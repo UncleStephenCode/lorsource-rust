@@ -41,7 +41,7 @@ def method_match(original_methods: list[str], rust_methods: list[str]) -> bool:
 
 def expand_original_paths(path: str) -> list[str]:
     sections = ["forum", "news", "polls", "articles", "gallery"]
-    variants = [path.replace("/page{page}", "/page/{page}")]
+    variants = [path.replace("/page{page}", "/{page}")]
     if "{section}" not in path:
         return variants
     return [variant.replace("{section}", section) for variant in variants for section in sections]

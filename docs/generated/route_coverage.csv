@@ -23,8 +23,8 @@ covered,POST,/admin/search-reindex,action=current,SearchControlController,reinde
 covered,GET,/admin/search-reindex,,SearchControlController,reindex,"GET,POST /admin/search-reindex",src/main/scala/ru/org/linux/search/SearchControlController.scala:64
 covered,ANY,/articles.boxlet,,ArticlesBoxlet,getData,GET /articles.boxlet,src/main/scala/ru/org/linux/boxlets/ArticlesBoxlet.scala:29
 covered,ANY,/articles/archive,,ArchiveController,articlesArchive,GET /articles/archive,src/main/scala/ru/org/linux/topic/ArchiveController.scala:85
-covered,ANY,/articles/{group}/{id}/history,,EditHistoryController,showEditInfo,GET /articles/:group/:id/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35
-covered,ANY,/articles/{group}/{id}/{commentid}/history,,EditHistoryController,showCommentEditInfo,GET /articles/:group/:id/:commentid/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60
+covered,ANY,/articles/{group}/{id}/history,,EditHistoryController,showEditInfo,GET /articles/{group}/{id}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35
+covered,ANY,/articles/{group}/{id}/{commentid}/history,,EditHistoryController,showCommentEditInfo,GET /articles/{group}/{id}/{commentid}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60
 covered,POST,/banip.jsp,,BanIPController,banIP,POST /banip.jsp,src/main/scala/ru/org/linux/auth/BanIPController.scala:34
 covered,ANY,/check-login,,RegisterController,ajaxLoginCheck,GET /check-login,src/main/scala/ru/org/linux/user/RegisterController.scala:194
 covered,POST,/clear-warning,,WarningController,clear,POST /clear-warning,src/main/scala/ru/org/linux/warning/WarningController.scala:198
@@ -47,19 +47,19 @@ covered,ANY,/errors/403,,HttpErrorController,handle403,GET /errors/403,src/main/
 covered,ANY,/errors/404,,HttpErrorController,handle404,GET /errors/404,src/main/scala/ru/org/linux/site/HttpErrorController.scala:22
 covered,ANY,/forum,,SectionController,forum,GET /forum,src/main/scala/ru/org/linux/section/SectionController.scala:30
 covered,ANY,/forum/lenta,,TopicListController,forum,GET /forum/lenta,src/main/scala/ru/org/linux/topic/TopicListController.scala:185
-covered,ANY,/forum/{group},,GroupController,forum,GET /forum/:group,src/main/scala/ru/org/linux/group/GroupController.scala:104
-covered,ANY,/forum/{group}/archive,,ArchiveController,forumArchive,GET /forum/:group/archive,src/main/scala/ru/org/linux/topic/ArchiveController.scala:88
-covered,ANY,/forum/{group}/{id}/history,,EditHistoryController,showEditInfo,GET /forum/:group/:id/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35
-covered,ANY,/forum/{group}/{id}/{commentid}/history,,EditHistoryController,showCommentEditInfo,GET /forum/:group/:id/:commentid/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60
-covered,ANY,/forum/{group}/{year}/{month},,GroupController,forumArchive,GET /forum/:group/:year/:month,src/main/scala/ru/org/linux/group/GroupController.scala:71
+covered,ANY,/forum/{group},,GroupController,forum,GET /forum/{group},src/main/scala/ru/org/linux/group/GroupController.scala:104
+covered,ANY,/forum/{group}/archive,,ArchiveController,forumArchive,GET /forum/{group}/archive,src/main/scala/ru/org/linux/topic/ArchiveController.scala:88
+covered,ANY,/forum/{group}/{id}/history,,EditHistoryController,showEditInfo,GET /forum/{group}/{id}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35
+covered,ANY,/forum/{group}/{id}/{commentid}/history,,EditHistoryController,showCommentEditInfo,GET /forum/{group}/{id}/{commentid}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60
+covered,ANY,/forum/{group}/{year}/{month},,GroupController,forumArchive,GET /forum/{group}/{id_or_year}/{page_or_month},src/main/scala/ru/org/linux/group/GroupController.scala:71
 covered,ANY,/gallery/archive,,ArchiveController,galleryArchive,GET /gallery/archive,src/main/scala/ru/org/linux/topic/ArchiveController.scala:76
-covered,ANY,/gallery/{group}/{id}/history,,EditHistoryController,showEditInfo,GET /gallery/:group/:id/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35
-covered,ANY,/gallery/{group}/{id}/{commentid}/history,,EditHistoryController,showCommentEditInfo,GET /gallery/:group/:id/:commentid/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60
+covered,ANY,/gallery/{group}/{id}/history,,EditHistoryController,showEditInfo,GET /gallery/{group}/{id}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35
+covered,ANY,/gallery/{group}/{id}/{commentid}/history,,EditHistoryController,showCommentEditInfo,GET /gallery/{group}/{id}/{commentid}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60
 covered,ANY,/group-lastmod.jsp,,GroupController,topicsLastmod,GET /group-lastmod.jsp,src/main/scala/ru/org/linux/group/GroupController.scala:59
 covered,ANY,/group.jsp,,GroupController,topics,GET /group.jsp,src/main/scala/ru/org/linux/group/GroupController.scala:47
 covered,GET,/groupmod.jsp,,GroupModificationController,showForm,"GET,POST /groupmod.jsp",src/main/scala/ru/org/linux/group/GroupModificationController.scala:30
 covered,POST,/groupmod.jsp,,GroupModificationController,modifyGroup,"GET,POST /groupmod.jsp",src/main/scala/ru/org/linux/group/GroupModificationController.scala:44
-covered,ANY,/help/{page},,HelpController,helpPage,GET /help/:page,src/main/scala/ru/org/linux/help/HelpController.scala:34
+covered,ANY,/help/{page},,HelpController,helpPage,GET /help/{page},src/main/scala/ru/org/linux/help/HelpController.scala:34
 covered,ANY,/index.jsp,,MainPageController,mainPage,GET /index.jsp,src/main/scala/ru/org/linux/spring/MainPageController.scala:40
 covered,"GET,HEAD",/jump-message.jsp,,TopicController,jumpMessage,GET /jump-message.jsp,src/main/scala/ru/org/linux/topic/TopicController.scala:450
 covered,"GET,HEAD",/login.jsp,,LoginController,loginForm,GET /login.jsp,src/main/scala/ru/org/linux/auth/LoginController.scala:132
@@ -77,35 +77,35 @@ covered,POST,/mt.jsp,,TopicModificationController,moveTopic,"GET,POST /mt.jsp",s
 covered,GET,/mt.jsp,,TopicModificationController,moveToForumForm,"GET,POST /mt.jsp",src/main/scala/ru/org/linux/topic/TopicModificationController.scala:119
 covered,GET,/mtn.jsp,,TopicModificationController,movePremoderatedForm,GET /mtn.jsp,src/main/scala/ru/org/linux/topic/TopicModificationController.scala:134
 covered,ANY,/news/archive,,ArchiveController,newsArchive,GET /news/archive,src/main/scala/ru/org/linux/topic/ArchiveController.scala:79
-covered,ANY,/news/{group}/{id}/history,,EditHistoryController,showEditInfo,GET /news/:group/:id/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35
-covered,ANY,/news/{group}/{id}/{commentid}/history,,EditHistoryController,showCommentEditInfo,GET /news/:group/:id/:commentid/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60
+covered,ANY,/news/{group}/{id}/history,,EditHistoryController,showEditInfo,GET /news/{group}/{id}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35
+covered,ANY,/news/{group}/{id}/{commentid}/history,,EditHistoryController,showCommentEditInfo,GET /news/{group}/{id}/{commentid}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60
 covered,POST,/notifications,,UserEventController,resetNotifications,"GET,POST /notifications",src/main/scala/ru/org/linux/user/UserEventController.scala:58
 covered,"GET,HEAD",/notifications,,UserEventController,showNotifications,"GET,POST /notifications",src/main/scala/ru/org/linux/user/UserEventController.scala:126
 covered,POST,/notifications-click,,UserEventController,clickNotifications,POST /notifications-click,src/main/scala/ru/org/linux/user/UserEventController.scala:68
 covered,POST,/notifications-click/ajax,,UserEventController,clickNotificationsAjax,POST /notifications-click/ajax,src/main/scala/ru/org/linux/user/UserEventController.scala:76
 covered,GET,/notifications-count,,UserEventApiController,getEventsCount,GET /notifications-count,src/main/scala/ru/org/linux/user/UserEventApiController.scala:31
 covered,POST,/notifications-reset,,UserEventApiController,resetNotifications,POST /notifications-reset,src/main/scala/ru/org/linux/user/UserEventApiController.scala:37
-covered,ANY,/people/{nick},output=rss,UserTopicListController,showUserTopicsRssGone,GET /people/:nick,src/main/scala/ru/org/linux/topic/UserTopicListController.scala:84
-covered,ANY,/people/{nick}/deleted-comments,,ShowCommentsController,showDeletedComments,GET /people/:nick/deleted-comments,src/main/scala/ru/org/linux/comment/ShowCommentsController.scala:61
-covered,GET,/people/{nick}/deleted-topics,,UserTopicListController,showDeletedTopics,GET /people/:nick/deleted-topics,src/main/scala/ru/org/linux/topic/UserTopicListController.scala:143
-covered,ANY,/people/{nick}/drafts,,UserTopicListController,showUserDrafts,GET /people/:nick/drafts,src/main/scala/ru/org/linux/topic/UserTopicListController.scala:59
-covered,GET,/people/{nick}/edit,,EditProfileController,show,"GET,POST /people/:nick/edit",src/main/scala/ru/org/linux/user/EditProfileController.scala:58
-covered,POST,/people/{nick}/edit,,EditProfileController,edit,"GET,POST /people/:nick/edit",src/main/scala/ru/org/linux/user/EditProfileController.scala:102
-covered,ANY,/people/{nick}/favs,,UserTopicListController,showUserFavs,GET /people/:nick/favs,src/main/scala/ru/org/linux/topic/UserTopicListController.scala:37
-covered,"GET,HEAD",/people/{nick}/profile,reset-password,ResetPasswordController,showModeratorForm,GET /people/:nick/profile,src/main/scala/ru/org/linux/user/ResetPasswordController.scala:33
-covered,"GET,HEAD",/people/{nick}/profile,,WhoisController,getInfoNew,GET /people/:nick/profile,src/main/scala/ru/org/linux/user/WhoisController.scala:49
-covered,"GET,HEAD",/people/{nick}/profile,year-stats,WhoisController,yearStats,GET /people/:nick/profile,src/main/scala/ru/org/linux/user/WhoisController.scala:204
-covered,"GET,HEAD",/people/{nick}/profile/wipe,,UserModificationController,wipe,GET /people/:nick/profile/wipe,src/main/scala/ru/org/linux/user/UserModificationController.scala:315
-covered,GET,/people/{nick}/remark,,EditRemarkController,showForm,"GET,POST /people/:nick/remark",src/main/scala/ru/org/linux/user/EditRemarkController.scala:29
-covered,POST,/people/{nick}/remark,,EditRemarkController,editProfile,"GET,POST /people/:nick/remark",src/main/scala/ru/org/linux/user/EditRemarkController.scala:48
-covered,ANY,/people/{nick}/remarks,,ShowRemarkController,showRemarks,GET /people/:nick/remarks,src/main/scala/ru/org/linux/user/ShowRemarkController.scala:26
-covered,GET,/people/{nick}/settings,,EditSettingsController,showForm,"GET,POST /people/:nick/settings",src/main/scala/ru/org/linux/user/EditSettingsController.scala:37
-covered,POST,/people/{nick}/settings,,EditSettingsController,updateSettings,"GET,POST /people/:nick/settings",src/main/scala/ru/org/linux/user/EditSettingsController.scala:78
-covered,ANY,/people/{nick}/tracked,,UserTopicListController,showUserWatches,GET /people/:nick/tracked,src/main/scala/ru/org/linux/topic/UserTopicListController.scala:161
+covered,ANY,/people/{nick},output=rss,UserTopicListController,showUserTopicsRssGone,GET /people/{nick},src/main/scala/ru/org/linux/topic/UserTopicListController.scala:84
+covered,ANY,/people/{nick}/deleted-comments,,ShowCommentsController,showDeletedComments,GET /people/{nick}/deleted-comments,src/main/scala/ru/org/linux/comment/ShowCommentsController.scala:61
+covered,GET,/people/{nick}/deleted-topics,,UserTopicListController,showDeletedTopics,GET /people/{nick}/deleted-topics,src/main/scala/ru/org/linux/topic/UserTopicListController.scala:143
+covered,ANY,/people/{nick}/drafts,,UserTopicListController,showUserDrafts,GET /people/{nick}/drafts,src/main/scala/ru/org/linux/topic/UserTopicListController.scala:59
+covered,GET,/people/{nick}/edit,,EditProfileController,show,"GET,POST /people/{nick}/edit",src/main/scala/ru/org/linux/user/EditProfileController.scala:58
+covered,POST,/people/{nick}/edit,,EditProfileController,edit,"GET,POST /people/{nick}/edit",src/main/scala/ru/org/linux/user/EditProfileController.scala:102
+covered,ANY,/people/{nick}/favs,,UserTopicListController,showUserFavs,GET /people/{nick}/favs,src/main/scala/ru/org/linux/topic/UserTopicListController.scala:37
+covered,"GET,HEAD",/people/{nick}/profile,reset-password,ResetPasswordController,showModeratorForm,GET /people/{nick}/profile,src/main/scala/ru/org/linux/user/ResetPasswordController.scala:33
+covered,"GET,HEAD",/people/{nick}/profile,,WhoisController,getInfoNew,GET /people/{nick}/profile,src/main/scala/ru/org/linux/user/WhoisController.scala:49
+covered,"GET,HEAD",/people/{nick}/profile,year-stats,WhoisController,yearStats,GET /people/{nick}/profile,src/main/scala/ru/org/linux/user/WhoisController.scala:204
+covered,"GET,HEAD",/people/{nick}/profile/wipe,,UserModificationController,wipe,GET /people/{nick}/profile/wipe,src/main/scala/ru/org/linux/user/UserModificationController.scala:315
+covered,GET,/people/{nick}/remark,,EditRemarkController,showForm,"GET,POST /people/{nick}/remark",src/main/scala/ru/org/linux/user/EditRemarkController.scala:29
+covered,POST,/people/{nick}/remark,,EditRemarkController,editProfile,"GET,POST /people/{nick}/remark",src/main/scala/ru/org/linux/user/EditRemarkController.scala:48
+covered,ANY,/people/{nick}/remarks,,ShowRemarkController,showRemarks,GET /people/{nick}/remarks,src/main/scala/ru/org/linux/user/ShowRemarkController.scala:26
+covered,GET,/people/{nick}/settings,,EditSettingsController,showForm,"GET,POST /people/{nick}/settings",src/main/scala/ru/org/linux/user/EditSettingsController.scala:37
+covered,POST,/people/{nick}/settings,,EditSettingsController,updateSettings,"GET,POST /people/{nick}/settings",src/main/scala/ru/org/linux/user/EditSettingsController.scala:78
+covered,ANY,/people/{nick}/tracked,,UserTopicListController,showUserWatches,GET /people/{nick}/tracked,src/main/scala/ru/org/linux/topic/UserTopicListController.scala:161
 covered,ANY,/poll.boxlet,,PollBoxlet,getData,GET /poll.boxlet,src/main/scala/ru/org/linux/poll/PollBoxlet.scala:30
 covered,ANY,/polls/archive,,ArchiveController,pollsArchive,GET /polls/archive,src/main/scala/ru/org/linux/topic/ArchiveController.scala:82
-covered,ANY,/polls/{group}/{id}/history,,EditHistoryController,showEditInfo,GET /polls/:group/:id/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35
-covered,ANY,/polls/{group}/{id}/{commentid}/history,,EditHistoryController,showCommentEditInfo,GET /polls/:group/:id/:commentid/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60
+covered,ANY,/polls/{group}/{id}/history,,EditHistoryController,showEditInfo,GET /polls/{group}/{id}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35
+covered,ANY,/polls/{group}/{id}/{commentid}/history,,EditHistoryController,showCommentEditInfo,GET /polls/{group}/{id}/{commentid}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60
 covered,GET,/post-warning,,WarningController,showForm,"GET,POST /post-warning",src/main/scala/ru/org/linux/warning/WarningController.scala:50
 covered,POST,/post-warning,,WarningController,post,"GET,POST /post-warning",src/main/scala/ru/org/linux/warning/WarningController.scala:98
 covered,GET,/reactions,comment,ReactionController,commentReaction,"GET,POST /reactions",src/main/scala/ru/org/linux/reaction/ReactionController.scala:44
@@ -119,7 +119,7 @@ covered,POST,/register.jsp,,RegisterController,doRegister,"GET,POST /register.js
 covered,POST,/remove-userpic.jsp,,UserModificationController,removeUserpic,POST /remove-userpic.jsp,src/main/scala/ru/org/linux/user/UserModificationController.scala:267
 covered,GET,/reset-password,,ResetPasswordController,showCodeForm,"GET,POST /reset-password",src/main/scala/ru/org/linux/user/ResetPasswordController.scala:47
 covered,POST,/reset-password,,ResetPasswordController,resetPassword,"GET,POST /reset-password",src/main/scala/ru/org/linux/user/ResetPasswordController.scala:50
-covered,ANY,/resolve.jsp,,ResolveController,resolve,POST /resolve.jsp,src/main/scala/ru/org/linux/topic/ResolveController.scala:29
+covered,ANY,/resolve.jsp,,ResolveController,resolve,"GET,POST /resolve.jsp",src/main/scala/ru/org/linux/topic/ResolveController.scala:29
 covered,ANY,/sameip.jsp,,SameIPController,sameIP,GET /sameip.jsp,src/main/scala/ru/org/linux/admin/SameIPController.scala:59
 covered,"GET,HEAD",/search.jsp,,SearchController,search,GET /search.jsp,src/main/scala/ru/org/linux/search/SearchController.scala:56
 covered,ANY,/section-rss.jsp,,TopicListController,showRSS,GET /section-rss.jsp,src/main/scala/ru/org/linux/topic/TopicListController.scala:240
@@ -130,8 +130,8 @@ covered,"GET,HEAD",/show-replies.jsp,"!output,!nick",UserEventController,showNot
 covered,"GET,HEAD",/show-replies.jsp,!output,UserEventController,showNotificationsForModerator,GET /show-replies.jsp,src/main/scala/ru/org/linux/user/UserEventController.scala:197
 covered,"GET,HEAD",/show-replies.jsp,output,UserEventController,repliesFeed,GET /show-replies.jsp,src/main/scala/ru/org/linux/user/UserEventController.scala:254
 covered,GET,/show-topics.jsp,,TopicListController,showUserTopics,GET /show-topics.jsp,src/main/scala/ru/org/linux/topic/TopicListController.scala:231
-covered,"GET,HEAD",/tag/{tag},,TagPageController,tagPage,GET /tag/:tag,src/main/scala/ru/org/linux/tag/TagPageController.scala:61
-covered,"GET,HEAD",/tag/{tag},section,TagTopicListController,tagFeed,GET /tag/:tag,src/main/scala/ru/org/linux/topic/TagTopicListController.scala:74
+covered,"GET,HEAD",/tag/{tag},,TagPageController,tagPage,GET /tag/{tag},src/main/scala/ru/org/linux/tag/TagPageController.scala:61
+covered,"GET,HEAD",/tag/{tag},section,TagTopicListController,tagFeed,GET /tag/{tag},src/main/scala/ru/org/linux/topic/TagTopicListController.scala:74
 covered,ANY,/tags,,TagController,showDefaultTagListHandlertags,GET /tags,src/main/scala/ru/org/linux/tag/TagController.scala:40
 covered,ANY,/tags,term,TagController,showTagListHandlerJSON,GET /tags,src/main/scala/ru/org/linux/tag/TagController.scala:93
 covered,ANY,/tags.jsp,,TagController,oldTagsRedirectHandler,GET /tags.jsp,src/main/scala/ru/org/linux/tag/TagController.scala:83
@@ -139,7 +139,7 @@ covered,GET,/tags/change,,TagController,changeTagShowFormHandler,"GET,POST /tags
 covered,POST,/tags/change,,TagController,changeTagSubmitHandler,"GET,POST /tags/change",src/main/scala/ru/org/linux/tag/TagController.scala:133
 covered,GET,/tags/delete,,TagController,deleteTagShowFormHandler,"GET,POST /tags/delete",src/main/scala/ru/org/linux/tag/TagController.scala:169
 covered,POST,/tags/delete,,TagController,deleteTagSubmitHandler,"GET,POST /tags/delete",src/main/scala/ru/org/linux/tag/TagController.scala:193
-covered,ANY,/tags/{firstLetter},,TagController,showTagListHandler,GET /tags/:first_letter,src/main/scala/ru/org/linux/tag/TagController.scala:50
+covered,ANY,/tags/{firstLetter},,TagController,showTagListHandler,GET /tags/{first_letter},src/main/scala/ru/org/linux/tag/TagController.scala:50
 covered,ANY,/top10.boxlet,,TopTenBoxlet,getData,GET /top10.boxlet,src/main/scala/ru/org/linux/boxlets/TopTenBoxlet.scala:28
 covered,ANY,/tracker,,TrackerController,tracker,GET /tracker,src/main/scala/ru/org/linux/tracker/TrackerController.scala:68
 covered,ANY,/tracker.jsp,,TrackerController,trackerOldUrl,GET /tracker.jsp,src/main/scala/ru/org/linux/tracker/TrackerController.scala:36
@@ -178,8 +178,8 @@ covered,POST,/vote.jsp,,VoteController,vote,POST /vote.jsp,src/main/scala/ru/org
 covered,ANY,/whois.jsp,,WhoisController,getInfo,GET /whois.jsp,src/main/scala/ru/org/linux/user/WhoisController.scala:162
 covered,GET,/yandex-tableau,,UserEventApiController,getYandexWidget,GET /yandex-tableau,src/main/scala/ru/org/linux/user/UserEventApiController.scala:47
 covered,ANY,/{section}/,,TopicListController,topics,GET /forum; GET /news; GET /news/; GET /polls; GET /polls/; GET /articles; GET /articles/; GET /gallery; GET /gallery/,src/main/scala/ru/org/linux/topic/TopicListController.scala:167
-covered,ANY,/{section}/archive/{year}/{month},,TopicListController,sectionArchive,GET /news/archive/:year/:month; GET /polls/archive/:year/:month; GET /articles/archive/:year/:month; GET /gallery/archive/:year/:month,src/main/scala/ru/org/linux/topic/TopicListController.scala:218
-covered,ANY,/{section}/{group},,TopicListController,topicsByGroup,GET /forum/:group; GET /news/:group; GET /polls/:group; GET /articles/:group; GET /gallery/:group,src/main/scala/ru/org/linux/topic/TopicListController.scala:203
-covered,ANY,/{section}/{group}/{id},,TopicController,getMessageMain,GET /forum/:group/:id; GET /news/:group/:id; GET /polls/:group/:id; GET /articles/:group/:id; GET /gallery/:group/:id,src/main/scala/ru/org/linux/topic/TopicController.scala:98
-covered,GET,/{section}/{group}/{id}/page{page},,TopicController,getMessagePage,GET /forum/:group/:id/page/:page,src/main/scala/ru/org/linux/topic/TopicController.scala:127
-covered,GET,/{section}/{group}/{id}/thread/{threadRoot},,TopicController,getMessageThread,GET /forum/:group/:id/thread/:thread_root; GET /news/:group/:id/thread/:thread_root; GET /polls/:group/:id/thread/:thread_root; GET /articles/:group/:id/thread/:thread_root; GET /gallery/:group/:id/thread/:thread_root,src/main/scala/ru/org/linux/topic/TopicController.scala:143
+covered,ANY,/{section}/archive/{year}/{month},,TopicListController,sectionArchive,GET /news/archive/{year}/{month}; GET /polls/archive/{year}/{month}; GET /articles/archive/{year}/{month}; GET /gallery/archive/{year}/{month},src/main/scala/ru/org/linux/topic/TopicListController.scala:218
+covered,ANY,/{section}/{group},,TopicListController,topicsByGroup,GET /forum/{group}; GET /news/{group}; GET /polls/{group}; GET /articles/{group}; GET /gallery/{group},src/main/scala/ru/org/linux/topic/TopicListController.scala:203
+covered,ANY,/{section}/{group}/{id},,TopicController,getMessageMain,GET /forum/{group}/{id}; GET /news/{group}/{id}; GET /polls/{group}/{id}; GET /articles/{group}/{id}; GET /gallery/{group}/{id},src/main/scala/ru/org/linux/topic/TopicController.scala:98
+covered,GET,/{section}/{group}/{id}/page{page},,TopicController,getMessagePage,GET /forum/{group}/{id_or_year}/{page_or_month}; GET /news/{group}/{id}/{page_marker}; GET /polls/{group}/{id}/{page_marker}; GET /articles/{group}/{id}/{page_marker}; GET /gallery/{group}/{id}/{page_marker},src/main/scala/ru/org/linux/topic/TopicController.scala:127
+covered,GET,/{section}/{group}/{id}/thread/{threadRoot},,TopicController,getMessageThread,GET /forum/{group}/{id}/thread/{thread_root}; GET /news/{group}/{id}/thread/{thread_root}; GET /polls/{group}/{id}/thread/{thread_root}; GET /articles/{group}/{id}/thread/{thread_root}; GET /gallery/{group}/{id}/thread/{thread_root},src/main/scala/ru/org/linux/topic/TopicController.scala:143

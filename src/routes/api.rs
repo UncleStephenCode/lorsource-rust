@@ -44,33 +44,93 @@ pub async fn poll_boxlet(State(state): State<AppState>) -> Result<Html<String>> 
 }
 
 #[derive(serde::Deserialize)]
-pub struct ReactionQuery { pub msgid: Option<i32>, pub topic: Option<i32>, pub comment: Option<i32> }
+pub struct ReactionQuery { pub topic: Option<i32>, pub comment: Option<i32>, pub msgid: Option<i32> }
 
 #[derive(serde::Deserialize)]
-pub struct ReactionForm { pub msgid: Option<i32>, pub topic: Option<i32>, pub comment: Option<i32>, pub reaction: Option<String>, pub value: Option<bool> }
+pub struct ReactionForm { pub topic: Option<i32>, pub comment: Option<i32>, pub msgid: Option<i32>, pub reaction: Option<String>, pub value: Option<bool> }
+
+fn parse_reaction_action(raw: Option<String>, value: Option<bool>) -> (String, bool) {
+    let raw = raw.unwrap_or_else(|| "+1-true".to_string());
+    if let Some((reaction, action)) = raw.rsplit_once('-') {
+        if action == "true" || action == "false" {
+            return (reaction.to_string(), action == "true");
+        }
+    }
+    (raw, value.unwrap_or(true))
+}
+
+async fn resolve_reaction_target(pool: &sqlx::PgPool, topic: Option<i32>, comment: Option<i32>, msgid: Option<i32>) -> Result<(i32, Option<i32>)> {
+    if let Some(comment_id) = comment {
+        let topic_id: i32 = sqlx::query_scalar("SELECT topic FROM comments WHERE id=$1")
+            .bind(comment_id)
+            .fetch_optional(pool)
+            .await?
+            .ok_or(crate::error::AppError::NotFound)?;
+        return Ok((topic_id, Some(comment_id)));
+    }
+
+    let topic_id = topic.or(msgid).ok_or_else(|| crate::error::AppError::BadRequest("missing topic/comment".into()))?;
+    Ok((topic_id, None))
+}
 
 pub async fn reactions_get(State(state): State<AppState>, axum::extract::Query(q): axum::extract::Query<ReactionQuery>) -> Result<Json<serde_json::Value>> {
-    let Some(msgid) = q.msgid.or(q.topic).or(q.comment) else {
-        return Ok(Json(json!({"reactions": {}})));
-    };
+    let (topic_id, comment_id) = resolve_reaction_target(&state.pool, q.topic, q.comment, q.msgid).await?;
     let rows = sqlx::query_as::<_, (String, i64)>(
-        "SELECT reaction, count(*) FROM reactions_log WHERE msgid=$1 AND set_value GROUP BY reaction ORDER BY reaction",
+        r#"SELECT reaction, count(*)
+           FROM reactions_log
+           WHERE topic_id=$1 AND (($2::int IS NULL AND comment_id IS NULL) OR comment_id=$2)
+           GROUP BY reaction ORDER BY reaction"#,
     )
-    .bind(msgid)
+    .bind(topic_id)
+    .bind(comment_id)
     .fetch_all(&state.pool)
     .await?;
     let counts: serde_json::Map<String, serde_json::Value> = rows.into_iter().map(|(k, v)| (k, json!(v))).collect();
-    Ok(Json(json!({"msgid": msgid, "reactions": counts})))
+    Ok(Json(json!({"topic": topic_id, "comment": comment_id, "reactions": counts})))
 }
 
 pub async fn reactions_post(State(state): State<AppState>, CurrentUser(user): CurrentUser, axum::Form(form): axum::Form<ReactionForm>) -> Result<Json<serde_json::Value>> {
     let Some(user) = user else { return Err(crate::error::AppError::Forbidden); };
-    let msgid = form.msgid.or(form.topic).or(form.comment).ok_or_else(|| crate::error::AppError::BadRequest("missing msgid".into()))?;
-    let reaction = form.reaction.unwrap_or_else(|| "+1".to_string());
-    let value = form.value.unwrap_or(true);
-    sqlx::query("INSERT INTO reactions_log(userid,msgid,reaction,set_value) VALUES($1,$2,$3,$4)")
-        .bind(user.id).bind(msgid).bind(&reaction).bind(value).execute(&state.pool).await?;
-    Ok(Json(json!({"ok": true, "msgid": msgid, "reaction": reaction, "value": value})))
+    let (topic_id, comment_id) = resolve_reaction_target(&state.pool, form.topic, form.comment, form.msgid).await?;
+    let (reaction, set) = parse_reaction_action(form.reaction, form.value);
+
+    if set {
+        if let Some(comment_id) = comment_id {
+            sqlx::query("UPDATE comments SET reactions = reactions || jsonb_build_object($2::text, $3::text) WHERE id=$1")
+                .bind(comment_id).bind(user.id).bind(&reaction).execute(&state.pool).await?;
+        } else {
+            sqlx::query("UPDATE topics SET reactions = reactions || jsonb_build_object($2::text, $3::text) WHERE id=$1")
+                .bind(topic_id).bind(user.id).bind(&reaction).execute(&state.pool).await?;
+        }
+        sqlx::query(
+            r#"INSERT INTO reactions_log(origin_user,topic_id,comment_id,reaction,set_date)
+               VALUES($1,$2,$3,$4,now())
+               ON CONFLICT (origin_user, topic_id, comment_id)
+               DO UPDATE SET set_date=now(), reaction=EXCLUDED.reaction"#,
+        )
+        .bind(user.id).bind(topic_id).bind(comment_id).bind(&reaction).execute(&state.pool).await?;
+    } else {
+        if let Some(comment_id) = comment_id {
+            sqlx::query("UPDATE comments SET reactions = reactions - $2::text WHERE id=$1")
+                .bind(comment_id).bind(user.id.to_string()).execute(&state.pool).await?;
+        } else {
+            sqlx::query("UPDATE topics SET reactions = reactions - $2::text WHERE id=$1")
+                .bind(topic_id).bind(user.id.to_string()).execute(&state.pool).await?;
+        }
+        sqlx::query(
+            r#"DELETE FROM reactions_log
+               WHERE origin_user=$1 AND topic_id=$2 AND (($3::int IS NULL AND comment_id IS NULL) OR comment_id=$3)"#,
+        )
+        .bind(user.id).bind(topic_id).bind(comment_id).execute(&state.pool).await?;
+    }
+
+    let count: i64 = sqlx::query_scalar(
+        r#"SELECT count(*) FROM reactions_log
+           WHERE topic_id=$1 AND (($2::int IS NULL AND comment_id IS NULL) OR comment_id=$2) AND reaction=$3"#,
+    )
+    .bind(topic_id).bind(comment_id).bind(&reaction).fetch_one(&state.pool).await?;
+
+    Ok(Json(json!({"count": count, "topic": topic_id, "comment": comment_id, "reaction": reaction, "set": set})))
 }
 
 #[derive(serde::Deserialize)]

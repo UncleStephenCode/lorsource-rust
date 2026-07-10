@@ -558,6 +558,24 @@ fn valid_login_name(nick: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+
+pub async fn forum_page_or_archive(
+    State(state): State<AppState>,
+    Path((group, id_or_year, page_or_month)): Path<(String, String, String)>,
+    Query(q): Query<PagerQuery>,
+    CurrentUser(current_user): CurrentUser,
+) -> Result<Html<String>> {
+    if let Some(page) = page_or_month.strip_prefix("page") {
+        let _page: i64 = page.parse().map_err(|_| AppError::NotFound)?;
+        let id: i32 = id_or_year.parse().map_err(|_| AppError::NotFound)?;
+        return crate::routes::topics::render_topic(state, id, current_user).await;
+    }
+
+    let year: i32 = id_or_year.parse().map_err(|_| AppError::NotFound)?;
+    let month: i32 = page_or_month.parse().map_err(|_| AppError::NotFound)?;
+    forum_archive_month(State(state), Path((group, year, month)), Query(q), CurrentUser(current_user)).await
+}
+
 fn validate_year_month(year: i32, month: i32) -> Result<()> {
     if !(1990..=3000).contains(&year) { return Err(AppError::BadRequest("указан некорректный год".into())); }
     if !(1..=12).contains(&month) { return Err(AppError::BadRequest("указан некорректный месяц".into())); }

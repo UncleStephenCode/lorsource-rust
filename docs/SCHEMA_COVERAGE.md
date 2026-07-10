@@ -37,23 +37,23 @@ Dropped upstream legacy tables: **19**
 | dropped-upstream | `jam_virtual_wiki` | `create_date, default_topic_name, logo_image_url, meta_description, site_name, virtual_wiki_id, virtual_wiki_name` | `` |
 | dropped-upstream | `jam_watchlist` | `topic_name, virtual_wiki_id, wiki_user_id` | `` |
 | covered | `memories` | `` | `notify, watch` |
-| rust-only | `message_warnings` | `` | `comment_id, id, moderator, postdate, reason, resolved, resolved_at, topic_id, userid` |
+| rust-only | `message_warnings` | `` | `author, closed_by, closed_when, comment, comment_id, id, message, moderator, postdate, reason, resolved, resolved_at, topic, topic_id, userid, warning_type` |
 | covered | `monthly_stats` | `` | `` |
 | covered | `msgbase` | `` | `markup` |
 | rust-only | `persistent_logins` | `` | `last_used, series, token, username` |
 | rust-only | `polls` | `` | `id, multiselect, topic` |
 | rust-only | `polls_variants` | `` | `id, label, vote, votes` |
-| rust-only | `reactions_log` | `` | `action_date, id, msgid, reaction, set_value, userid` |
+| rust-only | `reactions_log` | `` | `action_date, comment_id, id, msgid, origin_user, reaction, set_date, set_value, topic_id, userid` |
 | covered | `sections` | `` | `image_allowed, restrict_score, scroll_mode` |
 | covered | `tags` | `` | `` |
 | rust-only | `tags_synonyms` | `` | `id, synonym, tag_id` |
 | covered | `tags_values` | `` | `` |
 | rust-only | `telegram_posts` | `` | `postdate, telegram_id, topic` |
 | rust-only | `topic_users_notified` | `` | `topic, userid` |
-| covered | `topics` | `` | `draft, image, no_comments, reactions, score_loss, warning_counter` |
+| covered | `topics` | `` | `draft, image, no_comments, open_warnings, reactions, score_loss, warning_counter` |
 | covered | `user_agents` | `` | `` |
-| covered | `user_events` | `` | `event_type, topic_id` |
-| rust-only | `user_invites` | `` | `created_at, id, invite_code, owner, used_at, used_by` |
+| covered | `user_events` | `` | `event_type, topic_id, warning_id` |
+| rust-only | `user_invites` | `` | `created_at, email, id, invite_code, invited_user, issue_date, owner, used_at, used_by, valid_until` |
 | rust-only | `user_log` | `` | `action, action_date, action_userid, id, info, userid` |
 | rust-only | `user_remarks` | `` | `remark, userid, who` |
 | rust-only | `user_settings` | `` | `id, settings` |

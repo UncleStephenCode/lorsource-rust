@@ -208,6 +208,7 @@ pub struct UserEventRow {
     pub event_date: NaiveDateTime,
     pub message_id: Option<i32>,
     pub comment_id: Option<i32>,
+    pub warning_id: Option<i32>,
     pub message: Option<String>,
     pub unread: bool,
 }
@@ -225,21 +226,24 @@ pub struct ImageRow {
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct ReactionLogRow {
-    pub id: i32,
-    pub userid: i32,
-    pub msgid: i32,
+    pub origin_user: i32,
+    pub topic_id: i32,
+    pub comment_id: Option<i32>,
+    pub set_date: DateTime<Utc>,
     pub reaction: String,
-    pub action_date: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct WarningRow {
     pub id: i32,
-    pub userid: i32,
-    pub topic_id: Option<i32>,
-    pub comment_id: Option<i32>,
-    pub reason: String,
+    pub topic: i32,
+    pub comment: Option<i32>,
+    pub author: i32,
+    pub message: String,
+    pub warning_type: String,
     pub postdate: DateTime<Utc>,
+    pub closed_by: Option<i32>,
+    pub closed_when: Option<DateTime<Utc>>,
 }
 
 

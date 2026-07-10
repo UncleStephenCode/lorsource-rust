@@ -90,11 +90,13 @@ pub async fn topic_page(State(state): State<AppState>, Path((_group, id)): Path<
     render_topic(state, id, current_user).await
 }
 
-pub async fn topic_page_with_page(State(state): State<AppState>, Path((_group, id, _page)): Path<(String, i32, i64)>, CurrentUser(current_user): CurrentUser) -> Result<Html<String>> {
+pub async fn topic_page_with_page(State(state): State<AppState>, Path((_group, id, page_marker)): Path<(String, i32, String)>, CurrentUser(current_user): CurrentUser) -> Result<Html<String>> {
+    let Some(page) = page_marker.strip_prefix("page") else { return Err(AppError::NotFound); };
+    let _page: i64 = page.parse().map_err(|_| AppError::NotFound)?;
     render_topic(state, id, current_user).await
 }
 
-async fn render_topic(state: AppState, id: i32, current_user: Option<crate::models::UserSummary>) -> Result<Html<String>> {
+pub async fn render_topic(state: AppState, id: i32, current_user: Option<crate::models::UserSummary>) -> Result<Html<String>> {
     let topic = get_topic(&state, id).await?;
     let topic_html = markup::render_message(&topic.message, topic.bbcode);
     let items = sqlx::query_as::<_, crate::models::CommentItem>(
@@ -160,7 +162,7 @@ pub async fn edit_topic(State(state): State<AppState>, Form(form): Form<TopicFor
 }
 
 #[derive(Deserialize)]
-pub struct TopicActionForm { pub msgid: i32 }
+pub struct TopicActionForm { pub msgid: i32, pub resolve: Option<String> }
 
 pub async fn delete_topic(State(state): State<AppState>, Form(form): Form<TopicActionForm>) -> Result<Redirect> {
     sqlx::query("UPDATE topics SET deleted=true WHERE id=$1").bind(form.msgid).execute(&state.pool).await?;
@@ -172,8 +174,43 @@ pub async fn undelete_topic(State(state): State<AppState>, Form(form): Form<Topi
     Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.msgid)))
 }
 
-pub async fn resolve_topic(State(state): State<AppState>, Form(form): Form<TopicActionForm>) -> Result<Redirect> {
-    sqlx::query("UPDATE topics SET resolved=COALESCE(NOT resolved, true) WHERE id=$1").bind(form.msgid).execute(&state.pool).await?;
+pub async fn resolve_topic_get(State(state): State<AppState>, Query(form): Query<TopicActionForm>, CurrentUser(user): CurrentUser) -> Result<Redirect> {
+    do_resolve_topic(&state, user, form).await
+}
+
+pub async fn resolve_topic(State(state): State<AppState>, Form(form): Form<TopicActionForm>, CurrentUser(user): CurrentUser) -> Result<Redirect> {
+    do_resolve_topic(&state, user, form).await
+}
+
+async fn do_resolve_topic(state: &AppState, user: Option<crate::models::UserSummary>, form: TopicActionForm) -> Result<Redirect> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    let Some((author_id, group_resolvable)) = sqlx::query_as::<_, (i32, bool)>(
+        "SELECT t.userid, g.resolvable FROM topics t JOIN groups g ON g.id=t.groupid WHERE t.id=$1",
+    )
+    .bind(form.msgid)
+    .fetch_optional(&state.pool)
+    .await? else {
+        return Err(AppError::NotFound);
+    };
+    if !group_resolvable {
+        return Err(AppError::Forbidden);
+    }
+    if !user.canmod && user.id != author_id {
+        return Err(AppError::Forbidden);
+    }
+    let resolved = form.resolve.as_deref().map(|value| value == "yes");
+    if let Some(resolved) = resolved {
+        sqlx::query("UPDATE topics SET resolved=$2, lastmod=now() WHERE id=$1")
+            .bind(form.msgid)
+            .bind(resolved)
+            .execute(&state.pool)
+            .await?;
+    } else {
+        sqlx::query("UPDATE topics SET resolved=COALESCE(NOT resolved, true), lastmod=now() WHERE id=$1")
+            .bind(form.msgid)
+            .execute(&state.pool)
+            .await?;
+    }
     Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.msgid)))
 }
 

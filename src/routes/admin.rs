@@ -234,7 +234,14 @@ async fn post_warning_form(CurrentUser(user): CurrentUser, Query(q): Query<Warni
 }
 
 #[derive(Deserialize)]
-pub struct WarningForm { pub topic: Option<i32>, pub comment: Option<i32>, pub user: Option<i32>, pub reason: String }
+pub struct WarningForm {
+    pub topic: Option<i32>,
+    pub comment: Option<i32>,
+    pub user: Option<i32>,
+    pub reason: Option<String>,
+    pub text: Option<String>,
+    pub warning_type: Option<String>,
+}
 
 async fn post_warning(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<WarningForm>) -> Result<Redirect> {
     let moderator = require_moderator(&user)?;
@@ -247,10 +254,34 @@ async fn post_warning(State(state): State<AppState>, CurrentUser(user): CurrentU
     } else {
         return Err(AppError::BadRequest("target is required".into()));
     };
-    sqlx::query("INSERT INTO message_warnings(userid,moderator,topic_id,comment_id,reason) VALUES($1,$2,$3,$4,$5)")
-        .bind(target_user).bind(moderator.id).bind(form.topic).bind(form.comment).bind(form.reason).execute(&state.pool).await?;
-    if let Some(topic_id) = form.topic {
-        sqlx::query("UPDATE topics SET warning_counter=warning_counter+1 WHERE id=$1").bind(topic_id).execute(&state.pool).await?;
+    let message = form.text.or(form.reason).unwrap_or_else(|| "warning".to_string());
+    let warning_type = form.warning_type.unwrap_or_else(|| "rule".to_string());
+    let warning_type = match warning_type.as_str() {
+        "rule" | "tag" | "spelling" | "group" => warning_type,
+        _ => "rule".to_string(),
+    };
+    let topic_id = if let Some(topic_id) = form.topic {
+        topic_id
+    } else if let Some(comment_id) = form.comment {
+        sqlx::query_scalar("SELECT topic FROM comments WHERE id=$1").bind(comment_id).fetch_one(&state.pool).await?
+    } else {
+        return Err(AppError::BadRequest("topic or comment is required".into()));
+    };
+    let warning_id: i32 = sqlx::query_scalar(
+        "INSERT INTO message_warnings(topic,comment,author,message,warning_type) VALUES($1,$2,$3,$4,$5::warning_type) RETURNING id",
+    )
+        .bind(topic_id).bind(form.comment).bind(moderator.id).bind(message).bind(warning_type).fetch_one(&state.pool).await?;
+    let _ = warning_id;
+    if form.comment.is_none() {
+        sqlx::query(
+            r#"UPDATE topics SET open_warnings=(
+                SELECT count(DISTINCT mw.author) FROM message_warnings mw
+                WHERE mw.topic=topics.id AND mw.comment IS NULL AND mw.closed_by IS NULL AND mw.warning_type='rule'
+            ) WHERE id=$1"#,
+        )
+        .bind(topic_id)
+        .execute(&state.pool)
+        .await?;
         Ok(Redirect::to(&format!("/jump-message.jsp?msgid={topic_id}")))
     } else {
         let nick: String = sqlx::query_scalar("SELECT nick FROM users WHERE id=$1")
@@ -265,8 +296,22 @@ async fn post_warning(State(state): State<AppState>, CurrentUser(user): CurrentU
 pub struct ClearWarningForm { pub id: i32 }
 
 async fn clear_warning(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<ClearWarningForm>) -> Result<Redirect> {
-    require_moderator(&user)?;
-    sqlx::query("UPDATE message_warnings SET resolved=true,resolved_at=now() WHERE id=$1")
-        .bind(form.id).execute(&state.pool).await?;
-    Ok(Redirect::to("/view-remarks"))
+    let moderator = require_moderator(&user)?;
+    let topic_id: i32 = sqlx::query_scalar("SELECT topic FROM message_warnings WHERE id=$1")
+        .bind(form.id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    sqlx::query("UPDATE message_warnings SET closed_by=$2, closed_when=now() WHERE id=$1 AND closed_by IS NULL")
+        .bind(form.id).bind(moderator.id).execute(&state.pool).await?;
+    sqlx::query(
+        r#"UPDATE topics SET open_warnings=(
+            SELECT count(DISTINCT mw.author) FROM message_warnings mw
+            WHERE mw.topic=topics.id AND mw.comment IS NULL AND mw.closed_by IS NULL AND mw.warning_type='rule'
+        ) WHERE id=$1"#,
+    )
+    .bind(topic_id)
+    .execute(&state.pool)
+    .await?;
+    Ok(Redirect::to(&format!("/jump-message.jsp?msgid={topic_id}")))
 }

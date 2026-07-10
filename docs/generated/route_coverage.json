@@ -246,7 +246,7 @@
     "params": "",
     "controller": "EditHistoryController",
     "handler": "showEditInfo",
-    "rust_match": "GET /articles/:group/:id/history",
+    "rust_match": "GET /articles/{group}/{id}/history",
     "source": "src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35"
   },
   {
@@ -256,7 +256,7 @@
     "params": "",
     "controller": "EditHistoryController",
     "handler": "showCommentEditInfo",
-    "rust_match": "GET /articles/:group/:id/:commentid/history",
+    "rust_match": "GET /articles/{group}/{id}/{commentid}/history",
     "source": "src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60"
   },
   {
@@ -486,7 +486,7 @@
     "params": "",
     "controller": "GroupController",
     "handler": "forum",
-    "rust_match": "GET /forum/:group",
+    "rust_match": "GET /forum/{group}",
     "source": "src/main/scala/ru/org/linux/group/GroupController.scala:104"
   },
   {
@@ -496,7 +496,7 @@
     "params": "",
     "controller": "ArchiveController",
     "handler": "forumArchive",
-    "rust_match": "GET /forum/:group/archive",
+    "rust_match": "GET /forum/{group}/archive",
     "source": "src/main/scala/ru/org/linux/topic/ArchiveController.scala:88"
   },
   {
@@ -506,7 +506,7 @@
     "params": "",
     "controller": "EditHistoryController",
     "handler": "showEditInfo",
-    "rust_match": "GET /forum/:group/:id/history",
+    "rust_match": "GET /forum/{group}/{id}/history",
     "source": "src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35"
   },
   {
@@ -516,7 +516,7 @@
     "params": "",
     "controller": "EditHistoryController",
     "handler": "showCommentEditInfo",
-    "rust_match": "GET /forum/:group/:id/:commentid/history",
+    "rust_match": "GET /forum/{group}/{id}/{commentid}/history",
     "source": "src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60"
   },
   {
@@ -526,7 +526,7 @@
     "params": "",
     "controller": "GroupController",
     "handler": "forumArchive",
-    "rust_match": "GET /forum/:group/:year/:month",
+    "rust_match": "GET /forum/{group}/{id_or_year}/{page_or_month}",
     "source": "src/main/scala/ru/org/linux/group/GroupController.scala:71"
   },
   {
@@ -546,7 +546,7 @@
     "params": "",
     "controller": "EditHistoryController",
     "handler": "showEditInfo",
-    "rust_match": "GET /gallery/:group/:id/history",
+    "rust_match": "GET /gallery/{group}/{id}/history",
     "source": "src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35"
   },
   {
@@ -556,7 +556,7 @@
     "params": "",
     "controller": "EditHistoryController",
     "handler": "showCommentEditInfo",
-    "rust_match": "GET /gallery/:group/:id/:commentid/history",
+    "rust_match": "GET /gallery/{group}/{id}/{commentid}/history",
     "source": "src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60"
   },
   {
@@ -606,7 +606,7 @@
     "params": "",
     "controller": "HelpController",
     "handler": "helpPage",
-    "rust_match": "GET /help/:page",
+    "rust_match": "GET /help/{page}",
     "source": "src/main/scala/ru/org/linux/help/HelpController.scala:34"
   },
   {
@@ -786,7 +786,7 @@
     "params": "",
     "controller": "EditHistoryController",
     "handler": "showEditInfo",
-    "rust_match": "GET /news/:group/:id/history",
+    "rust_match": "GET /news/{group}/{id}/history",
     "source": "src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35"
   },
   {
@@ -796,7 +796,7 @@
     "params": "",
     "controller": "EditHistoryController",
     "handler": "showCommentEditInfo",
-    "rust_match": "GET /news/:group/:id/:commentid/history",
+    "rust_match": "GET /news/{group}/{id}/{commentid}/history",
     "source": "src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60"
   },
   {
@@ -866,7 +866,7 @@
     "params": "output=rss",
     "controller": "UserTopicListController",
     "handler": "showUserTopicsRssGone",
-    "rust_match": "GET /people/:nick",
+    "rust_match": "GET /people/{nick}",
     "source": "src/main/scala/ru/org/linux/topic/UserTopicListController.scala:84"
   },
   {
@@ -876,7 +876,7 @@
     "params": "",
     "controller": "ShowCommentsController",
     "handler": "showDeletedComments",
-    "rust_match": "GET /people/:nick/deleted-comments",
+    "rust_match": "GET /people/{nick}/deleted-comments",
     "source": "src/main/scala/ru/org/linux/comment/ShowCommentsController.scala:61"
   },
   {
@@ -886,7 +886,7 @@
     "params": "",
     "controller": "UserTopicListController",
     "handler": "showDeletedTopics",
-    "rust_match": "GET /people/:nick/deleted-topics",
+    "rust_match": "GET /people/{nick}/deleted-topics",
     "source": "src/main/scala/ru/org/linux/topic/UserTopicListController.scala:143"
   },
   {
@@ -896,7 +896,7 @@
     "params": "",
     "controller": "UserTopicListController",
     "handler": "showUserDrafts",
-    "rust_match": "GET /people/:nick/drafts",
+    "rust_match": "GET /people/{nick}/drafts",
     "source": "src/main/scala/ru/org/linux/topic/UserTopicListController.scala:59"
   },
   {
@@ -906,7 +906,7 @@
     "params": "",
     "controller": "EditProfileController",
     "handler": "show",
-    "rust_match": "GET,POST /people/:nick/edit",
+    "rust_match": "GET,POST /people/{nick}/edit",
     "source": "src/main/scala/ru/org/linux/user/EditProfileController.scala:58"
   },
   {
@@ -916,7 +916,7 @@
     "params": "",
     "controller": "EditProfileController",
     "handler": "edit",
-    "rust_match": "GET,POST /people/:nick/edit",
+    "rust_match": "GET,POST /people/{nick}/edit",
     "source": "src/main/scala/ru/org/linux/user/EditProfileController.scala:102"
   },
   {
@@ -926,7 +926,7 @@
     "params": "",
     "controller": "UserTopicListController",
     "handler": "showUserFavs",
-    "rust_match": "GET /people/:nick/favs",
+    "rust_match": "GET /people/{nick}/favs",
     "source": "src/main/scala/ru/org/linux/topic/UserTopicListController.scala:37"
   },
   {
@@ -936,7 +936,7 @@
     "params": "reset-password",
     "controller": "ResetPasswordController",
     "handler": "showModeratorForm",
-    "rust_match": "GET /people/:nick/profile",
+    "rust_match": "GET /people/{nick}/profile",
     "source": "src/main/scala/ru/org/linux/user/ResetPasswordController.scala:33"
   },
   {
@@ -946,7 +946,7 @@
     "params": "",
     "controller": "WhoisController",
     "handler": "getInfoNew",
-    "rust_match": "GET /people/:nick/profile",
+    "rust_match": "GET /people/{nick}/profile",
     "source": "src/main/scala/ru/org/linux/user/WhoisController.scala:49"
   },
   {
@@ -956,7 +956,7 @@
     "params": "year-stats",
     "controller": "WhoisController",
     "handler": "yearStats",
-    "rust_match": "GET /people/:nick/profile",
+    "rust_match": "GET /people/{nick}/profile",
     "source": "src/main/scala/ru/org/linux/user/WhoisController.scala:204"
   },
   {
@@ -966,7 +966,7 @@
     "params": "",
     "controller": "UserModificationController",
     "handler": "wipe",
-    "rust_match": "GET /people/:nick/profile/wipe",
+    "rust_match": "GET /people/{nick}/profile/wipe",
     "source": "src/main/scala/ru/org/linux/user/UserModificationController.scala:315"
   },
   {
@@ -976,7 +976,7 @@
     "params": "",
     "controller": "EditRemarkController",
     "handler": "showForm",
-    "rust_match": "GET,POST /people/:nick/remark",
+    "rust_match": "GET,POST /people/{nick}/remark",
     "source": "src/main/scala/ru/org/linux/user/EditRemarkController.scala:29"
   },
   {
@@ -986,7 +986,7 @@
     "params": "",
     "controller": "EditRemarkController",
     "handler": "editProfile",
-    "rust_match": "GET,POST /people/:nick/remark",
+    "rust_match": "GET,POST /people/{nick}/remark",
     "source": "src/main/scala/ru/org/linux/user/EditRemarkController.scala:48"
   },
   {
@@ -996,7 +996,7 @@
     "params": "",
     "controller": "ShowRemarkController",
     "handler": "showRemarks",
-    "rust_match": "GET /people/:nick/remarks",
+    "rust_match": "GET /people/{nick}/remarks",
     "source": "src/main/scala/ru/org/linux/user/ShowRemarkController.scala:26"
   },
   {
@@ -1006,7 +1006,7 @@
     "params": "",
     "controller": "EditSettingsController",
     "handler": "showForm",
-    "rust_match": "GET,POST /people/:nick/settings",
+    "rust_match": "GET,POST /people/{nick}/settings",
     "source": "src/main/scala/ru/org/linux/user/EditSettingsController.scala:37"
   },
   {
@@ -1016,7 +1016,7 @@
     "params": "",
     "controller": "EditSettingsController",
     "handler": "updateSettings",
-    "rust_match": "GET,POST /people/:nick/settings",
+    "rust_match": "GET,POST /people/{nick}/settings",
     "source": "src/main/scala/ru/org/linux/user/EditSettingsController.scala:78"
   },
   {
@@ -1026,7 +1026,7 @@
     "params": "",
     "controller": "UserTopicListController",
     "handler": "showUserWatches",
-    "rust_match": "GET /people/:nick/tracked",
+    "rust_match": "GET /people/{nick}/tracked",
     "source": "src/main/scala/ru/org/linux/topic/UserTopicListController.scala:161"
   },
   {
@@ -1056,7 +1056,7 @@
     "params": "",
     "controller": "EditHistoryController",
     "handler": "showEditInfo",
-    "rust_match": "GET /polls/:group/:id/history",
+    "rust_match": "GET /polls/{group}/{id}/history",
     "source": "src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35"
   },
   {
@@ -1066,7 +1066,7 @@
     "params": "",
     "controller": "EditHistoryController",
     "handler": "showCommentEditInfo",
-    "rust_match": "GET /polls/:group/:id/:commentid/history",
+    "rust_match": "GET /polls/{group}/{id}/{commentid}/history",
     "source": "src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60"
   },
   {
@@ -1206,7 +1206,7 @@
     "params": "",
     "controller": "ResolveController",
     "handler": "resolve",
-    "rust_match": "POST /resolve.jsp",
+    "rust_match": "GET,POST /resolve.jsp",
     "source": "src/main/scala/ru/org/linux/topic/ResolveController.scala:29"
   },
   {
@@ -1316,7 +1316,7 @@
     "params": "",
     "controller": "TagPageController",
     "handler": "tagPage",
-    "rust_match": "GET /tag/:tag",
+    "rust_match": "GET /tag/{tag}",
     "source": "src/main/scala/ru/org/linux/tag/TagPageController.scala:61"
   },
   {
@@ -1326,7 +1326,7 @@
     "params": "section",
     "controller": "TagTopicListController",
     "handler": "tagFeed",
-    "rust_match": "GET /tag/:tag",
+    "rust_match": "GET /tag/{tag}",
     "source": "src/main/scala/ru/org/linux/topic/TagTopicListController.scala:74"
   },
   {
@@ -1406,7 +1406,7 @@
     "params": "",
     "controller": "TagController",
     "handler": "showTagListHandler",
-    "rust_match": "GET /tags/:first_letter",
+    "rust_match": "GET /tags/{first_letter}",
     "source": "src/main/scala/ru/org/linux/tag/TagController.scala:50"
   },
   {
@@ -1796,7 +1796,7 @@
     "params": "",
     "controller": "TopicListController",
     "handler": "sectionArchive",
-    "rust_match": "GET /news/archive/:year/:month; GET /polls/archive/:year/:month; GET /articles/archive/:year/:month; GET /gallery/archive/:year/:month",
+    "rust_match": "GET /news/archive/{year}/{month}; GET /polls/archive/{year}/{month}; GET /articles/archive/{year}/{month}; GET /gallery/archive/{year}/{month}",
     "source": "src/main/scala/ru/org/linux/topic/TopicListController.scala:218"
   },
   {
@@ -1806,7 +1806,7 @@
     "params": "",
     "controller": "TopicListController",
     "handler": "topicsByGroup",
-    "rust_match": "GET /forum/:group; GET /news/:group; GET /polls/:group; GET /articles/:group; GET /gallery/:group",
+    "rust_match": "GET /forum/{group}; GET /news/{group}; GET /polls/{group}; GET /articles/{group}; GET /gallery/{group}",
     "source": "src/main/scala/ru/org/linux/topic/TopicListController.scala:203"
   },
   {
@@ -1816,7 +1816,7 @@
     "params": "",
     "controller": "TopicController",
     "handler": "getMessageMain",
-    "rust_match": "GET /forum/:group/:id; GET /news/:group/:id; GET /polls/:group/:id; GET /articles/:group/:id; GET /gallery/:group/:id",
+    "rust_match": "GET /forum/{group}/{id}; GET /news/{group}/{id}; GET /polls/{group}/{id}; GET /articles/{group}/{id}; GET /gallery/{group}/{id}",
     "source": "src/main/scala/ru/org/linux/topic/TopicController.scala:98"
   },
   {
@@ -1826,7 +1826,7 @@
     "params": "",
     "controller": "TopicController",
     "handler": "getMessagePage",
-    "rust_match": "GET /forum/:group/:id/page/:page",
+    "rust_match": "GET /forum/{group}/{id_or_year}/{page_or_month}; GET /news/{group}/{id}/{page_marker}; GET /polls/{group}/{id}/{page_marker}; GET /articles/{group}/{id}/{page_marker}; GET /gallery/{group}/{id}/{page_marker}",
     "source": "src/main/scala/ru/org/linux/topic/TopicController.scala:127"
   },
   {
@@ -1836,7 +1836,7 @@
     "params": "",
     "controller": "TopicController",
     "handler": "getMessageThread",
-    "rust_match": "GET /forum/:group/:id/thread/:thread_root; GET /news/:group/:id/thread/:thread_root; GET /polls/:group/:id/thread/:thread_root; GET /articles/:group/:id/thread/:thread_root; GET /gallery/:group/:id/thread/:thread_root",
+    "rust_match": "GET /forum/{group}/{id}/thread/{thread_root}; GET /news/{group}/{id}/thread/{thread_root}; GET /polls/{group}/{id}/thread/{thread_root}; GET /articles/{group}/{id}/thread/{thread_root}; GET /gallery/{group}/{id}/thread/{thread_root}",
     "source": "src/main/scala/ru/org/linux/topic/TopicController.scala:143"
   }
 ]

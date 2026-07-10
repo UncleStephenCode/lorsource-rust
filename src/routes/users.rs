@@ -56,12 +56,35 @@ pub async fn legacy_whois(Query(q): Query<WhoisQuery>) -> Redirect {
 
 pub async fn reactions(State(state): State<AppState>, Path(nick): Path<String>) -> Result<Html<String>> {
     let user = get_user(&state, &nick).await?;
-    Ok(Html(format!("<h1>Реакции {}</h1><p>Модуль реакций вынесен в routes/api.rs и готов к расширению.</p>", user.nick)))
+    let rows = sqlx::query_as::<_, (i32, Option<i32>, chrono::DateTime<chrono::Utc>, String)>(
+        "SELECT topic_id, comment_id, set_date, reaction FROM reactions_log WHERE origin_user=$1 ORDER BY set_date DESC LIMIT 100",
+    )
+    .bind(user.id)
+    .fetch_all(&state.pool)
+    .await?;
+    let mut html = format!("<h1>Реакции {}</h1><ul>", html_escape::encode_text(&user.nick));
+    for (topic, comment, date, reaction) in rows {
+        let target = comment.map(|id| format!("#comment-{id}")).unwrap_or_default();
+        html.push_str(&format!("<li>{date}: <a href="/jump-message.jsp?msgid={topic}{target}">{}</a></li>", html_escape::encode_text(&reaction)));
+    }
+    html.push_str("</ul>");
+    Ok(Html(html))
 }
 
 pub async fn remarks(State(state): State<AppState>, Path(nick): Path<String>) -> Result<Html<String>> {
     let user = get_user(&state, &nick).await?;
-    Ok(Html(format!("<h1>Заметки о {}</h1><p>Персональные заметки оставлены как совместимый маршрут.</p>", user.nick)))
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT u.nick, r.remark FROM user_remarks r JOIN users u ON u.id=r.userid WHERE r.who=$1 ORDER BY lower(u.nick)",
+    )
+    .bind(user.id)
+    .fetch_all(&state.pool)
+    .await?;
+    let mut html = format!("<h1>Заметки о {}</h1><ul>", html_escape::encode_text(&user.nick));
+    for (author, remark) in rows {
+        html.push_str(&format!("<li><b>{}</b>: {}</li>", html_escape::encode_text(&author), html_escape::encode_text(&remark)));
+    }
+    html.push_str("</ul>");
+    Ok(Html(html))
 }
 
 pub async fn get_user(state: &AppState, nick: &str) -> Result<UserSummary> {
@@ -206,18 +229,25 @@ pub async fn edit_profile(State(state): State<AppState>, Path(nick): Path<String
 pub async fn settings(State(state): State<AppState>, Path(nick): Path<String>, current: crate::auth::CurrentUser) -> Result<Html<String>> {
     let user = get_user(&state, &nick).await?;
     ensure_self_or_moderator(&current.0, &user)?;
-    let settings: serde_json::Value = sqlx::query_scalar("SELECT settings FROM users WHERE id=$1")
+    let settings: Option<String> = sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
         .bind(user.id)
-        .fetch_one(&state.pool)
+        .fetch_optional(&state.pool)
         .await?;
-    Ok(Html(format!("<h1>Настройки {}</h1><pre>{}</pre>", html_escape::encode_text(&user.nick), html_escape::encode_text(&serde_json::to_string_pretty(&settings).unwrap_or_default()))))
+    Ok(Html(format!("<h1>Настройки {}</h1><pre>{}</pre>", html_escape::encode_text(&user.nick), html_escape::encode_text(settings.as_deref().unwrap_or("")))))
 }
 
 pub async fn save_settings(State(state): State<AppState>, Path(nick): Path<String>, current: crate::auth::CurrentUser, Form(form): axum::Form<std::collections::HashMap<String, String>>) -> Result<Redirect> {
     let user = get_user(&state, &nick).await?;
     ensure_self_or_moderator(&current.0, &user)?;
-    let settings = serde_json::to_value(form).map_err(|e| AppError::Anyhow(e.into()))?;
-    sqlx::query("UPDATE users SET settings=$2 WHERE id=$1").bind(user.id).bind(settings).execute(&state.pool).await?;
+    let (keys, values): (Vec<String>, Vec<String>) = form.into_iter().unzip();
+    sqlx::query(
+        "INSERT INTO user_settings(id,settings) VALUES($1,hstore($2::text[],$3::text[])) ON CONFLICT(id) DO UPDATE SET settings=EXCLUDED.settings",
+    )
+    .bind(user.id)
+    .bind(keys)
+    .bind(values)
+    .execute(&state.pool)
+    .await?;
     Ok(Redirect::to(&format!("/people/{}/settings", urlencoding::encode(&user.nick))))
 }
 

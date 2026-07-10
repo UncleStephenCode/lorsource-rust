@@ -697,27 +697,41 @@
     "status": "rust-only",
     "original_columns": [],
     "rust_columns": [
+      "author",
+      "closed_by",
+      "closed_when",
+      "comment",
       "comment_id",
       "id",
+      "message",
       "moderator",
       "postdate",
       "reason",
       "resolved",
       "resolved_at",
+      "topic",
       "topic_id",
-      "userid"
+      "userid",
+      "warning_type"
     ],
     "missing_columns": [],
     "extra_columns": [
+      "author",
+      "closed_by",
+      "closed_when",
+      "comment",
       "comment_id",
       "id",
+      "message",
       "moderator",
       "postdate",
       "reason",
       "resolved",
       "resolved_at",
+      "topic",
       "topic_id",
-      "userid"
+      "userid",
+      "warning_type"
     ]
   },
   {
@@ -817,19 +831,27 @@
     "original_columns": [],
     "rust_columns": [
       "action_date",
+      "comment_id",
       "id",
       "msgid",
+      "origin_user",
       "reaction",
+      "set_date",
       "set_value",
+      "topic_id",
       "userid"
     ],
     "missing_columns": [],
     "extra_columns": [
       "action_date",
+      "comment_id",
       "id",
       "msgid",
+      "origin_user",
       "reaction",
+      "set_date",
       "set_value",
+      "topic_id",
       "userid"
     ]
   },
@@ -988,6 +1010,7 @@
       "moderate",
       "no_comments",
       "notop",
+      "open_warnings",
       "postdate",
       "postip",
       "postscore",
@@ -1010,6 +1033,7 @@
       "draft",
       "image",
       "no_comments",
+      "open_warnings",
       "reactions",
       "score_loss",
       "warning_counter"
@@ -1054,12 +1078,14 @@
       "topic_id",
       "type",
       "unread",
-      "userid"
+      "userid",
+      "warning_id"
     ],
     "missing_columns": [],
     "extra_columns": [
       "event_type",
-      "topic_id"
+      "topic_id",
+      "warning_id"
     ]
   },
   {
@@ -1068,20 +1094,28 @@
     "original_columns": [],
     "rust_columns": [
       "created_at",
+      "email",
       "id",
       "invite_code",
+      "invited_user",
+      "issue_date",
       "owner",
       "used_at",
-      "used_by"
+      "used_by",
+      "valid_until"
     ],
     "missing_columns": [],
     "extra_columns": [
       "created_at",
+      "email",
       "id",
       "invite_code",
+      "invited_user",
+      "issue_date",
       "owner",
       "used_at",
-      "used_by"
+      "used_by",
+      "valid_until"
     ]
   },
   {
