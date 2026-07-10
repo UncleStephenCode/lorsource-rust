@@ -20,14 +20,9 @@ pub async fn login_form() -> Result<Html<String>> {
 }
 
 pub async fn login(State(state): State<AppState>, jar: CookieJar, Form(form): Form<LoginForm>) -> Result<(CookieJar, Redirect)> {
-    // Compatibility mode: old demo dump uses unsalted hashes. The Rust port keeps login permissive
-    // for dev DB and expects a proper password verifier to be plugged into auth::password later.
-    let user_id: Option<i32> = sqlx::query_scalar("SELECT id FROM users WHERE lower(nick)=lower($1) AND NOT COALESCE(blocked,false)")
-        .bind(form.nick.trim())
-        .fetch_optional(&state.pool)
-        .await?;
-    let Some(user_id) = user_id else { return Err(AppError::Forbidden); };
-    if form.passwd.trim().is_empty() { return Err(AppError::Forbidden); }
+    let Some(user_id) = auth::verify_login(&state.pool, &form.nick, &form.passwd).await? else {
+        return Err(AppError::Forbidden);
+    };
     let token = auth::make_session(user_id, &state.config.cookie_secret);
     let cookie = Cookie::build(("lor_session", token))
         .path("/")
@@ -59,7 +54,7 @@ pub async fn register(State(state): State<AppState>, Form(form): Form<RegisterFo
     .bind(id)
     .bind(form.nick.trim())
     .bind(form.email)
-    .bind(form.passwd)
+    .bind(crate::security::password::hash(&form.passwd).map_err(|e| AppError::Anyhow(e.into()))?)
     .execute(&state.pool)
     .await?;
     Ok(Redirect::to(&format!("/people/{}", urlencoding::encode(form.nick.trim()))))

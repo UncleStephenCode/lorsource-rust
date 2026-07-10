@@ -4,6 +4,8 @@ mod db;
 mod error;
 mod markup;
 mod models;
+mod models_compat;
+mod security;
 mod pagination;
 mod routes;
 mod state;

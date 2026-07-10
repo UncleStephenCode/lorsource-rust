@@ -1,32 +1,16 @@
-# Карта переноса маршрутов
+# Route map
 
-Этот порт сохраняет публичные URL там, где это возможно без Spring MVC regexp-path.
+Generated files:
 
-## Реализовано как HTML
+- `docs/generated/original_routes.csv` — extracted from original Scala/Spring controllers.
+- `docs/generated/rust_routes.csv` — extracted from Rust/Axum route declarations.
+- `docs/generated/route_coverage.csv` — original endpoint to Rust route coverage.
+- `docs/ROUTE_COVERAGE.md` — human-readable coverage report.
 
-- `/`, `/index.jsp`
-- `/forum`, `/forum/lenta`, `/forum/{group}`
-- `/news/`, `/news/{group}`, `/news/{group}/{id}`
-- `/articles/`, `/articles/{group}`, `/articles/{group}/{id}`
-- `/gallery/`, `/gallery/{group}`, `/gallery/{group}/{id}`
-- `/polls/`, `/polls/{group}`, `/polls/{group}/{id}`
-- `/show-topics.jsp`, `/view-message.jsp`, `/jump-message.jsp`
-- `/add.jsp`, `/edit.jsp`, `/delete.jsp`, `/undelete`, `/resolve.jsp`
-- `/add_comment.jsp`, `/add_comment_ajax`, `/edit_comment`, `/delete_comment.jsp`, `/undelete_comment`
-- `/tags`, `/tags.jsp`, `/tags/{first_letter}`, `/tag/{tag}`
-- `/people/{nick}`, `/people/{nick}/profile`, `/whois.jsp`
-- `/search.jsp`, `/rss`, `/section-rss.jsp`, `/about`
+Regenerate:
 
-## Реализовано как JSON/совместимые заглушки
+```bash
+ORIGINAL_ROOT=/path/to/original/lorsource ./scripts/run-compatibility-suite.sh
+```
 
-- `/tracker`, `/tracker.jsp`
-- `/notifications`, `/notifications-count`, `/notifications-reset`
-- `/top10.boxlet`, `/articles.boxlet`, `/poll.boxlet`
-- admin/moderator endpoints: `/admin/*`, `/banip.jsp`, `/sameip.jsp`, `/groupmod.jsp`, `/usermod.jsp`, `/post-warning`, `/clear-warning`
-
-## Отличия от Scala/Spring
-
-- Старые JSP заменены на Askama-шаблоны.
-- Старые regexp routes вида `/forum/{group}/{id}/page{page}` упрощены до `/forum/{group}/{id}/page/{page}`.
-- Аутентификация реализована dev-совместимым cookie-механизмом. Для production нужно подключить проверку bcrypt-хеша из новых миграций исходного проекта.
-- Полнотекстовый поиск использует PostgreSQL `to_tsvector('russian', ...)`, без внешнего Sphinx/Elastic слоя.
+The Rust router now declares every original endpoint shape extracted by the current parser. Declaration coverage is not the same as functional parity: endpoints implemented through `legacy::not_implemented` still need their Scala business logic ported.

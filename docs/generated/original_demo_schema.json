@@ -1,0 +1,1721 @@
+[
+  {
+    "table": "b_ips",
+    "columns": [
+      {
+        "name": "ip",
+        "type": "inet",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "mod_id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "date",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "reason",
+        "type": "character varying(255)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "ban_date",
+        "type": "timestamp without time zone",
+        "nullable": true,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "ban_info",
+    "columns": [
+      {
+        "name": "userid",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "bandate",
+        "type": "timestamp without time zone",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "reason",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "ban_by",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "comments",
+    "columns": [
+      {
+        "name": "id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "topic",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "userid",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "title",
+        "type": "character varying(255)",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "postdate",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "replyto",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "deleted",
+        "type": "boolean",
+        "nullable": false,
+        "default": "false"
+      },
+      {
+        "name": "postip",
+        "type": "inet",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "ua_id",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "topic_deleted",
+        "type": "boolean",
+        "nullable": false,
+        "default": "false"
+      }
+    ]
+  },
+  {
+    "table": "del_info",
+    "columns": [
+      {
+        "name": "msgid",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "delby",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "reason",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "deldate",
+        "type": "timestamp without time zone",
+        "nullable": true,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "edit_info",
+    "columns": [
+      {
+        "name": "id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "msgid",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "editor",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "oldmessage",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "editdate",
+        "type": "timestamp without time zone",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "oldtitle",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "oldtags",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "oldlinktext",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "oldurl",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "groups",
+    "columns": [
+      {
+        "name": "id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "title",
+        "type": "character varying(255)",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "image",
+        "type": "character varying(255)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "section",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "stat1",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "stat2",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "stat3",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "stat4",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "restrict_topics",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "info",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "restrict_comments",
+        "type": "integer",
+        "nullable": false,
+        "default": "(-9999)"
+      },
+      {
+        "name": "longinfo",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "resolvable",
+        "type": "boolean",
+        "nullable": false,
+        "default": "false"
+      },
+      {
+        "name": "urlname",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "ignore_list",
+    "columns": [
+      {
+        "name": "userid",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "ignored",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "users",
+    "columns": [
+      {
+        "name": "id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "name",
+        "type": "character varying(255)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "nick",
+        "type": "character varying(80)",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "passwd",
+        "type": "character varying(40)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "url",
+        "type": "character varying(255)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "email",
+        "type": "character varying(255)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "canmod",
+        "type": "boolean",
+        "nullable": false,
+        "default": "false"
+      },
+      {
+        "name": "photo",
+        "type": "character varying(100)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "town",
+        "type": "character varying(100)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "candel",
+        "type": "boolean",
+        "nullable": false,
+        "default": "false"
+      },
+      {
+        "name": "lostpwd",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "default": "'1970-01-01 03:00:00+03'::timestamp with time zone"
+      },
+      {
+        "name": "blocked",
+        "type": "boolean",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "score",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "max_score",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "lastlogin",
+        "type": "timestamp without time zone",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "regdate",
+        "type": "timestamp without time zone",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "activated",
+        "type": "boolean",
+        "nullable": false,
+        "default": "false"
+      },
+      {
+        "name": "corrector",
+        "type": "boolean",
+        "nullable": false,
+        "default": "false"
+      },
+      {
+        "name": "userinfo",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "unread_events",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "new_email",
+        "type": "character varying(255)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "style",
+        "type": "character varying(15)",
+        "nullable": false,
+        "default": "'tango'::character varying"
+      }
+    ]
+  },
+  {
+    "table": "jam_category",
+    "columns": [
+      {
+        "name": "child_topic_id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "category_name",
+        "type": "character varying(200)",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "sort_key",
+        "type": "character varying(200)",
+        "nullable": true,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "jam_configuration",
+    "columns": [
+      {
+        "name": "config_key",
+        "type": "character varying(50)",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "config_value",
+        "type": "character varying(500)",
+        "nullable": false,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "jam_file",
+    "columns": [
+      {
+        "name": "file_id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "virtual_wiki_id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "file_name",
+        "type": "character varying(200)",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "delete_date",
+        "type": "timestamp without time zone",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "file_read_only",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "file_admin_only",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "file_url",
+        "type": "character varying(200)",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "mime_type",
+        "type": "character varying(100)",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "topic_id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "file_size",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "jam_file_version",
+    "columns": [
+      {
+        "name": "file_version_id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "file_id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "upload_comment",
+        "type": "character varying(200)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "file_url",
+        "type": "character varying(200)",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "wiki_user_id",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "upload_date",
+        "type": "timestamp without time zone",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "mime_type",
+        "type": "character varying(100)",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "file_size",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "wiki_user_display",
+        "type": "character varying(100)",
+        "nullable": true,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "jam_group_members",
+    "columns": [
+      {
+        "name": "id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "username",
+        "type": "character varying(100)",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "group_id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "jam_group",
+    "columns": [
+      {
+        "name": "group_id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "group_name",
+        "type": "character varying(30)",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "group_description",
+        "type": "character varying(200)",
+        "nullable": true,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "jam_group_authorities",
+    "columns": [
+      {
+        "name": "group_id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "authority",
+        "type": "character varying(30)",
+        "nullable": false,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "jam_interwiki",
+    "columns": [
+      {
+        "name": "interwiki_prefix",
+        "type": "character varying(30)",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "interwiki_pattern",
+        "type": "character varying(200)",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "interwiki_type",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "jam_log",
+    "columns": [
+      {
+        "name": "log_date",
+        "type": "timestamp without time zone",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "virtual_wiki_id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "wiki_user_id",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "display_name",
+        "type": "character varying(200)",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "topic_id",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "topic_version_id",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "log_type",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "log_comment",
+        "type": "character varying(200)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "log_params",
+        "type": "character varying(500)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "log_sub_type",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "jam_namespace",
+    "columns": [
+      {
+        "name": "namespace_id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "namespace",
+        "type": "character varying(200)",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "main_namespace_id",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "jam_namespace_translation",
+    "columns": [
+      {
+        "name": "namespace_id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "virtual_wiki_id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "namespace",
+        "type": "character varying(200)",
+        "nullable": false,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "jam_recent_change",
+    "columns": [
+      {
+        "name": "topic_version_id",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "previous_topic_version_id",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "topic_id",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "topic_name",
+        "type": "character varying(200)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "change_date",
+        "type": "timestamp without time zone",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "change_comment",
+        "type": "character varying(200)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "wiki_user_id",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "display_name",
+        "type": "character varying(200)",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "edit_type",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "virtual_wiki_id",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "virtual_wiki_name",
+        "type": "character varying(100)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "characters_changed",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "log_type",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "log_params",
+        "type": "character varying(500)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "log_sub_type",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "jam_role",
+    "columns": [
+      {
+        "name": "role_name",
+        "type": "character varying(30)",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "role_description",
+        "type": "character varying(200)",
+        "nullable": true,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "jam_topic",
+    "columns": [
+      {
+        "name": "topic_id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "virtual_wiki_id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "topic_name",
+        "type": "character varying(200)",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "delete_date",
+        "type": "timestamp without time zone",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "topic_read_only",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "topic_admin_only",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "current_version_id",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "topic_type",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "redirect_to",
+        "type": "character varying(200)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "namespace_id",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "page_name",
+        "type": "character varying(200)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "page_name_lower",
+        "type": "character varying(200)",
+        "nullable": true,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "jam_topic_links",
+    "columns": [
+      {
+        "name": "topic_id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "link_topic_namespace_id",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "link_topic_page_name",
+        "type": "character varying(200)",
+        "nullable": false,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "jam_topic_version",
+    "columns": [
+      {
+        "name": "topic_version_id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "topic_id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "edit_comment",
+        "type": "character varying(200)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "version_content",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "wiki_user_id",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "edit_date",
+        "type": "timestamp without time zone",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "edit_type",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "previous_topic_version_id",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "characters_changed",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "version_params",
+        "type": "character varying(500)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "wiki_user_display",
+        "type": "character varying(100)",
+        "nullable": true,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "jam_user_block",
+    "columns": [
+      {
+        "name": "user_block_id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "wiki_user_id",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "ip_address",
+        "type": "character varying(39)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "block_date",
+        "type": "timestamp without time zone",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "block_end_date",
+        "type": "timestamp without time zone",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "block_reason",
+        "type": "character varying(200)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "blocked_by_user_id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "unblock_date",
+        "type": "timestamp without time zone",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "unblock_reason",
+        "type": "character varying(200)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "unblocked_by_user_id",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "jam_virtual_wiki",
+    "columns": [
+      {
+        "name": "virtual_wiki_id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "virtual_wiki_name",
+        "type": "character varying(100)",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "default_topic_name",
+        "type": "character varying(200)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "create_date",
+        "type": "timestamp without time zone",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "logo_image_url",
+        "type": "character varying(200)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "site_name",
+        "type": "character varying(200)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "meta_description",
+        "type": "character varying(500)",
+        "nullable": true,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "jam_watchlist",
+    "columns": [
+      {
+        "name": "wiki_user_id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "topic_name",
+        "type": "character varying(200)",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "virtual_wiki_id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "memories",
+    "columns": [
+      {
+        "name": "id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "userid",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "topic",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "add_date",
+        "type": "timestamp without time zone",
+        "nullable": false,
+        "default": "now()"
+      }
+    ]
+  },
+  {
+    "table": "monthly_stats",
+    "columns": [
+      {
+        "name": "section",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "year",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "month",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "c",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "groupid",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "msgbase",
+    "columns": [
+      {
+        "name": "id",
+        "type": "bigint",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "message",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "bbcode",
+        "type": "boolean",
+        "nullable": true,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "sections",
+    "columns": [
+      {
+        "name": "id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "name",
+        "type": "character varying(255)",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "moderate",
+        "type": "boolean",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "imagepost",
+        "type": "boolean",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "preformat",
+        "type": "boolean",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "linktext",
+        "type": "character varying(255)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "havelink",
+        "type": "boolean",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "expire",
+        "type": "interval",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "vote",
+        "type": "boolean",
+        "nullable": true,
+        "default": "false"
+      },
+      {
+        "name": "add_info",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "tags",
+    "columns": [
+      {
+        "name": "msgid",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "tagid",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "tags_values",
+    "columns": [
+      {
+        "name": "id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "counter",
+        "type": "integer",
+        "nullable": true,
+        "default": "0"
+      },
+      {
+        "name": "value",
+        "type": "character varying(255)",
+        "nullable": false,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "topics",
+    "columns": [
+      {
+        "name": "id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "groupid",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "userid",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "title",
+        "type": "character varying(255)",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "url",
+        "type": "character varying(255)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "moderate",
+        "type": "boolean",
+        "nullable": false,
+        "default": "false"
+      },
+      {
+        "name": "postdate",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "linktext",
+        "type": "character varying(255)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "deleted",
+        "type": "boolean",
+        "nullable": false,
+        "default": "false"
+      },
+      {
+        "name": "stat1",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "stat2",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "stat3",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "stat4",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "lastmod",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "commitby",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "notop",
+        "type": "boolean",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "commitdate",
+        "type": "timestamp without time zone",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "postscore",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "postip",
+        "type": "inet",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "sticky",
+        "type": "boolean",
+        "nullable": false,
+        "default": "false"
+      },
+      {
+        "name": "ua_id",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "resolved",
+        "type": "boolean",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "minor",
+        "type": "boolean",
+        "nullable": false,
+        "default": "false"
+      }
+    ]
+  },
+  {
+    "table": "user_agents",
+    "columns": [
+      {
+        "name": "id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "name",
+        "type": "character varying(512)",
+        "nullable": true,
+        "default": "''::character varying"
+      }
+    ]
+  },
+  {
+    "table": "user_events",
+    "columns": [
+      {
+        "name": "userid",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "type",
+        "type": "event_type",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "private",
+        "type": "boolean",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "event_date",
+        "type": "timestamp without time zone",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "message_id",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "comment_id",
+        "type": "integer",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "message",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "unread",
+        "type": "boolean",
+        "nullable": false,
+        "default": "true"
+      },
+      {
+        "name": "id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "vote_users",
+    "columns": [
+      {
+        "name": "vote",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "userid",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      }
+    ]
+  },
+  {
+    "table": "votenames",
+    "columns": [
+      {
+        "name": "id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "topic",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "multiselect",
+        "type": "boolean",
+        "nullable": false,
+        "default": "false"
+      }
+    ]
+  },
+  {
+    "table": "votes",
+    "columns": [
+      {
+        "name": "id",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "vote",
+        "type": "integer",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "label",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "votes",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      }
+    ]
+  }
+]

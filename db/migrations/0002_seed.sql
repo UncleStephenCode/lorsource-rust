@@ -17,9 +17,9 @@ INSERT INTO groups(id,title,section,urlname,info,resolvable) VALUES
   (8,'Polls',5,'polls','Опросы',false)
 ON CONFLICT(id) DO NOTHING;
 
-INSERT INTO users(id,nick,name,email,canmod,candel,score,max_score,regdate,activated,corrector,userinfo) VALUES
-  (1,'admin','Rust Admin','admin@example.test',true,true,100,100,now(),true,true,'<p>Системный пользователь dev-сборки.</p>'),
-  (2,'unclestephen','Demo User','demo@example.test',false,false,42,42,now(),true,false,'<p>Демо-профиль для проверки портированного движка.</p>')
+INSERT INTO users(id,nick,name,email,passwd,canmod,candel,score,max_score,regdate,activated,corrector,userinfo) VALUES
+  (1,'admin','Rust Admin','admin@example.test','{noop}admin',true,true,100,100,now(),true,true,'<p>Системный пользователь dev-сборки.</p>'),
+  (2,'unclestephen','Demo User','demo@example.test','{noop}demo',false,false,42,42,now(),true,false,'<p>Демо-профиль для проверки портированного движка.</p>')
 ON CONFLICT(id) DO NOTHING;
 
 INSERT INTO msgbase(id,message,bbcode) VALUES

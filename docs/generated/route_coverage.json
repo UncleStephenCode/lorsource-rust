@@ -1,0 +1,1842 @@
+[
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/",
+    "params": "",
+    "controller": "MainPageController",
+    "handler": "mainPage",
+    "rust_match": "GET /",
+    "source": "src/main/scala/ru/org/linux/spring/MainPageController.scala:40"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/ExceptionResolver",
+    "params": "",
+    "controller": "ExceptionController",
+    "handler": "defaultExceptionHandler",
+    "rust_match": "GET /ExceptionResolver",
+    "source": "src/main/scala/ru/org/linux/exception/ExceptionController.scala:27"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/about",
+    "params": "",
+    "controller": "ServerInfoController",
+    "handler": "serverInfo",
+    "rust_match": "GET /about",
+    "source": "src/main/scala/ru/org/linux/spring/ServerInfoController.scala:26"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/activate",
+    "params": "",
+    "controller": "RegisterController",
+    "handler": "activateForm",
+    "rust_match": "GET,POST /activate",
+    "source": "src/main/scala/ru/org/linux/user/RegisterController.scala:117"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/activate",
+    "params": "action",
+    "controller": "RegisterController",
+    "handler": "activateNew",
+    "rust_match": "GET,POST /activate",
+    "source": "src/main/scala/ru/org/linux/user/RegisterController.scala:123"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/activate",
+    "params": "!action",
+    "controller": "RegisterController",
+    "handler": "activate",
+    "rust_match": "GET,POST /activate",
+    "source": "src/main/scala/ru/org/linux/user/RegisterController.scala:172"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/activate.jsp",
+    "params": "",
+    "controller": "RegisterController",
+    "handler": "activateForm",
+    "rust_match": "GET,POST /activate.jsp",
+    "source": "src/main/scala/ru/org/linux/user/RegisterController.scala:117"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/activate.jsp",
+    "params": "action",
+    "controller": "RegisterController",
+    "handler": "activateNew",
+    "rust_match": "GET,POST /activate.jsp",
+    "source": "src/main/scala/ru/org/linux/user/RegisterController.scala:123"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/activate.jsp",
+    "params": "!action",
+    "controller": "RegisterController",
+    "handler": "activate",
+    "rust_match": "GET,POST /activate.jsp",
+    "source": "src/main/scala/ru/org/linux/user/RegisterController.scala:172"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/add-section.jsp",
+    "params": "section",
+    "controller": "AddTopicController",
+    "handler": "showFormWithSection",
+    "rust_match": "GET /add-section.jsp",
+    "source": "src/main/scala/ru/org/linux/topic/AddTopicController.scala:308"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/add-section.jsp",
+    "params": "!section",
+    "controller": "AddTopicController",
+    "handler": "showFormAllSections",
+    "rust_match": "GET /add-section.jsp",
+    "source": "src/main/scala/ru/org/linux/topic/AddTopicController.scala:373"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/add.jsp",
+    "params": "",
+    "controller": "AddTopicController",
+    "handler": "add",
+    "rust_match": "GET,POST /add.jsp",
+    "source": "src/main/scala/ru/org/linux/topic/AddTopicController.scala:132"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/add.jsp",
+    "params": "",
+    "controller": "AddTopicController",
+    "handler": "doAdd",
+    "rust_match": "GET,POST /add.jsp",
+    "source": "src/main/scala/ru/org/linux/topic/AddTopicController.scala:172"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/add_comment.jsp",
+    "params": "",
+    "controller": "AddCommentController",
+    "handler": "showFormReply",
+    "rust_match": "GET,POST /add_comment.jsp",
+    "source": "src/main/scala/ru/org/linux/comment/AddCommentController.scala:54"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/add_comment.jsp",
+    "params": "",
+    "controller": "AddCommentController",
+    "handler": "addComment",
+    "rust_match": "GET,POST /add_comment.jsp",
+    "source": "src/main/scala/ru/org/linux/comment/AddCommentController.scala:89"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/add_comment_ajax",
+    "params": "",
+    "controller": "AddCommentController",
+    "handler": "addCommentAjax",
+    "rust_match": "POST /add_comment_ajax",
+    "source": "src/main/scala/ru/org/linux/comment/AddCommentController.scala:136"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/addphoto.jsp",
+    "params": "",
+    "controller": "UserpicController",
+    "handler": "showForm",
+    "rust_match": "GET,POST /addphoto.jsp",
+    "source": "src/main/scala/ru/org/linux/user/UserpicController.scala:45"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/addphoto.jsp",
+    "params": "",
+    "controller": "UserpicController",
+    "handler": "addPhoto",
+    "rust_match": "GET,POST /addphoto.jsp",
+    "source": "src/main/scala/ru/org/linux/user/UserpicController.scala:52"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/admin/geoip",
+    "params": "",
+    "controller": "GeoLocationController",
+    "handler": "geoip",
+    "rust_match": "GET /admin/geoip",
+    "source": "src/main/scala/ru/org/linux/auth/GeoLocationController.scala:24"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/admin/search-reindex",
+    "params": "action=all",
+    "controller": "SearchControlController",
+    "handler": "reindexAll",
+    "rust_match": "GET,POST /admin/search-reindex",
+    "source": "src/main/scala/ru/org/linux/search/SearchControlController.scala:28"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/admin/search-reindex",
+    "params": "action=current",
+    "controller": "SearchControlController",
+    "handler": "reindexCurrentMonth",
+    "rust_match": "GET,POST /admin/search-reindex",
+    "source": "src/main/scala/ru/org/linux/search/SearchControlController.scala:51"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/admin/search-reindex",
+    "params": "",
+    "controller": "SearchControlController",
+    "handler": "reindex",
+    "rust_match": "GET,POST /admin/search-reindex",
+    "source": "src/main/scala/ru/org/linux/search/SearchControlController.scala:64"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/articles.boxlet",
+    "params": "",
+    "controller": "ArticlesBoxlet",
+    "handler": "getData",
+    "rust_match": "GET /articles.boxlet",
+    "source": "src/main/scala/ru/org/linux/boxlets/ArticlesBoxlet.scala:29"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/articles/archive",
+    "params": "",
+    "controller": "ArchiveController",
+    "handler": "articlesArchive",
+    "rust_match": "GET /articles/archive",
+    "source": "src/main/scala/ru/org/linux/topic/ArchiveController.scala:85"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/articles/{group}/{id}/history",
+    "params": "",
+    "controller": "EditHistoryController",
+    "handler": "showEditInfo",
+    "rust_match": "GET /articles/:group/:id/history",
+    "source": "src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/articles/{group}/{id}/{commentid}/history",
+    "params": "",
+    "controller": "EditHistoryController",
+    "handler": "showCommentEditInfo",
+    "rust_match": "GET /articles/:group/:id/:commentid/history",
+    "source": "src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/banip.jsp",
+    "params": "",
+    "controller": "BanIPController",
+    "handler": "banIP",
+    "rust_match": "POST /banip.jsp",
+    "source": "src/main/scala/ru/org/linux/auth/BanIPController.scala:34"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/check-login",
+    "params": "",
+    "controller": "RegisterController",
+    "handler": "ajaxLoginCheck",
+    "rust_match": "GET /check-login",
+    "source": "src/main/scala/ru/org/linux/user/RegisterController.scala:194"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/clear-warning",
+    "params": "",
+    "controller": "WarningController",
+    "handler": "clear",
+    "rust_match": "POST /clear-warning",
+    "source": "src/main/scala/ru/org/linux/warning/WarningController.scala:198"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/comment-message.jsp",
+    "params": "",
+    "controller": "AddCommentController",
+    "handler": "showFormTopic",
+    "rust_match": "GET /comment-message.jsp",
+    "source": "src/main/scala/ru/org/linux/comment/AddCommentController.scala:71"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/commit.jsp",
+    "params": "",
+    "controller": "EditTopicController",
+    "handler": "showCommitForm",
+    "rust_match": "GET /commit.jsp",
+    "source": "src/main/scala/ru/org/linux/topic/EditTopicController.scala:57"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/delete.jsp",
+    "params": "",
+    "controller": "DeleteTopicController",
+    "handler": "showForm",
+    "rust_match": "GET,POST /delete.jsp",
+    "source": "src/main/scala/ru/org/linux/topic/DeleteTopicController.scala:50"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/delete.jsp",
+    "params": "",
+    "controller": "DeleteTopicController",
+    "handler": "deleteMessage",
+    "rust_match": "GET,POST /delete.jsp",
+    "source": "src/main/scala/ru/org/linux/topic/DeleteTopicController.scala:73"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/delete_comment.jsp",
+    "params": "",
+    "controller": "DeleteCommentController",
+    "handler": "showForm",
+    "rust_match": "GET,POST /delete_comment.jsp",
+    "source": "src/main/scala/ru/org/linux/comment/DeleteCommentController.scala:44"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/delete_comment.jsp",
+    "params": "",
+    "controller": "DeleteCommentController",
+    "handler": "deleteComments",
+    "rust_match": "GET,POST /delete_comment.jsp",
+    "source": "src/main/scala/ru/org/linux/comment/DeleteCommentController.scala:83"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/delete_image",
+    "params": "",
+    "controller": "DeleteImageController",
+    "handler": "deleteForm",
+    "rust_match": "GET,POST /delete_image",
+    "source": "src/main/scala/ru/org/linux/gallery/DeleteImageController.scala:39"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/delete_image",
+    "params": "",
+    "controller": "DeleteImageController",
+    "handler": "deleteImage",
+    "rust_match": "GET,POST /delete_image",
+    "source": "src/main/scala/ru/org/linux/gallery/DeleteImageController.scala:56"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/delip.jsp",
+    "params": "",
+    "controller": "DelIPController",
+    "handler": "delIp",
+    "rust_match": "POST /delip.jsp",
+    "source": "src/main/scala/ru/org/linux/admin/DelIPController.scala:44"
+  },
+  {
+    "status": "covered",
+    "methods": "GET,HEAD",
+    "path": "/deregister.jsp",
+    "params": "",
+    "controller": "DeregisterController",
+    "handler": "show",
+    "rust_match": "GET,POST /deregister.jsp",
+    "source": "src/main/scala/ru/org/linux/user/DeregisterController.scala:49"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/deregister.jsp",
+    "params": "",
+    "controller": "DeregisterController",
+    "handler": "deregister",
+    "rust_match": "GET,POST /deregister.jsp",
+    "source": "src/main/scala/ru/org/linux/user/DeregisterController.scala:56"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/edit.jsp",
+    "params": "",
+    "controller": "EditTopicController",
+    "handler": "showEditForm",
+    "rust_match": "GET,POST /edit.jsp",
+    "source": "src/main/scala/ru/org/linux/topic/EditTopicController.scala:84"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/edit.jsp",
+    "params": "",
+    "controller": "EditTopicController",
+    "handler": "edit",
+    "rust_match": "GET,POST /edit.jsp",
+    "source": "src/main/scala/ru/org/linux/topic/EditTopicController.scala:215"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/edit_comment",
+    "params": "",
+    "controller": "EditCommentController",
+    "handler": "editCommentShowHandler",
+    "rust_match": "GET,POST /edit_comment",
+    "source": "src/main/scala/ru/org/linux/comment/EditCommentController.scala:54"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/edit_comment",
+    "params": "",
+    "controller": "EditCommentController",
+    "handler": "editCommentPostHandler",
+    "rust_match": "GET,POST /edit_comment",
+    "source": "src/main/scala/ru/org/linux/comment/EditCommentController.scala:96"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/errors/403",
+    "params": "",
+    "controller": "HttpErrorController",
+    "handler": "handle403",
+    "rust_match": "GET /errors/403",
+    "source": "src/main/scala/ru/org/linux/site/HttpErrorController.scala:25"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/errors/404",
+    "params": "",
+    "controller": "HttpErrorController",
+    "handler": "handle404",
+    "rust_match": "GET /errors/404",
+    "source": "src/main/scala/ru/org/linux/site/HttpErrorController.scala:22"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/forum",
+    "params": "",
+    "controller": "SectionController",
+    "handler": "forum",
+    "rust_match": "GET /forum",
+    "source": "src/main/scala/ru/org/linux/section/SectionController.scala:30"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/forum/lenta",
+    "params": "",
+    "controller": "TopicListController",
+    "handler": "forum",
+    "rust_match": "GET /forum/lenta",
+    "source": "src/main/scala/ru/org/linux/topic/TopicListController.scala:185"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/forum/{group}",
+    "params": "",
+    "controller": "GroupController",
+    "handler": "forum",
+    "rust_match": "GET /forum/:group",
+    "source": "src/main/scala/ru/org/linux/group/GroupController.scala:104"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/forum/{group}/archive",
+    "params": "",
+    "controller": "ArchiveController",
+    "handler": "forumArchive",
+    "rust_match": "GET /forum/:group/archive",
+    "source": "src/main/scala/ru/org/linux/topic/ArchiveController.scala:88"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/forum/{group}/{id}/history",
+    "params": "",
+    "controller": "EditHistoryController",
+    "handler": "showEditInfo",
+    "rust_match": "GET /forum/:group/:id/history",
+    "source": "src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/forum/{group}/{id}/{commentid}/history",
+    "params": "",
+    "controller": "EditHistoryController",
+    "handler": "showCommentEditInfo",
+    "rust_match": "GET /forum/:group/:id/:commentid/history",
+    "source": "src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/forum/{group}/{year}/{month}",
+    "params": "",
+    "controller": "GroupController",
+    "handler": "forumArchive",
+    "rust_match": "GET /forum/:group/:year/:month",
+    "source": "src/main/scala/ru/org/linux/group/GroupController.scala:71"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/gallery/archive",
+    "params": "",
+    "controller": "ArchiveController",
+    "handler": "galleryArchive",
+    "rust_match": "GET /gallery/archive",
+    "source": "src/main/scala/ru/org/linux/topic/ArchiveController.scala:76"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/gallery/{group}/{id}/history",
+    "params": "",
+    "controller": "EditHistoryController",
+    "handler": "showEditInfo",
+    "rust_match": "GET /gallery/:group/:id/history",
+    "source": "src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/gallery/{group}/{id}/{commentid}/history",
+    "params": "",
+    "controller": "EditHistoryController",
+    "handler": "showCommentEditInfo",
+    "rust_match": "GET /gallery/:group/:id/:commentid/history",
+    "source": "src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/group-lastmod.jsp",
+    "params": "",
+    "controller": "GroupController",
+    "handler": "topicsLastmod",
+    "rust_match": "GET /group-lastmod.jsp",
+    "source": "src/main/scala/ru/org/linux/group/GroupController.scala:59"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/group.jsp",
+    "params": "",
+    "controller": "GroupController",
+    "handler": "topics",
+    "rust_match": "GET /group.jsp",
+    "source": "src/main/scala/ru/org/linux/group/GroupController.scala:47"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/groupmod.jsp",
+    "params": "",
+    "controller": "GroupModificationController",
+    "handler": "showForm",
+    "rust_match": "GET,POST /groupmod.jsp",
+    "source": "src/main/scala/ru/org/linux/group/GroupModificationController.scala:30"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/groupmod.jsp",
+    "params": "",
+    "controller": "GroupModificationController",
+    "handler": "modifyGroup",
+    "rust_match": "GET,POST /groupmod.jsp",
+    "source": "src/main/scala/ru/org/linux/group/GroupModificationController.scala:44"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/help/{page}",
+    "params": "",
+    "controller": "HelpController",
+    "handler": "helpPage",
+    "rust_match": "GET /help/:page",
+    "source": "src/main/scala/ru/org/linux/help/HelpController.scala:34"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/index.jsp",
+    "params": "",
+    "controller": "MainPageController",
+    "handler": "mainPage",
+    "rust_match": "GET /index.jsp",
+    "source": "src/main/scala/ru/org/linux/spring/MainPageController.scala:40"
+  },
+  {
+    "status": "covered",
+    "methods": "GET,HEAD",
+    "path": "/jump-message.jsp",
+    "params": "",
+    "controller": "TopicController",
+    "handler": "jumpMessage",
+    "rust_match": "GET /jump-message.jsp",
+    "source": "src/main/scala/ru/org/linux/topic/TopicController.scala:450"
+  },
+  {
+    "status": "covered",
+    "methods": "GET,HEAD",
+    "path": "/login.jsp",
+    "params": "",
+    "controller": "LoginController",
+    "handler": "loginForm",
+    "rust_match": "GET /login.jsp",
+    "source": "src/main/scala/ru/org/linux/auth/LoginController.scala:132"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/login_process",
+    "params": "",
+    "controller": "LoginController",
+    "handler": "loginProcess",
+    "rust_match": "POST /login_process",
+    "source": "src/main/scala/ru/org/linux/auth/LoginController.scala:53"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/logout",
+    "params": "",
+    "controller": "LoginController",
+    "handler": "logout",
+    "rust_match": "GET,POST /logout",
+    "source": "src/main/scala/ru/org/linux/auth/LoginController.scala:108"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/logout",
+    "params": "",
+    "controller": "LoginController",
+    "handler": "logoutLink",
+    "rust_match": "GET,POST /logout",
+    "source": "src/main/scala/ru/org/linux/auth/LoginController.scala:125"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/logout_all_sessions",
+    "params": "",
+    "controller": "LoginController",
+    "handler": "logoutAllDevices",
+    "rust_match": "GET,POST /logout_all_sessions",
+    "source": "src/main/scala/ru/org/linux/auth/LoginController.scala:119"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/logout_all_sessions",
+    "params": "",
+    "controller": "LoginController",
+    "handler": "logoutLink",
+    "rust_match": "GET,POST /logout_all_sessions",
+    "source": "src/main/scala/ru/org/linux/auth/LoginController.scala:125"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/lostpwd.jsp",
+    "params": "",
+    "controller": "LostPasswordController",
+    "handler": "showForm",
+    "rust_match": "GET,POST /lostpwd.jsp",
+    "source": "src/main/scala/ru/org/linux/user/LostPasswordController.scala:39"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/lostpwd.jsp",
+    "params": "",
+    "controller": "LostPasswordController",
+    "handler": "sendPassword",
+    "rust_match": "GET,POST /lostpwd.jsp",
+    "source": "src/main/scala/ru/org/linux/user/LostPasswordController.scala:42"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/markup/preview",
+    "params": "",
+    "controller": "MarkupPreviewController",
+    "handler": "preview",
+    "rust_match": "POST /markup/preview",
+    "source": "src/main/scala/ru/org/linux/markup/MarkupPreviewController.scala:34"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/memories.jsp",
+    "params": "add",
+    "controller": "MemoriesController",
+    "handler": "add",
+    "rust_match": "POST /memories.jsp",
+    "source": "src/main/scala/ru/org/linux/user/MemoriesController.scala:28"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/memories.jsp",
+    "params": "remove",
+    "controller": "MemoriesController",
+    "handler": "remove",
+    "rust_match": "POST /memories.jsp",
+    "source": "src/main/scala/ru/org/linux/user/MemoriesController.scala:50"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/mt.jsp",
+    "params": "",
+    "controller": "TopicModificationController",
+    "handler": "moveTopic",
+    "rust_match": "GET,POST /mt.jsp",
+    "source": "src/main/scala/ru/org/linux/topic/TopicModificationController.scala:99"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/mt.jsp",
+    "params": "",
+    "controller": "TopicModificationController",
+    "handler": "moveToForumForm",
+    "rust_match": "GET,POST /mt.jsp",
+    "source": "src/main/scala/ru/org/linux/topic/TopicModificationController.scala:119"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/mtn.jsp",
+    "params": "",
+    "controller": "TopicModificationController",
+    "handler": "movePremoderatedForm",
+    "rust_match": "GET /mtn.jsp",
+    "source": "src/main/scala/ru/org/linux/topic/TopicModificationController.scala:134"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/news/archive",
+    "params": "",
+    "controller": "ArchiveController",
+    "handler": "newsArchive",
+    "rust_match": "GET /news/archive",
+    "source": "src/main/scala/ru/org/linux/topic/ArchiveController.scala:79"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/news/{group}/{id}/history",
+    "params": "",
+    "controller": "EditHistoryController",
+    "handler": "showEditInfo",
+    "rust_match": "GET /news/:group/:id/history",
+    "source": "src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/news/{group}/{id}/{commentid}/history",
+    "params": "",
+    "controller": "EditHistoryController",
+    "handler": "showCommentEditInfo",
+    "rust_match": "GET /news/:group/:id/:commentid/history",
+    "source": "src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/notifications",
+    "params": "",
+    "controller": "UserEventController",
+    "handler": "resetNotifications",
+    "rust_match": "GET,POST /notifications",
+    "source": "src/main/scala/ru/org/linux/user/UserEventController.scala:58"
+  },
+  {
+    "status": "covered",
+    "methods": "GET,HEAD",
+    "path": "/notifications",
+    "params": "",
+    "controller": "UserEventController",
+    "handler": "showNotifications",
+    "rust_match": "GET,POST /notifications",
+    "source": "src/main/scala/ru/org/linux/user/UserEventController.scala:126"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/notifications-click",
+    "params": "",
+    "controller": "UserEventController",
+    "handler": "clickNotifications",
+    "rust_match": "POST /notifications-click",
+    "source": "src/main/scala/ru/org/linux/user/UserEventController.scala:68"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/notifications-click/ajax",
+    "params": "",
+    "controller": "UserEventController",
+    "handler": "clickNotificationsAjax",
+    "rust_match": "POST /notifications-click/ajax",
+    "source": "src/main/scala/ru/org/linux/user/UserEventController.scala:76"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/notifications-count",
+    "params": "",
+    "controller": "UserEventApiController",
+    "handler": "getEventsCount",
+    "rust_match": "GET /notifications-count",
+    "source": "src/main/scala/ru/org/linux/user/UserEventApiController.scala:31"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/notifications-reset",
+    "params": "",
+    "controller": "UserEventApiController",
+    "handler": "resetNotifications",
+    "rust_match": "POST /notifications-reset",
+    "source": "src/main/scala/ru/org/linux/user/UserEventApiController.scala:37"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/people/{nick}",
+    "params": "output=rss",
+    "controller": "UserTopicListController",
+    "handler": "showUserTopicsRssGone",
+    "rust_match": "GET /people/:nick",
+    "source": "src/main/scala/ru/org/linux/topic/UserTopicListController.scala:84"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/people/{nick}/deleted-comments",
+    "params": "",
+    "controller": "ShowCommentsController",
+    "handler": "showDeletedComments",
+    "rust_match": "GET /people/:nick/deleted-comments",
+    "source": "src/main/scala/ru/org/linux/comment/ShowCommentsController.scala:61"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/people/{nick}/deleted-topics",
+    "params": "",
+    "controller": "UserTopicListController",
+    "handler": "showDeletedTopics",
+    "rust_match": "GET /people/:nick/deleted-topics",
+    "source": "src/main/scala/ru/org/linux/topic/UserTopicListController.scala:143"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/people/{nick}/drafts",
+    "params": "",
+    "controller": "UserTopicListController",
+    "handler": "showUserDrafts",
+    "rust_match": "GET /people/:nick/drafts",
+    "source": "src/main/scala/ru/org/linux/topic/UserTopicListController.scala:59"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/people/{nick}/edit",
+    "params": "",
+    "controller": "EditProfileController",
+    "handler": "show",
+    "rust_match": "GET,POST /people/:nick/edit",
+    "source": "src/main/scala/ru/org/linux/user/EditProfileController.scala:58"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/people/{nick}/edit",
+    "params": "",
+    "controller": "EditProfileController",
+    "handler": "edit",
+    "rust_match": "GET,POST /people/:nick/edit",
+    "source": "src/main/scala/ru/org/linux/user/EditProfileController.scala:102"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/people/{nick}/favs",
+    "params": "",
+    "controller": "UserTopicListController",
+    "handler": "showUserFavs",
+    "rust_match": "GET /people/:nick/favs",
+    "source": "src/main/scala/ru/org/linux/topic/UserTopicListController.scala:37"
+  },
+  {
+    "status": "covered",
+    "methods": "GET,HEAD",
+    "path": "/people/{nick}/profile",
+    "params": "reset-password",
+    "controller": "ResetPasswordController",
+    "handler": "showModeratorForm",
+    "rust_match": "GET /people/:nick/profile",
+    "source": "src/main/scala/ru/org/linux/user/ResetPasswordController.scala:33"
+  },
+  {
+    "status": "covered",
+    "methods": "GET,HEAD",
+    "path": "/people/{nick}/profile",
+    "params": "",
+    "controller": "WhoisController",
+    "handler": "getInfoNew",
+    "rust_match": "GET /people/:nick/profile",
+    "source": "src/main/scala/ru/org/linux/user/WhoisController.scala:49"
+  },
+  {
+    "status": "covered",
+    "methods": "GET,HEAD",
+    "path": "/people/{nick}/profile",
+    "params": "year-stats",
+    "controller": "WhoisController",
+    "handler": "yearStats",
+    "rust_match": "GET /people/:nick/profile",
+    "source": "src/main/scala/ru/org/linux/user/WhoisController.scala:204"
+  },
+  {
+    "status": "covered",
+    "methods": "GET,HEAD",
+    "path": "/people/{nick}/profile/wipe",
+    "params": "",
+    "controller": "UserModificationController",
+    "handler": "wipe",
+    "rust_match": "GET /people/:nick/profile/wipe",
+    "source": "src/main/scala/ru/org/linux/user/UserModificationController.scala:315"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/people/{nick}/remark",
+    "params": "",
+    "controller": "EditRemarkController",
+    "handler": "showForm",
+    "rust_match": "GET,POST /people/:nick/remark",
+    "source": "src/main/scala/ru/org/linux/user/EditRemarkController.scala:29"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/people/{nick}/remark",
+    "params": "",
+    "controller": "EditRemarkController",
+    "handler": "editProfile",
+    "rust_match": "GET,POST /people/:nick/remark",
+    "source": "src/main/scala/ru/org/linux/user/EditRemarkController.scala:48"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/people/{nick}/remarks",
+    "params": "",
+    "controller": "ShowRemarkController",
+    "handler": "showRemarks",
+    "rust_match": "GET /people/:nick/remarks",
+    "source": "src/main/scala/ru/org/linux/user/ShowRemarkController.scala:26"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/people/{nick}/settings",
+    "params": "",
+    "controller": "EditSettingsController",
+    "handler": "showForm",
+    "rust_match": "GET,POST /people/:nick/settings",
+    "source": "src/main/scala/ru/org/linux/user/EditSettingsController.scala:37"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/people/{nick}/settings",
+    "params": "",
+    "controller": "EditSettingsController",
+    "handler": "updateSettings",
+    "rust_match": "GET,POST /people/:nick/settings",
+    "source": "src/main/scala/ru/org/linux/user/EditSettingsController.scala:78"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/people/{nick}/tracked",
+    "params": "",
+    "controller": "UserTopicListController",
+    "handler": "showUserWatches",
+    "rust_match": "GET /people/:nick/tracked",
+    "source": "src/main/scala/ru/org/linux/topic/UserTopicListController.scala:161"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/poll.boxlet",
+    "params": "",
+    "controller": "PollBoxlet",
+    "handler": "getData",
+    "rust_match": "GET /poll.boxlet",
+    "source": "src/main/scala/ru/org/linux/poll/PollBoxlet.scala:30"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/polls/archive",
+    "params": "",
+    "controller": "ArchiveController",
+    "handler": "pollsArchive",
+    "rust_match": "GET /polls/archive",
+    "source": "src/main/scala/ru/org/linux/topic/ArchiveController.scala:82"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/polls/{group}/{id}/history",
+    "params": "",
+    "controller": "EditHistoryController",
+    "handler": "showEditInfo",
+    "rust_match": "GET /polls/:group/:id/history",
+    "source": "src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/polls/{group}/{id}/{commentid}/history",
+    "params": "",
+    "controller": "EditHistoryController",
+    "handler": "showCommentEditInfo",
+    "rust_match": "GET /polls/:group/:id/:commentid/history",
+    "source": "src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/post-warning",
+    "params": "",
+    "controller": "WarningController",
+    "handler": "showForm",
+    "rust_match": "GET,POST /post-warning",
+    "source": "src/main/scala/ru/org/linux/warning/WarningController.scala:50"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/post-warning",
+    "params": "",
+    "controller": "WarningController",
+    "handler": "post",
+    "rust_match": "GET,POST /post-warning",
+    "source": "src/main/scala/ru/org/linux/warning/WarningController.scala:98"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/reactions",
+    "params": "comment",
+    "controller": "ReactionController",
+    "handler": "commentReaction",
+    "rust_match": "GET,POST /reactions",
+    "source": "src/main/scala/ru/org/linux/reaction/ReactionController.scala:44"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/reactions",
+    "params": "comment",
+    "controller": "ReactionController",
+    "handler": "setCommentReaction",
+    "rust_match": "GET,POST /reactions",
+    "source": "src/main/scala/ru/org/linux/reaction/ReactionController.scala:90"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/reactions",
+    "params": "!comment",
+    "controller": "ReactionController",
+    "handler": "topicReaction",
+    "rust_match": "GET,POST /reactions",
+    "source": "src/main/scala/ru/org/linux/reaction/ReactionController.scala:114"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/reactions",
+    "params": "!comment",
+    "controller": "ReactionController",
+    "handler": "setTopicReaction",
+    "rust_match": "GET,POST /reactions",
+    "source": "src/main/scala/ru/org/linux/reaction/ReactionController.scala:162"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/reactions/ajax",
+    "params": "comment",
+    "controller": "ReactionController",
+    "handler": "setCommentReactionAjax",
+    "rust_match": "POST /reactions/ajax",
+    "source": "src/main/scala/ru/org/linux/reaction/ReactionController.scala:101"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/reactions/ajax",
+    "params": "!comment",
+    "controller": "ReactionController",
+    "handler": "setTopicReactionAjax",
+    "rust_match": "POST /reactions/ajax",
+    "source": "src/main/scala/ru/org/linux/reaction/ReactionController.scala:172"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/register.jsp",
+    "params": "",
+    "controller": "RegisterController",
+    "handler": "register",
+    "rust_match": "GET,POST /register.jsp",
+    "source": "src/main/scala/ru/org/linux/user/RegisterController.scala:50"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/register.jsp",
+    "params": "",
+    "controller": "RegisterController",
+    "handler": "doRegister",
+    "rust_match": "GET,POST /register.jsp",
+    "source": "src/main/scala/ru/org/linux/user/RegisterController.scala:65"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/remove-userpic.jsp",
+    "params": "",
+    "controller": "UserModificationController",
+    "handler": "removeUserpic",
+    "rust_match": "POST /remove-userpic.jsp",
+    "source": "src/main/scala/ru/org/linux/user/UserModificationController.scala:267"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/reset-password",
+    "params": "",
+    "controller": "ResetPasswordController",
+    "handler": "showCodeForm",
+    "rust_match": "GET,POST /reset-password",
+    "source": "src/main/scala/ru/org/linux/user/ResetPasswordController.scala:47"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/reset-password",
+    "params": "",
+    "controller": "ResetPasswordController",
+    "handler": "resetPassword",
+    "rust_match": "GET,POST /reset-password",
+    "source": "src/main/scala/ru/org/linux/user/ResetPasswordController.scala:50"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/resolve.jsp",
+    "params": "",
+    "controller": "ResolveController",
+    "handler": "resolve",
+    "rust_match": "POST /resolve.jsp",
+    "source": "src/main/scala/ru/org/linux/topic/ResolveController.scala:29"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/sameip.jsp",
+    "params": "",
+    "controller": "SameIPController",
+    "handler": "sameIP",
+    "rust_match": "GET /sameip.jsp",
+    "source": "src/main/scala/ru/org/linux/admin/SameIPController.scala:59"
+  },
+  {
+    "status": "covered",
+    "methods": "GET,HEAD",
+    "path": "/search.jsp",
+    "params": "",
+    "controller": "SearchController",
+    "handler": "search",
+    "rust_match": "GET /search.jsp",
+    "source": "src/main/scala/ru/org/linux/search/SearchController.scala:56"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/section-rss.jsp",
+    "params": "",
+    "controller": "TopicListController",
+    "handler": "showRSS",
+    "rust_match": "GET /section-rss.jsp",
+    "source": "src/main/scala/ru/org/linux/topic/TopicListController.scala:240"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/setpostscore.jsp",
+    "params": "",
+    "controller": "TopicModificationController",
+    "handler": "showForm",
+    "rust_match": "GET,POST /setpostscore.jsp",
+    "source": "src/main/scala/ru/org/linux/topic/TopicModificationController.scala:41"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/setpostscore.jsp",
+    "params": "",
+    "controller": "TopicModificationController",
+    "handler": "modifyTopic",
+    "rust_match": "GET,POST /setpostscore.jsp",
+    "source": "src/main/scala/ru/org/linux/topic/TopicModificationController.scala:51"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/show-comments.jsp",
+    "params": "",
+    "controller": "ShowCommentsController",
+    "handler": "showComments",
+    "rust_match": "GET /show-comments.jsp",
+    "source": "src/main/scala/ru/org/linux/comment/ShowCommentsController.scala:32"
+  },
+  {
+    "status": "covered",
+    "methods": "GET,HEAD",
+    "path": "/show-replies.jsp",
+    "params": "!output,!nick",
+    "controller": "UserEventController",
+    "handler": "showNotificationsOld",
+    "rust_match": "GET /show-replies.jsp",
+    "source": "src/main/scala/ru/org/linux/user/UserEventController.scala:191"
+  },
+  {
+    "status": "covered",
+    "methods": "GET,HEAD",
+    "path": "/show-replies.jsp",
+    "params": "!output",
+    "controller": "UserEventController",
+    "handler": "showNotificationsForModerator",
+    "rust_match": "GET /show-replies.jsp",
+    "source": "src/main/scala/ru/org/linux/user/UserEventController.scala:197"
+  },
+  {
+    "status": "covered",
+    "methods": "GET,HEAD",
+    "path": "/show-replies.jsp",
+    "params": "output",
+    "controller": "UserEventController",
+    "handler": "repliesFeed",
+    "rust_match": "GET /show-replies.jsp",
+    "source": "src/main/scala/ru/org/linux/user/UserEventController.scala:254"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/show-topics.jsp",
+    "params": "",
+    "controller": "TopicListController",
+    "handler": "showUserTopics",
+    "rust_match": "GET /show-topics.jsp",
+    "source": "src/main/scala/ru/org/linux/topic/TopicListController.scala:231"
+  },
+  {
+    "status": "covered",
+    "methods": "GET,HEAD",
+    "path": "/tag/{tag}",
+    "params": "",
+    "controller": "TagPageController",
+    "handler": "tagPage",
+    "rust_match": "GET /tag/:tag",
+    "source": "src/main/scala/ru/org/linux/tag/TagPageController.scala:61"
+  },
+  {
+    "status": "covered",
+    "methods": "GET,HEAD",
+    "path": "/tag/{tag}",
+    "params": "section",
+    "controller": "TagTopicListController",
+    "handler": "tagFeed",
+    "rust_match": "GET /tag/:tag",
+    "source": "src/main/scala/ru/org/linux/topic/TagTopicListController.scala:74"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/tags",
+    "params": "",
+    "controller": "TagController",
+    "handler": "showDefaultTagListHandlertags",
+    "rust_match": "GET /tags",
+    "source": "src/main/scala/ru/org/linux/tag/TagController.scala:40"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/tags",
+    "params": "term",
+    "controller": "TagController",
+    "handler": "showTagListHandlerJSON",
+    "rust_match": "GET /tags",
+    "source": "src/main/scala/ru/org/linux/tag/TagController.scala:93"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/tags.jsp",
+    "params": "",
+    "controller": "TagController",
+    "handler": "oldTagsRedirectHandler",
+    "rust_match": "GET /tags.jsp",
+    "source": "src/main/scala/ru/org/linux/tag/TagController.scala:83"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/tags/change",
+    "params": "",
+    "controller": "TagController",
+    "handler": "changeTagShowFormHandler",
+    "rust_match": "GET,POST /tags/change",
+    "source": "src/main/scala/ru/org/linux/tag/TagController.scala:107"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/tags/change",
+    "params": "",
+    "controller": "TagController",
+    "handler": "changeTagSubmitHandler",
+    "rust_match": "GET,POST /tags/change",
+    "source": "src/main/scala/ru/org/linux/tag/TagController.scala:133"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/tags/delete",
+    "params": "",
+    "controller": "TagController",
+    "handler": "deleteTagShowFormHandler",
+    "rust_match": "GET,POST /tags/delete",
+    "source": "src/main/scala/ru/org/linux/tag/TagController.scala:169"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/tags/delete",
+    "params": "",
+    "controller": "TagController",
+    "handler": "deleteTagSubmitHandler",
+    "rust_match": "GET,POST /tags/delete",
+    "source": "src/main/scala/ru/org/linux/tag/TagController.scala:193"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/tags/{firstLetter}",
+    "params": "",
+    "controller": "TagController",
+    "handler": "showTagListHandler",
+    "rust_match": "GET /tags/:first_letter",
+    "source": "src/main/scala/ru/org/linux/tag/TagController.scala:50"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/top10.boxlet",
+    "params": "",
+    "controller": "TopTenBoxlet",
+    "handler": "getData",
+    "rust_match": "GET /top10.boxlet",
+    "source": "src/main/scala/ru/org/linux/boxlets/TopTenBoxlet.scala:28"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/tracker",
+    "params": "",
+    "controller": "TrackerController",
+    "handler": "tracker",
+    "rust_match": "GET /tracker",
+    "source": "src/main/scala/ru/org/linux/tracker/TrackerController.scala:68"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/tracker.jsp",
+    "params": "",
+    "controller": "TrackerController",
+    "handler": "trackerOldUrl",
+    "rust_match": "GET /tracker.jsp",
+    "source": "src/main/scala/ru/org/linux/tracker/TrackerController.scala:36"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/uncommit.jsp",
+    "params": "",
+    "controller": "TopicModificationController",
+    "handler": "uncommitForm",
+    "rust_match": "GET,POST /uncommit.jsp",
+    "source": "src/main/scala/ru/org/linux/topic/TopicModificationController.scala:155"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/uncommit.jsp",
+    "params": "",
+    "controller": "TopicModificationController",
+    "handler": "uncommit",
+    "rust_match": "GET,POST /uncommit.jsp",
+    "source": "src/main/scala/ru/org/linux/topic/TopicModificationController.scala:167"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/undelete",
+    "params": "",
+    "controller": "DeleteTopicController",
+    "handler": "undeleteForm",
+    "rust_match": "GET,POST /undelete",
+    "source": "src/main/scala/ru/org/linux/topic/DeleteTopicController.scala:104"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/undelete",
+    "params": "",
+    "controller": "DeleteTopicController",
+    "handler": "undelete",
+    "rust_match": "GET,POST /undelete",
+    "source": "src/main/scala/ru/org/linux/topic/DeleteTopicController.scala:115"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/undelete_comment",
+    "params": "",
+    "controller": "DeleteCommentController",
+    "handler": "showUndeleteForm",
+    "rust_match": "GET,POST /undelete_comment",
+    "source": "src/main/scala/ru/org/linux/comment/DeleteCommentController.scala:183"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/undelete_comment",
+    "params": "",
+    "controller": "DeleteCommentController",
+    "handler": "undelete",
+    "rust_match": "GET,POST /undelete_comment",
+    "source": "src/main/scala/ru/org/linux/comment/DeleteCommentController.scala:203"
+  },
+  {
+    "status": "covered",
+    "methods": "GET,HEAD",
+    "path": "/user-filter",
+    "params": "",
+    "controller": "UserFilterController",
+    "handler": "showList",
+    "rust_match": "GET /user-filter",
+    "source": "src/main/scala/ru/org/linux/user/UserFilterController.scala:34"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/user-filter/favorite-tag",
+    "params": "add",
+    "controller": "UserFilterController",
+    "handler": "favoriteTagAddHTML",
+    "rust_match": "POST /user-filter/favorite-tag",
+    "source": "src/main/scala/ru/org/linux/user/UserFilterController.scala:105"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/user-filter/favorite-tag",
+    "params": "add",
+    "controller": "UserFilterController",
+    "handler": "favoriteTagAddJSON",
+    "rust_match": "POST /user-filter/favorite-tag",
+    "source": "src/main/scala/ru/org/linux/user/UserFilterController.scala:127"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/user-filter/favorite-tag",
+    "params": "del",
+    "controller": "UserFilterController",
+    "handler": "favoriteTagDel",
+    "rust_match": "POST /user-filter/favorite-tag",
+    "source": "src/main/scala/ru/org/linux/user/UserFilterController.scala:148"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/user-filter/favorite-tag",
+    "params": "del",
+    "controller": "UserFilterController",
+    "handler": "favoriteTagDelJSON",
+    "rust_match": "POST /user-filter/favorite-tag",
+    "source": "src/main/scala/ru/org/linux/user/UserFilterController.scala:162"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/user-filter/ignore-tag",
+    "params": "add",
+    "controller": "UserFilterController",
+    "handler": "ignoreTagAdd",
+    "rust_match": "POST /user-filter/ignore-tag",
+    "source": "src/main/scala/ru/org/linux/user/UserFilterController.scala:175"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/user-filter/ignore-tag",
+    "params": "add",
+    "controller": "UserFilterController",
+    "handler": "ignoreTagAddJSON",
+    "rust_match": "POST /user-filter/ignore-tag",
+    "source": "src/main/scala/ru/org/linux/user/UserFilterController.scala:202"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/user-filter/ignore-tag",
+    "params": "del",
+    "controller": "UserFilterController",
+    "handler": "ignoreTagDel",
+    "rust_match": "POST /user-filter/ignore-tag",
+    "source": "src/main/scala/ru/org/linux/user/UserFilterController.scala:230"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/user-filter/ignore-tag",
+    "params": "del",
+    "controller": "UserFilterController",
+    "handler": "ignoreTagDelJSON",
+    "rust_match": "POST /user-filter/ignore-tag",
+    "source": "src/main/scala/ru/org/linux/user/UserFilterController.scala:250"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/user-filter/ignore-user",
+    "params": "add",
+    "controller": "UserFilterController",
+    "handler": "listAdd",
+    "rust_match": "POST /user-filter/ignore-user",
+    "source": "src/main/scala/ru/org/linux/user/UserFilterController.scala:67"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/user-filter/ignore-user",
+    "params": "del",
+    "controller": "UserFilterController",
+    "handler": "listDel",
+    "rust_match": "POST /user-filter/ignore-user",
+    "source": "src/main/scala/ru/org/linux/user/UserFilterController.scala:90"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/usermod.jsp",
+    "params": "action=block",
+    "controller": "UserModificationController",
+    "handler": "blockUser",
+    "rust_match": "POST /usermod.jsp",
+    "source": "src/main/scala/ru/org/linux/user/UserModificationController.scala:92"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/usermod.jsp",
+    "params": "action=score50",
+    "controller": "UserModificationController",
+    "handler": "score50",
+    "rust_match": "POST /usermod.jsp",
+    "source": "src/main/scala/ru/org/linux/user/UserModificationController.scala:116"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/usermod.jsp",
+    "params": "action=unblock",
+    "controller": "UserModificationController",
+    "handler": "unblockUser",
+    "rust_match": "POST /usermod.jsp",
+    "source": "src/main/scala/ru/org/linux/user/UserModificationController.scala:133"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/usermod.jsp",
+    "params": "action=block-n-delete-comments",
+    "controller": "UserModificationController",
+    "handler": "blockAndMassiveDeleteCommentUser",
+    "rust_match": "POST /usermod.jsp",
+    "source": "src/main/scala/ru/org/linux/user/UserModificationController.scala:152"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/usermod.jsp",
+    "params": "action=toggle_corrector",
+    "controller": "UserModificationController",
+    "handler": "toggleUserCorrector",
+    "rust_match": "POST /usermod.jsp",
+    "source": "src/main/scala/ru/org/linux/user/UserModificationController.scala:191"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/usermod.jsp",
+    "params": "action=reset-password",
+    "controller": "UserModificationController",
+    "handler": "resetPassword",
+    "rust_match": "POST /usermod.jsp",
+    "source": "src/main/scala/ru/org/linux/user/UserModificationController.scala:210"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/usermod.jsp",
+    "params": "action=remove_userinfo",
+    "controller": "UserModificationController",
+    "handler": "removeUserInfo",
+    "rust_match": "POST /usermod.jsp",
+    "source": "src/main/scala/ru/org/linux/user/UserModificationController.scala:231"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/usermod.jsp",
+    "params": "action=remove_town",
+    "controller": "UserModificationController",
+    "handler": "removeTown",
+    "rust_match": "POST /usermod.jsp",
+    "source": "src/main/scala/ru/org/linux/user/UserModificationController.scala:245"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/usermod.jsp",
+    "params": "action=remove_url",
+    "controller": "UserModificationController",
+    "handler": "removeUrl",
+    "rust_match": "POST /usermod.jsp",
+    "source": "src/main/scala/ru/org/linux/user/UserModificationController.scala:256"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/usermod.jsp",
+    "params": "action=freeze",
+    "controller": "UserModificationController",
+    "handler": "freezeUser",
+    "rust_match": "POST /usermod.jsp",
+    "source": "src/main/scala/ru/org/linux/user/UserModificationController.scala:291"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/view-deleted",
+    "params": "",
+    "controller": "DeletedCommentController",
+    "handler": "viewDeleted",
+    "rust_match": "GET /view-deleted",
+    "source": "src/main/scala/ru/org/linux/comment/DeletedCommentController.scala:35"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/view-message.jsp",
+    "params": "",
+    "controller": "TopicController",
+    "handler": "getMessageOld",
+    "rust_match": "GET /view-message.jsp",
+    "source": "src/main/scala/ru/org/linux/topic/TopicController.scala:359"
+  },
+  {
+    "status": "covered",
+    "methods": "GET,HEAD",
+    "path": "/view-news.jsp",
+    "params": "tag",
+    "controller": "TagTopicListController",
+    "handler": "tagFeedOld",
+    "rust_match": "GET /view-news.jsp",
+    "source": "src/main/scala/ru/org/linux/topic/TagTopicListController.scala:168"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/view-section.jsp",
+    "params": "",
+    "controller": "SectionController",
+    "handler": "oldLink",
+    "rust_match": "GET /view-section.jsp",
+    "source": "src/main/scala/ru/org/linux/section/SectionController.scala:45"
+  },
+  {
+    "status": "covered",
+    "methods": "POST",
+    "path": "/vote.jsp",
+    "params": "",
+    "controller": "VoteController",
+    "handler": "vote",
+    "rust_match": "POST /vote.jsp",
+    "source": "src/main/scala/ru/org/linux/poll/VoteController.scala:30"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/whois.jsp",
+    "params": "",
+    "controller": "WhoisController",
+    "handler": "getInfo",
+    "rust_match": "GET /whois.jsp",
+    "source": "src/main/scala/ru/org/linux/user/WhoisController.scala:162"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/yandex-tableau",
+    "params": "",
+    "controller": "UserEventApiController",
+    "handler": "getYandexWidget",
+    "rust_match": "GET /yandex-tableau",
+    "source": "src/main/scala/ru/org/linux/user/UserEventApiController.scala:47"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/{section}/",
+    "params": "",
+    "controller": "TopicListController",
+    "handler": "topics",
+    "rust_match": "GET /forum; GET /news; GET /news/; GET /polls; GET /polls/; GET /articles; GET /articles/; GET /gallery; GET /gallery/",
+    "source": "src/main/scala/ru/org/linux/topic/TopicListController.scala:167"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/{section}/archive/{year}/{month}",
+    "params": "",
+    "controller": "TopicListController",
+    "handler": "sectionArchive",
+    "rust_match": "GET /news/archive/:year/:month; GET /polls/archive/:year/:month; GET /articles/archive/:year/:month; GET /gallery/archive/:year/:month",
+    "source": "src/main/scala/ru/org/linux/topic/TopicListController.scala:218"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/{section}/{group}",
+    "params": "",
+    "controller": "TopicListController",
+    "handler": "topicsByGroup",
+    "rust_match": "GET /forum/:group; GET /news/:group; GET /polls/:group; GET /articles/:group; GET /gallery/:group",
+    "source": "src/main/scala/ru/org/linux/topic/TopicListController.scala:203"
+  },
+  {
+    "status": "covered",
+    "methods": "ANY",
+    "path": "/{section}/{group}/{id}",
+    "params": "",
+    "controller": "TopicController",
+    "handler": "getMessageMain",
+    "rust_match": "GET /forum/:group/:id; GET /news/:group/:id; GET /polls/:group/:id; GET /articles/:group/:id; GET /gallery/:group/:id",
+    "source": "src/main/scala/ru/org/linux/topic/TopicController.scala:98"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/{section}/{group}/{id}/page{page}",
+    "params": "",
+    "controller": "TopicController",
+    "handler": "getMessagePage",
+    "rust_match": "GET /forum/:group/:id/page/:page",
+    "source": "src/main/scala/ru/org/linux/topic/TopicController.scala:127"
+  },
+  {
+    "status": "covered",
+    "methods": "GET",
+    "path": "/{section}/{group}/{id}/thread/{threadRoot}",
+    "params": "",
+    "controller": "TopicController",
+    "handler": "getMessageThread",
+    "rust_match": "GET /forum/:group/:id/thread/:thread_root; GET /news/:group/:id/thread/:thread_root; GET /polls/:group/:id/thread/:thread_root; GET /articles/:group/:id/thread/:thread_root; GET /gallery/:group/:id/thread/:thread_root",
+    "source": "src/main/scala/ru/org/linux/topic/TopicController.scala:143"
+  }
+]

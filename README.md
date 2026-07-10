@@ -42,7 +42,27 @@ curl -fsS http://localhost:8080/healthz
 curl -fsS http://localhost:8080/rss | head
 ```
 
-## Что уже перенесено
+Проверка карты маршрутов и схемы:
+
+```bash
+./scripts/run-compatibility-suite.sh
+```
+
+HTTP smoke-тесты по Rust-порту:
+
+```bash
+NEW_BASE_URL=http://localhost:8080 python3 compat/test_http_compat.py
+```
+
+Сравнение старого и нового приложения, если старый Scala-сайт запущен рядом:
+
+```bash
+OLD_BASE_URL=http://localhost:8081 \
+NEW_BASE_URL=http://localhost:8080 \
+python3 compat/test_http_compat.py
+```
+
+## Что уже перенесено / подготовлено
 
 - главная лента;
 - разделы `news`, `forum`, `articles`, `gallery`, `polls`;
@@ -54,13 +74,21 @@ curl -fsS http://localhost:8080/rss | head
 - профили пользователей;
 - поиск по PostgreSQL FTS;
 - RSS;
-- старые совместимые URL `*.jsp`, где это уместно;
 - boxlet endpoints;
-- healthcheck и Docker-окружение.
+- healthcheck и Docker-окружение;
+- карта 184 исходных Spring endpoint’ов;
+- Rust route declaration coverage для всех извлечённых endpoint shapes;
+- legacy-route stubs для ещё не перенесённой бизнес-логики;
+- модельный слой совместимости `src/models_compat.rs`;
+- auth/security scaffold с BCrypt и signed session cookies;
+- миграция совместимости `db/migrations/0003_legacy_schema_compat.sql`;
+- HTTP smoke compatibility tests.
 
 ## Важное ограничение
 
-Исходный проект большой: в архиве было около 645 файлов основного кода и более 50 контроллеров. Этот архив — рабочий Rust-порт ядра и маршрутов, пригодный как основа для дальнейшего переноса, но не дословная механическая перепись каждого Scala/JSP класса. Production-функции вроде полноценной модерации, старого security layer, email, image pipeline, warning workflow и всех пользовательских настроек оставлены как явно выделенные точки расширения.
+Исходный проект большой. Этот архив — рабочий Rust-порт ядра, маршрутов и схемы совместимости, пригодный как основа для дальнейшего переноса, но **не production-ready замена исходного Scala/Spring приложения**.
+
+Сейчас все извлечённые URL-формы объявлены в Rust-router, но часть legacy endpoint’ов возвращает `501 Not Implemented`. Это сделано намеренно: endpoint больше не теряется как случайный `404`, а попадает в проверяемый backlog.
 
 ## Импорт старого demo dump
 
@@ -84,9 +112,20 @@ src/routes/search.rs   поиск
 src/routes/rss.rs      RSS
 src/routes/api.rs      tracker/notifications/boxlets
 src/routes/admin.rs    admin/moderator route stubs
+src/routes/legacy.rs   known but not yet ported legacy endpoints
+src/security.rs        password/session/permission compatibility layer
+src/models_compat.rs   original schema model inventory
 ```
 
 См. также:
 
+- `docs/PORTING_STATUS.md`
+- `docs/CONTROLLER_MAP.md`
 - `docs/ROUTE_MAP.md`
+- `docs/ROUTE_COVERAGE.md`
+- `docs/SCHEMA_COVERAGE.md`
+- `docs/AUTH_SECURITY_PORT.md`
+- `docs/SERVICE_PORTING_MAP.md`
+- `docs/COMPATIBILITY_TESTS.md`
+- `docs/DEMO_DB_COMPARISON.md`
 - `docs/ARCHITECTURE.md`

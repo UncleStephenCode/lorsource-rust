@@ -12,6 +12,7 @@ async-trait = "0.1"
 axum = { version = "0.7", features = ["macros", "json", "form"] }
 axum-extra = { version = "0.9", features = ["cookie", "typed-header"] }
 base64 = "0.22"
+bcrypt = "0.15"
 chrono = { version = "0.4", features = ["serde"] }
 html-escape = "0.2"
 http = "1"
