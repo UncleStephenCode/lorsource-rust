@@ -1,0 +1,952 @@
+[
+  {
+    "table": "adv_counts",
+    "status": "covered",
+    "java_columns": [
+      "counter",
+      "day",
+      "path"
+    ],
+    "rust_columns": [
+      "adv",
+      "clicks",
+      "counter",
+      "day",
+      "event_date",
+      "id",
+      "path",
+      "views"
+    ],
+    "missing_columns": [],
+    "extra_columns": [
+      "adv",
+      "clicks",
+      "event_date",
+      "id",
+      "views"
+    ]
+  },
+  {
+    "table": "b_ips",
+    "status": "covered",
+    "java_columns": [
+      "allow_posting",
+      "ban_date",
+      "captcha_required",
+      "date",
+      "ip",
+      "mod_id",
+      "reason"
+    ],
+    "rust_columns": [
+      "allow_posting",
+      "ban_date",
+      "captcha_required",
+      "date",
+      "ip",
+      "mod_id",
+      "reason"
+    ],
+    "missing_columns": [],
+    "extra_columns": []
+  },
+  {
+    "table": "ban_info",
+    "status": "covered",
+    "java_columns": [
+      "ban_by",
+      "bandate",
+      "reason",
+      "userid"
+    ],
+    "rust_columns": [
+      "ban_by",
+      "bandate",
+      "reason",
+      "userid"
+    ],
+    "missing_columns": [],
+    "extra_columns": []
+  },
+  {
+    "table": "comments",
+    "status": "covered",
+    "java_columns": [
+      "deleted",
+      "edit_count",
+      "edit_date",
+      "editor_id",
+      "id",
+      "postdate",
+      "postip",
+      "reactions",
+      "replyto",
+      "title",
+      "topic",
+      "topic_deleted",
+      "ua_id",
+      "userid"
+    ],
+    "rust_columns": [
+      "deleted",
+      "edit_count",
+      "edit_date",
+      "editdate",
+      "editor",
+      "editor_id",
+      "id",
+      "postdate",
+      "postip",
+      "reactions",
+      "replyto",
+      "title",
+      "topic",
+      "topic_deleted",
+      "ua_id",
+      "userid"
+    ],
+    "missing_columns": [],
+    "extra_columns": [
+      "editdate",
+      "editor"
+    ]
+  },
+  {
+    "table": "del_info",
+    "status": "covered",
+    "java_columns": [
+      "bonus",
+      "delby",
+      "deldate",
+      "msgid",
+      "reason"
+    ],
+    "rust_columns": [
+      "bonus",
+      "delby",
+      "deldate",
+      "msgid",
+      "reason"
+    ],
+    "missing_columns": [],
+    "extra_columns": []
+  },
+  {
+    "table": "edit_info",
+    "status": "covered",
+    "java_columns": [
+      "editdate",
+      "editor",
+      "id",
+      "msgid",
+      "object_type",
+      "oldaddimages",
+      "oldimage",
+      "oldlinktext",
+      "oldmessage",
+      "oldminor",
+      "oldpoll",
+      "oldtags",
+      "oldtitle",
+      "oldurl"
+    ],
+    "rust_columns": [
+      "editdate",
+      "editor",
+      "id",
+      "minor",
+      "msgid",
+      "object_type",
+      "oldaddimages",
+      "oldimage",
+      "oldlinktext",
+      "oldmessage",
+      "oldminor",
+      "oldpoll",
+      "oldtags",
+      "oldtitle",
+      "oldurl"
+    ],
+    "missing_columns": [],
+    "extra_columns": [
+      "minor"
+    ]
+  },
+  {
+    "table": "email_domains_block",
+    "status": "covered",
+    "java_columns": [
+      "block_until",
+      "domain"
+    ],
+    "rust_columns": [
+      "block_until",
+      "created_at",
+      "domain",
+      "reason"
+    ],
+    "missing_columns": [],
+    "extra_columns": [
+      "created_at",
+      "reason"
+    ]
+  },
+  {
+    "table": "groups",
+    "status": "covered",
+    "java_columns": [
+      "id",
+      "image",
+      "info",
+      "longinfo",
+      "resolvable",
+      "restrict_comments",
+      "restrict_topics",
+      "section",
+      "stat1",
+      "stat2",
+      "stat3",
+      "stat4",
+      "title",
+      "urlname"
+    ],
+    "rust_columns": [
+      "id",
+      "image",
+      "info",
+      "longinfo",
+      "resolvable",
+      "restrict_comments",
+      "restrict_topics",
+      "section",
+      "stat1",
+      "stat2",
+      "stat3",
+      "stat4",
+      "title",
+      "urlname"
+    ],
+    "missing_columns": [],
+    "extra_columns": []
+  },
+  {
+    "table": "ignore_list",
+    "status": "covered",
+    "java_columns": [
+      "ignored",
+      "userid"
+    ],
+    "rust_columns": [
+      "ignored",
+      "userid"
+    ],
+    "missing_columns": [],
+    "extra_columns": []
+  },
+  {
+    "table": "images",
+    "status": "covered",
+    "java_columns": [
+      "deleted",
+      "extension",
+      "icon",
+      "id",
+      "main",
+      "original",
+      "topic"
+    ],
+    "rust_columns": [
+      "deleted",
+      "extension",
+      "height",
+      "icon",
+      "id",
+      "main",
+      "medium",
+      "original",
+      "original_name",
+      "postdate",
+      "thumbnail",
+      "topic",
+      "userid",
+      "width"
+    ],
+    "missing_columns": [],
+    "extra_columns": [
+      "height",
+      "medium",
+      "original_name",
+      "postdate",
+      "thumbnail",
+      "userid",
+      "width"
+    ]
+  },
+  {
+    "table": "memories",
+    "status": "covered",
+    "java_columns": [
+      "add_date",
+      "id",
+      "topic",
+      "userid",
+      "watch"
+    ],
+    "rust_columns": [
+      "add_date",
+      "id",
+      "notify",
+      "topic",
+      "userid",
+      "watch"
+    ],
+    "missing_columns": [],
+    "extra_columns": [
+      "notify"
+    ]
+  },
+  {
+    "table": "message_warnings",
+    "status": "covered",
+    "java_columns": [
+      "author",
+      "closed_by",
+      "closed_when",
+      "comment",
+      "id",
+      "message",
+      "postdate",
+      "topic",
+      "warning_type"
+    ],
+    "rust_columns": [
+      "author",
+      "closed_by",
+      "closed_when",
+      "comment",
+      "comment_id",
+      "id",
+      "message",
+      "moderator",
+      "postdate",
+      "reason",
+      "resolved",
+      "resolved_at",
+      "topic",
+      "topic_id",
+      "userid",
+      "warning_type"
+    ],
+    "missing_columns": [],
+    "extra_columns": [
+      "comment_id",
+      "moderator",
+      "reason",
+      "resolved",
+      "resolved_at",
+      "topic_id",
+      "userid"
+    ]
+  },
+  {
+    "table": "monthly_stats",
+    "status": "covered",
+    "java_columns": [
+      "c",
+      "groupid",
+      "month",
+      "section",
+      "year"
+    ],
+    "rust_columns": [
+      "c",
+      "groupid",
+      "month",
+      "section",
+      "year"
+    ],
+    "missing_columns": [],
+    "extra_columns": []
+  },
+  {
+    "table": "msgbase",
+    "status": "covered",
+    "java_columns": [
+      "id",
+      "markup",
+      "message"
+    ],
+    "rust_columns": [
+      "bbcode",
+      "id",
+      "markup",
+      "message"
+    ],
+    "missing_columns": [],
+    "extra_columns": [
+      "bbcode"
+    ]
+  },
+  {
+    "table": "persistent_logins",
+    "status": "covered",
+    "java_columns": [
+      "last_used",
+      "series",
+      "token",
+      "username"
+    ],
+    "rust_columns": [
+      "last_used",
+      "series",
+      "token",
+      "username"
+    ],
+    "missing_columns": [],
+    "extra_columns": []
+  },
+  {
+    "table": "polls",
+    "status": "covered",
+    "java_columns": [
+      "id",
+      "multiselect",
+      "topic"
+    ],
+    "rust_columns": [
+      "id",
+      "multiselect",
+      "topic"
+    ],
+    "missing_columns": [],
+    "extra_columns": []
+  },
+  {
+    "table": "polls_variants",
+    "status": "covered",
+    "java_columns": [
+      "id",
+      "label",
+      "vote",
+      "votes"
+    ],
+    "rust_columns": [
+      "id",
+      "label",
+      "vote",
+      "votes"
+    ],
+    "missing_columns": [],
+    "extra_columns": []
+  },
+  {
+    "table": "reactions_log",
+    "status": "covered",
+    "java_columns": [
+      "comment_id",
+      "origin_user",
+      "reaction",
+      "set_date",
+      "topic_id"
+    ],
+    "rust_columns": [
+      "action_date",
+      "comment_id",
+      "id",
+      "msgid",
+      "origin_user",
+      "reaction",
+      "set_date",
+      "set_value",
+      "topic_id",
+      "userid"
+    ],
+    "missing_columns": [],
+    "extra_columns": [
+      "action_date",
+      "id",
+      "msgid",
+      "set_value",
+      "userid"
+    ]
+  },
+  {
+    "table": "sections",
+    "status": "covered",
+    "java_columns": [
+      "add_info",
+      "expire",
+      "havelink",
+      "id",
+      "imageallowed",
+      "imagepost",
+      "linktext",
+      "moderate",
+      "name",
+      "preformat",
+      "restrict_topics",
+      "scroll_mode",
+      "vote"
+    ],
+    "rust_columns": [
+      "add_info",
+      "expire",
+      "havelink",
+      "id",
+      "image_allowed",
+      "imageallowed",
+      "imagepost",
+      "linktext",
+      "moderate",
+      "name",
+      "preformat",
+      "restrict_score",
+      "restrict_topics",
+      "scroll_mode",
+      "vote"
+    ],
+    "missing_columns": [],
+    "extra_columns": [
+      "image_allowed",
+      "restrict_score"
+    ]
+  },
+  {
+    "table": "tags",
+    "status": "covered",
+    "java_columns": [
+      "msgid",
+      "tagid"
+    ],
+    "rust_columns": [
+      "msgid",
+      "tagid"
+    ],
+    "missing_columns": [],
+    "extra_columns": []
+  },
+  {
+    "table": "tags_synonyms",
+    "status": "covered",
+    "java_columns": [
+      "tagid",
+      "value"
+    ],
+    "rust_columns": [
+      "id",
+      "synonym",
+      "tag_id",
+      "tagid",
+      "value"
+    ],
+    "missing_columns": [],
+    "extra_columns": [
+      "id",
+      "synonym",
+      "tag_id"
+    ]
+  },
+  {
+    "table": "tags_values",
+    "status": "covered",
+    "java_columns": [
+      "counter",
+      "id",
+      "value"
+    ],
+    "rust_columns": [
+      "counter",
+      "id",
+      "value"
+    ],
+    "missing_columns": [],
+    "extra_columns": []
+  },
+  {
+    "table": "telegram_posts",
+    "status": "covered",
+    "java_columns": [
+      "postdate",
+      "telegram_id",
+      "topic_id"
+    ],
+    "rust_columns": [
+      "postdate",
+      "telegram_id",
+      "topic",
+      "topic_id"
+    ],
+    "missing_columns": [],
+    "extra_columns": [
+      "topic"
+    ]
+  },
+  {
+    "table": "topic_users_notified",
+    "status": "covered",
+    "java_columns": [
+      "topic",
+      "userid"
+    ],
+    "rust_columns": [
+      "topic",
+      "userid"
+    ],
+    "missing_columns": [],
+    "extra_columns": []
+  },
+  {
+    "table": "topics",
+    "status": "covered",
+    "java_columns": [
+      "allow_anonymous",
+      "commitby",
+      "commitdate",
+      "deleted",
+      "draft",
+      "groupid",
+      "id",
+      "lastmod",
+      "linktext",
+      "minor",
+      "moderate",
+      "notop",
+      "open_warnings",
+      "postdate",
+      "postip",
+      "postscore",
+      "reactions",
+      "resolved",
+      "stat1",
+      "stat2",
+      "stat3",
+      "stat4",
+      "sticky",
+      "title",
+      "ua_id",
+      "url",
+      "userid"
+    ],
+    "rust_columns": [
+      "allow_anonymous",
+      "commitby",
+      "commitdate",
+      "deleted",
+      "draft",
+      "groupid",
+      "id",
+      "image",
+      "lastmod",
+      "linktext",
+      "minor",
+      "moderate",
+      "no_comments",
+      "notop",
+      "open_warnings",
+      "postdate",
+      "postip",
+      "postscore",
+      "reactions",
+      "resolved",
+      "score_loss",
+      "stat1",
+      "stat2",
+      "stat3",
+      "stat4",
+      "sticky",
+      "title",
+      "ua_id",
+      "url",
+      "userid",
+      "warning_counter"
+    ],
+    "missing_columns": [],
+    "extra_columns": [
+      "image",
+      "no_comments",
+      "score_loss",
+      "warning_counter"
+    ]
+  },
+  {
+    "table": "user_agents",
+    "status": "covered",
+    "java_columns": [
+      "id",
+      "name"
+    ],
+    "rust_columns": [
+      "id",
+      "name"
+    ],
+    "missing_columns": [],
+    "extra_columns": []
+  },
+  {
+    "table": "user_events",
+    "status": "covered",
+    "java_columns": [
+      "comment_id",
+      "event_date",
+      "id",
+      "message",
+      "message_id",
+      "origin_user",
+      "private",
+      "type",
+      "unread",
+      "userid",
+      "warning_id"
+    ],
+    "rust_columns": [
+      "comment_id",
+      "event_date",
+      "event_type",
+      "id",
+      "message",
+      "message_id",
+      "origin_user",
+      "private",
+      "topic_id",
+      "type",
+      "unread",
+      "userid",
+      "warning_id"
+    ],
+    "missing_columns": [],
+    "extra_columns": [
+      "event_type",
+      "topic_id"
+    ]
+  },
+  {
+    "table": "user_invites",
+    "status": "covered",
+    "java_columns": [
+      "email",
+      "invite_code",
+      "invited_user",
+      "issue_date",
+      "owner",
+      "valid_until"
+    ],
+    "rust_columns": [
+      "created_at",
+      "email",
+      "id",
+      "invite_code",
+      "invited_user",
+      "issue_date",
+      "owner",
+      "used_at",
+      "used_by",
+      "valid_until"
+    ],
+    "missing_columns": [],
+    "extra_columns": [
+      "created_at",
+      "id",
+      "used_at",
+      "used_by"
+    ]
+  },
+  {
+    "table": "user_log",
+    "status": "covered",
+    "java_columns": [
+      "action",
+      "action_date",
+      "action_userid",
+      "id",
+      "info",
+      "userid"
+    ],
+    "rust_columns": [
+      "action",
+      "action_date",
+      "action_userid",
+      "id",
+      "info",
+      "userid"
+    ],
+    "missing_columns": [],
+    "extra_columns": []
+  },
+  {
+    "table": "user_remarks",
+    "status": "covered",
+    "java_columns": [
+      "id",
+      "ref_user_id",
+      "remark_text",
+      "user_id"
+    ],
+    "rust_columns": [
+      "id",
+      "ref_user_id",
+      "remark",
+      "remark_text",
+      "user_id",
+      "userid",
+      "who"
+    ],
+    "missing_columns": [],
+    "extra_columns": [
+      "remark",
+      "userid",
+      "who"
+    ]
+  },
+  {
+    "table": "user_settings",
+    "status": "covered",
+    "java_columns": [
+      "id",
+      "settings"
+    ],
+    "rust_columns": [
+      "id",
+      "settings"
+    ],
+    "missing_columns": [],
+    "extra_columns": []
+  },
+  {
+    "table": "user_tags",
+    "status": "covered",
+    "java_columns": [
+      "is_favorite",
+      "tag_id",
+      "user_id"
+    ],
+    "rust_columns": [
+      "is_favorite",
+      "tag_id",
+      "user_id",
+      "userid"
+    ],
+    "missing_columns": [],
+    "extra_columns": [
+      "userid"
+    ]
+  },
+  {
+    "table": "users",
+    "status": "covered",
+    "java_columns": [
+      "activated",
+      "blocked",
+      "candel",
+      "canmod",
+      "corrector",
+      "email",
+      "freezing_reason",
+      "frozen_by",
+      "frozen_until",
+      "id",
+      "lastlogin",
+      "lostpwd",
+      "max_score",
+      "name",
+      "new_email",
+      "nick",
+      "passwd",
+      "photo",
+      "regdate",
+      "score",
+      "token_generation",
+      "town",
+      "unread_events",
+      "url",
+      "userinfo",
+      "userinfo_markup"
+    ],
+    "rust_columns": [
+      "activated",
+      "blocked",
+      "candel",
+      "canmod",
+      "corrector",
+      "email",
+      "force_unlogin",
+      "freezing_reason",
+      "frozen_by",
+      "frozen_until",
+      "id",
+      "lastlogin",
+      "lostpwd",
+      "max_score",
+      "name",
+      "new_email",
+      "nick",
+      "passwd",
+      "photo",
+      "regdate",
+      "score",
+      "settings",
+      "style",
+      "token_generation",
+      "town",
+      "unread_events",
+      "url",
+      "userinfo",
+      "userinfo_markup"
+    ],
+    "missing_columns": [],
+    "extra_columns": [
+      "force_unlogin",
+      "settings",
+      "style"
+    ]
+  },
+  {
+    "table": "vote_users",
+    "status": "covered",
+    "java_columns": [
+      "userid",
+      "variant_id",
+      "vote"
+    ],
+    "rust_columns": [
+      "userid",
+      "variant_id",
+      "vote"
+    ],
+    "missing_columns": [],
+    "extra_columns": []
+  },
+  {
+    "table": "votenames",
+    "status": "rust-only",
+    "java_columns": [],
+    "rust_columns": [
+      "id",
+      "multiselect",
+      "topic"
+    ],
+    "missing_columns": [],
+    "extra_columns": [
+      "id",
+      "multiselect",
+      "topic"
+    ]
+  },
+  {
+    "table": "votes",
+    "status": "rust-only",
+    "java_columns": [],
+    "rust_columns": [
+      "id",
+      "label",
+      "vote",
+      "votes"
+    ],
+    "missing_columns": [],
+    "extra_columns": [
+      "id",
+      "label",
+      "vote",
+      "votes"
+    ]
+  }
+]

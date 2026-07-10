@@ -4,7 +4,7 @@
 
 Стек проекта:
 
-- Rust 2021
+- Rust 2024 (`rust-toolchain.toml`: 1.97.0)
 - Axum + Tokio для HTTP
 - SQLx + PostgreSQL для доступа к БД
 - Askama вместо JSP
@@ -48,6 +48,16 @@ curl -fsS http://localhost:8080/rss | head
 ./scripts/run-compatibility-suite.sh
 ```
 
+
+Дополнительная проверка текущей Java/Liquibase схемы:
+
+```bash
+python3 tools/compare_current_java_schema.py \
+  --java-root /path/to/lorsource-java-cleared \
+  --migrations-dir db/migrations \
+  --md docs/CURRENT_JAVA_SCHEMA_COVERAGE.md
+```
+
 HTTP smoke-тесты по Rust-порту:
 
 ```bash
@@ -82,9 +92,10 @@ python3 compat/test_http_compat.py
 - перенесены activation, userpic upload, deregistration, `/check-login` и базовая admin/moderation surface;
 - v5: схема и обработчик `/vote.jsp` приведены к текущему Java-коду (`polls`, `polls_variants`, `vote_users.variant_id`, `voteid` + repeated `vote`);
 - v5: добавлены `user_settings`, `user_log`, `user_log_action` и базовое логирование account/moderation действий;
+- v10: миграции стали безопасными для уже мигрированной Java/Liquibase БД; добавлена проверка текущей Java-схемы `docs/CURRENT_JAVA_SCHEMA_COVERAGE.md`;
 - модельный слой совместимости `src/models_compat.rs`;
 - auth/security scaffold с BCrypt и signed session cookies;
-- миграция совместимости `db/migrations/0003_legacy_schema_compat.sql`;
+- миграции совместимости `db/migrations/0003_legacy_schema_compat.sql` … `0006_java_runtime_migration_compat.sql`;
 - HTTP smoke compatibility tests.
 
 ## Важное ограничение

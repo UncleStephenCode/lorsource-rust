@@ -51,7 +51,7 @@ impl TrTopicRepository for CTopicPgRepository {
     }
 
     async fn vInsertTopicMessage(&self, txPg: &mut Transaction<'_, Postgres>, iMsgId: i32, sMessage: &str) -> Result<()> {
-        sqlx::query("INSERT INTO msgbase(id, message, bbcode) VALUES ($1, $2, true)")
+        sqlx::query("INSERT INTO msgbase(id, message, markup) VALUES ($1, $2, 'BBCODE_TEX')")
             .bind(iMsgId)
             .bind(sMessage)
             .execute(&mut **txPg)
@@ -200,7 +200,7 @@ OFFSET $3 LIMIT $4
 "#;
 
 const S_GET_TOPIC_SQL: &str = r#"
-SELECT t.id, t.title, m.message, m.bbcode, t.url, t.linktext, t.postdate, t.lastmod,
+SELECT t.id, t.title, m.message, (m.markup::text <> 'PLAIN') AS bbcode, t.url, t.linktext, t.postdate, t.lastmod,
        u.id AS author_id, u.nick AS author,
        g.id AS group_id, g.title AS group_title, g.urlname AS group_urlname,
        s.id AS section_id, s.name AS section_name,

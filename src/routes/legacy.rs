@@ -626,7 +626,7 @@ pub async fn memories(State(state): State<AppState>, CurrentUser(user): CurrentU
 pub async fn user_filter(State(state): State<AppState>, CurrentUser(user): CurrentUser) -> Result<Json<serde_json::Value>> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
     let tags = sqlx::query_as::<_, (String, bool)>(
-        "SELECT tv.value, ut.is_favorite FROM user_tags ut JOIN tags_values tv ON tv.id=ut.tag_id WHERE ut.userid=$1 ORDER BY tv.value",
+        "SELECT tv.value, ut.is_favorite FROM user_tags ut JOIN tags_values tv ON tv.id=ut.tag_id WHERE ut.user_id=$1 ORDER BY tv.value",
     ).bind(user.id).fetch_all(&state.pool).await?;
     let ignored = sqlx::query_as::<_, (String,)>(
         "SELECT u.nick FROM ignore_list il JOIN users u ON u.id=il.ignored WHERE il.userid=$1 ORDER BY u.nick",
@@ -677,14 +677,14 @@ async fn save_or_delete_user_tag(state: AppState, user: Option<crate::models::Us
     };
 
     if form.del.is_some() {
-        sqlx::query("DELETE FROM user_tags WHERE userid=$1 AND tag_id=$2 AND is_favorite=$3")
+        sqlx::query("DELETE FROM user_tags WHERE user_id=$1 AND tag_id=$2 AND is_favorite=$3")
             .bind(user.id)
             .bind(tag_id)
             .bind(is_favorite)
             .execute(&state.pool)
             .await?;
     } else {
-        sqlx::query("INSERT INTO user_tags(userid,tag_id,is_favorite) VALUES($1,$2,$3) ON CONFLICT DO NOTHING")
+        sqlx::query("INSERT INTO user_tags(user_id,tag_id,is_favorite) VALUES($1,$2,$3) ON CONFLICT DO NOTHING")
             .bind(user.id)
             .bind(tag_id)
             .bind(is_favorite)
@@ -780,7 +780,7 @@ pub async fn delete_image_form(Query(q): Query<ImageForm>, CurrentUser(user): Cu
 
 pub async fn delete_image(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<ImageForm>) -> Result<Redirect> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
-    sqlx::query("UPDATE images SET deleted=true WHERE id=$1 AND (userid=$2 OR EXISTS (SELECT 1 FROM users WHERE id=$2 AND canmod))")
+    sqlx::query("UPDATE images SET deleted=true WHERE id=$1 AND (COALESCE(userid, (SELECT userid FROM topics WHERE topics.id=images.topic))=$2 OR EXISTS (SELECT 1 FROM users WHERE id=$2 AND canmod))")
         .bind(form.id).bind(user.id).execute(&state.pool).await?;
     Ok(Redirect::to("/gallery/"))
 }
