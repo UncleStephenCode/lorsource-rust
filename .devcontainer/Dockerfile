@@ -1,4 +1,4 @@
-FROM rust:1.82-bookworm
+FROM rust:1.97-bookworm
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-client \

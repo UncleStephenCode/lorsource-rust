@@ -1,4 +1,4 @@
-use crate::{auth::CurrentUser, error::{AppError, Result}, markup, models::{PagerQuery, TopicDetail, TopicSummary}, pagination::Pager, state::AppState};
+use crate::{auth::CurrentUser, application::topic::CTopicService, domain::topic::repository::{StEditTopic, StNewTopic}, error::{AppError, Result}, infra::postgres::topic_repository::CTopicPgRepository, markup, models::{PagerQuery, TopicDetail, TopicSummary}, pagination::Pager, state::AppState};
 use askama::Template;
 use axum::{extract::{Path, Query, State}, http::Uri, response::{Html, Redirect}, Form};
 use serde::Deserialize;
@@ -99,17 +99,7 @@ pub async fn topic_page_with_page(State(state): State<AppState>, Path((_group, i
 pub async fn render_topic(state: AppState, id: i32, current_user: Option<crate::models::UserSummary>) -> Result<Html<String>> {
     let topic = get_topic(&state, id).await?;
     let topic_html = markup::render_message(&topic.message, topic.bbcode);
-    let items = sqlx::query_as::<_, crate::models::CommentItem>(
-        r#"SELECT c.id, c.topic, c.replyto, c.title, m.message, c.postdate, u.id AS author_id, u.nick AS author, c.deleted
-           FROM comments c
-           JOIN msgbase m ON m.id=c.id
-           JOIN users u ON u.id=c.userid
-           WHERE c.topic=$1 AND NOT c.topic_deleted
-           ORDER BY c.postdate ASC"#,
-    )
-    .bind(id)
-    .fetch_all(&state.pool)
-    .await?;
+    let items = topic_service(&state).vecListComments(id).await?;
     let comments = items.into_iter().map(|item| CommentView { html: markup::render_message(&item.message, Some(true)), item }).collect();
     Ok(Html(TopicTemplate { topic, topic_html, comments, current_user }.render()?))
 }
@@ -122,25 +112,18 @@ pub async fn new_topic_form(State(state): State<AppState>) -> Result<Html<String
 pub async fn create_topic(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<TopicForm>) -> Result<Redirect> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
     let mut tx = state.pool.begin().await?;
-    let id: i32 = sqlx::query_scalar("SELECT nextval('s_msgid')::int").fetch_one(&mut *tx).await?;
-    sqlx::query("INSERT INTO msgbase(id, message, bbcode) VALUES ($1, $2, true)")
-        .bind(id)
-        .bind(&form.msg)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query(
-        r#"INSERT INTO topics(id, groupid, userid, title, url, postdate, linktext, stat1, stat2, lastmod, moderate)
-           VALUES ($1,$2,$3,$4,$5,now(),$6,0,0,now(),true)"#,
-    )
-    .bind(id)
-    .bind(form.group)
-    .bind(user.id)
-    .bind(form.title.trim())
-    .bind(form.url.as_deref().filter(|s| !s.trim().is_empty()))
-    .bind(form.linktext.as_deref().filter(|s| !s.trim().is_empty()))
-    .execute(&mut *tx)
-    .await?;
-    if let Some(tags) = form.tags.as_deref() { upsert_tags(&mut tx, id, tags).await?; }
+    let service = topic_service(&state);
+    let id = service.iNextMessageId(&mut tx).await?;
+    service.vInsertTopicMessage(&mut tx, id, &form.msg).await?;
+    service.vInsertTopic(&mut tx, StNewTopic {
+        iMsgId: id,
+        iGroupId: form.group,
+        iUserId: user.id,
+        sTitle: form.title.trim(),
+        optUrl: form.url.as_deref().filter(|sValue| !sValue.trim().is_empty()),
+        optLinkText: form.linktext.as_deref().filter(|sValue| !sValue.trim().is_empty()),
+    }).await?;
+    service.vReplaceTags(&mut tx, id, form.tags.as_deref()).await?;
     tx.commit().await?;
     Ok(Redirect::to(&format!("/jump-message.jsp?msgid={id}")))
 }
@@ -154,11 +137,15 @@ pub async fn edit_topic_form(State(state): State<AppState>, Query(q): Query<View
 pub async fn edit_topic(State(state): State<AppState>, Form(form): Form<TopicForm>) -> Result<Redirect> {
     let id = form.id.ok_or_else(|| AppError::BadRequest("missing topic id".into()))?;
     let mut tx = state.pool.begin().await?;
-    sqlx::query("UPDATE msgbase SET message=$2 WHERE id=$1").bind(id).bind(&form.msg).execute(&mut *tx).await?;
-    sqlx::query("UPDATE topics SET title=$2, url=$3, linktext=$4, lastmod=now() WHERE id=$1")
-        .bind(id).bind(form.title.trim()).bind(form.url).bind(form.linktext).execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM tags WHERE msgid=$1").bind(id).execute(&mut *tx).await?;
-    if let Some(tags) = form.tags.as_deref() { upsert_tags(&mut tx, id, tags).await?; }
+    let service = topic_service(&state);
+    service.vUpdateTopicMessage(&mut tx, id, &form.msg).await?;
+    service.vUpdateTopicHeader(&mut tx, StEditTopic {
+        iMsgId: id,
+        sTitle: form.title.trim(),
+        optUrl: form.url,
+        optLinkText: form.linktext,
+    }).await?;
+    service.vReplaceTags(&mut tx, id, form.tags.as_deref()).await?;
     tx.commit().await?;
     Ok(Redirect::to(&format!("/jump-message.jsp?msgid={id}")))
 }
@@ -167,12 +154,12 @@ pub async fn edit_topic(State(state): State<AppState>, Form(form): Form<TopicFor
 pub struct TopicActionForm { pub msgid: i32, pub resolve: Option<String> }
 
 pub async fn delete_topic(State(state): State<AppState>, Form(form): Form<TopicActionForm>) -> Result<Redirect> {
-    sqlx::query("UPDATE topics SET deleted=true WHERE id=$1").bind(form.msgid).execute(&state.pool).await?;
+    topic_service(&state).vSetDeleted(form.msgid, true).await?;
     Ok(Redirect::to("/"))
 }
 
 pub async fn undelete_topic(State(state): State<AppState>, Form(form): Form<TopicActionForm>) -> Result<Redirect> {
-    sqlx::query("UPDATE topics SET deleted=false WHERE id=$1").bind(form.msgid).execute(&state.pool).await?;
+    topic_service(&state).vSetDeleted(form.msgid, false).await?;
     Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.msgid)))
 }
 
@@ -186,12 +173,7 @@ pub async fn resolve_topic(State(state): State<AppState>, Form(form): Form<Topic
 
 async fn do_resolve_topic(state: &AppState, user: Option<crate::models::UserSummary>, form: TopicActionForm) -> Result<Redirect> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
-    let Some((author_id, group_resolvable)) = sqlx::query_as::<_, (i32, bool)>(
-        "SELECT t.userid, g.resolvable FROM topics t JOIN groups g ON g.id=t.groupid WHERE t.id=$1",
-    )
-    .bind(form.msgid)
-    .fetch_optional(&state.pool)
-    .await? else {
+    let Some((author_id, group_resolvable)) = topic_service(state).optResolveMeta(form.msgid).await? else {
         return Err(AppError::NotFound);
     };
     if !group_resolvable {
@@ -201,92 +183,21 @@ async fn do_resolve_topic(state: &AppState, user: Option<crate::models::UserSumm
         return Err(AppError::Forbidden);
     }
     let resolved = form.resolve.as_deref().map(|value| value == "yes");
-    if let Some(resolved) = resolved {
-        sqlx::query("UPDATE topics SET resolved=$2, lastmod=now() WHERE id=$1")
-            .bind(form.msgid)
-            .bind(resolved)
-            .execute(&state.pool)
-            .await?;
-    } else {
-        sqlx::query("UPDATE topics SET resolved=COALESCE(NOT resolved, true), lastmod=now() WHERE id=$1")
-            .bind(form.msgid)
-            .execute(&state.pool)
-            .await?;
-    }
+    topic_service(state).vSetResolved(form.msgid, resolved).await?;
     Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.msgid)))
 }
 
 pub async fn list_topics(state: &AppState, section: Option<&str>, group: Option<&str>, offset: i64, limit: i64) -> Result<Vec<TopicSummary>> {
-    let rows = sqlx::query_as::<_, TopicSummary>(
-        r#"SELECT t.id, t.title, t.url, t.postdate, t.lastmod, u.id AS author_id, u.nick AS author,
-                  g.id AS group_id, g.title AS group_title, g.urlname AS group_urlname,
-                  s.id AS section_id, s.name AS section_name,
-                  CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END AS section_prefix,
-                  t.stat1 AS comments, t.stat2 AS views, t.deleted, t.sticky, t.resolved,
-                  string_agg(tv.value, ',' ORDER BY tv.value) AS tags
-           FROM topics t
-           JOIN users u ON u.id=t.userid
-           JOIN groups g ON g.id=t.groupid
-           JOIN sections s ON s.id=g.section
-           LEFT JOIN tags tg ON tg.msgid=t.id
-           LEFT JOIN tags_values tv ON tv.id=tg.tagid
-           WHERE ($1::text IS NULL OR CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END = $1)
-             AND ($2::text IS NULL OR g.urlname=$2)
-             AND NOT t.deleted
-           GROUP BY t.id,u.id,g.id,s.id
-           ORDER BY t.sticky DESC, COALESCE(t.lastmod,t.postdate) DESC
-           OFFSET $3 LIMIT $4"#,
-    )
-    .bind(section)
-    .bind(group)
-    .bind(offset)
-    .bind(limit)
-    .fetch_all(&state.pool)
-    .await?;
-    Ok(rows)
+    topic_service(state).vecListTopics(section, group, offset, limit).await
 }
 
 pub async fn get_topic(state: &AppState, id: i32) -> Result<TopicDetail> {
-    Ok(sqlx::query_as::<_, TopicDetail>(
-        r#"SELECT t.id, t.title, m.message, m.bbcode, t.url, t.linktext, t.postdate, t.lastmod,
-                  u.id AS author_id, u.nick AS author,
-                  g.id AS group_id, g.title AS group_title, g.urlname AS group_urlname,
-                  s.id AS section_id, s.name AS section_name,
-                  CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END AS section_prefix,
-                  t.stat1 AS comments, t.stat2 AS views, t.deleted, t.sticky, t.resolved,
-                  string_agg(tv.value, ',' ORDER BY tv.value) AS tags
-           FROM topics t
-           JOIN msgbase m ON m.id=t.id
-           JOIN users u ON u.id=t.userid
-           JOIN groups g ON g.id=t.groupid
-           JOIN sections s ON s.id=g.section
-           LEFT JOIN tags tg ON tg.msgid=t.id
-           LEFT JOIN tags_values tv ON tv.id=tg.tagid
-           WHERE t.id=$1
-           GROUP BY t.id,m.id,u.id,g.id,s.id"#,
-    )
-    .bind(id)
-    .fetch_one(&state.pool)
-    .await?)
+    topic_service(state).stGetTopic(id).await
 }
 
-async fn upsert_tags(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, msgid: i32, tags: &str) -> Result<()> {
-    for tag in tags.split(',').map(str::trim).filter(|t| !t.is_empty()).take(20) {
-        let tagid: i32 = sqlx::query_scalar(
-            r#"INSERT INTO tags_values(value,counter) VALUES ($1,1)
-               ON CONFLICT(value) DO UPDATE SET counter=tags_values.counter+1
-               RETURNING id"#,
-        )
-        .bind(tag)
-        .fetch_one(&mut **tx)
-        .await?;
-        sqlx::query("INSERT INTO tags(msgid, tagid) VALUES ($1,$2) ON CONFLICT DO NOTHING")
-            .bind(msgid)
-            .bind(tagid)
-            .execute(&mut **tx)
-            .await?;
-    }
-    Ok(())
+
+fn topic_service(state: &AppState) -> CTopicService<CTopicPgRepository> {
+    CTopicService::new(CTopicPgRepository::new(state.pool.clone()))
 }
 
 fn section_from_uri(uri: &Uri) -> Option<&'static str> {
@@ -343,8 +254,7 @@ pub async fn commit_topic_form(Query(q): Query<ViewMessageQuery>, CurrentUser(us
 pub async fn commit_topic(State(state): State<AppState>, Form(form): Form<TopicActionForm>, CurrentUser(user): CurrentUser) -> Result<Redirect> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
     if !user.canmod { return Err(AppError::Forbidden); }
-    sqlx::query("UPDATE topics SET moderate=false, commitby=$2, commitdate=now(), lastmod=now() WHERE id=$1")
-        .bind(form.msgid).bind(user.id).execute(&state.pool).await?;
+    topic_service(&state).vCommitTopic(form.msgid, user.id).await?;
     Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.msgid)))
 }
 
@@ -361,8 +271,7 @@ pub async fn uncommit_form(Query(q): Query<ViewMessageQuery>, CurrentUser(user):
 
 pub async fn uncommit(State(state): State<AppState>, Form(form): Form<TopicActionForm>, CurrentUser(user): CurrentUser) -> Result<Redirect> {
     if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
-    sqlx::query("UPDATE topics SET moderate=true, commitby=NULL, commitdate=NULL, lastmod=now() WHERE id=$1")
-        .bind(form.msgid).execute(&state.pool).await?;
+    topic_service(&state).vUncommitTopic(form.msgid).await?;
     Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.msgid)))
 }
 
@@ -390,8 +299,7 @@ pub async fn move_topic_form(State(state): State<AppState>, Query(q): Query<View
 
 pub async fn move_topic(State(state): State<AppState>, Form(form): Form<MoveTopicForm>, CurrentUser(user): CurrentUser) -> Result<Redirect> {
     if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
-    sqlx::query("UPDATE topics SET groupid=$2,lastmod=now() WHERE id=$1")
-        .bind(form.msgid).bind(form.moveto).execute(&state.pool).await?;
+    topic_service(&state).vMoveTopic(form.msgid, form.moveto).await?;
     Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.msgid)))
 }
 
