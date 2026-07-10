@@ -1,0 +1,33 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: lor
+      POSTGRES_USER: lor
+      POSTGRES_PASSWORD: lor
+    ports:
+      - "5432:5432"
+    volumes:
+      - lor_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lor -d lor"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgres://lor:lor@postgres:5432/lor
+      PUBLIC_URL: http://localhost:8080
+      COOKIE_SECRET: change-me-in-production-change-me-in-production
+      RUST_LOG: lorsource_rust=debug,tower_http=info,sqlx=warn
+      RUN_MIGRATIONS: "true"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  lor_pgdata:

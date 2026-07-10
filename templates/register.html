@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<h1>{{ title }}</h1>
+{% match error %}{% when Some with (e) %}<p class="error">{{ e }}</p>{% when None %}{% endmatch %}
+<form method="post" action="/register.jsp" class="form">
+  <label>Ник <input name="nick" required minlength="3"></label>
+  <label>Email <input name="email" type="email"></label>
+  <label>Пароль <input name="passwd" type="password" required minlength="6"></label>
+  <button type="submit">Зарегистрироваться</button>
+</form>
+{% endblock %}

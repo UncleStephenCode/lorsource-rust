@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Поиск{% endblock %}
+{% block content %}
+<h1>Поиск</h1>
+<form class="search" method="get" action="/search.jsp">
+  <input type="search" name="q" value="{{ q }}" placeholder="что искать" autofocus>
+  <button type="submit">Найти</button>
+</form>
+{% if q.len() > 0 %}<p class="meta">Результаты по запросу: {{ q }}</p>{% endif %}
+<div class="topic-list">
+{% for t in topics %}
+  <article class="topic-card"><h2><a href="{{ t.topic_url() }}">{{ t.title }}</a></h2><div class="meta">{{ t.author }} · {{ t.postdate }}</div></article>
+{% endfor %}
+</div>
+{% endblock %}

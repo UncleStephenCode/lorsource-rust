@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<h1>{{ title }}</h1>
+{% if topics.len() == 0 %}
+  <p class="muted">Тем пока нет.</p>
+{% endif %}
+<div class="topic-list">
+{% for t in topics %}
+  <article class="topic-card{% if t.sticky %} sticky{% endif %}">
+    <h2><a href="{{ t.topic_url() }}">{{ t.title }}</a></h2>
+    <div class="meta">
+      <a href="/{{ t.section_prefix }}/">{{ t.section_name }}</a> / 
+      <a href="/{{ t.section_prefix }}/{{ t.group_urlname }}">{{ t.group_title }}</a> ·
+      <a href="/people/{{ t.author }}">{{ t.author }}</a> · {{ t.postdate }} · {{ t.comments }} комм.
+    </div>
+    {% if t.tags_vec().len() > 0 %}
+    <div class="tags">
+      {% for tag in t.tags_vec() %}<a href="/tag/{{ tag }}">#{{ tag }}</a>{% endfor %}
+    </div>
+    {% endif %}
+  </article>
+{% endfor %}
+</div>
+<nav class="pager">
+  {% match pager.prev_offset %}{% when Some with (prev) %}<a href="?offset={{ prev }}">← новее</a>{% when None %}{% endmatch %}
+  <a href="?offset={{ pager.next_offset }}">старее →</a>
+</nav>
+{% endblock %}

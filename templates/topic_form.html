@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<h1>{{ title }}</h1>
+<form method="post" action="{{ action }}" class="form wide">
+  {% match topic %}{% when Some with (t) %}<input type="hidden" name="id" value="{{ t.id }}">{% when None %}{% endmatch %}
+  <label>Раздел
+    <select name="group">
+      {% for g in groups %}<option value="{{ g.id }}">{{ g.section_name }} / {{ g.title }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Заголовок <input name="title" required value="{% match topic %}{% when Some with (t) %}{{ t.title }}{% when None %}{% endmatch %}"></label>
+  <label>Ссылка <input name="url" value="{% match topic %}{% when Some with (t) %}{% match t.url %}{% when Some with (u) %}{{ u }}{% when None %}{% endmatch %}{% when None %}{% endmatch %}"></label>
+  <label>Текст ссылки <input name="linktext" value="{% match topic %}{% when Some with (t) %}{% match t.linktext %}{% when Some with (lt) %}{{ lt }}{% when None %}{% endmatch %}{% when None %}{% endmatch %}"></label>
+  <label>Метки через запятую <input name="tags" value="{% match topic %}{% when Some with (t) %}{% for tag in t.tags_vec() %}{{ tag }}{% if !loop.last %}, {% endif %}{% endfor %}{% when None %}{% endmatch %}"></label>
+  <label>Сообщение <textarea name="msg" rows="16" required>{% match topic %}{% when Some with (t) %}{{ t.message }}{% when None %}{% endmatch %}</textarea></label>
+  <button type="submit">Сохранить</button>
+</form>
+{% endblock %}
