@@ -63,11 +63,15 @@ CREATE TABLE IF NOT EXISTS memories (
 );
 
 CREATE TABLE IF NOT EXISTS monthly_stats (
-    month date PRIMARY KEY,
-    topics integer NOT NULL DEFAULT 0,
-    comments integer NOT NULL DEFAULT 0,
-    users integer NOT NULL DEFAULT 0
+    section integer REFERENCES sections(id),
+    year integer NOT NULL,
+    month integer NOT NULL,
+    c integer NOT NULL DEFAULT 0,
+    groupid integer REFERENCES groups(id)
 );
+
+CREATE INDEX IF NOT EXISTS monthly_stats_section_idx ON monthly_stats(section, year, month);
+CREATE INDEX IF NOT EXISTS monthly_stats_group_idx ON monthly_stats(groupid, year, month);
 
 CREATE TABLE IF NOT EXISTS user_agents (
     id serial PRIMARY KEY,

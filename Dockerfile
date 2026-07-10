@@ -14,6 +14,6 @@ COPY --from=build /app/target/release/lorsource-rust /usr/local/bin/lorsource-ru
 COPY static ./static
 COPY templates ./templates
 COPY db ./db
-ENV LOR_HOST=0.0.0.0 LOR_PORT=8080 STATIC_DIR=/app/static RUN_MIGRATIONS=true
+ENV LOR_HOST=0.0.0.0 LOR_PORT=8080 STATIC_DIR=/app/static UPLOAD_DIR=/app/uploads RUN_MIGRATIONS=true
 EXPOSE 8080
 CMD ["/usr/local/bin/lorsource-rust"]

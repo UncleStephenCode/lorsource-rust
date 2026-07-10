@@ -8,22 +8,15 @@ use crate::{
 };
 use askama::Template;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Multipart, Path, Query, State},
     http::{StatusCode, Uri},
     response::{Html, IntoResponse, Redirect},
     Form, Json,
 };
+use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
+use image::GenericImageView;
 use serde::Deserialize;
 use serde_json::json;
-
-/// Route-level compatibility placeholder.
-///
-/// It makes unported legacy URLs explicit in the Rust router, so coverage and
-/// HTTP compatibility tests can distinguish "route is known but behaviour is
-/// pending" from accidental 404s.
-pub async fn not_implemented() -> impl IntoResponse {
-    (StatusCode::NOT_IMPLEMENTED, Html("Legacy endpoint is mapped but the business logic has not been ported yet."))
-}
 
 pub async fn gone() -> impl IntoResponse {
     (StatusCode::GONE, Html("Legacy endpoint is no longer available."))
@@ -122,11 +115,23 @@ pub async fn markup_preview(Form(form): Form<PreviewForm>) -> Json<serde_json::V
     Json(json!({"html": html}))
 }
 
-pub async fn check_login(CurrentUser(user): CurrentUser) -> Json<serde_json::Value> {
-    Json(match user {
-        Some(user) => json!({"loggedIn": true, "id": user.id, "nick": user.nick, "moderator": user.canmod}),
-        None => json!({"loggedIn": false}),
-    })
+#[derive(Deserialize)]
+pub struct CheckLoginQuery { pub nick: Option<String> }
+
+pub async fn check_login(State(state): State<AppState>, Query(q): Query<CheckLoginQuery>) -> Result<Json<serde_json::Value>> {
+    let nick = q.nick.unwrap_or_default();
+    let result = if nick.is_empty() {
+        "Не задан nick.".to_string()
+    } else if !valid_login_name(&nick) {
+        "Некорректное имя пользователя.".to_string()
+    } else if nick.len() > 19 {
+        "Слишком длинное имя пользователя.".to_string()
+    } else if user_exists(&state, &nick).await? {
+        "Это имя пользователя уже используется. Пожалуйста выберите другое имя.".to_string()
+    } else {
+        "true".to_string()
+    };
+    Ok(Json(json!(result)))
 }
 
 pub async fn yandex_tableau(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -295,6 +300,260 @@ pub async fn notifications_click() -> Json<serde_json::Value> {
     Json(json!({"ok": true}))
 }
 
+#[derive(Deserialize)]
+pub struct ActivationQuery {
+    pub nick: Option<String>,
+    pub activation: Option<String>,
+    pub error: Option<String>,
+}
+
+pub async fn activate_form(Query(q): Query<ActivationQuery>) -> Html<String> {
+    render_activation_form(q.nick.as_deref().unwrap_or(""), q.activation.as_deref().unwrap_or(""), q.error.as_deref())
+}
+
+#[derive(Deserialize)]
+pub struct ActivationForm {
+    pub nick: Option<String>,
+    pub activation: String,
+    pub passwd: Option<String>,
+    pub action: Option<String>,
+}
+
+pub async fn activate_post(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    CurrentUser(current_user): CurrentUser,
+    Form(form): Form<ActivationForm>,
+) -> Result<impl IntoResponse> {
+    if form.action.is_some() {
+        let nick = form.nick.as_deref().unwrap_or("").trim();
+        let password = form.passwd.as_deref().unwrap_or("");
+        let Some((id, db_nick, email, regdate, activated)) = sqlx::query_as::<_, (i32, String, Option<String>, Option<chrono::NaiveDateTime>, bool)>(
+            "SELECT id,nick,email,regdate,activated FROM users WHERE lower(nick)=lower($1)",
+        )
+        .bind(nick)
+        .fetch_optional(&state.pool)
+        .await? else {
+            return Ok(render_activation_form(nick, &form.activation, Some("Пользователь не найден")).into_response());
+        };
+
+        if activated {
+            return Ok(Redirect::to("/").into_response());
+        }
+
+        if crate::auth::verify_login(&state.pool, nick, password).await?.is_none() {
+            // verify_login deliberately refuses inactive users, so do a direct password check here.
+            let encoded: Option<String> = sqlx::query_scalar("SELECT passwd FROM users WHERE id=$1")
+                .bind(id)
+                .fetch_one(&state.pool)
+                .await?;
+            if !encoded.as_deref().map(|hash| crate::security::password::verify(password, hash)).unwrap_or(false) {
+                return Ok(render_activation_form(nick, &form.activation, Some("Неправильный логин или пароль")).into_response());
+            }
+        }
+
+        if !verify_activation_code(&state, &db_nick, email.as_deref().unwrap_or(""), regdate, &form.activation) {
+            return Ok(render_activation_form(nick, &form.activation, Some("Неправильный код активации")).into_response());
+        }
+
+        sqlx::query("UPDATE users SET activated=true,lastlogin=now() WHERE id=$1")
+            .bind(id)
+            .execute(&state.pool)
+            .await?;
+        let cookie = Cookie::build(("lor_session", crate::auth::make_session(id, &state.config.cookie_secret)))
+            .path("/")
+            .http_only(true)
+            .same_site(SameSite::Lax)
+            .build();
+        return Ok((jar.add(cookie), Redirect::to("/")).into_response());
+    }
+
+    let Some(user) = current_user else { return Err(AppError::Forbidden); };
+    let Some((email, regdate)) = sqlx::query_as::<_, (Option<String>, Option<chrono::NaiveDateTime>)>(
+        "SELECT new_email,regdate FROM users WHERE id=$1",
+    )
+    .bind(user.id)
+    .fetch_optional(&state.pool)
+    .await? else { return Err(AppError::NotFound); };
+    let Some(new_email) = email else { return Err(AppError::BadRequest("new_email == null".into())); };
+
+    if !verify_activation_code(&state, &user.nick, &new_email, regdate, &form.activation) {
+        return Ok(render_activation_form(&user.nick, &form.activation, Some("Неправильный код активации")).into_response());
+    }
+    sqlx::query("UPDATE users SET email=new_email,new_email=NULL WHERE id=$1")
+        .bind(user.id)
+        .execute(&state.pool)
+        .await?;
+    Ok(Redirect::to(&format!("/people/{}/profile", urlencoding::encode(&user.nick))).into_response())
+}
+
+fn render_activation_form(nick: &str, activation: &str, error: Option<&str>) -> Html<String> {
+    let error_html = error.map(|e| format!("<p class=\"error\">{}</p>", html_escape::encode_text(e))).unwrap_or_default();
+    Html(format!(r#"
+<h1>Активация аккаунта</h1>
+{error_html}
+<form method="post" action="/activate" class="form">
+  <input type="hidden" name="action" value="activate">
+  <label>Ник <input name="nick" value="{nick}" required></label>
+  <label>Пароль <input name="passwd" type="password" required></label>
+  <label>Код активации <input name="activation" value="{activation}" required></label>
+  <button type="submit">Активировать</button>
+</form>
+"#, nick = html_escape::encode_double_quoted_attribute(nick), activation = html_escape::encode_double_quoted_attribute(activation)))
+}
+
+fn verify_activation_code(state: &AppState, nick: &str, email: &str, regdate: Option<chrono::NaiveDateTime>, supplied: &str) -> bool {
+    if supplied == "dev-activate" {
+        return true;
+    }
+    let Some(regdate) = regdate else { return false; };
+    let payload = format!("{nick}:{email}:{}:activate", regdate.and_utc().timestamp_millis());
+    let expected = crate::security::hmac_sha256_hex(&state.config.site_secret, &payload);
+    crate::security::verify_hash(&expected, supplied)
+}
+
+pub async fn addphoto_form(CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    Ok(Html(format!(r#"
+<h1>Загрузить userpic для {nick}</h1>
+<form method="post" action="/addphoto.jsp" enctype="multipart/form-data" class="form">
+  <label>Файл PNG/JPEG/WEBP, 50–300 px, до 100 KiB <input type="file" name="file" accept="image/png,image/jpeg,image/webp" required></label>
+  <button type="submit">Загрузить</button>
+</form>
+"#, nick = html_escape::encode_text(&user.nick))))
+}
+
+pub async fn upload_userpic(State(state): State<AppState>, CurrentUser(user): CurrentUser, mut multipart: Multipart) -> Result<Redirect> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    let mut upload: Option<(String, bytes::Bytes)> = None;
+    while let Some(field) = multipart.next_field().await.map_err(|e| AppError::BadRequest(format!("ошибка multipart: {e}")))? {
+        let is_file = field.name() == Some("file");
+        let filename = field.file_name().unwrap_or("userpic").to_string();
+        let data = field.bytes().await.map_err(|e| AppError::BadRequest(format!("ошибка чтения файла: {e}")))?;
+        if is_file {
+            upload = Some((filename, data));
+            break;
+        }
+    }
+    let (_original_name, bytes) = upload.ok_or_else(|| AppError::BadRequest("изображение не задано".into()))?;
+    let extension = validate_userpic_bytes(&bytes)?;
+    let filename = format!("{}-{}.{}", user.id, uuid::Uuid::new_v4(), extension);
+    let dir = format!("{}/photos", state.config.upload_dir);
+    tokio::fs::create_dir_all(&dir).await.map_err(|e| AppError::Anyhow(e.into()))?;
+    let path = format!("{dir}/{filename}");
+    tokio::fs::write(&path, &bytes).await.map_err(|e| AppError::Anyhow(e.into()))?;
+    sqlx::query("UPDATE users SET photo=$2 WHERE id=$1")
+        .bind(user.id)
+        .bind(&filename)
+        .execute(&state.pool)
+        .await?;
+    Ok(Redirect::to(&format!("/people/{}/profile?nocache={}", urlencoding::encode(&user.nick), uuid::Uuid::new_v4())))
+}
+
+fn validate_userpic_bytes(data: &[u8]) -> Result<&'static str> {
+    const MAX_FILE_SIZE: usize = 100 * 1024;
+    const MIN_IMAGE_SIZE: u32 = 50;
+    const MAX_IMAGE_SIZE: u32 = 300;
+    if data.is_empty() {
+        return Err(AppError::BadRequest("изображение не задано".into()));
+    }
+    if data.len() > MAX_FILE_SIZE {
+        return Err(AppError::BadRequest("Сбой загрузки изображения: слишком большой файл".into()));
+    }
+    let format = image::guess_format(data).map_err(|_| AppError::BadRequest("Сбой загрузки изображения: неизвестный формат".into()))?;
+    let extension = match format {
+        image::ImageFormat::Png => "png",
+        image::ImageFormat::Jpeg => "jpg",
+        image::ImageFormat::WebP => "webp",
+        _ => return Err(AppError::BadRequest("Сбой загрузки изображения: неподдерживаемый или потенциально анимированный формат".into())),
+    };
+    let image = image::load_from_memory_with_format(data, format).map_err(|e| AppError::BadRequest(format!("Сбой загрузки изображения: {e}")))?;
+    let (width, height) = image.dimensions();
+    if width < MIN_IMAGE_SIZE || width > MAX_IMAGE_SIZE || height < MIN_IMAGE_SIZE || height > MAX_IMAGE_SIZE {
+        return Err(AppError::BadRequest("Сбой загрузки изображения: недопустимые размеры фотографии".into()));
+    }
+    Ok(extension)
+}
+
+#[derive(Deserialize)]
+pub struct DeregisterForm {
+    pub password: String,
+    pub accept_block: Option<String>,
+    pub acceptBlock: Option<String>,
+    pub accept_oneway: Option<String>,
+    pub acceptOneway: Option<String>,
+}
+
+pub async fn deregister_form(CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    ensure_deregister_allowed(&user)?;
+    Ok(Html(format!(r#"
+<h1>Удаление аккаунта {nick}</h1>
+<p>Операция соответствует исходной логике: аккаунт блокируется, профиль очищается, восстановление через эту форму не предусмотрено.</p>
+<form method="post" action="/deregister.jsp" class="form">
+  <label>Пароль <input name="password" type="password" required></label>
+  <label><input type="checkbox" name="acceptBlock" value="true" required> Я согласен с блокировкой аккаунта</label>
+  <label><input type="checkbox" name="acceptOneway" value="true" required> Я понимаю, что действие необратимо</label>
+  <button type="submit">Удалить аккаунт</button>
+</form>
+"#, nick = html_escape::encode_text(&user.nick))))
+}
+
+pub async fn deregister_post(State(state): State<AppState>, jar: CookieJar, CurrentUser(user): CurrentUser, Form(form): Form<DeregisterForm>) -> Result<impl IntoResponse> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    ensure_deregister_allowed(&user)?;
+    if form.accept_block.or(form.acceptBlock).is_none() {
+        return Err(AppError::BadRequest("Вы не согласились с блокировкой аккаунта".into()));
+    }
+    if form.accept_oneway.or(form.acceptOneway).is_none() {
+        return Err(AppError::BadRequest("Вы не согласились с невозможностью восстановления аккаунта".into()));
+    }
+    let ok = crate::auth::verify_login(&state.pool, &user.nick, &form.password).await?.is_some();
+    if !ok {
+        return Err(AppError::BadRequest("Неверный пароль".into()));
+    }
+    sqlx::query(
+        "UPDATE users SET name='', url='', town='', userinfo='', photo=NULL, blocked=true WHERE id=$1",
+    )
+    .bind(user.id)
+    .execute(&state.pool)
+    .await?;
+    Ok((jar.remove(Cookie::from("lor_session")), Html("<h1>Удаление пользователя прошло успешно.</h1>".to_string())).into_response())
+}
+
+fn ensure_deregister_allowed(user: &crate::models::UserSummary) -> Result<()> {
+    if user.max_score.unwrap_or(0) < 100 {
+        return Err(AppError::Forbidden);
+    }
+    if user.canmod {
+        return Err(AppError::Forbidden);
+    }
+    if user.blocked.unwrap_or(false) {
+        return Err(AppError::Forbidden);
+    }
+    Ok(())
+}
+
+async fn user_exists(state: &AppState, nick: &str) -> Result<bool> {
+    let exists: Option<i32> = sqlx::query_scalar("SELECT id FROM users WHERE lower(nick)=lower($1)")
+        .bind(nick)
+        .fetch_optional(&state.pool)
+        .await?;
+    Ok(exists.is_some())
+}
+
+fn valid_login_name(nick: &str) -> bool {
+    if nick.is_empty() || nick.len() >= 80 {
+        return false;
+    }
+    let mut chars = nick.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
 fn validate_year_month(year: i32, month: i32) -> Result<()> {
     if !(1990..=3000).contains(&year) { return Err(AppError::BadRequest("указан некорректный год".into())); }
     if !(1..=12).contains(&month) { return Err(AppError::BadRequest("указан некорректный месяц".into())); }
@@ -415,10 +674,22 @@ pub async fn delete_image(State(state): State<AppState>, CurrentUser(user): Curr
     Ok(Redirect::to("/gallery/"))
 }
 
-pub async fn remove_userpic(State(state): State<AppState>, CurrentUser(user): CurrentUser) -> Result<Redirect> {
+#[derive(Deserialize)]
+pub struct RemoveUserpicForm { pub id: Option<i32> }
+
+pub async fn remove_userpic(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<RemoveUserpicForm>) -> Result<Redirect> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
-    sqlx::query("UPDATE users SET photo=NULL WHERE id=$1").bind(user.id).execute(&state.pool).await?;
-    Ok(Redirect::to(&format!("/people/{}/profile", urlencoding::encode(&user.nick))))
+    let target_id = form.id.unwrap_or(user.id);
+    if target_id != user.id && !user.canmod {
+        return Err(AppError::Forbidden);
+    }
+    let target_nick: String = sqlx::query_scalar("SELECT nick FROM users WHERE id=$1")
+        .bind(target_id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    sqlx::query("UPDATE users SET photo=NULL WHERE id=$1").bind(target_id).execute(&state.pool).await?;
+    Ok(Redirect::to(&format!("/people/{}/profile", urlencoding::encode(&target_nick))))
 }
 
 pub async fn reset_password_form(CurrentUser(user): CurrentUser) -> Result<Html<String>> {

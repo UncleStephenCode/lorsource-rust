@@ -8,7 +8,7 @@
 - Axum + Tokio для HTTP
 - SQLx + PostgreSQL для доступа к БД
 - Askama вместо JSP
-- tower-http для static files, gzip и trace middleware
+- tower-http для static files, `/photos/*`, gzip и trace middleware
 - Docker Compose для локального запуска
 
 ## Быстрый запуск через Docker Compose
@@ -78,8 +78,8 @@ python3 compat/test_http_compat.py
 - healthcheck и Docker-окружение;
 - карта 184 исходных Spring endpoint’ов;
 - Rust route declaration coverage для всех извлечённых endpoint shapes;
-- legacy-route stubs для ещё не перенесённой бизнес-логики;
-- v3 functional coverage: большинство прежних `legacy::not_implemented` заменены на реальные handlers; оставшиеся placeholder routes перечислены в `docs/FUNCTIONAL_COVERAGE.md`;
+- v4 functional coverage: explicit `legacy::not_implemented` routes removed;
+- перенесены activation, userpic upload, deregistration, `/check-login` и базовая admin/moderation surface;
 - модельный слой совместимости `src/models_compat.rs`;
 - auth/security scaffold с BCrypt и signed session cookies;
 - миграция совместимости `db/migrations/0003_legacy_schema_compat.sql`;
@@ -89,7 +89,7 @@ python3 compat/test_http_compat.py
 
 Исходный проект большой. Этот архив — рабочий Rust-порт ядра, маршрутов и схемы совместимости, пригодный как основа для дальнейшего переноса, но **не production-ready замена исходного Scala/Spring приложения**.
 
-Сейчас все извлечённые URL-формы объявлены в Rust-router. После v3 большая часть legacy endpoint’ов уже имеет рабочие handlers; оставшиеся placeholder routes сохранены намеренно и перечислены в `docs/FUNCTIONAL_COVERAGE.md`. Они требуют отдельных подсистем: activation tokens, upload/storage pipeline и account deregistration policy.
+Сейчас все извлечённые URL-формы объявлены в Rust-router, и явных `legacy::not_implemented` маршрутов больше нет. Это всё ещё не означает production parity: сложные подсистемы вроде captcha, SMTP, точной модераторской истории, поискового reindex backend и полного image pipeline пока реализованы упрощённо.
 
 ## Импорт старого demo dump
 
@@ -112,8 +112,8 @@ src/routes/tags.rs     метки
 src/routes/search.rs   поиск
 src/routes/rss.rs      RSS
 src/routes/api.rs      tracker/notifications/boxlets
-src/routes/admin.rs    admin/moderator route stubs
-src/routes/legacy.rs   known but not yet ported legacy endpoints
+src/routes/admin.rs    базовые admin/moderator handlers
+src/routes/legacy.rs   legacy compatibility handlers
 src/security.rs        password/session/permission compatibility layer
 src/models_compat.rs   original schema model inventory
 ```
@@ -130,4 +130,5 @@ src/models_compat.rs   original schema model inventory
 - `docs/SERVICE_PORTING_MAP.md`
 - `docs/COMPATIBILITY_TESTS.md`
 - `docs/DEMO_DB_COMPARISON.md`
+- `docs/FUNCTIONAL_COMPARISON_JAVA_RUST.md`
 - `docs/ARCHITECTURE.md`

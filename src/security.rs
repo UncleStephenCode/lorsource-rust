@@ -8,6 +8,7 @@
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::Utc;
+use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 
 pub mod password {
@@ -107,6 +108,23 @@ impl Principal {
             Permission::EditOwnPost | Permission::DeleteOwnPost => self.user_id.is_some() && !self.blocked && self.activated,
         }
     }
+}
+
+
+/// Hex encoded HMAC-SHA256 compatible with the original `SecretTokenService`
+/// activation/reset code strategy.
+pub fn hmac_sha256_hex(secret: &str, payload: &str) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
+        .expect("HMAC accepts keys of any size");
+    mac.update(payload.as_bytes());
+    mac.finalize().into_bytes().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+pub fn verify_hash(expected: &str, supplied: &str) -> bool {
+    if expected.len() != supplied.len() {
+        return false;
+    }
+    expected.as_bytes().iter().zip(supplied.as_bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
 }
 
 pub fn sign_payload(payload: &str, secret: &str) -> String {

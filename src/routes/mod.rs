@@ -87,13 +87,13 @@ pub fn router() -> Router<AppState> {
         // Many of these currently return 501 intentionally: the URL is reserved and tested,
         // but the service/controller logic still has to be ported from Scala.
         .route("/ExceptionResolver", get(legacy::exception_resolver))
-        .route("/activate", get(legacy::not_implemented).post(legacy::not_implemented))
-        .route("/activate.jsp", get(legacy::not_implemented).post(legacy::not_implemented))
-        .route("/addphoto.jsp", get(legacy::not_implemented).post(legacy::not_implemented))
+        .route("/activate", get(legacy::activate_form).post(legacy::activate_post))
+        .route("/activate.jsp", get(legacy::activate_form).post(legacy::activate_post))
+        .route("/addphoto.jsp", get(legacy::addphoto_form).post(legacy::upload_userpic))
         .route("/articles/archive", get(legacy::archive_section))
         .route("/commit.jsp", get(topics::commit_topic_form).post(topics::commit_topic))
         .route("/delete_image", get(legacy::delete_image_form).post(legacy::delete_image))
-        .route("/deregister.jsp", get(legacy::not_implemented).post(legacy::not_implemented))
+        .route("/deregister.jsp", get(legacy::deregister_form).post(legacy::deregister_post))
         .route("/errors/403", get(legacy::error_403))
         .route("/errors/404", get(legacy::error_404))
         .route("/gallery/archive", get(legacy::archive_section))

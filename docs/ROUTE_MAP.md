@@ -13,4 +13,4 @@ Regenerate:
 ORIGINAL_ROOT=/path/to/original/lorsource ./scripts/run-compatibility-suite.sh
 ```
 
-The Rust router now declares every original endpoint shape extracted by the current parser. Declaration coverage is not the same as functional parity: endpoints implemented through `legacy::not_implemented` still need their Scala business logic ported.
+The Rust router now declares every original endpoint shape extracted by the current parser. In v4 there are no routes mapped to `legacy::not_implemented`; declaration coverage still is not the same as production functional parity, so service-level behavior must continue to be compared with endpoint-specific tests.

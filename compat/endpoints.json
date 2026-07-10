@@ -168,12 +168,11 @@
     "compare": true
   },
   {
-    "name": "known but unported activation",
+    "name": "activation form",
     "method": "GET",
     "old": "/activate",
     "new": "/activate",
-    "compare": false,
-    "new_expected_status": 501
+    "compare": false
   },
   {
     "name": "reactions summary",
@@ -204,10 +203,10 @@
     "compare": false
   },
   {
-    "name": "check login anonymous",
+    "name": "check login availability",
     "method": "GET",
-    "old": "/check-login",
-    "new": "/check-login",
+    "old": "/check-login?nick=newuser",
+    "new": "/check-login?nick=newuser",
     "compare": false
   },
   {
@@ -215,6 +214,30 @@
     "method": "GET",
     "old": "/post-warning",
     "new": "/post-warning",
+    "compare": false,
+    "new_expected_status": 403
+  },
+  {
+    "name": "addphoto requires auth",
+    "method": "GET",
+    "old": "/addphoto.jsp",
+    "new": "/addphoto.jsp",
+    "compare": false,
+    "new_expected_status": 403
+  },
+  {
+    "name": "deregister requires auth",
+    "method": "GET",
+    "old": "/deregister.jsp",
+    "new": "/deregister.jsp",
+    "compare": false,
+    "new_expected_status": 403
+  },
+  {
+    "name": "admin geoip requires moderator",
+    "method": "GET",
+    "old": "/admin/geoip?ip=127.0.0.1",
+    "new": "/admin/geoip?ip=127.0.0.1",
     "compare": false,
     "new_expected_status": 403
   }

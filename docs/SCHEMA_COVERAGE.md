@@ -38,7 +38,7 @@ Dropped upstream legacy tables: **19**
 | dropped-upstream | `jam_watchlist` | `topic_name, virtual_wiki_id, wiki_user_id` | `` |
 | covered | `memories` | `` | `notify, watch` |
 | rust-only | `message_warnings` | `` | `comment_id, id, moderator, postdate, reason, resolved, resolved_at, topic_id, userid` |
-| covered | `monthly_stats` | `c, groupid, section, year` | `comments, topics, users` |
+| covered | `monthly_stats` | `` | `` |
 | covered | `msgbase` | `` | `markup` |
 | rust-only | `persistent_logins` | `` | `last_used, series, token, username` |
 | rust-only | `reactions_log` | `` | `action_date, id, msgid, reaction, set_value, userid` |

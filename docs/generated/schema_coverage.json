@@ -731,22 +731,14 @@
       "year"
     ],
     "rust_columns": [
-      "comments",
-      "month",
-      "topics",
-      "users"
-    ],
-    "missing_columns": [
       "c",
       "groupid",
+      "month",
       "section",
       "year"
     ],
-    "extra_columns": [
-      "comments",
-      "topics",
-      "users"
-    ]
+    "missing_columns": [],
+    "extra_columns": []
   },
   {
     "table": "msgbase",

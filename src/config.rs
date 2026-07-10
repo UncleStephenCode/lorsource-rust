@@ -5,7 +5,9 @@ pub struct Config {
     pub database_url: String,
     pub public_url: String,
     pub static_dir: String,
+    pub upload_dir: String,
     pub cookie_secret: String,
+    pub site_secret: String,
     pub run_migrations: bool,
     pub page_size: i64,
 }
@@ -18,7 +20,9 @@ impl Config {
             database_url: std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://lor:lor@localhost:5432/lor".to_string()),
             public_url: std::env::var("PUBLIC_URL").unwrap_or_else(|_| "http://localhost:8080".to_string()),
             static_dir: std::env::var("STATIC_DIR").unwrap_or_else(|_| "static".to_string()),
+            upload_dir: std::env::var("UPLOAD_DIR").unwrap_or_else(|_| "uploads".to_string()),
             cookie_secret: std::env::var("COOKIE_SECRET").unwrap_or_else(|_| "dev-only-change-me-change-me-change-me".to_string()),
+            site_secret: std::env::var("SITE_SECRET").ok().or_else(|| std::env::var("COOKIE_SECRET").ok()).unwrap_or_else(|| "dev-only-change-me-change-me-change-me".to_string()),
             run_migrations: std::env::var("RUN_MIGRATIONS").map(|v| v != "0" && v != "false").unwrap_or(true),
             page_size: std::env::var("PAGE_SIZE").ok().and_then(|v| v.parse().ok()).unwrap_or(30),
         }

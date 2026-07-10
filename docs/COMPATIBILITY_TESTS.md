@@ -31,7 +31,7 @@ Then run:
 NEW_BASE_URL=http://localhost:8080 python3 compat/test_http_compat.py
 ```
 
-This verifies that known endpoints are not accidental 404s and that intentionally unported endpoints return their expected placeholder status.
+This verifies that known endpoints are not accidental 404s and that protected endpoints return expected auth/permission statuses. v4 no longer expects explicit 501 placeholder statuses.
 
 ## HTTP checks against old and new apps
 

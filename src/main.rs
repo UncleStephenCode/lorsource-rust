@@ -31,11 +31,15 @@ async fn main() -> anyhow::Result<()> {
         db::migrate(&pool).await?;
     }
 
+    std::fs::create_dir_all(format!("{}/photos", config.upload_dir))
+        .context("failed to create upload photos directory")?;
+
     let state = AppState::new(config.clone(), pool);
     let app = Router::new()
         .merge(routes::router())
         .route("/healthz", get(routes::healthz))
         .nest_service("/static", ServeDir::new(&config.static_dir))
+        .nest_service("/photos", ServeDir::new(format!("{}/photos", &config.upload_dir)))
         .fallback(routes::not_found)
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())

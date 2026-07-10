@@ -19,7 +19,7 @@ This archive is no longer only a hand-written MVP skeleton. It now contains a re
 
 Current generated report: `docs/ROUTE_COVERAGE.md`.
 
-The Rust router now declares all extracted original endpoint shapes. Important nuance: many legacy endpoints intentionally return **501 Not Implemented**. That is still useful because accidental 404 is gone and the porting backlog is explicit.
+The Rust router declares all extracted original endpoint shapes. In v4 the remaining explicit `legacy::not_implemented` routes were replaced with concrete handlers; route coverage is still not the same as production-grade business-rule parity.
 
 ## DB status
 
@@ -31,7 +31,7 @@ Old `jam_*` tables from the demo dump are marked as dropped upstream because the
 
 ## Not yet production-equivalent
 
-The project still is **not** a full one-to-one functional port. The next work is to replace each `legacy::not_implemented` route with real service code and then tighten compatibility tests from coarse status/content-type checks to endpoint-specific assertions.
+The project still is **not** a full one-to-one functional port. The next work is to replace simplified handlers with exact service-level parity and tighten compatibility tests from coarse status/content-type checks to endpoint-specific assertions.
 
 ## v3 continuation
 
@@ -45,4 +45,16 @@ This iteration replaced a large share of `legacy::not_implemented` placeholders 
 - social features skeletons: memories, user filters, reactions, votes, tag rename/delete;
 - moderation utilities: deleted-comments view, post score update, image-delete flag and userpic removal.
 
-Remaining placeholders are documented in `docs/FUNCTIONAL_COVERAGE.md`. They are left explicit because they require larger subsystems: activation tokens, photo upload/storage and account deregistration policy.
+
+## v4 continuation
+
+This iteration compares the uploaded Java/Scala source with the Rust branch and removes the remaining explicit placeholders:
+
+- `/activate` and `/activate.jsp` now implement activation form, HMAC token verification and session login;
+- `/check-login` now matches the original nick-availability AJAX endpoint;
+- `/addphoto.jsp` now supports multipart userpic upload with size/dimension checks and `/photos/*` serving;
+- `/deregister.jsp` now implements password check, required confirmations, profile cleanup and account blocking;
+- admin/moderator routes previously mapped to one broad stub now have concrete compatibility handlers;
+- `monthly_stats` migration now matches the original demo table shape.
+
+Remaining gaps are tracked in `docs/FUNCTIONAL_COVERAGE.md` and `docs/FUNCTIONAL_COMPARISON_JAVA_RUST.md`.

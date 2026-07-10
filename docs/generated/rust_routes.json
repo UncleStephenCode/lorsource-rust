@@ -4,9 +4,9 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(stub_admin)",
+    "handler": "get(geoip)",
     "source": "src/routes/admin.rs",
-    "line": 6
+    "line": 8
   },
   {
     "path": "/admin/search-reindex",
@@ -14,36 +14,36 @@
       "GET",
       "POST"
     ],
-    "handler": "get(stub_admin).post(stub_admin)",
+    "handler": "get(search_reindex_form).post(search_reindex)",
     "source": "src/routes/admin.rs",
-    "line": 7
+    "line": 9
   },
   {
     "path": "/banip.jsp",
     "methods": [
       "POST"
     ],
-    "handler": "post(stub_admin)",
+    "handler": "post(ban_ip)",
     "source": "src/routes/admin.rs",
-    "line": 8
+    "line": 10
   },
   {
     "path": "/delip.jsp",
     "methods": [
       "POST"
     ],
-    "handler": "post(stub_admin)",
+    "handler": "post(del_ip)",
     "source": "src/routes/admin.rs",
-    "line": 9
+    "line": 11
   },
   {
     "path": "/sameip.jsp",
     "methods": [
       "GET"
     ],
-    "handler": "get(stub_admin)",
+    "handler": "get(same_ip)",
     "source": "src/routes/admin.rs",
-    "line": 10
+    "line": 12
   },
   {
     "path": "/groupmod.jsp",
@@ -51,18 +51,18 @@
       "GET",
       "POST"
     ],
-    "handler": "get(stub_admin).post(stub_admin)",
+    "handler": "get(groupmod_form).post(groupmod_save)",
     "source": "src/routes/admin.rs",
-    "line": 11
+    "line": 13
   },
   {
     "path": "/usermod.jsp",
     "methods": [
       "POST"
     ],
-    "handler": "post(stub_admin)",
+    "handler": "post(usermod)",
     "source": "src/routes/admin.rs",
-    "line": 12
+    "line": 14
   },
   {
     "path": "/post-warning",
@@ -70,18 +70,18 @@
       "GET",
       "POST"
     ],
-    "handler": "get(stub_admin).post(stub_admin)",
+    "handler": "get(post_warning_form).post(post_warning)",
     "source": "src/routes/admin.rs",
-    "line": 13
+    "line": 15
   },
   {
     "path": "/clear-warning",
     "methods": [
       "POST"
     ],
-    "handler": "post(stub_admin)",
+    "handler": "post(clear_warning)",
     "source": "src/routes/admin.rs",
-    "line": 14
+    "line": 16
   },
   {
     "path": "/",
@@ -695,7 +695,7 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::not_implemented).post(legacy::not_implemented)",
+    "handler": "get(legacy::activate_form).post(legacy::activate_post)",
     "source": "src/routes/mod.rs",
     "line": 90
   },
@@ -705,7 +705,7 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::not_implemented).post(legacy::not_implemented)",
+    "handler": "get(legacy::activate_form).post(legacy::activate_post)",
     "source": "src/routes/mod.rs",
     "line": 91
   },
@@ -715,7 +715,7 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::not_implemented).post(legacy::not_implemented)",
+    "handler": "get(legacy::addphoto_form).post(legacy::upload_userpic)",
     "source": "src/routes/mod.rs",
     "line": 92
   },
@@ -754,7 +754,7 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::not_implemented).post(legacy::not_implemented)",
+    "handler": "get(legacy::deregister_form).post(legacy::deregister_post)",
     "source": "src/routes/mod.rs",
     "line": 96
   },

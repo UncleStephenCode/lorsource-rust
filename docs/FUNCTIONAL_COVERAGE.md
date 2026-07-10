@@ -1,24 +1,30 @@
 # Functional coverage report
 
-This report distinguishes route declaration coverage from functional handler coverage. `ROUTE_COVERAGE.md` answers whether old URLs exist; this file tracks which Rust routes still deliberately fall through to `legacy::not_implemented`.
+This report distinguishes route declaration coverage from functional handler coverage. `ROUTE_COVERAGE.md` answers whether old URLs exist; this file tracks routes still deliberately mapped to placeholders or broad stubs.
 
 Total Rust route declarations: **146**
-Routes with non-placeholder handlers: **142**
-Routes still mapped to `legacy::not_implemented`: **4**
+Routes still mapped to `legacy::not_implemented`: **0**
+Routes still mapped to `stub_admin`: **0**
 
-## Remaining placeholder routes
+## v4 implementation notes
 
-| Methods | Path | Handler |
-|---|---|---|
-| `GET,POST` | `/activate` | `get(legacy::not_implemented).post(legacy::not_implemented)` |
-| `GET,POST` | `/activate.jsp` | `get(legacy::not_implemented).post(legacy::not_implemented)` |
-| `GET,POST` | `/addphoto.jsp` | `get(legacy::not_implemented).post(legacy::not_implemented)` |
-| `GET,POST` | `/deregister.jsp` | `get(legacy::not_implemented).post(legacy::not_implemented)` |
+- Replaced the remaining explicit placeholders for `/activate`, `/activate.jsp`, `/addphoto.jsp` and `/deregister.jsp` with real handlers.
+- Fixed `/check-login`: it now matches the original registration AJAX endpoint and checks `nick` availability instead of returning current-session state.
+- Added HMAC-SHA256 activation code verification compatible with the original `SecretTokenService` formula when `SITE_SECRET` matches the Java secret.
+- Added userpic upload with multipart parsing, size/dimension checks and `/photos/*` static serving.
+- Added destructive deregistration flow: password check, required confirmations, profile cleanup and user blocking.
+- Replaced admin stubs with basic moderation handlers for GeoIP lookup surface, search reindex queue acknowledgement, IP bans, group editing, user moderation actions and warnings.
+- Fixed `monthly_stats` compatibility migration to match the original demo schema columns.
 
-## v3 implementation notes
+## Remaining functional gaps
 
-- Added functional handlers for old redirect endpoints: `/group.jsp`, `/group-lastmod.jsp`, `/view-section.jsp`, `/view-news.jsp`.
-- Added archive pages for section archives and month archives.
-- Added compatibility handlers for `/markup/preview`, `/check-login`, `/yandex-tableau`, `/show-comments.jsp`, `/show-replies.jsp`.
-- Added read/write skeletons for memories, reactions, votes, tag moderation, user filters, deleted views and basic profile/settings/remarks flows.
-- Left activation, photo upload and account deregistration as explicit placeholders because the original behavior depends on email tokens, upload storage and destructive account policy.
+There are no routes left that intentionally return `legacy::not_implemented`, but full production parity still requires endpoint-specific compatibility work for the larger subsystems below:
+
+- real SMTP delivery and registration/password-reset email workflow;
+- captcha and anti-flood checks;
+- full Spring Security role model, persistent remember-me sessions and CSRF parity;
+- production image processing pipeline, animated image detection and object storage/CDN behavior;
+- real search reindex backend instead of an admin acknowledgement page;
+- MaxMind/GeoIP database integration;
+- exact moderator audit log/user-log semantics;
+- full notification/tracker/realtime event generation.
