@@ -155,7 +155,6 @@ pub struct UserModForm {
     pub action: String,
     pub reason: Option<String>,
     pub delta: Option<i32>,
-    pub shift: Option<String>,
     pub password: Option<String>,
 }
 
@@ -203,28 +202,8 @@ async fn usermod(State(state): State<AppState>, CurrentUser(user): CurrentUser, 
             crate::audit::log_user_action(&state.pool, form.id, moderator.id, "reset_url", &[]).await?;
         }
         "freeze" => {
-            let reason = form.reason.clone().unwrap_or_default();
-            if reason.len() > 255 {
-                return Err(AppError::BadRequest("Причина слишком длинная, максимум 255 байт".into()));
-            }
-            let shift = form.shift.as_deref().unwrap_or("неделя");
-            let interval = freeze_shift_to_interval(shift)?;
-            if shift == "Разморозить" {
-                sqlx::query("UPDATE users SET frozen_until=NULL, frozen_by=NULL, freezing_reason=NULL WHERE id=$1")
-                    .bind(form.id)
-                    .execute(&state.pool)
-                    .await?;
-                crate::audit::log_user_action(&state.pool, form.id, moderator.id, "defrosted", &[]).await?;
-            } else {
-                sqlx::query("UPDATE users SET frozen_until=now()+($2::interval), frozen_by=$3, freezing_reason=$4 WHERE id=$1")
-                    .bind(form.id)
-                    .bind(interval)
-                    .bind(moderator.id)
-                    .bind(&reason)
-                    .execute(&state.pool)
-                    .await?;
-                crate::audit::log_user_action(&state.pool, form.id, moderator.id, "frozen", &[("reason", reason.as_str()), ("shift", shift)]).await?;
-            }
+            sqlx::query("UPDATE users SET frozen_until=now()+interval '7 days' WHERE id=$1").bind(form.id).execute(&state.pool).await?;
+            crate::audit::log_user_action(&state.pool, form.id, moderator.id, "frozen", &[]).await?;
         }
         "block-n-delete-comments" => {
             sqlx::query("UPDATE users SET blocked=true WHERE id=$1").bind(form.id).execute(&state.pool).await?;
@@ -235,29 +214,6 @@ async fn usermod(State(state): State<AppState>, CurrentUser(user): CurrentUser, 
     }
     let nick: String = sqlx::query_scalar("SELECT nick FROM users WHERE id=$1").bind(form.id).fetch_one(&state.pool).await?;
     Ok(Redirect::to(&format!("/people/{}/profile", urlencoding::encode(&nick))))
-}
-
-fn freeze_shift_to_interval(shift: &str) -> Result<&'static str> {
-    match shift {
-        "30 минут" => Ok("30 minutes"),
-        "час" => Ok("1 hour"),
-        "2 часа" => Ok("2 hours"),
-        "3 часа" => Ok("3 hours"),
-        "6 часов" => Ok("6 hours"),
-        "9 часов" => Ok("9 hours"),
-        "12 часов" => Ok("12 hours"),
-        "сутки" => Ok("1 day"),
-        "двое суток" => Ok("2 days"),
-        "3 дня" => Ok("3 days"),
-        "5 дней" => Ok("5 days"),
-        "неделя" => Ok("1 week"),
-        "две недели" => Ok("2 weeks"),
-        "месяц" => Ok("1 month"),
-        "2 месяца" => Ok("2 months"),
-        "3 месяца" => Ok("3 months"),
-        "Разморозить" => Ok("0 seconds"),
-        _ => Err(AppError::BadRequest("Некорректный срок заморозки".into())),
-    }
 }
 
 #[derive(Deserialize)]

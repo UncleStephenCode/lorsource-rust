@@ -9,7 +9,7 @@ description = "Experimental Rust/Axum port of the LOR engine core"
 [dependencies]
 anyhow = "1"
 aes-gcm = "0.10"
-askama = { version = "0.12", features = ["with-axum"] }
+askama = "0.12"
 async-trait = "0.1"
 axum = { version = "0.7", features = ["macros", "json", "form", "multipart"] }
 axum-extra = { version = "0.9", features = ["cookie", "typed-header"] }

@@ -231,16 +231,6 @@ CREATE INDEX IF NOT EXISTS memories_userid_idx ON memories(userid);
 CREATE INDEX IF NOT EXISTS memories_topic_idx ON memories(topic);
 CREATE INDEX IF NOT EXISTS edit_info_msgid_idx ON edit_info(msgid);
 CREATE INDEX IF NOT EXISTS images_topic_idx ON images(topic);
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='reactions_log' AND column_name='msgid') THEN
-    CREATE INDEX IF NOT EXISTS reactions_log_msgid_idx ON reactions_log(msgid);
-  END IF;
-END$$;
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='message_warnings' AND column_name='userid') THEN
-    CREATE INDEX IF NOT EXISTS message_warnings_userid_idx ON message_warnings(userid);
-  END IF;
-END$$;
+CREATE INDEX IF NOT EXISTS reactions_log_msgid_idx ON reactions_log(msgid);
+CREATE INDEX IF NOT EXISTS message_warnings_userid_idx ON message_warnings(userid);
 CREATE INDEX IF NOT EXISTS user_events_userid_unread_idx ON user_events(userid, unread);

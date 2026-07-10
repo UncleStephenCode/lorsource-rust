@@ -156,7 +156,7 @@
     "line": 27
   },
   {
-    "path": "/forum/{group}/{id}/{tail}",
+    "path": "/forum/{group}/{id_or_year}/{page_or_month}",
     "methods": [
       "GET"
     ],
@@ -201,7 +201,7 @@
     "line": 32
   },
   {
-    "path": "/news/{group}/{id}/{tail}",
+    "path": "/news/{group}/{id}/{page_marker}",
     "methods": [
       "GET"
     ],
@@ -246,7 +246,7 @@
     "line": 37
   },
   {
-    "path": "/articles/{group}/{id}/{tail}",
+    "path": "/articles/{group}/{id}/{page_marker}",
     "methods": [
       "GET"
     ],
@@ -291,7 +291,7 @@
     "line": 42
   },
   {
-    "path": "/gallery/{group}/{id}/{tail}",
+    "path": "/gallery/{group}/{id}/{page_marker}",
     "methods": [
       "GET"
     ],
@@ -336,7 +336,7 @@
     "line": 47
   },
   {
-    "path": "/polls/{group}/{id}/{tail}",
+    "path": "/polls/{group}/{id}/{page_marker}",
     "methods": [
       "GET"
     ],
@@ -1212,7 +1212,7 @@
     "line": 144
   },
   {
-    "path": "/forum/{group}/{id}/{tail}/history",
+    "path": "/forum/{group}/{id}/{commentid}/history",
     "methods": [
       "GET"
     ],
@@ -1230,7 +1230,7 @@
     "line": 146
   },
   {
-    "path": "/news/{group}/{id}/{tail}/history",
+    "path": "/news/{group}/{id}/{commentid}/history",
     "methods": [
       "GET"
     ],
@@ -1248,7 +1248,7 @@
     "line": 148
   },
   {
-    "path": "/articles/{group}/{id}/{tail}/history",
+    "path": "/articles/{group}/{id}/{commentid}/history",
     "methods": [
       "GET"
     ],
@@ -1266,7 +1266,7 @@
     "line": 150
   },
   {
-    "path": "/gallery/{group}/{id}/{tail}/history",
+    "path": "/gallery/{group}/{id}/{commentid}/history",
     "methods": [
       "GET"
     ],
@@ -1284,7 +1284,7 @@
     "line": 152
   },
   {
-    "path": "/polls/{group}/{id}/{tail}/history",
+    "path": "/polls/{group}/{id}/{commentid}/history",
     "methods": [
       "GET"
     ],

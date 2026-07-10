@@ -1,19 +1,20 @@
 use crate::{error::Result, state::AppState};
-use axum::{extract::{Query, State}, http::{header, HeaderMap}, response::IntoResponse};
+use axum::{extract::{Query, State}, http::{header, HeaderMap}};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
 pub struct RssQuery { pub section: Option<String> }
 
-pub async fn main_rss(State(state): State<AppState>) -> Result<impl IntoResponse> {
+pub async fn main_rss(State(state): State<AppState>) -> Result<(HeaderMap, String)> {
     render_rss(&state, None).await
 }
 
-pub async fn section_rss(State(state): State<AppState>, Query(q): Query<RssQuery>) -> Result<impl IntoResponse> {
-    render_rss(&state, q.section.as_deref()).await
+pub async fn section_rss(State(state): State<AppState>, Query(q): Query<RssQuery>) -> Result<(HeaderMap, String)> {
+    render_rss(&state, q.section).await
 }
 
-async fn render_rss(state: &AppState, section: Option<&str>) -> Result<impl IntoResponse> {
+async fn render_rss(state: &AppState, optSection: Option<String>) -> Result<(HeaderMap, String)> {
+    let section = optSection.as_deref();
     let topics = crate::routes::topics::list_topics(state, section, None, 0, 30).await?;
     let mut body = String::from(r#"<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel>"#);
     body.push_str("<title>LOR Rust</title><link>");

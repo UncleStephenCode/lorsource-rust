@@ -256,7 +256,7 @@
     "params": "",
     "controller": "EditHistoryController",
     "handler": "showCommentEditInfo",
-    "rust_match": "GET /articles/{group}/{id}/{tail}/history",
+    "rust_match": "GET /articles/{group}/{id}/{commentid}/history",
     "source": "src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60"
   },
   {
@@ -516,7 +516,7 @@
     "params": "",
     "controller": "EditHistoryController",
     "handler": "showCommentEditInfo",
-    "rust_match": "GET /forum/{group}/{id}/{tail}/history",
+    "rust_match": "GET /forum/{group}/{id}/{commentid}/history",
     "source": "src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60"
   },
   {
@@ -526,7 +526,7 @@
     "params": "",
     "controller": "GroupController",
     "handler": "forumArchive",
-    "rust_match": "GET /forum/{group}/{id}/{tail}",
+    "rust_match": "GET /forum/{group}/{id_or_year}/{page_or_month}",
     "source": "src/main/scala/ru/org/linux/group/GroupController.scala:71"
   },
   {
@@ -556,7 +556,7 @@
     "params": "",
     "controller": "EditHistoryController",
     "handler": "showCommentEditInfo",
-    "rust_match": "GET /gallery/{group}/{id}/{tail}/history",
+    "rust_match": "GET /gallery/{group}/{id}/{commentid}/history",
     "source": "src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60"
   },
   {
@@ -796,7 +796,7 @@
     "params": "",
     "controller": "EditHistoryController",
     "handler": "showCommentEditInfo",
-    "rust_match": "GET /news/{group}/{id}/{tail}/history",
+    "rust_match": "GET /news/{group}/{id}/{commentid}/history",
     "source": "src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60"
   },
   {
@@ -1066,7 +1066,7 @@
     "params": "",
     "controller": "EditHistoryController",
     "handler": "showCommentEditInfo",
-    "rust_match": "GET /polls/{group}/{id}/{tail}/history",
+    "rust_match": "GET /polls/{group}/{id}/{commentid}/history",
     "source": "src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60"
   },
   {
@@ -1826,7 +1826,7 @@
     "params": "",
     "controller": "TopicController",
     "handler": "getMessagePage",
-    "rust_match": "GET /forum/{group}/{id}/{tail}; GET /news/{group}/{id}/{tail}; GET /polls/{group}/{id}/{tail}; GET /articles/{group}/{id}/{tail}; GET /gallery/{group}/{id}/{tail}",
+    "rust_match": "GET /forum/{group}/{id_or_year}/{page_or_month}; GET /news/{group}/{id}/{page_marker}; GET /polls/{group}/{id}/{page_marker}; GET /articles/{group}/{id}/{page_marker}; GET /gallery/{group}/{id}/{page_marker}",
     "source": "src/main/scala/ru/org/linux/topic/TopicController.scala:127"
   },
   {

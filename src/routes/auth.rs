@@ -141,7 +141,7 @@ async fn validate_registration_email(state: &AppState, email: &str) -> Result<()
     let domain = domain.to_lowercase();
     let top_private = domain.split('.').rev().take(2).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(".");
     let blocked: Option<String> = sqlx::query_scalar(
-        "SELECT domain FROM email_domains_block WHERE (lower(domain)=lower($1) OR lower(domain)=lower($2)) AND COALESCE(block_until, now() + interval '100 years') > now() LIMIT 1",
+        "SELECT domain FROM email_domains_block WHERE lower(domain)=lower($1) OR lower(domain)=lower($2) LIMIT 1",
     )
     .bind(&domain)
     .bind(&top_private)

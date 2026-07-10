@@ -167,7 +167,7 @@ pub async fn resolve_topic_get(State(state): State<AppState>, Query(form): Query
     do_resolve_topic(&state, user, form).await
 }
 
-pub async fn resolve_topic(State(state): State<AppState>, Form(form): Form<TopicActionForm>, CurrentUser(user): CurrentUser) -> Result<Redirect> {
+pub async fn resolve_topic(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<TopicActionForm>) -> Result<Redirect> {
     do_resolve_topic(&state, user, form).await
 }
 
@@ -201,10 +201,14 @@ fn topic_service(state: &AppState) -> CTopicService<CTopicPgRepository> {
 }
 
 fn section_from_uri(uri: &Uri) -> Option<&'static str> {
-    uri.path().trim_start_matches('/').split('/').next().and_then(|s| match s {
-        "forum" | "news" | "articles" | "gallery" | "polls" => Some(s),
+    match uri.path().trim_start_matches('/').split('/').next()? {
+        "forum" => Some("forum"),
+        "news" => Some("news"),
+        "articles" => Some("articles"),
+        "gallery" => Some("gallery"),
+        "polls" => Some("polls"),
         _ => None,
-    })
+    }
 }
 
 fn section_title(section: &str) -> &'static str {
@@ -251,7 +255,7 @@ pub async fn commit_topic_form(Query(q): Query<ViewMessageQuery>, CurrentUser(us
 "#, q.msgid, q.msgid)))
 }
 
-pub async fn commit_topic(State(state): State<AppState>, Form(form): Form<TopicActionForm>, CurrentUser(user): CurrentUser) -> Result<Redirect> {
+pub async fn commit_topic(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<TopicActionForm>) -> Result<Redirect> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
     if !user.canmod { return Err(AppError::Forbidden); }
     topic_service(&state).vCommitTopic(form.msgid, user.id).await?;
@@ -269,7 +273,7 @@ pub async fn uncommit_form(Query(q): Query<ViewMessageQuery>, CurrentUser(user):
 "#, q.msgid, q.msgid)))
 }
 
-pub async fn uncommit(State(state): State<AppState>, Form(form): Form<TopicActionForm>, CurrentUser(user): CurrentUser) -> Result<Redirect> {
+pub async fn uncommit(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<TopicActionForm>) -> Result<Redirect> {
     if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
     topic_service(&state).vUncommitTopic(form.msgid).await?;
     Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.msgid)))
@@ -297,7 +301,7 @@ pub async fn move_topic_form(State(state): State<AppState>, Query(q): Query<View
 "#, q.msgid, q.msgid, options)))
 }
 
-pub async fn move_topic(State(state): State<AppState>, Form(form): Form<MoveTopicForm>, CurrentUser(user): CurrentUser) -> Result<Redirect> {
+pub async fn move_topic(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<MoveTopicForm>) -> Result<Redirect> {
     if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
     topic_service(&state).vMoveTopic(form.msgid, form.moveto).await?;
     Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.msgid)))

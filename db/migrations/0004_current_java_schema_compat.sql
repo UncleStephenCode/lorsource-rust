@@ -24,19 +24,13 @@ CREATE TABLE IF NOT EXISTS polls_variants (
 -- If the imported demo dump still contains the pre-2011 names, copy the data
 -- into the current names used by PollDao.scala. The original tables are left in
 -- place so old dumps remain importable.
-DO $$
-BEGIN
-  IF to_regclass('public.votenames') IS NOT NULL THEN
-    INSERT INTO polls(id, topic, multiselect)
-    SELECT id, topic, multiselect FROM votenames
-    ON CONFLICT (id) DO NOTHING;
-  END IF;
-  IF to_regclass('public.votes') IS NOT NULL THEN
-    INSERT INTO polls_variants(id, vote, label, votes)
-    SELECT id, vote, label, votes FROM votes
-    ON CONFLICT (id) DO NOTHING;
-  END IF;
-END$$;
+INSERT INTO polls(id, topic, multiselect)
+SELECT id, topic, multiselect FROM votenames
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO polls_variants(id, vote, label, votes)
+SELECT id, vote, label, votes FROM votes
+ON CONFLICT (id) DO NOTHING;
 
 ALTER TABLE vote_users ADD COLUMN IF NOT EXISTS variant_id integer;
 
@@ -48,18 +42,12 @@ ALTER TABLE vote_users DROP CONSTRAINT IF EXISTS vote_users_vote_fkey;
 ALTER TABLE vote_users DROP CONSTRAINT IF EXISTS vote_users_variant_id_fkey;
 
 -- Convert old rows where vote_users.vote stored the selected variant id.
-DO $$
-BEGIN
-  IF to_regclass('public.polls_variants') IS NOT NULL
-     AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='vote_users' AND column_name='variant_id') THEN
-    UPDATE vote_users vu
-    SET variant_id = vu.vote,
-        vote = pv.vote
-    FROM polls_variants pv
-    WHERE vu.variant_id IS NULL
-      AND pv.id = vu.vote;
-  END IF;
-END$$;
+UPDATE vote_users vu
+SET variant_id = vu.vote,
+    vote = pv.vote
+FROM polls_variants pv
+WHERE vu.variant_id IS NULL
+  AND pv.id = vu.vote;
 
 DO $$
 BEGIN
@@ -128,19 +116,8 @@ CREATE TABLE IF NOT EXISTS user_settings (
 -- The current Java branch migrated style from users.style into user_settings
 -- and then dropped user_settings.main. Keep users.style for older dumps, but
 -- mirror it into user_settings for code that expects the new table.
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='style') THEN
-    INSERT INTO user_settings(id, settings)
-    SELECT id, hstore(ARRAY['style'], ARRAY[style])
-    FROM users
-    WHERE id <> 2
-    ON CONFLICT (id) DO NOTHING;
-  ELSE
-    INSERT INTO user_settings(id, settings)
-    SELECT id, ''::hstore
-    FROM users
-    WHERE id <> 2
-    ON CONFLICT (id) DO NOTHING;
-  END IF;
-END$$;
+INSERT INTO user_settings(id, settings)
+SELECT id, hstore(ARRAY['style'], ARRAY[style])
+FROM users
+WHERE id <> 2
+ON CONFLICT (id) DO NOTHING;

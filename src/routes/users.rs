@@ -1,6 +1,6 @@
 use crate::{error::{AppError, Result}, models::{PagerQuery, TopicSummary, UserSummary}, pagination::Pager, state::AppState};
 use askama::Template;
-use axum::{extract::{Path, Query, State}, response::{Html, Redirect}};
+use axum::{extract::{Path, Query, State}, response::{Html, Redirect}, Form};
 use serde::Deserialize;
 
 #[derive(Template)]
@@ -74,7 +74,7 @@ pub async fn reactions(State(state): State<AppState>, Path(nick): Path<String>) 
 pub async fn remarks(State(state): State<AppState>, Path(nick): Path<String>) -> Result<Html<String>> {
     let user = get_user(&state, &nick).await?;
     let rows = sqlx::query_as::<_, (String, String)>(
-        "SELECT u.nick, r.remark_text FROM user_remarks r JOIN users u ON u.id=r.user_id WHERE r.ref_user_id=$1 ORDER BY lower(u.nick)",
+        "SELECT u.nick, r.remark FROM user_remarks r JOIN users u ON u.id=r.userid WHERE r.who=$1 ORDER BY lower(u.nick)",
     )
     .bind(user.id)
     .fetch_all(&state.pool)
@@ -257,7 +257,7 @@ pub struct RemarkForm { pub remark: String }
 pub async fn remark_form(State(state): State<AppState>, Path(nick): Path<String>, current: crate::auth::CurrentUser) -> Result<Html<String>> {
     let target = get_user(&state, &nick).await?;
     let Some(me) = current.0 else { return Err(AppError::Forbidden); };
-    let remark: Option<String> = sqlx::query_scalar("SELECT remark_text FROM user_remarks WHERE user_id=$1 AND ref_user_id=$2")
+    let remark: Option<String> = sqlx::query_scalar("SELECT remark FROM user_remarks WHERE userid=$1 AND who=$2")
         .bind(me.id).bind(target.id).fetch_optional(&state.pool).await?;
     Ok(Html(format!(r#"
 <h1>Заметка о {}</h1>
@@ -271,7 +271,7 @@ pub async fn remark_form(State(state): State<AppState>, Path(nick): Path<String>
 pub async fn save_remark(State(state): State<AppState>, Path(nick): Path<String>, current: crate::auth::CurrentUser, Form(form): axum::Form<RemarkForm>) -> Result<Redirect> {
     let target = get_user(&state, &nick).await?;
     let Some(me) = current.0 else { return Err(AppError::Forbidden); };
-    sqlx::query("INSERT INTO user_remarks(user_id,ref_user_id,remark_text) VALUES($1,$2,$3) ON CONFLICT(user_id,ref_user_id) DO UPDATE SET remark_text=EXCLUDED.remark_text")
+    sqlx::query("INSERT INTO user_remarks(userid,who,remark) VALUES($1,$2,$3) ON CONFLICT(userid,who) DO UPDATE SET remark=EXCLUDED.remark")
         .bind(me.id).bind(target.id).bind(form.remark).execute(&state.pool).await?;
     Ok(Redirect::to(&format!("/people/{}/remarks", urlencoding::encode(&target.nick))))
 }

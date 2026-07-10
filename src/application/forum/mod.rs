@@ -25,6 +25,10 @@ where
         self.oRepository.vecListGroups().await
     }
 
+    pub async fn vecListGroupsBySection(&self, optSectionPrefix: Option<&str>) -> Result<Vec<StGroup>> {
+        self.oRepository.vecListGroupsBySection(optSectionPrefix).await
+    }
+
     pub async fn stArchiveGroup(&self, sGroupUrlName: &str) -> Result<StGroup> {
         self.oRepository.stFindGroupByUrlName(sGroupUrlName).await
     }

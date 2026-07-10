@@ -123,7 +123,7 @@ pub async fn undelete_comment(State(state): State<AppState>, Form(form): Form<Co
 async fn insert_comment(state: &AppState, user_id: i32, form: CommentForm) -> Result<i32> {
     let mut tx = state.pool.begin().await?;
     let id: i32 = sqlx::query_scalar("SELECT nextval('s_msgid')::int").fetch_one(&mut *tx).await?;
-    sqlx::query("INSERT INTO msgbase(id, message, markup) VALUES($1,$2,'BBCODE_TEX')").bind(id).bind(&form.msg).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO msgbase(id, message, bbcode) VALUES($1,$2,true)").bind(id).bind(&form.msg).execute(&mut *tx).await?;
     sqlx::query(
         "INSERT INTO comments(id, topic, userid, title, postdate, replyto) VALUES($1,$2,$3,$4,now(),$5)",
     )

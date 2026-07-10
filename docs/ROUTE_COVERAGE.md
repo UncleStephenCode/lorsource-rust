@@ -32,7 +32,7 @@ Missing route declaration: **0**
 | covered | `ANY` | `/articles.boxlet` | `ArticlesBoxlet.getData` | `GET /articles.boxlet` |
 | covered | `ANY` | `/articles/archive` | `ArchiveController.articlesArchive` | `GET /articles/archive` |
 | covered | `ANY` | `/articles/{group}/{id}/history` | `EditHistoryController.showEditInfo` | `GET /articles/{group}/{id}/history` |
-| covered | `ANY` | `/articles/{group}/{id}/{commentid}/history` | `EditHistoryController.showCommentEditInfo` | `GET /articles/{group}/{id}/{tail}/history` |
+| covered | `ANY` | `/articles/{group}/{id}/{commentid}/history` | `EditHistoryController.showCommentEditInfo` | `GET /articles/{group}/{id}/{commentid}/history` |
 | covered | `POST` | `/banip.jsp` | `BanIPController.banIP` | `POST /banip.jsp` |
 | covered | `ANY` | `/check-login` | `RegisterController.ajaxLoginCheck` | `GET /check-login` |
 | covered | `POST` | `/clear-warning` | `WarningController.clear` | `POST /clear-warning` |
@@ -58,11 +58,11 @@ Missing route declaration: **0**
 | covered | `ANY` | `/forum/{group}` | `GroupController.forum` | `GET /forum/{group}` |
 | covered | `ANY` | `/forum/{group}/archive` | `ArchiveController.forumArchive` | `GET /forum/{group}/archive` |
 | covered | `ANY` | `/forum/{group}/{id}/history` | `EditHistoryController.showEditInfo` | `GET /forum/{group}/{id}/history` |
-| covered | `ANY` | `/forum/{group}/{id}/{commentid}/history` | `EditHistoryController.showCommentEditInfo` | `GET /forum/{group}/{id}/{tail}/history` |
-| covered | `ANY` | `/forum/{group}/{year}/{month}` | `GroupController.forumArchive` | `GET /forum/{group}/{id}/{tail}` |
+| covered | `ANY` | `/forum/{group}/{id}/{commentid}/history` | `EditHistoryController.showCommentEditInfo` | `GET /forum/{group}/{id}/{commentid}/history` |
+| covered | `ANY` | `/forum/{group}/{year}/{month}` | `GroupController.forumArchive` | `GET /forum/{group}/{id_or_year}/{page_or_month}` |
 | covered | `ANY` | `/gallery/archive` | `ArchiveController.galleryArchive` | `GET /gallery/archive` |
 | covered | `ANY` | `/gallery/{group}/{id}/history` | `EditHistoryController.showEditInfo` | `GET /gallery/{group}/{id}/history` |
-| covered | `ANY` | `/gallery/{group}/{id}/{commentid}/history` | `EditHistoryController.showCommentEditInfo` | `GET /gallery/{group}/{id}/{tail}/history` |
+| covered | `ANY` | `/gallery/{group}/{id}/{commentid}/history` | `EditHistoryController.showCommentEditInfo` | `GET /gallery/{group}/{id}/{commentid}/history` |
 | covered | `ANY` | `/group-lastmod.jsp` | `GroupController.topicsLastmod` | `GET /group-lastmod.jsp` |
 | covered | `ANY` | `/group.jsp` | `GroupController.topics` | `GET /group.jsp` |
 | covered | `GET` | `/groupmod.jsp` | `GroupModificationController.showForm` | `GET,POST /groupmod.jsp` |
@@ -86,7 +86,7 @@ Missing route declaration: **0**
 | covered | `GET` | `/mtn.jsp` | `TopicModificationController.movePremoderatedForm` | `GET /mtn.jsp` |
 | covered | `ANY` | `/news/archive` | `ArchiveController.newsArchive` | `GET /news/archive` |
 | covered | `ANY` | `/news/{group}/{id}/history` | `EditHistoryController.showEditInfo` | `GET /news/{group}/{id}/history` |
-| covered | `ANY` | `/news/{group}/{id}/{commentid}/history` | `EditHistoryController.showCommentEditInfo` | `GET /news/{group}/{id}/{tail}/history` |
+| covered | `ANY` | `/news/{group}/{id}/{commentid}/history` | `EditHistoryController.showCommentEditInfo` | `GET /news/{group}/{id}/{commentid}/history` |
 | covered | `POST` | `/notifications` | `UserEventController.resetNotifications` | `GET,POST /notifications` |
 | covered | `GET,HEAD` | `/notifications` | `UserEventController.showNotifications` | `GET,POST /notifications` |
 | covered | `POST` | `/notifications-click` | `UserEventController.clickNotifications` | `POST /notifications-click` |
@@ -113,7 +113,7 @@ Missing route declaration: **0**
 | covered | `ANY` | `/poll.boxlet` | `PollBoxlet.getData` | `GET /poll.boxlet` |
 | covered | `ANY` | `/polls/archive` | `ArchiveController.pollsArchive` | `GET /polls/archive` |
 | covered | `ANY` | `/polls/{group}/{id}/history` | `EditHistoryController.showEditInfo` | `GET /polls/{group}/{id}/history` |
-| covered | `ANY` | `/polls/{group}/{id}/{commentid}/history` | `EditHistoryController.showCommentEditInfo` | `GET /polls/{group}/{id}/{tail}/history` |
+| covered | `ANY` | `/polls/{group}/{id}/{commentid}/history` | `EditHistoryController.showCommentEditInfo` | `GET /polls/{group}/{id}/{commentid}/history` |
 | covered | `GET` | `/post-warning` | `WarningController.showForm` | `GET,POST /post-warning` |
 | covered | `POST` | `/post-warning` | `WarningController.post` | `GET,POST /post-warning` |
 | covered | `GET` | `/reactions` | `ReactionController.commentReaction` | `GET,POST /reactions` |
@@ -189,5 +189,5 @@ Missing route declaration: **0**
 | covered | `ANY` | `/{section}/archive/{year}/{month}` | `TopicListController.sectionArchive` | `GET /news/archive/{year}/{month}; GET /polls/archive/{year}/{month}; GET /articles/archive/{year}/{month}; GET /gallery/archive/{year}/{month}` |
 | covered | `ANY` | `/{section}/{group}` | `TopicListController.topicsByGroup` | `GET /forum/{group}; GET /news/{group}; GET /polls/{group}; GET /articles/{group}; GET /gallery/{group}` |
 | covered | `ANY` | `/{section}/{group}/{id}` | `TopicController.getMessageMain` | `GET /forum/{group}/{id}; GET /news/{group}/{id}; GET /polls/{group}/{id}; GET /articles/{group}/{id}; GET /gallery/{group}/{id}` |
-| covered | `GET` | `/{section}/{group}/{id}/page{page}` | `TopicController.getMessagePage` | `GET /forum/{group}/{id}/{tail}; GET /news/{group}/{id}/{tail}; GET /polls/{group}/{id}/{tail}; GET /articles/{group}/{id}/{tail}; GET /gallery/{group}/{id}/{tail}` |
+| covered | `GET` | `/{section}/{group}/{id}/page{page}` | `TopicController.getMessagePage` | `GET /forum/{group}/{id_or_year}/{page_or_month}; GET /news/{group}/{id}/{page_marker}; GET /polls/{group}/{id}/{page_marker}; GET /articles/{group}/{id}/{page_marker}; GET /gallery/{group}/{id}/{page_marker}` |
 | covered | `GET` | `/{section}/{group}/{id}/thread/{threadRoot}` | `TopicController.getMessageThread` | `GET /forum/{group}/{id}/thread/{thread_root}; GET /news/{group}/{id}/thread/{thread_root}; GET /polls/{group}/{id}/thread/{thread_root}; GET /articles/{group}/{id}/thread/{thread_root}; GET /gallery/{group}/{id}/thread/{thread_root}` |

@@ -21,20 +21,11 @@ python3 "$ROOT/tools/route_coverage.py" \
   --json "$ROOT/docs/generated/route_coverage.json" \
   --csv "$ROOT/docs/generated/route_coverage.csv" \
   --md "$ROOT/docs/ROUTE_COVERAGE.md"
-if [[ -n "$ORIGINAL_ROOT" ]]; then
-  python3 "$ROOT/tools/compare_current_java_schema.py" \
-    --java-root "$ORIGINAL_ROOT" \
-    --migrations-dir "$ROOT/db/migrations" \
-    --json "$ROOT/docs/generated/current_java_schema_coverage.json" \
-    --md "$ROOT/docs/CURRENT_JAVA_SCHEMA_COVERAGE.md"
-  cp "$ROOT/docs/CURRENT_JAVA_SCHEMA_COVERAGE.md" "$ROOT/docs/SCHEMA_COVERAGE.md"
-else
-  python3 "$ROOT/tools/compare_schema_inventory.py" \
-    --original-json "$ROOT/docs/generated/original_demo_schema.json" \
-    --migrations-dir "$ROOT/db/migrations" \
-    --json "$ROOT/docs/generated/schema_coverage.json" \
-    --md "$ROOT/docs/SCHEMA_COVERAGE.md"
-fi
+python3 "$ROOT/tools/compare_schema_inventory.py" \
+  --original-json "$ROOT/docs/generated/original_demo_schema.json" \
+  --migrations-dir "$ROOT/db/migrations" \
+  --json "$ROOT/docs/generated/schema_coverage.json" \
+  --md "$ROOT/docs/SCHEMA_COVERAGE.md"
 
 if [[ "${RUN_HTTP_COMPAT:-0}" == "1" ]]; then
   python3 "$ROOT/compat/test_http_compat.py"
