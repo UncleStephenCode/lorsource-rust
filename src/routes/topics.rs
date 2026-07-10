@@ -267,3 +267,95 @@ fn section_title(section: &str) -> &'static str {
         _ => "Темы",
     }
 }
+
+pub async fn delete_topic_form(Query(q): Query<ViewMessageQuery>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+    if user.is_none() { return Err(AppError::Forbidden); }
+    Ok(Html(format!(r#"
+<h1>Удалить тему #{}</h1>
+<form method="post" action="/delete.jsp">
+  <input type="hidden" name="msgid" value="{}">
+  <button type="submit">Удалить</button>
+</form>
+"#, q.msgid, q.msgid)))
+}
+
+pub async fn undelete_topic_form(Query(q): Query<ViewMessageQuery>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
+    Ok(Html(format!(r#"
+<h1>Восстановить тему #{}</h1>
+<form method="post" action="/undelete">
+  <input type="hidden" name="msgid" value="{}">
+  <button type="submit">Восстановить</button>
+</form>
+"#, q.msgid, q.msgid)))
+}
+
+pub async fn commit_topic_form(Query(q): Query<ViewMessageQuery>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
+    Ok(Html(format!(r#"
+<h1>Подтвердить тему #{}</h1>
+<form method="post" action="/commit.jsp">
+  <input type="hidden" name="msgid" value="{}">
+  <button type="submit">Подтвердить</button>
+</form>
+"#, q.msgid, q.msgid)))
+}
+
+pub async fn commit_topic(State(state): State<AppState>, Form(form): Form<TopicActionForm>, CurrentUser(user): CurrentUser) -> Result<Redirect> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    if !user.canmod { return Err(AppError::Forbidden); }
+    sqlx::query("UPDATE topics SET moderate=false, commitby=$2, commitdate=now(), lastmod=now() WHERE id=$1")
+        .bind(form.msgid).bind(user.id).execute(&state.pool).await?;
+    Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.msgid)))
+}
+
+pub async fn uncommit_form(Query(q): Query<ViewMessageQuery>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
+    Ok(Html(format!(r#"
+<h1>Отменить подтверждение темы #{}</h1>
+<form method="post" action="/uncommit.jsp">
+  <input type="hidden" name="msgid" value="{}">
+  <button type="submit">Отменить подтверждение</button>
+</form>
+"#, q.msgid, q.msgid)))
+}
+
+pub async fn uncommit(State(state): State<AppState>, Form(form): Form<TopicActionForm>, CurrentUser(user): CurrentUser) -> Result<Redirect> {
+    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
+    sqlx::query("UPDATE topics SET moderate=true, commitby=NULL, commitdate=NULL, lastmod=now() WHERE id=$1")
+        .bind(form.msgid).execute(&state.pool).await?;
+    Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.msgid)))
+}
+
+#[derive(Deserialize)]
+pub struct MoveTopicForm { pub msgid: i32, pub moveto: i32 }
+
+pub async fn move_topic_form(State(state): State<AppState>, Query(q): Query<ViewMessageQuery>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
+    let topic = get_topic(&state, q.msgid).await?;
+    let groups = crate::routes::groups::list_groups(&state).await?;
+    let mut options = String::new();
+    for g in groups {
+        let selected = if g.id == topic.group_id { " selected" } else { "" };
+        options.push_str(&format!("<option value=\"{}\"{}>{} / {}</option>", g.id, selected, html_escape::encode_text(&g.section_name), html_escape::encode_text(&g.title)));
+    }
+    Ok(Html(format!(r#"
+<h1>Переместить тему #{}</h1>
+<form method="post" action="/mt.jsp">
+  <input type="hidden" name="msgid" value="{}">
+  <select name="moveto">{}</select>
+  <button type="submit">Переместить</button>
+</form>
+"#, q.msgid, q.msgid, options)))
+}
+
+pub async fn move_topic(State(state): State<AppState>, Form(form): Form<MoveTopicForm>, CurrentUser(user): CurrentUser) -> Result<Redirect> {
+    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
+    sqlx::query("UPDATE topics SET groupid=$2,lastmod=now() WHERE id=$1")
+        .bind(form.msgid).bind(form.moveto).execute(&state.pool).await?;
+    Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.msgid)))
+}
+
+pub async fn premoderated_move_form(State(state): State<AppState>, Query(q): Query<ViewMessageQuery>, user: CurrentUser) -> Result<Html<String>> {
+    move_topic_form(State(state), Query(q), user).await
+}

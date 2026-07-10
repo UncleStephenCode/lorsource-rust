@@ -306,7 +306,7 @@
     "params": "",
     "controller": "EditTopicController",
     "handler": "showCommitForm",
-    "rust_match": "GET /commit.jsp",
+    "rust_match": "GET,POST /commit.jsp",
     "source": "src/main/scala/ru/org/linux/topic/EditTopicController.scala:57"
   },
   {

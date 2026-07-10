@@ -1,5 +1,5 @@
-use crate::{error::{AppError, Result}, state::AppState};
-use axum::{extract::{Query, State}, response::Redirect, Form};
+use crate::{auth::CurrentUser, error::{AppError, Result}, markup, state::AppState};
+use axum::{extract::{Path, Query, State}, response::{Html, Redirect}, Form};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -19,6 +19,29 @@ pub struct CommentForm {
     pub replyto: Option<i32>,
     pub title: Option<String>,
     pub msg: String,
+}
+
+
+pub async fn add_comment_form(State(state): State<AppState>, Query(q): Query<CommentFormQuery>) -> Result<Html<String>> {
+    let topic = crate::routes::topics::get_topic(&state, q.topic).await?;
+    let reply_input = q.replyto.map(|id| format!(r#"<input type="hidden" name="replyto" value="{id}">"#)).unwrap_or_default();
+    Ok(Html(format!(r#"
+<h1>Добавить комментарий</h1>
+<p><a href="{url}">{title}</a></p>
+<form method="post" action="/add_comment.jsp" class="form wide">
+  <input type="hidden" name="topic" value="{topic_id}">
+  {reply_input}
+  <label>Заголовок <input name="title" value="Комментарий"></label>
+  <label>Комментарий <textarea name="msg" rows="12" required></textarea></label>
+  <button type="submit">Отправить</button>
+</form>
+"#, url = topic.topic_url(), title = html_escape::encode_text(&topic.title), topic_id = topic.id)))
+}
+
+#[derive(Deserialize)]
+pub struct CommentFormQuery {
+    pub topic: i32,
+    pub replyto: Option<i32>,
 }
 
 pub async fn add_comment(State(state): State<AppState>, Form(form): Form<CommentForm>) -> Result<Redirect> {
@@ -48,6 +71,37 @@ pub async fn edit_comment(State(state): State<AppState>, Form(form): Form<EditCo
         sqlx::query("UPDATE comments SET title=$2 WHERE id=$1").bind(form.msgid).bind(title).execute(&state.pool).await?;
     }
     Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.msgid)))
+}
+
+
+pub async fn delete_comment_form(State(state): State<AppState>, Query(q): Query<JumpQuery>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+    if user.is_none() { return Err(AppError::Forbidden); }
+    let row: (i32, String, String) = sqlx::query_as(
+        "SELECT c.topic, c.title, u.nick FROM comments c JOIN users u ON u.id=c.userid WHERE c.id=$1",
+    )
+    .bind(q.msgid)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    Ok(Html(format!(r#"
+<h1>Удалить комментарий #{}</h1>
+<p>Тема #{} · {} · автор {}</p>
+<form method="post" action="/delete_comment.jsp">
+  <input type="hidden" name="msgid" value="{}">
+  <button type="submit">Удалить</button>
+</form>
+"#, q.msgid, row.0, html_escape::encode_text(&row.1), html_escape::encode_text(&row.2), q.msgid)))
+}
+
+pub async fn undelete_comment_form(Query(q): Query<JumpQuery>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
+    Ok(Html(format!(r#"
+<h1>Восстановить комментарий #{}</h1>
+<form method="post" action="/undelete_comment">
+  <input type="hidden" name="msgid" value="{}">
+  <button type="submit">Восстановить</button>
+</form>
+"#, q.msgid, q.msgid)))
 }
 
 #[derive(Deserialize)]
@@ -98,4 +152,26 @@ async fn locate_topic_or_comment(state: &AppState, msgid: i32) -> Result<Option<
     .fetch_optional(&state.pool)
     .await?;
     Ok(row)
+}
+
+
+pub async fn deleted_comments_by_user(State(state): State<AppState>, Path(nick): Path<String>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
+    let comments = sqlx::query_as::<_, crate::models::CommentItem>(
+        r#"SELECT c.id, c.topic, c.replyto, c.title, m.message, c.postdate, u.id AS author_id, u.nick AS author, c.deleted
+           FROM comments c
+           JOIN msgbase m ON m.id=c.id
+           JOIN users u ON u.id=c.userid
+           WHERE lower(u.nick)=lower($1) AND c.deleted
+           ORDER BY c.postdate DESC LIMIT 100"#,
+    )
+    .bind(&nick)
+    .fetch_all(&state.pool)
+    .await?;
+    let mut html = format!("<h1>Удалённые комментарии {}</h1>", html_escape::encode_text(&nick));
+    for c in comments {
+        html.push_str(&format!("<article id=\"comment-{}\"><h3>{}</h3><p>topic #{} · {}</p><div>{}</div></article>",
+            c.id, html_escape::encode_text(&c.title), c.topic, c.postdate, markup::render_message(&c.message, Some(true))));
+    }
+    Ok(Html(html))
 }

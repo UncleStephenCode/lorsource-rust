@@ -29,7 +29,7 @@ covered,POST,/banip.jsp,,BanIPController,banIP,POST /banip.jsp,src/main/scala/ru
 covered,ANY,/check-login,,RegisterController,ajaxLoginCheck,GET /check-login,src/main/scala/ru/org/linux/user/RegisterController.scala:194
 covered,POST,/clear-warning,,WarningController,clear,POST /clear-warning,src/main/scala/ru/org/linux/warning/WarningController.scala:198
 covered,ANY,/comment-message.jsp,,AddCommentController,showFormTopic,GET /comment-message.jsp,src/main/scala/ru/org/linux/comment/AddCommentController.scala:71
-covered,GET,/commit.jsp,,EditTopicController,showCommitForm,GET /commit.jsp,src/main/scala/ru/org/linux/topic/EditTopicController.scala:57
+covered,GET,/commit.jsp,,EditTopicController,showCommitForm,"GET,POST /commit.jsp",src/main/scala/ru/org/linux/topic/EditTopicController.scala:57
 covered,GET,/delete.jsp,,DeleteTopicController,showForm,"GET,POST /delete.jsp",src/main/scala/ru/org/linux/topic/DeleteTopicController.scala:50
 covered,POST,/delete.jsp,,DeleteTopicController,deleteMessage,"GET,POST /delete.jsp",src/main/scala/ru/org/linux/topic/DeleteTopicController.scala:73
 covered,GET,/delete_comment.jsp,,DeleteCommentController,showForm,"GET,POST /delete_comment.jsp",src/main/scala/ru/org/linux/comment/DeleteCommentController.scala:44

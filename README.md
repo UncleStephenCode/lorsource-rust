@@ -79,6 +79,7 @@ python3 compat/test_http_compat.py
 - карта 184 исходных Spring endpoint’ов;
 - Rust route declaration coverage для всех извлечённых endpoint shapes;
 - legacy-route stubs для ещё не перенесённой бизнес-логики;
+- v3 functional coverage: большинство прежних `legacy::not_implemented` заменены на реальные handlers; оставшиеся placeholder routes перечислены в `docs/FUNCTIONAL_COVERAGE.md`;
 - модельный слой совместимости `src/models_compat.rs`;
 - auth/security scaffold с BCrypt и signed session cookies;
 - миграция совместимости `db/migrations/0003_legacy_schema_compat.sql`;
@@ -88,7 +89,7 @@ python3 compat/test_http_compat.py
 
 Исходный проект большой. Этот архив — рабочий Rust-порт ядра, маршрутов и схемы совместимости, пригодный как основа для дальнейшего переноса, но **не production-ready замена исходного Scala/Spring приложения**.
 
-Сейчас все извлечённые URL-формы объявлены в Rust-router, но часть legacy endpoint’ов возвращает `501 Not Implemented`. Это сделано намеренно: endpoint больше не теряется как случайный `404`, а попадает в проверяемый backlog.
+Сейчас все извлечённые URL-формы объявлены в Rust-router. После v3 большая часть legacy endpoint’ов уже имеет рабочие handlers; оставшиеся placeholder routes сохранены намеренно и перечислены в `docs/FUNCTIONAL_COVERAGE.md`. Они требуют отдельных подсистем: activation tokens, upload/storage pipeline и account deregistration policy.
 
 ## Импорт старого demo dump
 
@@ -123,6 +124,7 @@ src/models_compat.rs   original schema model inventory
 - `docs/CONTROLLER_MAP.md`
 - `docs/ROUTE_MAP.md`
 - `docs/ROUTE_COVERAGE.md`
+- `docs/FUNCTIONAL_COVERAGE.md`
 - `docs/SCHEMA_COVERAGE.md`
 - `docs/AUTH_SECURITY_PORT.md`
 - `docs/SERVICE_PORTING_MAP.md`

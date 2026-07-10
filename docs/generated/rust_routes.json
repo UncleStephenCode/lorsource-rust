@@ -370,7 +370,7 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::not_implemented).post(topics::delete_topic)",
+    "handler": "get(topics::delete_topic_form).post(topics::delete_topic)",
     "source": "src/routes/mod.rs",
     "line": 51
   },
@@ -380,7 +380,7 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::not_implemented).post(topics::undelete_topic)",
+    "handler": "get(topics::undelete_topic_form).post(topics::undelete_topic)",
     "source": "src/routes/mod.rs",
     "line": 52
   },
@@ -399,7 +399,7 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::not_implemented).post(comments::add_comment)",
+    "handler": "get(comments::add_comment_form).post(comments::add_comment)",
     "source": "src/routes/mod.rs",
     "line": 54
   },
@@ -437,7 +437,7 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::not_implemented).post(comments::delete_comment)",
+    "handler": "get(comments::delete_comment_form).post(comments::delete_comment)",
     "source": "src/routes/mod.rs",
     "line": 58
   },
@@ -447,7 +447,7 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::not_implemented).post(comments::undelete_comment)",
+    "handler": "get(comments::undelete_comment_form).post(comments::undelete_comment)",
     "source": "src/routes/mod.rs",
     "line": 59
   },
@@ -685,7 +685,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::exception_resolver)",
     "source": "src/routes/mod.rs",
     "line": 89
   },
@@ -724,16 +724,17 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::archive_section)",
     "source": "src/routes/mod.rs",
     "line": 93
   },
   {
     "path": "/commit.jsp",
     "methods": [
-      "GET"
+      "GET",
+      "POST"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(topics::commit_topic_form).post(topics::commit_topic)",
     "source": "src/routes/mod.rs",
     "line": 94
   },
@@ -743,7 +744,7 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::not_implemented).post(legacy::not_implemented)",
+    "handler": "get(legacy::delete_image_form).post(legacy::delete_image)",
     "source": "src/routes/mod.rs",
     "line": 95
   },
@@ -762,7 +763,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::error_403)",
     "source": "src/routes/mod.rs",
     "line": 97
   },
@@ -771,7 +772,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::error_404)",
     "source": "src/routes/mod.rs",
     "line": 98
   },
@@ -780,7 +781,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::archive_section)",
     "source": "src/routes/mod.rs",
     "line": 99
   },
@@ -789,7 +790,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::group_lastmod_jsp)",
     "source": "src/routes/mod.rs",
     "line": 100
   },
@@ -798,7 +799,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::group_jsp)",
     "source": "src/routes/mod.rs",
     "line": 101
   },
@@ -807,7 +808,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::help_page)",
     "source": "src/routes/mod.rs",
     "line": 102
   },
@@ -826,7 +827,7 @@
     "methods": [
       "POST"
     ],
-    "handler": "post(legacy::not_implemented)",
+    "handler": "post(legacy::markup_preview)",
     "source": "src/routes/mod.rs",
     "line": 104
   },
@@ -835,7 +836,7 @@
     "methods": [
       "POST"
     ],
-    "handler": "post(legacy::not_implemented)",
+    "handler": "post(legacy::memories)",
     "source": "src/routes/mod.rs",
     "line": 105
   },
@@ -845,7 +846,7 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::not_implemented).post(legacy::not_implemented)",
+    "handler": "get(topics::move_topic_form).post(topics::move_topic)",
     "source": "src/routes/mod.rs",
     "line": 106
   },
@@ -854,7 +855,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(topics::premoderated_move_form)",
     "source": "src/routes/mod.rs",
     "line": 107
   },
@@ -863,7 +864,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::archive_section)",
     "source": "src/routes/mod.rs",
     "line": 108
   },
@@ -872,7 +873,7 @@
     "methods": [
       "POST"
     ],
-    "handler": "post(legacy::not_implemented)",
+    "handler": "post(legacy::notifications_click)",
     "source": "src/routes/mod.rs",
     "line": 109
   },
@@ -881,7 +882,7 @@
     "methods": [
       "POST"
     ],
-    "handler": "post(legacy::not_implemented)",
+    "handler": "post(legacy::notifications_click)",
     "source": "src/routes/mod.rs",
     "line": 110
   },
@@ -890,7 +891,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::archive_section)",
     "source": "src/routes/mod.rs",
     "line": 111
   },
@@ -900,7 +901,7 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::not_implemented).post(legacy::not_implemented)",
+    "handler": "get(api::reactions_get).post(api::reactions_post)",
     "source": "src/routes/mod.rs",
     "line": 112
   },
@@ -909,7 +910,7 @@
     "methods": [
       "POST"
     ],
-    "handler": "post(legacy::not_implemented)",
+    "handler": "post(api::reactions_post)",
     "source": "src/routes/mod.rs",
     "line": 113
   },
@@ -918,7 +919,7 @@
     "methods": [
       "POST"
     ],
-    "handler": "post(legacy::not_implemented)",
+    "handler": "post(legacy::remove_userpic)",
     "source": "src/routes/mod.rs",
     "line": 114
   },
@@ -928,7 +929,7 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::not_implemented).post(legacy::not_implemented)",
+    "handler": "get(legacy::reset_password_form).post(legacy::reset_password)",
     "source": "src/routes/mod.rs",
     "line": 115
   },
@@ -938,7 +939,7 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::not_implemented).post(legacy::not_implemented)",
+    "handler": "get(legacy::set_post_score_form).post(legacy::set_post_score)",
     "source": "src/routes/mod.rs",
     "line": 116
   },
@@ -947,7 +948,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::show_comments_jsp)",
     "source": "src/routes/mod.rs",
     "line": 117
   },
@@ -956,7 +957,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::show_replies_jsp)",
     "source": "src/routes/mod.rs",
     "line": 118
   },
@@ -966,7 +967,7 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::not_implemented).post(legacy::not_implemented)",
+    "handler": "get(tags::change_form).post(tags::change_tag)",
     "source": "src/routes/mod.rs",
     "line": 119
   },
@@ -976,7 +977,7 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::not_implemented).post(legacy::not_implemented)",
+    "handler": "get(tags::delete_form).post(tags::delete_tag)",
     "source": "src/routes/mod.rs",
     "line": 120
   },
@@ -986,7 +987,7 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::not_implemented).post(legacy::not_implemented)",
+    "handler": "get(topics::uncommit_form).post(topics::uncommit)",
     "source": "src/routes/mod.rs",
     "line": 121
   },
@@ -995,7 +996,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::user_filter)",
     "source": "src/routes/mod.rs",
     "line": 122
   },
@@ -1004,7 +1005,7 @@
     "methods": [
       "POST"
     ],
-    "handler": "post(legacy::not_implemented)",
+    "handler": "post(legacy::favorite_tag)",
     "source": "src/routes/mod.rs",
     "line": 123
   },
@@ -1013,7 +1014,7 @@
     "methods": [
       "POST"
     ],
-    "handler": "post(legacy::not_implemented)",
+    "handler": "post(legacy::ignore_tag)",
     "source": "src/routes/mod.rs",
     "line": 124
   },
@@ -1022,7 +1023,7 @@
     "methods": [
       "POST"
     ],
-    "handler": "post(legacy::not_implemented)",
+    "handler": "post(legacy::ignore_user)",
     "source": "src/routes/mod.rs",
     "line": 125
   },
@@ -1031,7 +1032,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::view_deleted)",
     "source": "src/routes/mod.rs",
     "line": 126
   },
@@ -1040,7 +1041,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::view_news_jsp)",
     "source": "src/routes/mod.rs",
     "line": 127
   },
@@ -1049,7 +1050,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::view_section_jsp)",
     "source": "src/routes/mod.rs",
     "line": 128
   },
@@ -1058,7 +1059,7 @@
     "methods": [
       "POST"
     ],
-    "handler": "post(legacy::not_implemented)",
+    "handler": "post(api::vote)",
     "source": "src/routes/mod.rs",
     "line": 129
   },
@@ -1067,7 +1068,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::yandex_tableau)",
     "source": "src/routes/mod.rs",
     "line": 130
   },
@@ -1076,7 +1077,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::check_login)",
     "source": "src/routes/mod.rs",
     "line": 131
   },
@@ -1085,7 +1086,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(comments::deleted_comments_by_user)",
     "source": "src/routes/mod.rs",
     "line": 132
   },
@@ -1094,7 +1095,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(users::deleted_topics)",
     "source": "src/routes/mod.rs",
     "line": 133
   },
@@ -1103,7 +1104,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(users::drafts)",
     "source": "src/routes/mod.rs",
     "line": 134
   },
@@ -1113,7 +1114,7 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::not_implemented).post(legacy::not_implemented)",
+    "handler": "get(users::edit_profile_form).post(users::edit_profile)",
     "source": "src/routes/mod.rs",
     "line": 135
   },
@@ -1122,7 +1123,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(users::favs)",
     "source": "src/routes/mod.rs",
     "line": 136
   },
@@ -1131,7 +1132,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(users::profile_wipe)",
     "source": "src/routes/mod.rs",
     "line": 137
   },
@@ -1141,7 +1142,7 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::not_implemented).post(legacy::not_implemented)",
+    "handler": "get(users::remark_form).post(users::save_remark)",
     "source": "src/routes/mod.rs",
     "line": 138
   },
@@ -1151,7 +1152,7 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::not_implemented).post(legacy::not_implemented)",
+    "handler": "get(users::settings).post(users::save_settings)",
     "source": "src/routes/mod.rs",
     "line": 139
   },
@@ -1160,7 +1161,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(users::tracked)",
     "source": "src/routes/mod.rs",
     "line": 140
   },
@@ -1169,7 +1170,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::topic_history)",
     "source": "src/routes/mod.rs",
     "line": 141
   },
@@ -1178,7 +1179,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::comment_history)",
     "source": "src/routes/mod.rs",
     "line": 142
   },
@@ -1187,7 +1188,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::topic_history)",
     "source": "src/routes/mod.rs",
     "line": 143
   },
@@ -1196,7 +1197,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::comment_history)",
     "source": "src/routes/mod.rs",
     "line": 144
   },
@@ -1205,7 +1206,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::topic_history)",
     "source": "src/routes/mod.rs",
     "line": 145
   },
@@ -1214,7 +1215,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::comment_history)",
     "source": "src/routes/mod.rs",
     "line": 146
   },
@@ -1223,7 +1224,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::topic_history)",
     "source": "src/routes/mod.rs",
     "line": 147
   },
@@ -1232,7 +1233,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::comment_history)",
     "source": "src/routes/mod.rs",
     "line": 148
   },
@@ -1241,7 +1242,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::topic_history)",
     "source": "src/routes/mod.rs",
     "line": 149
   },
@@ -1250,7 +1251,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::comment_history)",
     "source": "src/routes/mod.rs",
     "line": 150
   },
@@ -1259,7 +1260,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::forum_archive_month)",
     "source": "src/routes/mod.rs",
     "line": 151
   },
@@ -1268,7 +1269,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::archive_section_month)",
     "source": "src/routes/mod.rs",
     "line": 152
   },
@@ -1277,7 +1278,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::archive_section_month)",
     "source": "src/routes/mod.rs",
     "line": 153
   },
@@ -1286,7 +1287,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::archive_section_month)",
     "source": "src/routes/mod.rs",
     "line": 154
   },
@@ -1295,7 +1296,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::archive_section_month)",
     "source": "src/routes/mod.rs",
     "line": 155
   },
@@ -1304,7 +1305,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::topic_thread_redirect)",
     "source": "src/routes/mod.rs",
     "line": 156
   },
@@ -1313,7 +1314,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::topic_thread_redirect)",
     "source": "src/routes/mod.rs",
     "line": 157
   },
@@ -1322,7 +1323,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::topic_thread_redirect)",
     "source": "src/routes/mod.rs",
     "line": 158
   },
@@ -1331,7 +1332,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::topic_thread_redirect)",
     "source": "src/routes/mod.rs",
     "line": 159
   },
@@ -1340,7 +1341,7 @@
     "methods": [
       "GET"
     ],
-    "handler": "get(legacy::not_implemented)",
+    "handler": "get(legacy::topic_thread_redirect)",
     "source": "src/routes/mod.rs",
     "line": 160
   }

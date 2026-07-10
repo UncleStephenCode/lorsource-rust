@@ -55,3 +55,53 @@ pub async fn tag_page(State(state): State<AppState>, Path(tag): Path<String>, Qu
     .bind(&tag).bind(pager.offset).bind(pager.limit).fetch_all(&state.pool).await?;
     Ok(Html(TagTopicsTemplate { title: format!("Метка: {tag}"), topics, pager, current_user: current_user.0 }.render()?))
 }
+
+#[derive(serde::Deserialize)]
+pub struct TagRenameForm { pub old: String, pub new: String }
+
+pub async fn change_form(crate::auth::CurrentUser(user): crate::auth::CurrentUser) -> crate::error::Result<Html<String>> {
+    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(crate::error::AppError::Forbidden); }
+    Ok(Html(r#"
+<h1>Переименовать метку</h1>
+<form method="post" action="/tags/change" class="form">
+<label>Старая <input name="old" required></label>
+<label>Новая <input name="new" required></label>
+<button type="submit">Переименовать</button>
+</form>
+"#.to_string()))
+}
+
+pub async fn change_tag(State(state): State<AppState>, crate::auth::CurrentUser(user): crate::auth::CurrentUser, axum::Form(form): axum::Form<TagRenameForm>) -> crate::error::Result<axum::response::Redirect> {
+    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(crate::error::AppError::Forbidden); }
+    sqlx::query("UPDATE tags_values SET value=$2 WHERE lower(value)=lower($1)")
+        .bind(form.old.trim())
+        .bind(form.new.trim())
+        .execute(&state.pool)
+        .await?;
+    Ok(axum::response::Redirect::to(&format!("/tag/{}", urlencoding::encode(form.new.trim()))))
+}
+
+#[derive(serde::Deserialize)]
+pub struct TagDeleteForm { pub tag: String }
+
+pub async fn delete_form(crate::auth::CurrentUser(user): crate::auth::CurrentUser) -> crate::error::Result<Html<String>> {
+    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(crate::error::AppError::Forbidden); }
+    Ok(Html(r#"
+<h1>Удалить метку</h1>
+<form method="post" action="/tags/delete" class="form">
+<label>Метка <input name="tag" required></label>
+<button type="submit">Удалить</button>
+</form>
+"#.to_string()))
+}
+
+pub async fn delete_tag(State(state): State<AppState>, crate::auth::CurrentUser(user): crate::auth::CurrentUser, axum::Form(form): axum::Form<TagDeleteForm>) -> crate::error::Result<axum::response::Redirect> {
+    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(crate::error::AppError::Forbidden); }
+    let tag_id: Option<i32> = sqlx::query_scalar("SELECT id FROM tags_values WHERE lower(value)=lower($1)")
+        .bind(form.tag.trim()).fetch_optional(&state.pool).await?;
+    if let Some(tag_id) = tag_id {
+        sqlx::query("DELETE FROM tags WHERE tagid=$1").bind(tag_id).execute(&state.pool).await?;
+        sqlx::query("DELETE FROM tags_values WHERE id=$1").bind(tag_id).execute(&state.pool).await?;
+    }
+    Ok(axum::response::Redirect::to("/tags"))
+}

@@ -32,3 +32,17 @@ Old `jam_*` tables from the demo dump are marked as dropped upstream because the
 ## Not yet production-equivalent
 
 The project still is **not** a full one-to-one functional port. The next work is to replace each `legacy::not_implemented` route with real service code and then tighten compatibility tests from coarse status/content-type checks to endpoint-specific assertions.
+
+## v3 continuation
+
+This iteration replaced a large share of `legacy::not_implemented` placeholders with working Rust handlers for low-risk read/redirect and lightweight write flows:
+
+- legacy redirects: `group.jsp`, `group-lastmod.jsp`, `view-section.jsp`, `view-news.jsp`;
+- archives: section archives, monthly archives and forum group monthly archives;
+- compatibility utilities: `markup/preview`, `check-login`, `yandex-tableau`, `show-comments.jsp`, `show-replies.jsp`;
+- topic/comment action forms for delete/undelete, commit/uncommit and moving topics;
+- user-facing lists and settings: deleted topics/comments, drafts, favorites, tracked topics, profile edit, settings, remarks;
+- social features skeletons: memories, user filters, reactions, votes, tag rename/delete;
+- moderation utilities: deleted-comments view, post score update, image-delete flag and userpic removal.
+
+Remaining placeholders are documented in `docs/FUNCTIONAL_COVERAGE.md`. They are left explicit because they require larger subsystems: activation tokens, photo upload/storage and account deregistration policy.

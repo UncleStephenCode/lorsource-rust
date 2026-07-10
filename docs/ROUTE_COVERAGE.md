@@ -37,7 +37,7 @@ Missing route declaration: **0**
 | covered | `ANY` | `/check-login` | `RegisterController.ajaxLoginCheck` | `GET /check-login` |
 | covered | `POST` | `/clear-warning` | `WarningController.clear` | `POST /clear-warning` |
 | covered | `ANY` | `/comment-message.jsp` | `AddCommentController.showFormTopic` | `GET /comment-message.jsp` |
-| covered | `GET` | `/commit.jsp` | `EditTopicController.showCommitForm` | `GET /commit.jsp` |
+| covered | `GET` | `/commit.jsp` | `EditTopicController.showCommitForm` | `GET,POST /commit.jsp` |
 | covered | `GET` | `/delete.jsp` | `DeleteTopicController.showForm` | `GET,POST /delete.jsp` |
 | covered | `POST` | `/delete.jsp` | `DeleteTopicController.deleteMessage` | `GET,POST /delete.jsp` |
 | covered | `GET` | `/delete_comment.jsp` | `DeleteCommentController.showForm` | `GET,POST /delete_comment.jsp` |
