@@ -49,19 +49,19 @@ ALTER TABLE reactions_log ADD COLUMN IF NOT EXISTS set_date timestamptz NOT NULL
 ALTER TABLE reactions_log ADD COLUMN IF NOT EXISTS reaction text;
 
 UPDATE reactions_log rl
-SET origin_user = COALESCE(origin_user, userid),
-    topic_id = COALESCE(topic_id, CASE WHEN c.topic IS NOT NULL THEN c.topic ELSE rl.msgid END),
-    comment_id = COALESCE(comment_id, CASE WHEN c.id IS NOT NULL THEN rl.msgid ELSE NULL END),
-    set_date = COALESCE(set_date, action_date, now())
+SET origin_user = COALESCE(rl.origin_user, rl.userid),
+    topic_id = COALESCE(rl.topic_id, CASE WHEN c.topic IS NOT NULL THEN c.topic ELSE rl.msgid END),
+    comment_id = COALESCE(rl.comment_id, CASE WHEN c.id IS NOT NULL THEN rl.msgid ELSE NULL END),
+    set_date = COALESCE(rl.set_date, rl.action_date, now())
 FROM comments c
 WHERE rl.msgid = c.id
   AND (rl.origin_user IS NULL OR rl.topic_id IS NULL OR rl.comment_id IS NULL);
 
-UPDATE reactions_log
-SET origin_user = COALESCE(origin_user, userid),
-    topic_id = COALESCE(topic_id, msgid),
-    set_date = COALESCE(set_date, action_date, now())
-WHERE origin_user IS NULL OR topic_id IS NULL;
+UPDATE reactions_log rl
+SET origin_user = COALESCE(rl.origin_user, rl.userid),
+    topic_id = COALESCE(rl.topic_id, rl.msgid),
+    set_date = COALESCE(rl.set_date, rl.action_date, now())
+WHERE rl.origin_user IS NULL OR rl.topic_id IS NULL;
 
 DROP INDEX IF EXISTS reactions_log_upsert_idx;
 CREATE UNIQUE INDEX IF NOT EXISTS reactions_log_upsert_idx
