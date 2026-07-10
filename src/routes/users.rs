@@ -65,7 +65,7 @@ pub async fn reactions(State(state): State<AppState>, Path(nick): Path<String>) 
     let mut html = format!("<h1>Реакции {}</h1><ul>", html_escape::encode_text(&user.nick));
     for (topic, comment, date, reaction) in rows {
         let target = comment.map(|id| format!("#comment-{id}")).unwrap_or_default();
-        html.push_str(&format!("<li>{date}: <a href="/jump-message.jsp?msgid={topic}{target}">{}</a></li>", html_escape::encode_text(&reaction)));
+        html.push_str(&format!(r#"<li>{date}: <a href="/jump-message.jsp?msgid={topic}{target}">{}</a></li>"#, html_escape::encode_text(&reaction)));
     }
     html.push_str("</ul>");
     Ok(Html(html))

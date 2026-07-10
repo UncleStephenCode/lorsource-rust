@@ -119,7 +119,8 @@ pub async fn new_topic_form(State(state): State<AppState>) -> Result<Html<String
     Ok(Html(TopicFormTemplate { title: "Новая тема".into(), action: "/add.jsp".into(), topic: None, groups }.render()?))
 }
 
-pub async fn create_topic(State(state): State<AppState>, Form(form): Form<TopicForm>) -> Result<Redirect> {
+pub async fn create_topic(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<TopicForm>) -> Result<Redirect> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
     let mut tx = state.pool.begin().await?;
     let id: i32 = sqlx::query_scalar("SELECT nextval('s_msgid')::int").fetch_one(&mut *tx).await?;
     sqlx::query("INSERT INTO msgbase(id, message, bbcode) VALUES ($1, $2, true)")
@@ -128,11 +129,12 @@ pub async fn create_topic(State(state): State<AppState>, Form(form): Form<TopicF
         .execute(&mut *tx)
         .await?;
     sqlx::query(
-        r#"INSERT INTO topics(id, groupid, userid, title, url, postdate, linktext, stat1, stat2, lastmod)
-           VALUES ($1,$2,1,$3,$4,now(),$5,0,0,now())"#,
+        r#"INSERT INTO topics(id, groupid, userid, title, url, postdate, linktext, stat1, stat2, lastmod, moderate)
+           VALUES ($1,$2,$3,$4,$5,now(),$6,0,0,now(),true)"#,
     )
     .bind(id)
     .bind(form.group)
+    .bind(user.id)
     .bind(form.title.trim())
     .bind(form.url.as_deref().filter(|s| !s.trim().is_empty()))
     .bind(form.linktext.as_deref().filter(|s| !s.trim().is_empty()))

@@ -136,3 +136,8 @@ src/models_compat.rs   original schema model inventory
 - `docs/CURRENT_JAVA_COMPATIBILITY.md`
 - `docs/CURRENT_SOURCE_TABLE_COVERAGE.md`
 - `docs/ARCHITECTURE.md`
+
+## v7 parity audit
+
+This archive contains the v7 Rust port iteration. It was re-checked against the uploaded current Java/Scala source and includes additional fixes for registration validation, check-login similarity checks, write attribution for topic/comment creation, and legacy jump redirects. See `docs/PARITY_AUDIT_V7.md` and `docs/VERIFICATION_REPORT_V7.md`.
+

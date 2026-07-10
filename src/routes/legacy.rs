@@ -122,11 +122,11 @@ pub async fn check_login(State(state): State<AppState>, Query(q): Query<CheckLog
     let nick = q.nick.unwrap_or_default();
     let result = if nick.is_empty() {
         "Не задан nick.".to_string()
-    } else if !valid_login_name(&nick) {
+    } else if !valid_login_name_for_java(&nick) {
         "Некорректное имя пользователя.".to_string()
     } else if nick.len() > 19 {
         "Слишком длинное имя пользователя.".to_string()
-    } else if user_exists(&state, &nick).await? {
+    } else if user_exists_or_similar(&state, &nick).await? {
         "Это имя пользователя уже используется. Пожалуйста выберите другое имя.".to_string()
     } else {
         "true".to_string()
@@ -538,24 +538,37 @@ fn ensure_deregister_allowed(user: &crate::models::UserSummary) -> Result<()> {
     Ok(())
 }
 
-async fn user_exists(state: &AppState, nick: &str) -> Result<bool> {
+async fn user_exists_or_similar(state: &AppState, nick: &str) -> Result<bool> {
     let exists: Option<i32> = sqlx::query_scalar("SELECT id FROM users WHERE lower(nick)=lower($1)")
         .bind(nick)
         .fetch_optional(&state.pool)
         .await?;
-    Ok(exists.is_some())
+    if exists.is_some() {
+        return Ok(true);
+    }
+    let similar: Option<i32> = sqlx::query_scalar(
+        r#"SELECT id FROM users
+           WHERE score>=200 AND lastlogin>CURRENT_TIMESTAMP - interval '3 years'
+             AND levenshtein_less_equal(lower(nick), lower($1), 1)<=1
+           LIMIT 1"#,
+    )
+    .bind(nick)
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(similar.is_some())
 }
 
-fn valid_login_name(nick: &str) -> bool {
+pub fn valid_login_name_for_java(nick: &str) -> bool {
+    let nick = nick.to_lowercase();
     if nick.is_empty() || nick.len() >= 80 {
         return false;
     }
     let mut chars = nick.chars();
     match chars.next() {
-        Some(c) if c.is_ascii_alphabetic() => {}
+        Some(c) if c.is_ascii_lowercase() => {}
         _ => return false,
     }
-    chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }
 
 

@@ -6,8 +6,9 @@ use serde::Deserialize;
 pub struct JumpQuery { pub msgid: i32 }
 
 pub async fn jump_message(State(state): State<AppState>, Query(q): Query<JumpQuery>) -> Result<Redirect> {
-    if let Some((section, group, topic_id)) = locate_topic_or_comment(&state, q.msgid).await? {
-        Ok(Redirect::to(&format!("/{section}/{group}/{topic_id}#comment-{}", q.msgid)))
+    if let Some((section, group, topic_id, comment_id)) = locate_topic_or_comment(&state, q.msgid).await? {
+        let anchor = comment_id.map(|id| format!("#comment-{id}")).unwrap_or_default();
+        Ok(Redirect::to(&format!("/{section}/{group}/{topic_id}{anchor}")))
     } else {
         Err(AppError::NotFound)
     }
@@ -44,13 +45,15 @@ pub struct CommentFormQuery {
     pub replyto: Option<i32>,
 }
 
-pub async fn add_comment(State(state): State<AppState>, Form(form): Form<CommentForm>) -> Result<Redirect> {
-    let id = insert_comment(&state, form).await?;
+pub async fn add_comment(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<CommentForm>) -> Result<Redirect> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    let id = insert_comment(&state, user.id, form).await?;
     Ok(Redirect::to(&format!("/jump-message.jsp?msgid={id}")))
 }
 
-pub async fn add_comment_ajax(State(state): State<AppState>, Form(form): Form<CommentForm>) -> Result<axum::Json<serde_json::Value>> {
-    let id = insert_comment(&state, form).await?;
+pub async fn add_comment_ajax(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<CommentForm>) -> Result<axum::Json<serde_json::Value>> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    let id = insert_comment(&state, user.id, form).await?;
     Ok(axum::Json(serde_json::json!({"id": id, "ok": true})))
 }
 
@@ -117,15 +120,16 @@ pub async fn undelete_comment(State(state): State<AppState>, Form(form): Form<Co
     Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.msgid)))
 }
 
-async fn insert_comment(state: &AppState, form: CommentForm) -> Result<i32> {
+async fn insert_comment(state: &AppState, user_id: i32, form: CommentForm) -> Result<i32> {
     let mut tx = state.pool.begin().await?;
     let id: i32 = sqlx::query_scalar("SELECT nextval('s_msgid')::int").fetch_one(&mut *tx).await?;
     sqlx::query("INSERT INTO msgbase(id, message, bbcode) VALUES($1,$2,true)").bind(id).bind(&form.msg).execute(&mut *tx).await?;
     sqlx::query(
-        "INSERT INTO comments(id, topic, userid, title, postdate, replyto) VALUES($1,$2,1,$3,now(),$4)",
+        "INSERT INTO comments(id, topic, userid, title, postdate, replyto) VALUES($1,$2,$3,$4,now(),$5)",
     )
     .bind(id)
     .bind(form.topic)
+    .bind(user_id)
     .bind(form.title.unwrap_or_else(|| "Комментарий".into()))
     .bind(form.replyto)
     .execute(&mut *tx)
@@ -135,15 +139,15 @@ async fn insert_comment(state: &AppState, form: CommentForm) -> Result<i32> {
     Ok(id)
 }
 
-async fn locate_topic_or_comment(state: &AppState, msgid: i32) -> Result<Option<(String, String, i32)>> {
-    let row = sqlx::query_as::<_, (String, String, i32)>(
+async fn locate_topic_or_comment(state: &AppState, msgid: i32) -> Result<Option<(String, String, i32, Option<i32>)>> {
+    let row = sqlx::query_as::<_, (String, String, i32, Option<i32>)>(
         r#"SELECT CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END AS section,
-                  g.urlname, t.id
+                  g.urlname, t.id, NULL::integer AS comment_id
            FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section
            WHERE t.id=$1
            UNION ALL
            SELECT CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END AS section,
-                  g.urlname, t.id
+                  g.urlname, t.id, c.id AS comment_id
            FROM comments c JOIN topics t ON t.id=c.topic JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section
            WHERE c.id=$1
            LIMIT 1"#,

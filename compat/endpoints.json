@@ -249,5 +249,27 @@
     "new": "/admin/geoip?ip=127.0.0.1",
     "compare": false,
     "new_expected_status": 403
+  },
+  {
+    "name": "check-login empty nick",
+    "method": "GET",
+    "old": "/check-login?nick=",
+    "new": "/check-login?nick=",
+    "compare": true
+  },
+  {
+    "name": "check-login valid seed-free nick",
+    "method": "GET",
+    "old": "/check-login?nick=rustporttest",
+    "new": "/check-login?nick=rustporttest",
+    "compare": true
+  },
+  {
+    "name": "jump seed topic",
+    "method": "GET",
+    "old": "/jump-message.jsp?msgid=100",
+    "new": "/jump-message.jsp?msgid=100",
+    "compare": false,
+    "requires_seed": true
   }
 ]

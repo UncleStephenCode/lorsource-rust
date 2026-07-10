@@ -3,6 +3,7 @@
 -- lorsource-java.zip expects the post-migration names and audit/settings tables.
 
 CREATE EXTENSION IF NOT EXISTS hstore;
+CREATE EXTENSION IF NOT EXISTS fuzzystrmatch;
 
 CREATE SEQUENCE IF NOT EXISTS vote_id START WITH 1;
 CREATE SEQUENCE IF NOT EXISTS votes_id START WITH 1;
