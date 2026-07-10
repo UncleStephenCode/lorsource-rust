@@ -74,12 +74,71 @@ pub async fn reactions_post(State(state): State<AppState>, CurrentUser(user): Cu
 }
 
 #[derive(serde::Deserialize)]
-pub struct VoteForm { pub vote: i32 }
+pub struct VoteForm {
+    /// Poll id (`voteid` in the original VoteController).
+    pub voteid: i32,
+    /// Selected variant ids. The original form submits this field as repeated `vote`.
+    #[serde(default)]
+    pub vote: Vec<i32>,
+}
 
 pub async fn vote(State(state): State<AppState>, CurrentUser(user): CurrentUser, axum::Form(form): axum::Form<VoteForm>) -> Result<axum::response::Redirect> {
     let Some(user) = user else { return Err(crate::error::AppError::Forbidden); };
-    sqlx::query("INSERT INTO vote_users(vote, userid) VALUES($1,$2) ON CONFLICT DO NOTHING")
-        .bind(form.vote).bind(user.id).execute(&state.pool).await?;
-    sqlx::query("UPDATE votes SET votes=votes+1 WHERE id=$1").bind(form.vote).execute(&state.pool).await?;
-    Ok(axum::response::Redirect::to("/polls/"))
+    if form.vote.is_empty() {
+        return Err(crate::error::AppError::BadRequest("ничего не выбрано".into()));
+    }
+
+    let Some((topic_id, multiselect, section_prefix, group_urlname)) = sqlx::query_as::<_, (i32, bool, String, String)>(
+        r#"SELECT p.topic, p.multiselect,
+                  CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END AS section_prefix,
+                  g.urlname
+           FROM polls p
+           JOIN topics t ON t.id=p.topic
+           JOIN groups g ON g.id=t.groupid
+           JOIN sections s ON s.id=g.section
+           WHERE p.id=$1 AND t.moderate AND NOT t.deleted"#,
+    )
+    .bind(form.voteid)
+    .fetch_optional(&state.pool)
+    .await? else {
+        return Err(crate::error::AppError::BadRequest("опрос не найден или ещё не подтверждён".into()));
+    };
+
+    if !multiselect && form.vote.len() != 1 {
+        return Err(crate::error::AppError::BadRequest("этот опрос допускает только один вариант ответа".into()));
+    }
+
+    let already_voted: i64 = sqlx::query_scalar("SELECT count(vote) FROM vote_users WHERE vote=$1 AND userid=$2")
+        .bind(form.voteid)
+        .bind(user.id)
+        .fetch_one(&state.pool)
+        .await?;
+    if already_voted == 0 {
+        for variant_id in form.vote {
+            let Some(valid_variant) = sqlx::query_scalar::<_, i32>("SELECT id FROM polls_variants WHERE id=$1 AND vote=$2")
+                .bind(variant_id)
+                .bind(form.voteid)
+                .fetch_optional(&state.pool)
+                .await? else {
+                    return Err(crate::error::AppError::BadRequest("неправильный вариант ответа".into()));
+                };
+            let inserted = sqlx::query(
+                "INSERT INTO vote_users(vote, userid, variant_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
+            )
+            .bind(form.voteid)
+            .bind(user.id)
+            .bind(valid_variant)
+            .execute(&state.pool)
+            .await?
+            .rows_affected();
+            if inserted > 0 {
+                sqlx::query("UPDATE polls_variants SET votes=votes+1 WHERE id=$1")
+                    .bind(valid_variant)
+                    .execute(&state.pool)
+                    .await?;
+            }
+        }
+    }
+
+    Ok(axum::response::Redirect::to(&format!("/{section_prefix}/{group_urlname}/{topic_id}")))
 }

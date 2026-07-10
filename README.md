@@ -80,6 +80,8 @@ python3 compat/test_http_compat.py
 - Rust route declaration coverage для всех извлечённых endpoint shapes;
 - v4 functional coverage: explicit `legacy::not_implemented` routes removed;
 - перенесены activation, userpic upload, deregistration, `/check-login` и базовая admin/moderation surface;
+- v5: схема и обработчик `/vote.jsp` приведены к текущему Java-коду (`polls`, `polls_variants`, `vote_users.variant_id`, `voteid` + repeated `vote`);
+- v5: добавлены `user_settings`, `user_log`, `user_log_action` и базовое логирование account/moderation действий;
 - модельный слой совместимости `src/models_compat.rs`;
 - auth/security scaffold с BCrypt и signed session cookies;
 - миграция совместимости `db/migrations/0003_legacy_schema_compat.sql`;
@@ -131,4 +133,6 @@ src/models_compat.rs   original schema model inventory
 - `docs/COMPATIBILITY_TESTS.md`
 - `docs/DEMO_DB_COMPARISON.md`
 - `docs/FUNCTIONAL_COMPARISON_JAVA_RUST.md`
+- `docs/CURRENT_JAVA_COMPATIBILITY.md`
+- `docs/CURRENT_SOURCE_TABLE_COVERAGE.md`
 - `docs/ARCHITECTURE.md`

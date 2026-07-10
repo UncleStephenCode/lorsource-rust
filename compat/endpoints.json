@@ -234,6 +234,15 @@
     "new_expected_status": 403
   },
   {
+    "name": "vote requires auth with current Java form shape",
+    "method": "POST",
+    "old": "/vote.jsp",
+    "new": "/vote.jsp",
+    "data": "voteid=1&vote=1",
+    "compare": false,
+    "new_expected_status": 403
+  },
+  {
     "name": "admin geoip requires moderator",
     "method": "GET",
     "old": "/admin/geoip?ip=127.0.0.1",

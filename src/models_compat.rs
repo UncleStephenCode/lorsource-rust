@@ -123,24 +123,33 @@ pub struct TopicTagRow {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct VoteNameRow {
+pub struct PollRow {
     pub id: i32,
     pub topic: i32,
     pub multiselect: bool,
 }
 
+/// Pre-2011 demo-dump alias for `PollRow`; current Java code uses `polls`.
+pub type VoteNameRow = PollRow;
+
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct VoteVariantRow {
+pub struct PollVariantRow {
     pub id: i32,
     pub vote: i32,
     pub label: String,
     pub votes: i32,
 }
 
+/// Pre-2011 demo-dump alias for `PollVariantRow`; current Java code uses `polls_variants`.
+pub type VoteVariantRow = PollVariantRow;
+
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct VoteUserRow {
+    /// Current Java semantics: poll id.
     pub vote: i32,
     pub userid: i32,
+    /// Selected poll variant id, introduced by the 2011 poll Liquibase update.
+    pub variant_id: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -231,4 +240,25 @@ pub struct WarningRow {
     pub comment_id: Option<i32>,
     pub reason: String,
     pub postdate: DateTime<Utc>,
+}
+
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct UserSettingsRow {
+    pub id: i32,
+    /// Stored as PostgreSQL hstore in the Java schema; represented as text when
+    /// queried through generic compatibility code.
+    pub settings: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct UserLogRow {
+    pub id: i32,
+    pub userid: i32,
+    pub action_userid: i32,
+    pub action_date: DateTime<Utc>,
+    pub action: String,
+    /// Stored as PostgreSQL hstore in the Java schema; represented as text when
+    /// queried through generic compatibility code.
+    pub info: String,
 }

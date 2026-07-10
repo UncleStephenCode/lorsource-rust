@@ -778,6 +778,40 @@
     ]
   },
   {
+    "table": "polls",
+    "status": "rust-only",
+    "original_columns": [],
+    "rust_columns": [
+      "id",
+      "multiselect",
+      "topic"
+    ],
+    "missing_columns": [],
+    "extra_columns": [
+      "id",
+      "multiselect",
+      "topic"
+    ]
+  },
+  {
+    "table": "polls_variants",
+    "status": "rust-only",
+    "original_columns": [],
+    "rust_columns": [
+      "id",
+      "label",
+      "vote",
+      "votes"
+    ],
+    "missing_columns": [],
+    "extra_columns": [
+      "id",
+      "label",
+      "vote",
+      "votes"
+    ]
+  },
+  {
     "table": "reactions_log",
     "status": "rust-only",
     "original_columns": [],
@@ -1051,6 +1085,28 @@
     ]
   },
   {
+    "table": "user_log",
+    "status": "rust-only",
+    "original_columns": [],
+    "rust_columns": [
+      "action",
+      "action_date",
+      "action_userid",
+      "id",
+      "info",
+      "userid"
+    ],
+    "missing_columns": [],
+    "extra_columns": [
+      "action",
+      "action_date",
+      "action_userid",
+      "id",
+      "info",
+      "userid"
+    ]
+  },
+  {
     "table": "user_remarks",
     "status": "rust-only",
     "original_columns": [],
@@ -1064,6 +1120,20 @@
       "remark",
       "userid",
       "who"
+    ]
+  },
+  {
+    "table": "user_settings",
+    "status": "rust-only",
+    "original_columns": [],
+    "rust_columns": [
+      "id",
+      "settings"
+    ],
+    "missing_columns": [],
+    "extra_columns": [
+      "id",
+      "settings"
     ]
   },
   {
@@ -1154,10 +1224,13 @@
     ],
     "rust_columns": [
       "userid",
+      "variant_id",
       "vote"
     ],
     "missing_columns": [],
-    "extra_columns": []
+    "extra_columns": [
+      "variant_id"
+    ]
   },
   {
     "table": "votenames",

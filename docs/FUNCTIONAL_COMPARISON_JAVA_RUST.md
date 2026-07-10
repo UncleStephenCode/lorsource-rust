@@ -54,6 +54,21 @@ Original: admin and moderation controllers cover GeoIP, search reindex, IP bans,
 
 Rust v4: previous broad admin stubs were replaced by concrete handlers that operate on the compatibility tables (`b_ips`, `ban_info`, `groups`, `users`, `message_warnings`). External integrations such as real GeoIP and search reindex workers remain adapter points.
 
+
+## v5 current Java-source parity fixes
+
+The uploaded Java/Scala archive is newer than the historic demo dump in the poll/settings/audit areas. The Rust port now carries an additional migration and handler updates for those differences:
+
+- current poll tables `polls` and `polls_variants` are created and populated from old `votenames/votes` when an old dump is imported;
+- `vote_users.variant_id` is added and old rows are rewritten from variant-id semantics to current poll-id + variant-id semantics;
+- POST `/vote.jsp` now accepts the same form shape as `VoteController`: `voteid=<poll id>` plus one or more `vote=<variant id>` values;
+- `user_settings` and PostgreSQL `hstore` are added for the current settings model;
+- `user_log_action` and `user_log` are added for `UserLogDao` compatibility;
+- basic account/moderation actions now write audit records through `src/audit.rs`;
+- the compatibility shell script no longer depends on executable bits on Python tools.
+
+See `docs/CURRENT_JAVA_COMPATIBILITY.md` for the detailed finding list.
+
 ## Still not production-equivalent
 
 The port now has URL coverage and no explicit 501 placeholders, but exact functional parity is still incomplete for subsystems that depend on external services, historical side effects or deep business rules:

@@ -162,32 +162,53 @@ async fn usermod(State(state): State<AppState>, CurrentUser(user): CurrentUser, 
     let moderator = require_moderator(&user)?;
     match form.action.as_str() {
         "block" => {
+            let reason = form.reason.clone().unwrap_or_else(|| "blocked by moderator".to_string());
             sqlx::query("UPDATE users SET blocked=true WHERE id=$1").bind(form.id).execute(&state.pool).await?;
             sqlx::query("INSERT INTO ban_info(userid,ban_by,reason,bandate) VALUES($1,$2,$3,now()) ON CONFLICT(userid) DO UPDATE SET ban_by=EXCLUDED.ban_by, reason=EXCLUDED.reason, bandate=now()")
-                .bind(form.id).bind(moderator.id).bind(form.reason.unwrap_or_else(|| "blocked by moderator".to_string())).execute(&state.pool).await?;
+                .bind(form.id).bind(moderator.id).bind(&reason).execute(&state.pool).await?;
+            crate::audit::log_user_action(&state.pool, form.id, moderator.id, "block_user", &[("reason", reason.as_str())]).await?;
         }
         "unblock" => {
             sqlx::query("UPDATE users SET blocked=false WHERE id=$1").bind(form.id).execute(&state.pool).await?;
             sqlx::query("DELETE FROM ban_info WHERE userid=$1").bind(form.id).execute(&state.pool).await?;
+            crate::audit::log_user_action(&state.pool, form.id, moderator.id, "unblock_user", &[]).await?;
         }
         "score50" => {
             sqlx::query("UPDATE users SET score=GREATEST(score,50), max_score=GREATEST(max_score,50) WHERE id=$1").bind(form.id).execute(&state.pool).await?;
+            crate::audit::log_user_action(&state.pool, form.id, moderator.id, "score50", &[]).await?;
         }
         "toggle_corrector" => {
+            let was_corrector: bool = sqlx::query_scalar("SELECT corrector FROM users WHERE id=$1").bind(form.id).fetch_one(&state.pool).await?;
             sqlx::query("UPDATE users SET corrector=NOT corrector WHERE id=$1").bind(form.id).execute(&state.pool).await?;
+            let action = if was_corrector { "unset_corrector" } else { "set_corrector" };
+            crate::audit::log_user_action(&state.pool, form.id, moderator.id, action, &[]).await?;
         }
         "reset-password" => {
             let password = form.password.unwrap_or_else(|| "change-me".to_string());
             let hash = crate::security::password::hash(&password).map_err(|e| AppError::Anyhow(e.into()))?;
             sqlx::query("UPDATE users SET passwd=$2 WHERE id=$1").bind(form.id).bind(hash).execute(&state.pool).await?;
+            crate::audit::log_user_action(&state.pool, form.id, moderator.id, "reset_password", &[]).await?;
         }
-        "remove_userinfo" => { sqlx::query("UPDATE users SET userinfo='' WHERE id=$1").bind(form.id).execute(&state.pool).await?; }
-        "remove_town" => { sqlx::query("UPDATE users SET town='' WHERE id=$1").bind(form.id).execute(&state.pool).await?; }
-        "remove_url" => { sqlx::query("UPDATE users SET url='' WHERE id=$1").bind(form.id).execute(&state.pool).await?; }
-        "freeze" => { sqlx::query("UPDATE users SET frozen_until=now()+interval '7 days' WHERE id=$1").bind(form.id).execute(&state.pool).await?; }
+        "remove_userinfo" => {
+            sqlx::query("UPDATE users SET userinfo='' WHERE id=$1").bind(form.id).execute(&state.pool).await?;
+            crate::audit::log_user_action(&state.pool, form.id, moderator.id, "reset_info", &[]).await?;
+        }
+        "remove_town" => {
+            sqlx::query("UPDATE users SET town='' WHERE id=$1").bind(form.id).execute(&state.pool).await?;
+            crate::audit::log_user_action(&state.pool, form.id, moderator.id, "reset_town", &[]).await?;
+        }
+        "remove_url" => {
+            sqlx::query("UPDATE users SET url='' WHERE id=$1").bind(form.id).execute(&state.pool).await?;
+            crate::audit::log_user_action(&state.pool, form.id, moderator.id, "reset_url", &[]).await?;
+        }
+        "freeze" => {
+            sqlx::query("UPDATE users SET frozen_until=now()+interval '7 days' WHERE id=$1").bind(form.id).execute(&state.pool).await?;
+            crate::audit::log_user_action(&state.pool, form.id, moderator.id, "frozen", &[]).await?;
+        }
         "block-n-delete-comments" => {
             sqlx::query("UPDATE users SET blocked=true WHERE id=$1").bind(form.id).execute(&state.pool).await?;
             sqlx::query("UPDATE comments SET deleted=true WHERE userid=$1").bind(form.id).execute(&state.pool).await?;
+            crate::audit::log_user_action(&state.pool, form.id, moderator.id, "block_user", &[("reason", "block-n-delete-comments")]).await?;
         }
         other => return Err(AppError::BadRequest(format!("unknown usermod action: {other}"))),
     }

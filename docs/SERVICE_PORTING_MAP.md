@@ -48,8 +48,8 @@ Status legend: `ported` means used by Rust handlers now; `ported-partial` means 
 | `linux` | `OpenSearchIndexCreationService` | not ported yet | `pending` |
 | `linux` | `OpenSearchIndexService` | not ported yet | `pending` |
 | `linux` | `Perf4jHandlerInterceptor` | not ported yet | `pending` |
-| `linux` | `PollDao` | `src/models_compat.rs`, `db/migrations/0003_*`, route stub | `scaffolded` |
-| `linux` | `PollPrepareService` | `src/models_compat.rs`, `db/migrations/0003_*`, route stub | `scaffolded` |
+| `linux` | `PollDao` | `src/routes/api.rs`, `db/migrations/0004_current_java_schema_compat.sql` | `ported-partial` |
+| `linux` | `PollPrepareService` | `src/routes/api.rs` poll boxlet/list surface | `ported-partial` |
 | `linux` | `PreparedRemarkService` | not ported yet | `pending` |
 | `linux` | `ProfileDao` | not ported yet | `pending` |
 | `linux` | `ReactionDao` | not ported yet | `pending` |
@@ -87,7 +87,7 @@ Status legend: `ported` means used by Rust handlers now; `ported-partial` means 
 | `linux` | `UserEventPrepareService` | not ported yet | `pending` |
 | `linux` | `UserEventService` | not ported yet | `pending` |
 | `linux` | `UserInvitesDao` | not ported yet | `pending` |
-| `linux` | `UserLogDao` | not ported yet | `pending` |
+| `linux` | `UserLogDao` | `src/audit.rs`, `user_log` table | `ported-partial` |
 | `linux` | `UserLogPrepareService` | not ported yet | `pending` |
 | `linux` | `UserPermissionService` | `src/security.rs`, route-level checks | `ported-partial` |
 | `linux` | `UserService` | `src/routes/auth.rs`, `src/routes/users.rs`, `src/routes/legacy.rs` | `ported-partial` |

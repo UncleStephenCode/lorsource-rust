@@ -2,7 +2,7 @@
 
 Tables covered: **20**
 Missing original tables: **0**
-Rust-only/current-update tables: **12**
+Rust-only/current-update tables: **16**
 Dropped upstream legacy tables: **19**
 
 | Status | Table | Missing columns from Rust migration | Extra Rust columns |
@@ -41,6 +41,8 @@ Dropped upstream legacy tables: **19**
 | covered | `monthly_stats` | `` | `` |
 | covered | `msgbase` | `` | `markup` |
 | rust-only | `persistent_logins` | `` | `last_used, series, token, username` |
+| rust-only | `polls` | `` | `id, multiselect, topic` |
+| rust-only | `polls_variants` | `` | `id, label, vote, votes` |
 | rust-only | `reactions_log` | `` | `action_date, id, msgid, reaction, set_value, userid` |
 | covered | `sections` | `` | `image_allowed, restrict_score, scroll_mode` |
 | covered | `tags` | `` | `` |
@@ -52,9 +54,11 @@ Dropped upstream legacy tables: **19**
 | covered | `user_agents` | `` | `` |
 | covered | `user_events` | `` | `event_type, topic_id` |
 | rust-only | `user_invites` | `` | `created_at, id, invite_code, owner, used_at, used_by` |
+| rust-only | `user_log` | `` | `action, action_date, action_userid, id, info, userid` |
 | rust-only | `user_remarks` | `` | `remark, userid, who` |
+| rust-only | `user_settings` | `` | `id, settings` |
 | rust-only | `user_tags` | `` | `is_favorite, tag_id, userid` |
 | covered | `users` | `` | `force_unlogin, frozen_until, settings, userinfo_markup` |
-| covered | `vote_users` | `` | `` |
+| covered | `vote_users` | `` | `variant_id` |
 | covered | `votenames` | `` | `` |
 | covered | `votes` | `` | `` |

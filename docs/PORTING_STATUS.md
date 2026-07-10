@@ -58,3 +58,17 @@ This iteration compares the uploaded Java/Scala source with the Rust branch and 
 - `monthly_stats` migration now matches the original demo table shape.
 
 Remaining gaps are tracked in `docs/FUNCTIONAL_COVERAGE.md` and `docs/FUNCTIONAL_COMPARISON_JAVA_RUST.md`.
+
+## v5: current Java-source compatibility pass
+
+Compared the uploaded Java/Scala source archive against the uploaded Rust archive again and fixed mismatches that came from relying too much on the old demo dump:
+
+- switched poll compatibility to current Java semantics: `polls`, `polls_variants`, `vote_users.variant_id`;
+- updated POST `/vote.jsp` to the Java controller form shape: `voteid` plus repeated `vote` values;
+- added migration for `user_settings`, `user_log_action`, `user_log` and PostgreSQL `hstore`;
+- added `src/audit.rs` and wired basic account/moderation actions to `user_log`;
+- fixed compatibility script execution when archive extraction drops Python executable bits;
+- removed duplicate hidden field in the group moderation form;
+- added `docs/CURRENT_JAVA_COMPATIBILITY.md` and `docs/CURRENT_SOURCE_TABLE_COVERAGE.md`.
+
+The port still needs service-by-service parity work for captcha, mail, flood protection, exact Spring Security/remember-me behavior, OpenSearch, full notifications and exact JSP model attributes.

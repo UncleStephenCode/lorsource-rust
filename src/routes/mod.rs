@@ -84,8 +84,7 @@ pub fn router() -> Router<AppState> {
         .route("/poll.boxlet", get(api::poll_boxlet))
 
         // Legacy compatibility surface discovered from the original Spring controllers.
-        // Many of these currently return 501 intentionally: the URL is reserved and tested,
-        // but the service/controller logic still has to be ported from Scala.
+        // The URL shapes are declared here; deep business-rule parity is tracked in docs.
         .route("/ExceptionResolver", get(legacy::exception_resolver))
         .route("/activate", get(legacy::activate_form).post(legacy::activate_post))
         .route("/activate.jsp", get(legacy::activate_form).post(legacy::activate_post))

@@ -28,3 +28,9 @@ There are no routes left that intentionally return `legacy::not_implemented`, bu
 - MaxMind/GeoIP database integration;
 - exact moderator audit log/user-log semantics;
 - full notification/tracker/realtime event generation.
+
+## v5 additions
+
+- Fixed current Java poll compatibility: `polls`, `polls_variants`, `vote_users.variant_id` and POST `/vote.jsp` semantics.
+- Added current Java account settings/audit surfaces: `user_settings`, `user_log_action`, `user_log`, and a Rust audit helper.
+- Compatibility scripts now run Python tools through `python3`, so the suite works even when archive extraction drops executable bits.

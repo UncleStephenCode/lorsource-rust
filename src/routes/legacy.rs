@@ -360,6 +360,7 @@ pub async fn activate_post(
             .bind(id)
             .execute(&state.pool)
             .await?;
+        crate::audit::log_user_action(&state.pool, id, id, "register", &[]).await?;
         let cookie = Cookie::build(("lor_session", crate::auth::make_session(id, &state.config.cookie_secret)))
             .path("/")
             .http_only(true)
@@ -384,6 +385,7 @@ pub async fn activate_post(
         .bind(user.id)
         .execute(&state.pool)
         .await?;
+    crate::audit::log_user_action(&state.pool, user.id, user.id, "accept_new_email", &[]).await?;
     Ok(Redirect::to(&format!("/people/{}/profile", urlencoding::encode(&user.nick))).into_response())
 }
 
@@ -447,6 +449,7 @@ pub async fn upload_userpic(State(state): State<AppState>, CurrentUser(user): Cu
         .bind(&filename)
         .execute(&state.pool)
         .await?;
+    crate::audit::log_user_action(&state.pool, user.id, user.id, "set_userpic", &[("file", filename.as_str())]).await?;
     Ok(Redirect::to(&format!("/people/{}/profile?nocache={}", urlencoding::encode(&user.nick), uuid::Uuid::new_v4())))
 }
 
@@ -518,6 +521,7 @@ pub async fn deregister_post(State(state): State<AppState>, jar: CookieJar, Curr
     .bind(user.id)
     .execute(&state.pool)
     .await?;
+    crate::audit::log_user_action(&state.pool, user.id, user.id, "block_user", &[("reason", "deregister")]).await?;
     Ok((jar.remove(Cookie::from("lor_session")), Html("<h1>Удаление пользователя прошло успешно.</h1>".to_string())).into_response())
 }
 
@@ -689,6 +693,7 @@ pub async fn remove_userpic(State(state): State<AppState>, CurrentUser(user): Cu
         .await?
         .ok_or(AppError::NotFound)?;
     sqlx::query("UPDATE users SET photo=NULL WHERE id=$1").bind(target_id).execute(&state.pool).await?;
+    crate::audit::log_user_action(&state.pool, target_id, user.id, "reset_userpic", &[]).await?;
     Ok(Redirect::to(&format!("/people/{}/profile", urlencoding::encode(&target_nick))))
 }
 
@@ -714,5 +719,6 @@ pub async fn reset_password(State(state): State<AppState>, CurrentUser(user): Cu
     if current.id != target.0 && !current.canmod { return Err(AppError::Forbidden); }
     let hash = crate::security::password::hash(&form.passwd).map_err(|e| AppError::Anyhow(e.into()))?;
     sqlx::query("UPDATE users SET passwd=$2 WHERE id=$1").bind(target.0).bind(hash).execute(&state.pool).await?;
+    crate::audit::log_user_action(&state.pool, target.0, current.id, "set_password", &[]).await?;
     Ok(Redirect::to(&format!("/people/{}/profile", urlencoding::encode(&target.1))))
 }

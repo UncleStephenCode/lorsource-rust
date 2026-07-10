@@ -33,10 +33,15 @@ class Response:
     body_prefix: bytes
 
 
-def request(base: str, path: str, method: str) -> Response:
+def request(base: str, path: str, method: str, data: str | None = None) -> Response:
     url = urllib.parse.urljoin(base.rstrip("/") + "/", path.lstrip("/"))
     opener = urllib.request.build_opener(NoRedirectHandler)
-    req = urllib.request.Request(url, method=method.upper(), headers={"User-Agent": "lorsource-rust-compat/1"})
+    headers = {"User-Agent": "lorsource-rust-compat/1"}
+    body = None
+    if data is not None:
+        body = data.encode("utf-8")
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+    req = urllib.request.Request(url, data=body, method=method.upper(), headers=headers)
     try:
         with opener.open(req, timeout=15) as resp:
             return Response(resp.status, resp.headers.get("content-type", ""), None, resp.read(256))
@@ -71,7 +76,8 @@ def main() -> int:
 
     for case in matrix:
         method = case.get("method", "GET")
-        new_resp = request(args.new, case["new"], method)
+        data = case.get("data")
+        new_resp = request(args.new, case["new"], method, data)
         expected = case.get("new_expected_status")
         if expected is not None and new_resp.status != expected:
             failures.append(f"{case['name']}: new status {new_resp.status}, expected {expected}")
@@ -80,7 +86,7 @@ def main() -> int:
             failures.append(f"{case['name']}: new endpoint unexpectedly 404: {case['new']}")
             continue
         if args.old and case.get("compare", True):
-            old_resp = request(args.old, case["old"], method)
+            old_resp = request(args.old, case["old"], method, data)
             if status_class(old_resp.status) != status_class(new_resp.status):
                 failures.append(f"{case['name']}: status class old={old_resp.status} new={new_resp.status}")
             if old_resp.location_path and new_resp.location_path and old_resp.location_path != new_resp.location_path:
