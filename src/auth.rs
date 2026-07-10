@@ -48,22 +48,33 @@ fn verify_legacy_session(value: &str, secret: &str) -> Option<i32> {
     if security::sign_payload(&payload, secret) == sig { payload.parse().ok() } else { None }
 }
 
-pub async fn verify_login(pool: &sqlx::PgPool, login: &str, password: &str) -> Result<Option<i32>, sqlx::Error> {
-    let row: Option<(i32, Option<String>)> = sqlx::query_as(
-        r#"SELECT id, passwd
-           FROM users
-           WHERE (lower(nick)=lower($1) OR lower(COALESCE(email,''))=lower($1))
-             AND activated
-             AND NOT COALESCE(blocked,false)"#,
+#[derive(Debug, Clone)]
+pub struct StLoginIdentity {
+    pub id: i32,
+    pub nick: String,
+    pub style: Option<String>,
+}
+
+pub type LoginIdentity = StLoginIdentity;
+
+pub async fn verify_login(pool: &sqlx::PgPool, login: &str, password: &str) -> Result<Option<LoginIdentity>, sqlx::Error> {
+    let row: Option<(i32, String, Option<String>, Option<String>)> = sqlx::query_as(
+        r#"SELECT u.id, u.nick, u.passwd, COALESCE((us.settings -> 'style'), NULL) AS style
+           FROM users u
+           LEFT JOIN user_settings us ON us.id = u.id
+           WHERE (lower(u.nick)=lower($1) OR lower(COALESCE(u.email,''))=lower($1))
+             AND u.activated
+             AND NOT COALESCE(u.blocked,false)
+           LIMIT 1"#,
     )
     .bind(login.trim())
     .fetch_optional(pool)
     .await?;
 
-    let Some((id, encoded_password)) = row else { return Ok(None); };
+    let Some((id, nick, encoded_password, style)) = row else { return Ok(None); };
     let Some(encoded_password) = encoded_password else { return Ok(None); };
     if security::password::verify(password, &encoded_password) {
-        Ok(Some(id))
+        Ok(Some(LoginIdentity { id, nick, style }))
     } else {
         Ok(None)
     }
