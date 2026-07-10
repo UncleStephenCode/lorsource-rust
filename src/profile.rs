@@ -1,0 +1,188 @@
+use std::collections::HashMap;
+
+#[derive(Debug, Clone)]
+pub struct StThemeOption {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub deprecated: bool,
+    pub selected: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct StChoiceOption {
+    pub value: &'static str,
+    pub label: &'static str,
+    pub selected: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct StNumberOption {
+    pub value: i32,
+    pub selected: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct StProfileSettings {
+    pub style: String,
+    pub format_mode: String,
+    pub topics: i32,
+    pub messages: i32,
+    pub photos: bool,
+    pub hide_adsense: bool,
+    pub main_gallery: bool,
+    pub avatar: String,
+    pub tracker_mode: String,
+    pub old_tracker: bool,
+    pub reaction_notification: bool,
+}
+
+pub type ThemeOption = StThemeOption;
+pub type ChoiceOption = StChoiceOption;
+pub type NumberOption = StNumberOption;
+pub type ProfileSettings = StProfileSettings;
+
+pub const DEFAULT_STYLE: &str = "tango-auto";
+pub const DEFAULT_FORMAT_MODE: &str = "markdown";
+pub const DEFAULT_TOPICS: i32 = 30;
+pub const DEFAULT_MESSAGES: i32 = 50;
+pub const DEFAULT_AVATAR: &str = "empty";
+pub const DEFAULT_TRACKER_MODE: &str = "main";
+
+pub const TOPICS_VALUES: &[i32] = &[30, 50, 100, 200, 300, 500];
+pub const MESSAGES_VALUES: &[i32] = &[25, 50, 100, 200, 300, 500];
+pub const THEMES: &[(&str, &str, bool)] = &[
+    ("tango", "tango", false),
+    ("tango-light", "tango-light", false),
+    ("tango-auto", "tango-auto", false),
+    ("black", "black", false),
+    ("white2", "white2", true),
+    ("waltz", "waltz", true),
+    ("zomg_ponies", "zomg_ponies", true),
+];
+pub const AVATARS: &[&str] = &["empty", "identicon", "monsterid", "wavatar", "retro", "robohash"];
+pub const TRACKER_MODES: &[(&str, &str)] = &[
+    ("main", "Основной"),
+    ("all", "Все сообщения"),
+    ("topics", "Только темы"),
+];
+pub const FORMAT_MODES: &[(&str, &str)] = &[
+    ("markdown", "Markdown"),
+    ("lorcode", "LORCODE"),
+    ("html", "HTML"),
+];
+
+impl Default for StProfileSettings {
+    fn default() -> Self {
+        Self {
+            style: DEFAULT_STYLE.to_string(),
+            format_mode: DEFAULT_FORMAT_MODE.to_string(),
+            topics: DEFAULT_TOPICS,
+            messages: DEFAULT_MESSAGES,
+            photos: true,
+            hide_adsense: true,
+            main_gallery: true,
+            avatar: DEFAULT_AVATAR.to_string(),
+            tracker_mode: DEFAULT_TRACKER_MODE.to_string(),
+            old_tracker: false,
+            reaction_notification: true,
+        }
+    }
+}
+
+impl StProfileSettings {
+    pub fn from_hstore_text(opt_text: Option<String>) -> Self {
+        let mut settings = Self::default();
+        let map = opt_text.as_deref().map(parse_hstore_text).unwrap_or_default();
+        if let Some(style) = map.get("style").filter(|s| is_style(s)) { settings.style = style.clone(); }
+        if let Some(mode) = map.get("format.mode").filter(|s| is_format_mode(s)) { settings.format_mode = mode.clone(); }
+        if let Some(topics) = map.get("topics").and_then(|s| s.parse::<i32>().ok()).filter(|v| TOPICS_VALUES.contains(v)) { settings.topics = topics; }
+        if let Some(messages) = map.get("messages").and_then(|s| s.parse::<i32>().ok()).filter(|v| MESSAGES_VALUES.contains(v)) { settings.messages = messages; }
+        if let Some(value) = map.get("photos") { settings.photos = parse_bool(value); }
+        if let Some(value) = map.get("hideAdsense") { settings.hide_adsense = parse_bool(value); }
+        if let Some(value) = map.get("mainGallery") { settings.main_gallery = parse_bool(value); }
+        if let Some(value) = map.get("avatar").filter(|s| AVATARS.contains(&s.as_str())) { settings.avatar = value.clone(); }
+        if let Some(value) = map.get("trackerMode").filter(|s| TRACKER_MODES.iter().any(|(v, _)| v == s)) { settings.tracker_mode = value.clone(); }
+        if let Some(value) = map.get("oldTracker") { settings.old_tracker = parse_bool(value); }
+        if let Some(value) = map.get("reactionNotification") { settings.reaction_notification = parse_bool(value); }
+        settings
+    }
+
+    pub fn from_form(form: &HashMap<String, String>) -> Self {
+        let mut settings = Self::default();
+        if let Some(style) = form.get("style").filter(|s| is_style(s)) { settings.style = style.clone(); }
+        if let Some(mode) = form.get("format_mode").filter(|s| is_format_mode(s)) { settings.format_mode = mode.clone(); }
+        if let Some(topics) = form.get("topics").and_then(|s| s.parse::<i32>().ok()).filter(|v| TOPICS_VALUES.contains(v)) { settings.topics = topics; }
+        if let Some(messages) = form.get("messages").and_then(|s| s.parse::<i32>().ok()).filter(|v| MESSAGES_VALUES.contains(v)) { settings.messages = messages; }
+        settings.photos = form.contains_key("photos");
+        settings.hide_adsense = form.contains_key("hideAdsense");
+        settings.main_gallery = form.contains_key("mainGallery");
+        if let Some(avatar) = form.get("avatar").filter(|s| AVATARS.contains(&s.as_str())) { settings.avatar = avatar.clone(); }
+        if let Some(mode) = form.get("trackerMode").filter(|s| TRACKER_MODES.iter().any(|(v, _)| v == s)) { settings.tracker_mode = mode.clone(); }
+        settings.old_tracker = form.contains_key("oldTracker");
+        settings.reaction_notification = form.contains_key("reactionNotification");
+        settings
+    }
+
+    pub fn to_hstore_arrays(&self) -> (Vec<String>, Vec<String>) {
+        (
+            vec![
+                "style".into(), "format.mode".into(), "topics".into(), "messages".into(), "photos".into(),
+                "hideAdsense".into(), "mainGallery".into(), "avatar".into(), "trackerMode".into(),
+                "oldTracker".into(), "reactionNotification".into(),
+            ],
+            vec![
+                self.style.clone(), self.format_mode.clone(), self.topics.to_string(), self.messages.to_string(), self.photos.to_string(),
+                self.hide_adsense.to_string(), self.main_gallery.to_string(), self.avatar.clone(), self.tracker_mode.clone(),
+                self.old_tracker.to_string(), self.reaction_notification.to_string(),
+            ],
+        )
+    }
+
+    pub fn theme_options(&self) -> Vec<StThemeOption> {
+        THEMES.iter().map(|(id, label, deprecated)| StThemeOption { id, label, deprecated: *deprecated, selected: self.style == *id }).collect()
+    }
+
+    pub fn topic_options(&self) -> Vec<StNumberOption> {
+        TOPICS_VALUES.iter().map(|v| StNumberOption { value: *v, selected: self.topics == *v }).collect()
+    }
+
+    pub fn message_options(&self) -> Vec<StNumberOption> {
+        MESSAGES_VALUES.iter().map(|v| StNumberOption { value: *v, selected: self.messages == *v }).collect()
+    }
+
+    pub fn avatar_options(&self) -> Vec<StChoiceOption> {
+        AVATARS.iter().map(|v| StChoiceOption { value: v, label: v, selected: self.avatar == *v }).collect()
+    }
+
+    pub fn tracker_options(&self) -> Vec<StChoiceOption> {
+        TRACKER_MODES.iter().map(|(value, label)| StChoiceOption { value, label, selected: self.tracker_mode == *value }).collect()
+    }
+
+    pub fn format_options(&self) -> Vec<StChoiceOption> {
+        FORMAT_MODES.iter().map(|(value, label)| StChoiceOption { value, label, selected: self.format_mode == *value }).collect()
+    }
+}
+
+pub fn is_style(value: &str) -> bool { THEMES.iter().any(|(id, _, _)| *id == value) }
+pub fn is_format_mode(value: &str) -> bool { FORMAT_MODES.iter().any(|(id, _)| *id == value) }
+
+fn parse_bool(value: &str) -> bool {
+    matches!(value, "true" | "t" | "yes" | "on" | "1")
+}
+
+/// Minimal parser for PostgreSQL hstore text output such as `"style"=>"tango-auto", "topics"=>"30"`.
+/// It intentionally accepts simple unquoted legacy output as well, because old dumps differ.
+fn parse_hstore_text(value: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for part in value.split(',') {
+        let Some((key, val)) = part.split_once("=>") else { continue; };
+        let key = clean_hstore_token(key);
+        let val = clean_hstore_token(val);
+        if !key.is_empty() { map.insert(key, val); }
+    }
+    map
+}
+
+fn clean_hstore_token(token: &str) -> String {
+    token.trim().trim_matches('"').replace("\\\"", "\"")
+}

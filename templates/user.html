@@ -1,13 +1,76 @@
 {% extends "base.html" %}
-{% block title %}{{ user.nick }}{% endblock %}
+{% block title %}Информация о пользователе {{ profile.nick }}{% endblock %}
 {% block content %}
-<h1>{{ user.nick }}</h1>
-<div class="profile">
-  {% match user.name %}{% when Some with (name) %}<p><b>Имя:</b> {{ name }}</p>{% when None %}{% endmatch %}
-  {% match user.town %}{% when Some with (town) %}<p><b>Город:</b> {{ town }}</p>{% when None %}{% endmatch %}
-  <p><b>Score:</b> {% match user.score %}{% when Some with (score) %}{{ score }}{% when None %}0{% endmatch %}</p>
-  {% match user.userinfo %}{% when Some with (info) %}<div class="message">{{ info|safe }}</div>{% when None %}{% endmatch %}
+{% if is_owner %}
+<nav class="profile-nav">
+  <a href="/people/{{ profile.nick }}/edit" class="btn btn-default">Редактировать профиль</a>
+  <a href="/people/{{ profile.nick }}/settings" class="btn btn-default">Настройки</a>
+  <form action="/logout" method="post" class="inline-form"><button type="submit" class="btn btn-danger">Выйти</button></form>
+  <form action="/logout_all_sessions" method="post" class="inline-form"><button type="submit" class="btn btn-danger">Выйти со всех устройств</button></form>
+</nav>
+{% else %}
+<h1>Информация о пользователе {{ profile.nick }}</h1>
+{% endif %}
+
+<div id="whois_userpic" class="userpic-box">
+  {% match profile.photo_url() %}{% when Some with (photo_url) %}<img src="{{ photo_url }}" alt="{{ profile.nick }}" class="userpic">{% when None %}<div class="userpic userpic-placeholder">?</div>{% endmatch %}
+  {% if is_owner %}<a class="btn btn-small btn-default" href="/addphoto.jsp">Изменить</a>{% endif %}
 </div>
+
+<div class="vcard profile-card">
+  <b>Nick:</b> <span class="nickname">{{ profile.nick }}</span><br>
+  {% match profile.name %}{% when Some with (name) %}<b>Имя:</b> <span class="fn">{{ name }}</span><br>{% when None %}{% endmatch %}
+  <b>ID:</b> {{ profile.id }}<br>
+  {% match profile.url %}{% when Some with (url) %}<b>URL:</b> <a class="url" href="{{ url }}">{{ url }}</a><br>{% when None %}{% endmatch %}
+  {% match profile.town %}{% when Some with (town) %}<b>Город:</b> {{ town }}<br>{% when None %}{% endmatch %}
+  {% match profile.regdate_text %}{% when Some with (regdate) %}<b>Дата регистрации:</b> {{ regdate }}<br>{% when None %}{% endmatch %}
+  {% match profile.lastlogin_text %}{% when Some with (lastlogin) %}<b>Последнее посещение:</b> {{ lastlogin }}<br>{% when None %}{% endmatch %}
+  <b>Статус:</b> {{ profile.status() }}{% if profile.canmod %} (модератор){% endif %}{% if profile.candel %} (администратор){% endif %}{% if profile.corrector %} (корректор){% endif %}{% if profile.blocked %} (заблокирован){% endif %}<br>
+  {% if can_view_private %}<b>Score:</b> {{ profile.score }} MaxScore: {{ profile.max_score }}<br>{% endif %}
+  {% match profile.email %}{% when Some with (email) %}{% if can_view_private %}<b>Email:</b> <a href="mailto:{{ email }}">{{ email }}</a> (виден только вам и модераторам)<br>{% endif %}{% when None %}{% endmatch %}
+</div>
+
+{% match profile.userinfo %}{% when Some with (info) %}<div class="infoblock userinfo">{{ info|safe }}</div>{% when None %}{% endmatch %}
+
+{% if favorite_tags.len() > 0 %}
+<p><b>Избранные теги:</b>
+{% for tag in favorite_tags %}<a class="tag" href="/tag/{{ tag }}">{{ tag }}</a>{% if loop.last %}{% else %}, {% endif %}{% endfor %}
+{% if is_owner %}&emsp;<a href="/user-filter">изменить</a>{% endif %}</p>
+{% endif %}
+
+{% if can_view_private && ignore_tags.len() > 0 %}
+<p><b>Игнорированные теги:</b>
+{% for tag in ignore_tags %}<a class="tag" href="/tag/{{ tag }}">{{ tag }}</a>{% if loop.last %}{% else %}, {% endif %}{% endfor %}</p>
+{% endif %}
+
+{% if is_owner %}
+<h2>Действия</h2>
+<ul>
+  <li><a href="/user-filter">Настройка фильтрации сообщений</a></li>
+  <li><a href="/people/{{ profile.nick }}/favs">Избранные темы</a></li>
+  <li><a href="/people/{{ profile.nick }}/tracked">Отслеживаемые темы</a></li>
+  <li><a href="/people/{{ profile.nick }}/drafts">Черновики{% if drafts_count > 0 %}: {{ drafts_count }}{% endif %}</a></li>
+  <li><a href="/people/{{ profile.nick }}/remarks">Просмотр заметок о пользователях</a></li>
+</ul>
+{% endif %}
+
+<h2>Статистика</h2>
+<div id="cal-heatmap" class="cal-heatmap-stub">Календарь активности совместим с endpoint `?year-stats`; визуализация D3 будет подключена отдельным слоем.</div>
+{% match stats.first_topic %}{% when Some with (v) %}<b>Первая созданная тема:</b> {{ v }}<br>{% when None %}{% endmatch %}
+{% match stats.last_topic %}{% when Some with (v) %}<b>Последняя созданная тема:</b> {{ v }}<br>{% when None %}{% endmatch %}
+{% match stats.first_comment %}{% when Some with (v) %}<b>Первый комментарий:</b> {{ v }}<br>{% when None %}{% endmatch %}
+{% match stats.last_comment %}{% when Some with (v) %}<b>Последний комментарий:</b> {{ v }}<br>{% when None %}{% endmatch %}
+{% if stats.comment_count > 0 %}<b>Число комментариев:</b> {{ stats.comment_count }}<br>{% endif %}
+<b>Число тем:</b> {{ stats.topic_count }}
+
 <h2>Темы пользователя</h2>
-{% for t in topics %}<article class="topic-card"><h3><a href="{{ t.topic_url() }}">{{ t.title }}</a></h3><div class="meta">{{ t.postdate }}</div></article>{% endfor %}
+<nav class="profile-nav">
+  <a href="/people/{{ profile.nick }}/profile" class="btn btn-selected">Темы</a>
+  <a href="/people/{{ profile.nick }}/reactions" class="btn btn-default">Реакции</a>
+  <a href="/people/{{ profile.nick }}/favs" class="btn btn-default">Избранное</a>
+  <a href="/people/{{ profile.nick }}/tracked" class="btn btn-default">Отслеживаемое</a>
+</nav>
+{% for t in topics %}
+<article class="topic-card"><h3><a href="{{ t.topic_url() }}">{{ t.title }}</a></h3><div class="meta">{{ t.postdate }} · {{ t.comments }} комментариев</div></article>
+{% endfor %}
 {% endblock %}

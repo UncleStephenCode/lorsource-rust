@@ -1,27 +1,39 @@
 <!doctype html>
-<html lang="ru">
+<html lang="ru" data-theme="tango-auto">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}LOR Rust{% endblock %}</title>
+  <meta name="viewport" content="initial-scale=1.0">
+  <title>{% block title %}Linux.org.ru{% endblock %}</title>
+  <link rel="shortcut icon" href="/static/favicon.ico" type="image/x-icon">
   <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/theme-lor.css">
   <link rel="alternate" type="application/rss+xml" href="/rss">
+  <script>
+    (function() {
+      var match = document.cookie.match(/(?:^|;\s*)lor_theme=([^;]+)/);
+      var theme = match ? decodeURIComponent(match[1]) : localStorage.getItem('lor-theme');
+      if (!theme) theme = 'tango-auto';
+      document.documentElement.setAttribute('data-theme', theme);
+    })();
+  </script>
 </head>
 <body>
-<header class="site-header">
-  <div class="wrap">
-    <a class="logo" href="/">LOR.rs</a>
-    <nav>
-      <a href="/news/">Новости</a>
-      <a href="/forum">Форум</a>
-      <a href="/articles/">Статьи</a>
-      <a href="/gallery/">Галерея</a>
-      <a href="/polls/">Опросы</a>
-      <a href="/tags">Метки</a>
-      <a href="/search.jsp">Поиск</a>
-    </nav>
-  </div>
+<header id="hd" class="lor-header">
+  <div id="topProfile"><a href="/login.jsp">Вход</a> · <a href="/register.jsp">Регистрация</a></div>
+  <span id="sitetitle"><a href="/">LINUX.ORG.RU</a></span>
+  <nav class="menu">
+    <ul>
+      <li><a href="/news/">Новости</a></li>
+      <li><a href="/gallery/">Галерея</a></li>
+      <li><a href="/articles/">Статьи</a></li>
+      <li><a href="/forum/">Форум</a></li>
+      <li><a href="/polls/">Опросы</a></li>
+      <li><a href="/tracker/">Трекер</a></li>
+      <li><a href="/search.jsp">Поиск</a></li>
+    </ul>
+  </nav>
 </header>
+<div style="clear: both"></div>
 <main class="wrap layout">
   <section class="content">
     {% block content %}{% endblock %}
@@ -33,11 +45,12 @@
       <li><a href="/tracker">Трекер</a></li>
       <li><a href="/rss">RSS</a></li>
       <li><a href="/about">О проекте</a></li>
+      <li><a href="/tags">Метки</a></li>
     </ul>
   </aside>
 </main>
 <footer class="wrap footer">
-  <p>Experimental Rust port of lorsource. Scala/Spring-compatible routes are kept where practical.</p>
+  <p>Linux.org.ru Rust port. Legacy URL, theme assets and profile surface are kept for migration compatibility.</p>
 </footer>
 </body>
 </html>

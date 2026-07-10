@@ -12,6 +12,7 @@ mod models;
 mod models_compat;
 mod security;
 mod pagination;
+mod profile;
 mod routes;
 mod state;
 
@@ -44,6 +45,15 @@ async fn main() -> anyhow::Result<()> {
         .merge(routes::router())
         .route("/healthz", get(routes::healthz))
         .nest_service("/static", ServeDir::new(&config.static_dir))
+        .nest_service("/img", ServeDir::new(format!("{}/img", &config.static_dir)))
+        .nest_service("/font", ServeDir::new(format!("{}/font", &config.static_dir)))
+        .nest_service("/js", ServeDir::new(format!("{}/js", &config.static_dir)))
+        .nest_service("/black", ServeDir::new(format!("{}/black", &config.static_dir)))
+        .nest_service("/tango", ServeDir::new(format!("{}/tango", &config.static_dir)))
+        .nest_service("/white2", ServeDir::new(format!("{}/white2", &config.static_dir)))
+        .nest_service("/waltz", ServeDir::new(format!("{}/waltz", &config.static_dir)))
+        .nest_service("/zomg_ponies", ServeDir::new(format!("{}/zomg_ponies", &config.static_dir)))
+        .nest_service("/adv", ServeDir::new(format!("{}/adv", &config.static_dir)))
         .nest_service("/photos", ServeDir::new(format!("{}/photos", &config.upload_dir)))
         .fallback(routes::not_found)
         .layer(CompressionLayer::new())

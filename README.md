@@ -158,3 +158,9 @@ See `docs/PARITY_AUDIT_V8.md` and `docs/DEVCONTAINER_PORT.md`.
 ## Architecture refactor v9
 
 This archive contains the v9 architectural refactor: Rust 2024 / Rust 1.97 toolchain, domain/application/infra split, Hungarian-style identifiers in the new domain/service/repository layer, and PostgreSQL repositories for the forum/topic core flows. See `docs/ARCHITECTURE_REFACTOR_V9.md` and `docs/generated/architecture_report_v9.json`.
+
+### Profile and theme parity
+
+The Rust port includes a whois-like `/people/{nick}/profile` page and Java-compatible profile settings in `/people/{nick}/settings`. The settings are stored in `user_settings.settings` using the same keys as the Java `DefaultProfile`: `style`, `format.mode`, `topics`, `messages`, `photos`, `hideAdsense`, `mainGallery`, `avatar`, `trackerMode`, `oldTracker`, `reactionNotification`.
+
+Original webapp assets from the Java project are served under `/img`, `/font`, `/js`, `/black`, `/tango`, `/white2`, `/waltz`, `/zomg_ponies` and `/adv`. Supported theme IDs are `tango`, `tango-light`, `tango-auto`, `black`, `white2`, `waltz`, and `zomg_ponies`.

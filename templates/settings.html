@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Настройки{% endblock %}
+{% block content %}
+<h1>Настройки</h1>
+<nav class="profile-nav">
+  <a href="/people/{{ user.nick }}/edit" class="btn btn-default">Редактировать профиль</a>
+  <a href="/addphoto.jsp" class="btn btn-default">Добавить фотографию</a>
+  <a href="/people/{{ user.nick }}/settings" class="btn btn-selected">Настройки</a>
+</nav>
+
+<form method="post" id="profileForm" action="/people/{{ user.nick }}/settings" class="settings-form">
+<table>
+<tr><td><label for="photos">Показывать фотографии</label></td><td><input type="checkbox" id="photos" name="photos" {% if settings.photos %}checked{% endif %}></td></tr>
+<tr><td><label for="hideAdsense">Показывать меньше рекламы</label></td><td><input type="checkbox" id="hideAdsense" name="hideAdsense" {% if settings.hide_adsense %}checked{% endif %}></td></tr>
+<tr><td><label for="mainGallery">Показывать галерею, опросы и статьи в ленте на главной</label></td><td><input type="checkbox" id="mainGallery" name="mainGallery" {% if settings.main_gallery %}checked{% endif %}></td></tr>
+<tr><td><label for="oldTracker">Старый вид трекера и форума</label></td><td><input type="checkbox" id="oldTracker" name="oldTracker" {% if settings.old_tracker %}checked{% endif %}></td></tr>
+<tr><td><label for="reactionNotification">Уведомлять о реакциях</label></td><td><input type="checkbox" id="reactionNotification" name="reactionNotification" {% if settings.reaction_notification %}checked{% endif %}></td></tr>
+<tr><td colspan="2"><hr></td></tr>
+<tr><td valign="top"><span id="style-label">Тема</span></td><td><div role="radiogroup" aria-labelledby="style-label">
+{% for theme in themes %}<label><input type="radio" name="style" value="{{ theme.id }}" {% if theme.selected %}checked{% endif %}>{{ theme.label }}{% if theme.deprecated %} <small>(устаревшая)</small>{% endif %}</label><br>{% endfor %}
+</div></td></tr>
+<tr><td colspan="2"><hr></td></tr>
+<tr><td valign="top"><span id="topics-label">Число тем форума на странице</span></td><td>{% for item in topic_values %}<label><input type="radio" name="topics" value="{{ item.value }}" {% if item.selected %}checked{% endif %}>{{ item.value }}</label> {% endfor %}</td></tr>
+<tr><td colspan="2"><hr></td></tr>
+<tr><td valign="top"><span id="messages-label">Число комментариев на странице</span></td><td>{% for item in message_values %}<label><input type="radio" name="messages" value="{{ item.value }}" {% if item.selected %}checked{% endif %}>{{ item.value }}</label> {% endfor %}</td></tr>
+<tr><td colspan="2"><hr></td></tr>
+<tr><td valign="top"><span id="trackerMode-label">Фильтр трекера по умолчанию</span></td><td>{% for item in tracker_modes %}<label><input type="radio" name="trackerMode" value="{{ item.value }}" {% if item.selected %}checked{% endif %}>{{ item.label }}</label><br>{% endfor %}</td></tr>
+<tr><td colspan="2"><hr></td></tr>
+<tr><td valign="top"><span id="avatar-label">При отсутствии аватара показывать</span></td><td>{% for item in avatars %}<label><input type="radio" name="avatar" value="{{ item.value }}" {% if item.selected %}checked{% endif %}>{{ item.label }}</label><br>{% endfor %}</td></tr>
+<tr><td colspan="2"><hr></td></tr>
+<tr><td valign="top"><span id="format-mode-label">Разметка текста</span></td><td>{% for item in format_modes %}<label><input type="radio" name="format_mode" value="{{ item.value }}" {% if item.selected %}checked{% endif %}>{{ item.label }}</label><br>{% endfor %}</td></tr>
+</table>
+<button type="submit" class="btn btn-primary">Установить</button>
+</form>
+
+<h2>Другие настройки</h2>
+<ul>
+  <li><a href="/addphoto.jsp">Добавить фотографию</a></li>
+  <li><a href="/people/{{ user.nick }}/edit">Изменение регистрации</a></li>
+  <li><a href="/user-filter">Настройка фильтрации сообщений</a></li>
+  <li><a href="/deregister.jsp">Удаление аккаунта</a></li>
+</ul>
+<p><b>Внимание!</b> Тема также записывается в cookie/localStorage, чтобы dev-порт сразу показывал выбранное оформление без полноценного Spring Template layer.</p>
+<script>
+document.getElementById('profileForm').addEventListener('submit', function() {
+  var selected = document.querySelector('input[name="style"]:checked');
+  if (selected) {
+    localStorage.setItem('lor-theme', selected.value);
+    document.cookie = 'lor_theme=' + encodeURIComponent(selected.value) + '; path=/; max-age=31536000';
+  }
+});
+</script>
+{% endblock %}
