@@ -9,6 +9,8 @@ pub enum AppError {
     Forbidden,
     #[error("bad request: {0}")]
     BadRequest(String),
+    #[error("too many requests: {0}")]
+    TooManyRequests(String),
     #[error("database error: {0}")]
     Sqlx(#[from] sqlx::Error),
     #[error("template error: {0}")]
@@ -33,6 +35,7 @@ impl IntoResponse for AppError {
             AppError::NotFound => (StatusCode::NOT_FOUND, "Не найдено"),
             AppError::Forbidden => (StatusCode::FORBIDDEN, "Доступ запрещён"),
             AppError::BadRequest(_) => (StatusCode::BAD_REQUEST, "Некорректный запрос"),
+            AppError::TooManyRequests(_) => (StatusCode::TOO_MANY_REQUESTS, "Попробуйте позже"),
             AppError::Sqlx(sqlx::Error::RowNotFound) => (StatusCode::NOT_FOUND, "Не найдено"),
             _ => (StatusCode::INTERNAL_SERVER_ERROR, "Ошибка"),
         };

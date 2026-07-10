@@ -141,3 +141,16 @@ src/models_compat.rs   original schema model inventory
 
 This archive contains the v7 Rust port iteration. It was re-checked against the uploaded current Java/Scala source and includes additional fixes for registration validation, check-login similarity checks, write attribution for topic/comment creation, and legacy jump redirects. See `docs/PARITY_AUDIT_V7.md` and `docs/VERIFICATION_REPORT_V7.md`.
 
+
+## v8 parity update
+
+This archive includes an additional Java/Rust parity pass:
+
+- Java-compatible encrypted register permits (`SecretTokenService` AES-GCM/PBKDF2 shape).
+- Java-style lost-password and reset-code flow.
+- `user-filter` add/delete form compatibility (`tagName`, `id`, `add`, `del`).
+- Reaction validation/rate-limit/own-post restrictions aligned with the Java controller.
+- Poll voting expiry check.
+- Adapted `.devcontainer` with Rust tooling, PostgreSQL and OpenSearch.
+
+See `docs/PARITY_AUDIT_V8.md` and `docs/DEVCONTAINER_PORT.md`.

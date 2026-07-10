@@ -166,3 +166,93 @@ pub fn csrf_token(session_cookie: &str, secret: &str) -> String {
 pub fn verify_csrf(session_cookie: &str, token: &str, secret: &str) -> bool {
     csrf_token(session_cookie, secret) == token
 }
+
+/// Token helpers compatible with the current Java `SecretTokenService`.
+///
+/// Java uses:
+/// - PBKDF2WithHmacSHA256(base secret, random 16-byte salt, 65536 iterations, 256-bit key)
+/// - AES/GCM/NoPadding with a random 12-byte IV and 128-bit tag
+/// - Base64(salt || iv || ciphertext_with_tag)
+pub mod secret_tokens {
+    use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use pbkdf2::pbkdf2_hmac;
+    use rand::RngCore;
+    use sha2::Sha256;
+
+    const SALT_LEN: usize = 16;
+    const IV_LEN: usize = 12;
+    const KEY_LEN: usize = 32;
+    const PBKDF2_ITERATIONS: u32 = 65_536;
+
+    fn derive_key(secret: &str, salt: &[u8]) -> [u8; KEY_LEN] {
+        let mut key = [0u8; KEY_LEN];
+        pbkdf2_hmac::<Sha256>(secret.as_bytes(), salt, PBKDF2_ITERATIONS, &mut key);
+        key
+    }
+
+    pub fn encrypt_java_secret(secret: &str, plaintext: &str) -> Result<String, String> {
+        let mut salt = [0u8; SALT_LEN];
+        let mut iv = [0u8; IV_LEN];
+        rand::rngs::OsRng.fill_bytes(&mut salt);
+        rand::rngs::OsRng.fill_bytes(&mut iv);
+
+        let key = derive_key(secret, &salt);
+        let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| "aes-gcm key error".to_string())?;
+        let ciphertext = cipher
+            .encrypt(Nonce::from_slice(&iv), plaintext.as_bytes())
+            .map_err(|_| "aes-gcm encrypt error".to_string())?;
+
+        let mut out = Vec::with_capacity(SALT_LEN + IV_LEN + ciphertext.len());
+        out.extend_from_slice(&salt);
+        out.extend_from_slice(&iv);
+        out.extend_from_slice(&ciphertext);
+        Ok(STANDARD.encode(out))
+    }
+
+    pub fn decrypt_java_secret(secret: &str, encoded: &str) -> Option<String> {
+        let data = STANDARD.decode(encoded).ok()?;
+        if data.len() < SALT_LEN + IV_LEN + 16 {
+            return None;
+        }
+        let salt = &data[..SALT_LEN];
+        let iv = &data[SALT_LEN..SALT_LEN + IV_LEN];
+        let ciphertext = &data[SALT_LEN + IV_LEN..];
+
+        let key = derive_key(secret, salt);
+        let cipher = Aes256Gcm::new_from_slice(&key).ok()?;
+        let plaintext = cipher.decrypt(Nonce::from_slice(iv), ciphertext).ok()?;
+        String::from_utf8(plaintext).ok()
+    }
+
+    pub fn make_register_permit(secret: &str, now_millis: i64) -> Result<String, String> {
+        let expiry = now_millis + 3_600_000;
+        encrypt_java_secret(secret, &format!("permit:{expiry}"))
+    }
+
+    pub fn check_register_permit(secret: &str, permit: &str, now_millis: i64) -> bool {
+        let Some(plaintext) = decrypt_java_secret(secret, permit) else { return false; };
+        let Some(expiry) = plaintext.strip_prefix("permit:").and_then(|v| v.parse::<i64>().ok()) else {
+            return false;
+        };
+        expiry > now_millis
+    }
+
+    pub fn activation_code(secret: &str, nick: &str, email: &str, regdate_millis: i64) -> String {
+        super::hmac_sha256_hex(secret, &format!("{nick}:{email}:{regdate_millis}:activate"))
+    }
+
+    pub fn verify_activation_code(secret: &str, nick: &str, email: &str, regdate_millis: i64, code: &str) -> bool {
+        let expected = activation_code(secret, nick, email, regdate_millis);
+        super::verify_hash(&expected, code)
+    }
+
+    pub fn reset_code(secret: &str, nick: &str, email: &str, reset_millis: i64) -> String {
+        super::hmac_sha256_hex(secret, &format!("{nick}:{email}:{reset_millis}:reset"))
+    }
+
+    pub fn verify_reset_code(secret: &str, nick: &str, email: &str, reset_millis: i64, code: &str) -> bool {
+        let expected = reset_code(secret, nick, email, reset_millis);
+        super::verify_hash(&expected, code)
+    }
+}

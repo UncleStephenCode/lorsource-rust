@@ -966,7 +966,7 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::reset_password_form).post(legacy::reset_password)",
+    "handler": "get(legacy::reset_password_form).post(auth::reset_password_with_code)",
     "source": "src/routes/mod.rs",
     "line": 118
   },

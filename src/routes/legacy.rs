@@ -635,35 +635,111 @@ pub async fn user_filter(State(state): State<AppState>, CurrentUser(user): Curre
 }
 
 #[derive(Deserialize)]
-pub struct UserTagForm { pub tag: String }
+pub struct UserTagForm {
+    pub tag: Option<String>,
+    #[serde(rename = "tagName")]
+    pub tag_name: Option<String>,
+    pub add: Option<String>,
+    pub del: Option<String>,
+}
 
 pub async fn favorite_tag(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<UserTagForm>) -> Result<Json<serde_json::Value>> {
-    save_user_tag(state, user, form.tag, true).await
+    save_or_delete_user_tag(state, user, form, true).await
 }
 
 pub async fn ignore_tag(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<UserTagForm>) -> Result<Json<serde_json::Value>> {
-    save_user_tag(state, user, form.tag, false).await
+    if user.as_ref().map(|u| u.canmod).unwrap_or(false) {
+        return Err(AppError::Forbidden);
+    }
+    save_or_delete_user_tag(state, user, form, false).await
 }
 
-async fn save_user_tag(state: AppState, user: Option<crate::models::UserSummary>, tag: String, is_favorite: bool) -> Result<Json<serde_json::Value>> {
+async fn save_or_delete_user_tag(state: AppState, user: Option<crate::models::UserSummary>, form: UserTagForm, is_favorite: bool) -> Result<Json<serde_json::Value>> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
-    let tag_id: i32 = sqlx::query_scalar(
-        "INSERT INTO tags_values(value,counter) VALUES($1,0) ON CONFLICT(value) DO UPDATE SET value=EXCLUDED.value RETURNING id",
-    ).bind(tag.trim()).fetch_one(&state.pool).await?;
-    sqlx::query("INSERT INTO user_tags(userid,tag_id,is_favorite) VALUES($1,$2,$3) ON CONFLICT DO NOTHING")
-        .bind(user.id).bind(tag_id).bind(is_favorite).execute(&state.pool).await?;
-    Ok(Json(json!({"ok": true})))
+    let tag = form.tag_name.or(form.tag).unwrap_or_default().trim().to_string();
+    if tag.is_empty() {
+        return Err(AppError::BadRequest("tagName is required".into()));
+    }
+
+    let tag_id: i32 = if form.del.is_some() {
+        sqlx::query_scalar("SELECT id FROM tags_values WHERE lower(value)=lower($1)")
+            .bind(&tag)
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or(AppError::NotFound)?
+    } else {
+        sqlx::query_scalar(
+            "INSERT INTO tags_values(value,counter) VALUES($1,0) ON CONFLICT(value) DO UPDATE SET value=EXCLUDED.value RETURNING id",
+        )
+        .bind(&tag)
+        .fetch_one(&state.pool)
+        .await?
+    };
+
+    if form.del.is_some() {
+        sqlx::query("DELETE FROM user_tags WHERE userid=$1 AND tag_id=$2 AND is_favorite=$3")
+            .bind(user.id)
+            .bind(tag_id)
+            .bind(is_favorite)
+            .execute(&state.pool)
+            .await?;
+    } else {
+        sqlx::query("INSERT INTO user_tags(userid,tag_id,is_favorite) VALUES($1,$2,$3) ON CONFLICT DO NOTHING")
+            .bind(user.id)
+            .bind(tag_id)
+            .bind(is_favorite)
+            .execute(&state.pool)
+            .await?;
+    }
+
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM user_tags WHERE tag_id=$1 AND is_favorite=$2")
+        .bind(tag_id)
+        .bind(is_favorite)
+        .fetch_one(&state.pool)
+        .await?;
+    Ok(Json(json!({"count": count, "tag": tag, "favorite": is_favorite})))
 }
 
 #[derive(Deserialize)]
-pub struct IgnoreUserForm { pub nick: String }
+pub struct IgnoreUserForm {
+    pub id: Option<i32>,
+    pub nick: Option<String>,
+    pub add: Option<String>,
+    pub del: Option<String>,
+}
 
 pub async fn ignore_user(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<IgnoreUserForm>) -> Result<Json<serde_json::Value>> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
-    let ignored_id: i32 = sqlx::query_scalar("SELECT id FROM users WHERE lower(nick)=lower($1)").bind(form.nick.trim()).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
-    sqlx::query("INSERT INTO ignore_list(userid,ignored) VALUES($1,$2) ON CONFLICT DO NOTHING")
-        .bind(user.id).bind(ignored_id).execute(&state.pool).await?;
-    Ok(Json(json!({"ok": true})))
+    if user.canmod {
+        return Err(AppError::Forbidden);
+    }
+    let ignored_id: i32 = if let Some(id) = form.id {
+        id
+    } else {
+        let nick = form.nick.unwrap_or_default();
+        sqlx::query_scalar("SELECT id FROM users WHERE lower(nick)=lower($1)")
+            .bind(nick.trim())
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or(AppError::NotFound)?
+    };
+    if ignored_id == user.id {
+        return Err(AppError::BadRequest("нельзя игнорировать самого себя".into()));
+    }
+    if form.del.is_some() {
+        sqlx::query("DELETE FROM ignore_list WHERE userid=$1 AND ignored=$2")
+            .bind(user.id)
+            .bind(ignored_id)
+            .execute(&state.pool)
+            .await?;
+    } else {
+        sqlx::query("INSERT INTO ignore_list(userid,ignored) VALUES($1,$2) ON CONFLICT DO NOTHING")
+            .bind(user.id)
+            .bind(ignored_id)
+            .execute(&state.pool)
+            .await?;
+    }
+    Ok(Json(json!({"ok": true, "ignored": ignored_id, "deleted": form.del.is_some()})))
 }
 
 #[derive(Deserialize)]
@@ -728,14 +804,13 @@ pub async fn remove_userpic(State(state): State<AppState>, CurrentUser(user): Cu
     Ok(Redirect::to(&format!("/people/{}/profile", urlencoding::encode(&target_nick))))
 }
 
-pub async fn reset_password_form(CurrentUser(user): CurrentUser) -> Result<Html<String>> {
-    if user.is_none() { return Err(AppError::Forbidden); }
+pub async fn reset_password_form() -> Result<Html<String>> {
     Ok(Html(r#"
 <h1>Сбросить пароль</h1>
 <form method="post" action="/reset-password" class="form">
 <label>Ник <input name="nick" required></label>
-<label>Новый пароль <input name="passwd" type="password" required minlength="6"></label>
-<button type="submit">Сохранить</button>
+<label>Код из письма <input name="code" required></label>
+<button type="submit">Сбросить пароль</button>
 </form>
 "#.to_string()))
 }

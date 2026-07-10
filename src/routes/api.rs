@@ -89,10 +89,65 @@ pub async fn reactions_get(State(state): State<AppState>, axum::extract::Query(q
     Ok(Json(json!({"topic": topic_id, "comment": comment_id, "reactions": counts})))
 }
 
+const ALLOWED_REACTIONS: &[&str] = &[
+    "👍", "👎", "😊", "😱", "🤦", "🔥", "🤔", "🤡", "☕☕", "🪗", "😢", "🚮", "🎉", "🤬",
+];
+
+async fn check_reaction_allowed(pool: &sqlx::PgPool, user_id: i32, topic_id: i32, comment_id: Option<i32>, set: bool, reaction: &str) -> Result<()> {
+    if set && !ALLOWED_REACTIONS.contains(&reaction) {
+        return Err(crate::error::AppError::Forbidden);
+    }
+    if set {
+        let recent: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM reactions_log WHERE origin_user=$1 AND set_date > CURRENT_TIMESTAMP - interval '10 minutes'",
+        )
+        .bind(user_id)
+        .fetch_one(pool)
+        .await?;
+        if recent >= 5 {
+            return Err(crate::error::AppError::TooManyRequests("Попробуйте позже".into()));
+        }
+    }
+
+    let (author_id, topic_deleted, topic_expired, comment_deleted): (i32, bool, bool, Option<bool>) = if let Some(comment_id) = comment_id {
+        sqlx::query_as(
+            r#"SELECT c.userid,
+                      t.deleted,
+                      (t.postdate + g.expire < now()) AS expired,
+                      c.deleted
+               FROM comments c
+               JOIN topics t ON t.id=c.topic
+               JOIN groups g ON g.id=t.groupid
+               WHERE c.id=$1 AND t.id=$2"#,
+        )
+        .bind(comment_id)
+        .bind(topic_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or(crate::error::AppError::NotFound)?
+    } else {
+        let (author_id, deleted, expired): (i32, bool, bool) = sqlx::query_as(
+            r#"SELECT t.userid, t.deleted, (t.postdate + g.expire < now()) AS expired
+               FROM topics t JOIN groups g ON g.id=t.groupid WHERE t.id=$1"#,
+        )
+        .bind(topic_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or(crate::error::AppError::NotFound)?;
+        (author_id, deleted, expired, None)
+    };
+
+    if user_id == author_id || topic_deleted || topic_expired || comment_deleted.unwrap_or(false) {
+        return Err(crate::error::AppError::Forbidden);
+    }
+    Ok(())
+}
+
 pub async fn reactions_post(State(state): State<AppState>, CurrentUser(user): CurrentUser, axum::Form(form): axum::Form<ReactionForm>) -> Result<Json<serde_json::Value>> {
     let Some(user) = user else { return Err(crate::error::AppError::Forbidden); };
     let (topic_id, comment_id) = resolve_reaction_target(&state.pool, form.topic, form.comment, form.msgid).await?;
     let (reaction, set) = parse_reaction_action(form.reaction, form.value);
+    check_reaction_allowed(&state.pool, user.id, topic_id, comment_id, set, &reaction).await?;
 
     if set {
         if let Some(comment_id) = comment_id {
@@ -105,7 +160,7 @@ pub async fn reactions_post(State(state): State<AppState>, CurrentUser(user): Cu
         sqlx::query(
             r#"INSERT INTO reactions_log(origin_user,topic_id,comment_id,reaction,set_date)
                VALUES($1,$2,$3,$4,now())
-               ON CONFLICT (origin_user, topic_id, comment_id)
+               ON CONFLICT (topic_id, comment_id, origin_user)
                DO UPDATE SET set_date=now(), reaction=EXCLUDED.reaction"#,
         )
         .bind(user.id).bind(topic_id).bind(comment_id).bind(&reaction).execute(&state.pool).await?;
@@ -148,10 +203,11 @@ pub async fn vote(State(state): State<AppState>, CurrentUser(user): CurrentUser,
         return Err(crate::error::AppError::BadRequest("ничего не выбрано".into()));
     }
 
-    let Some((topic_id, multiselect, section_prefix, group_urlname)) = sqlx::query_as::<_, (i32, bool, String, String)>(
+    let Some((topic_id, multiselect, section_prefix, group_urlname, expired)) = sqlx::query_as::<_, (i32, bool, String, String, bool)>(
         r#"SELECT p.topic, p.multiselect,
                   CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END AS section_prefix,
-                  g.urlname
+                  g.urlname,
+                  (t.postdate + g.expire < now()) AS expired
            FROM polls p
            JOIN topics t ON t.id=p.topic
            JOIN groups g ON g.id=t.groupid
@@ -164,6 +220,9 @@ pub async fn vote(State(state): State<AppState>, CurrentUser(user): CurrentUser,
         return Err(crate::error::AppError::BadRequest("опрос не найден или ещё не подтверждён".into()));
     };
 
+    if expired {
+        return Err(crate::error::AppError::BadRequest("Опрос завершен".into()));
+    }
     if !multiselect && form.vote.len() != 1 {
         return Err(crate::error::AppError::BadRequest("этот опрос допускает только один вариант ответа".into()));
     }

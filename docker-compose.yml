@@ -25,6 +25,7 @@ services:
       COOKIE_SECRET: change-me-in-production-change-me-in-production
       RUST_LOG: lorsource_rust=debug,tower_http=info,sqlx=warn
       RUN_MIGRATIONS: "true"
+      OPENSEARCH_URL: http://opensearch:9200
     ports:
       - "8080:8080"
     volumes:
@@ -32,7 +33,30 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      opensearch:
+        condition: service_healthy
+
+  opensearch:
+    image: opensearchproject/opensearch:3.6.0
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      - bootstrap.memory_lock=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -sf http://localhost:9200/_cluster/health | grep -qv ''"status":"red"''']
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    volumes:
+      - lor_opensearch:/usr/share/opensearch/data
 
 volumes:
   lor_pgdata:
   lor_uploads:
+  lor_opensearch:
