@@ -18,3 +18,5 @@ RUN rustup component add rustfmt clippy
 # devcontainer can still build if crates.io is temporarily unavailable.
 RUN cargo install sqlx-cli --no-default-features --features postgres || true
 RUN cargo install cargo-watch || true
+
+EXPOSE 8181

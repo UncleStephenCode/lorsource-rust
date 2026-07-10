@@ -12,13 +12,13 @@ services:
       - target-cache:/workspace/target
       - rust-uploads:/workspace/uploads
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8181:8181"
     command: sleep infinity
     environment:
       DATABASE_URL: postgres://lor:lor@postgres:5432/lor
-      PUBLIC_URL: http://localhost:8080
+      PUBLIC_URL: http://localhost:8181
       LOR_HOST: 0.0.0.0
-      LOR_PORT: 8080
+      LOR_PORT: 8181
       STATIC_DIR: /workspace/static
       UPLOAD_DIR: /workspace/uploads
       COOKIE_SECRET: devcontainer-change-me-change-me-change-me

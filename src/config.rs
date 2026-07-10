@@ -20,9 +20,9 @@ impl StConfig {
     pub fn stFromEnv() -> Self {
         Self {
             host: std::env::var("LOR_HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
-            port: std::env::var("LOR_PORT").ok().and_then(|sValue| sValue.parse().ok()).unwrap_or(8080),
+            port: std::env::var("LOR_PORT").ok().and_then(|sValue| sValue.parse().ok()).unwrap_or(8181),
             database_url: std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://lor:lor@localhost:5432/lor".to_string()),
-            public_url: std::env::var("PUBLIC_URL").unwrap_or_else(|_| "http://localhost:8080".to_string()),
+            public_url: std::env::var("PUBLIC_URL").unwrap_or_else(|_| "http://localhost:8181".to_string()),
             static_dir: std::env::var("STATIC_DIR").unwrap_or_else(|_| "static".to_string()),
             upload_dir: std::env::var("UPLOAD_DIR").unwrap_or_else(|_| "uploads".to_string()),
             cookie_secret: std::env::var("COOKIE_SECRET").unwrap_or_else(|_| "dev-only-change-me-change-me-change-me".to_string()),

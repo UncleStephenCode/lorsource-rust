@@ -20,7 +20,7 @@ docker compose up --build
 Открыть:
 
 ```text
-http://localhost:8080
+http://localhost:8181
 ```
 
 PostgreSQL будет поднят рядом, миграции и демо-данные применятся автоматически.
@@ -38,8 +38,8 @@ cargo run
 ## Проверка
 
 ```bash
-curl -fsS http://localhost:8080/healthz
-curl -fsS http://localhost:8080/rss | head
+curl -fsS http://localhost:8181/healthz
+curl -fsS http://localhost:8181/rss | head
 ```
 
 Проверка карты маршрутов и схемы:
@@ -51,14 +51,14 @@ curl -fsS http://localhost:8080/rss | head
 HTTP smoke-тесты по Rust-порту:
 
 ```bash
-NEW_BASE_URL=http://localhost:8080 python3 compat/test_http_compat.py
+NEW_BASE_URL=http://localhost:8181 python3 compat/test_http_compat.py
 ```
 
 Сравнение старого и нового приложения, если старый Scala-сайт запущен рядом:
 
 ```bash
 OLD_BASE_URL=http://localhost:8081 \
-NEW_BASE_URL=http://localhost:8080 \
+NEW_BASE_URL=http://localhost:8181 \
 python3 compat/test_http_compat.py
 ```
 
