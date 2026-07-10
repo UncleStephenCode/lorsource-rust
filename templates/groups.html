@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<h1>{{ title }}</h1>
+<div class="group-grid">
+{% for g in groups %}
+  <article class="group-card">
+    <h2><a href="/{{ g.section_prefix }}/{{ g.urlname }}">{{ g.title }}</a></h2>
+    <p class="meta">{{ g.section_name }} · {{ g.topics }} тем</p>
+    {% match g.info %}{% when Some with (info) %}<p>{{ info }}</p>{% when None %}{% endmatch %}
+  </article>
+{% endfor %}
+</div>
+{% endblock %}

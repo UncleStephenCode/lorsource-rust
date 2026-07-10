@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<h1>{{ title }}</h1>
+{% match error %}{% when Some with (e) %}<p class="error">{{ e }}</p>{% when None %}{% endmatch %}
+<form method="post" action="/register.jsp" class="form">
+  <input type="hidden" name="permit" value="{{ permit }}">
+  <label>Ник <input name="nick" required maxlength="19" pattern="[a-z][a-z0-9_-]*"></label>
+  <label>Email <input name="email" type="email" required></label>
+  <label>Пароль <input name="password" type="password" required minlength="10"></label>
+  <label>Повтор пароля <input name="password2" type="password" required minlength="10"></label>
+  <label><input type="checkbox" name="rules" value="okay" required> Я согласен с правилами</label>
+  <button type="submit">Зарегистрироваться</button>
+</form>
+{% endblock %}

@@ -1,0 +1,275 @@
+[
+  {
+    "name": "home",
+    "method": "GET",
+    "old": "/",
+    "new": "/",
+    "compare": true
+  },
+  {
+    "name": "legacy index",
+    "method": "GET",
+    "old": "/index.jsp",
+    "new": "/index.jsp",
+    "compare": true
+  },
+  {
+    "name": "about",
+    "method": "GET",
+    "old": "/about",
+    "new": "/about",
+    "compare": true
+  },
+  {
+    "name": "forum index",
+    "method": "GET",
+    "old": "/forum",
+    "new": "/forum",
+    "compare": true
+  },
+  {
+    "name": "forum group",
+    "method": "GET",
+    "old": "/forum/general",
+    "new": "/forum/general",
+    "compare": true,
+    "requires_seed": true
+  },
+  {
+    "name": "news",
+    "method": "GET",
+    "old": "/news",
+    "new": "/news",
+    "compare": true
+  },
+  {
+    "name": "articles",
+    "method": "GET",
+    "old": "/articles",
+    "new": "/articles",
+    "compare": true
+  },
+  {
+    "name": "gallery",
+    "method": "GET",
+    "old": "/gallery",
+    "new": "/gallery",
+    "compare": true
+  },
+  {
+    "name": "polls",
+    "method": "GET",
+    "old": "/polls",
+    "new": "/polls",
+    "compare": true
+  },
+  {
+    "name": "topic page",
+    "method": "GET",
+    "old": "/news/opensource/100",
+    "new": "/news/opensource/100",
+    "compare": true,
+    "requires_seed": true
+  },
+  {
+    "name": "topic page old jsp",
+    "method": "GET",
+    "old": "/view-message.jsp?msgid=100",
+    "new": "/view-message.jsp?msgid=100",
+    "compare": true,
+    "requires_seed": true
+  },
+  {
+    "name": "jump comment",
+    "method": "GET",
+    "old": "/jump-message.jsp?msgid=102",
+    "new": "/jump-message.jsp?msgid=102",
+    "compare": true,
+    "requires_seed": true
+  },
+  {
+    "name": "search",
+    "method": "GET",
+    "old": "/search.jsp?q=Rust",
+    "new": "/search.jsp?q=Rust",
+    "compare": true
+  },
+  {
+    "name": "tags",
+    "method": "GET",
+    "old": "/tags",
+    "new": "/tags",
+    "compare": true
+  },
+  {
+    "name": "tag page",
+    "method": "GET",
+    "old": "/tag/rust",
+    "new": "/tag/rust",
+    "compare": true,
+    "requires_seed": true
+  },
+  {
+    "name": "user profile",
+    "method": "GET",
+    "old": "/people/unclestephen",
+    "new": "/people/unclestephen",
+    "compare": true,
+    "requires_seed": true
+  },
+  {
+    "name": "whois jsp",
+    "method": "GET",
+    "old": "/whois.jsp?nick=unclestephen",
+    "new": "/whois.jsp?nick=unclestephen",
+    "compare": true,
+    "requires_seed": true
+  },
+  {
+    "name": "rss",
+    "method": "GET",
+    "old": "/rss",
+    "new": "/rss",
+    "compare": true
+  },
+  {
+    "name": "section rss",
+    "method": "GET",
+    "old": "/section-rss.jsp?section=news",
+    "new": "/section-rss.jsp?section=news",
+    "compare": true
+  },
+  {
+    "name": "top10 boxlet",
+    "method": "GET",
+    "old": "/top10.boxlet",
+    "new": "/top10.boxlet",
+    "compare": true
+  },
+  {
+    "name": "login form",
+    "method": "GET",
+    "old": "/login.jsp",
+    "new": "/login.jsp",
+    "compare": true
+  },
+  {
+    "name": "register form",
+    "method": "GET",
+    "old": "/register.jsp",
+    "new": "/register.jsp",
+    "compare": true
+  },
+  {
+    "name": "lost password form",
+    "method": "GET",
+    "old": "/lostpwd.jsp",
+    "new": "/lostpwd.jsp",
+    "compare": true
+  },
+  {
+    "name": "activation form",
+    "method": "GET",
+    "old": "/activate",
+    "new": "/activate",
+    "compare": false
+  },
+  {
+    "name": "reactions summary",
+    "method": "GET",
+    "old": "/reactions?topic=100",
+    "new": "/reactions?topic=100",
+    "compare": false
+  },
+  {
+    "name": "legacy group redirect",
+    "method": "GET",
+    "old": "/group.jsp?group=1",
+    "new": "/group.jsp?group=1",
+    "compare": false
+  },
+  {
+    "name": "legacy section redirect",
+    "method": "GET",
+    "old": "/view-section.jsp?section=2",
+    "new": "/view-section.jsp?section=2",
+    "compare": false
+  },
+  {
+    "name": "markup preview",
+    "method": "POST",
+    "old": "/markup/preview",
+    "new": "/markup/preview",
+    "compare": false
+  },
+  {
+    "name": "check login availability",
+    "method": "GET",
+    "old": "/check-login?nick=newuser",
+    "new": "/check-login?nick=newuser",
+    "compare": false
+  },
+  {
+    "name": "known but unported warnings",
+    "method": "GET",
+    "old": "/post-warning",
+    "new": "/post-warning",
+    "compare": false,
+    "new_expected_status": 403
+  },
+  {
+    "name": "addphoto requires auth",
+    "method": "GET",
+    "old": "/addphoto.jsp",
+    "new": "/addphoto.jsp",
+    "compare": false,
+    "new_expected_status": 403
+  },
+  {
+    "name": "deregister requires auth",
+    "method": "GET",
+    "old": "/deregister.jsp",
+    "new": "/deregister.jsp",
+    "compare": false,
+    "new_expected_status": 403
+  },
+  {
+    "name": "vote requires auth with current Java form shape",
+    "method": "POST",
+    "old": "/vote.jsp",
+    "new": "/vote.jsp",
+    "data": "voteid=1&vote=1",
+    "compare": false,
+    "new_expected_status": 403
+  },
+  {
+    "name": "admin geoip requires moderator",
+    "method": "GET",
+    "old": "/admin/geoip?ip=127.0.0.1",
+    "new": "/admin/geoip?ip=127.0.0.1",
+    "compare": false,
+    "new_expected_status": 403
+  },
+  {
+    "name": "check-login empty nick",
+    "method": "GET",
+    "old": "/check-login?nick=",
+    "new": "/check-login?nick=",
+    "compare": true
+  },
+  {
+    "name": "check-login valid seed-free nick",
+    "method": "GET",
+    "old": "/check-login?nick=rustporttest",
+    "new": "/check-login?nick=rustporttest",
+    "compare": true
+  },
+  {
+    "name": "jump seed topic",
+    "method": "GET",
+    "old": "/jump-message.jsp?msgid=100",
+    "new": "/jump-message.jsp?msgid=100",
+    "compare": false,
+    "requires_seed": true
+  }
+]

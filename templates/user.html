@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}{{ user.nick }}{% endblock %}
+{% block content %}
+<h1>{{ user.nick }}</h1>
+<div class="profile">
+  {% match user.name %}{% when Some with (name) %}<p><b>Имя:</b> {{ name }}</p>{% when None %}{% endmatch %}
+  {% match user.town %}{% when Some with (town) %}<p><b>Город:</b> {{ town }}</p>{% when None %}{% endmatch %}
+  <p><b>Score:</b> {% match user.score %}{% when Some with (score) %}{{ score }}{% when None %}0{% endmatch %}</p>
+  {% match user.userinfo %}{% when Some with (info) %}<div class="message">{{ info|safe }}</div>{% when None %}{% endmatch %}
+</div>
+<h2>Темы пользователя</h2>
+{% for t in topics %}<article class="topic-card"><h3><a href="{{ t.topic_url() }}">{{ t.title }}</a></h3><div class="meta">{{ t.postdate }}</div></article>{% endfor %}
+{% endblock %}

@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}{{ topic.title }}{% endblock %}
+{% block content %}
+<article class="topic-full">
+  <h1>{{ topic.title }}</h1>
+  <div class="meta">
+    <a href="/{{ topic.section_prefix }}/">{{ topic.section_name }}</a> / 
+    <a href="/{{ topic.section_prefix }}/{{ topic.group_urlname }}">{{ topic.group_title }}</a> ·
+    <a href="/people/{{ topic.author }}">{{ topic.author }}</a> · {{ topic.postdate }}
+  </div>
+  {% match topic.url %}{% when Some with (url) %}<p class="source"><a rel="nofollow" href="{{ url }}">{% match topic.linktext %}{% when Some with (lt) %}{{ lt }}{% when None %}{{ url }}{% endmatch %}</a></p>{% when None %}{% endmatch %}
+  <div class="message">{{ topic_html|safe }}</div>
+  {% if topic.tags_vec().len() > 0 %}
+  <div class="tags">{% for tag in topic.tags_vec() %}<a href="/tag/{{ tag }}">#{{ tag }}</a>{% endfor %}</div>
+  {% endif %}
+</article>
+
+<section class="comments">
+  <h2>Комментарии: {{ comments.len() }}</h2>
+  {% for c in comments %}
+  <article id="comment-{{ c.item.id }}" class="comment{% if c.item.deleted %} deleted{% endif %}">
+    <header><a href="/people/{{ c.item.author }}">{{ c.item.author }}</a> · {{ c.item.postdate }} · <a href="#comment-{{ c.item.id }}">#{{ c.item.id }}</a></header>
+    <div class="message">{{ c.html|safe }}</div>
+  </article>
+  {% endfor %}
+</section>
+
+<form class="comment-form" method="post" action="/add_comment.jsp">
+  <h3>Добавить комментарий</h3>
+  <input type="hidden" name="topic" value="{{ topic.id }}">
+  <input type="text" name="title" value="Комментарий">
+  <textarea name="msg" rows="8" required></textarea>
+  <button type="submit">Отправить</button>
+</form>
+{% endblock %}

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}LOR Rust{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <link rel="alternate" type="application/rss+xml" href="/rss">
+</head>
+<body>
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="/">LOR.rs</a>
+    <nav>
+      <a href="/news/">Новости</a>
+      <a href="/forum">Форум</a>
+      <a href="/articles/">Статьи</a>
+      <a href="/gallery/">Галерея</a>
+      <a href="/polls/">Опросы</a>
+      <a href="/tags">Метки</a>
+      <a href="/search.jsp">Поиск</a>
+    </nav>
+  </div>
+</header>
+<main class="wrap layout">
+  <section class="content">
+    {% block content %}{% endblock %}
+  </section>
+  <aside class="sidebar">
+    <h3>Навигация</h3>
+    <ul>
+      <li><a href="/add.jsp">Новая тема</a></li>
+      <li><a href="/tracker">Трекер</a></li>
+      <li><a href="/rss">RSS</a></li>
+      <li><a href="/about">О проекте</a></li>
+    </ul>
+  </aside>
+</main>
+<footer class="wrap footer">
+  <p>Experimental Rust port of lorsource. Scala/Spring-compatible routes are kept where practical.</p>
+</footer>
+</body>
+</html>
