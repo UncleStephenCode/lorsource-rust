@@ -1,5 +1,6 @@
 use crate::{auth::CurrentUser, error::Result, state::AppState};
-use axum::{extract::State, response::Html, Json};
+use axum::{extract::{Query, State}, response::{Html, Redirect}, Json};
+use askama::Template;
 use serde_json::json;
 
 pub async fn notifications(CurrentUser(user): CurrentUser) -> Json<serde_json::Value> {
@@ -14,9 +15,59 @@ pub async fn notifications_reset() -> Json<serde_json::Value> {
     Json(json!({"ok": true}))
 }
 
-pub async fn tracker(State(state): State<AppState>) -> Result<Json<serde_json::Value>> {
-    let topics = crate::routes::topics::list_topics(&state, None, None, 0, 20).await?;
-    Ok(Json(json!({"items": topics})))
+#[derive(Debug, serde::Deserialize)]
+pub struct TrackerQuery {
+    pub offset: Option<i64>,
+    pub filter: Option<String>,
+}
+
+#[derive(Template)]
+#[template(path = "tracker.html")]
+struct TrackerTemplate {
+    title: String,
+    filter: String,
+    topics: Vec<crate::models::TopicSummary>,
+    prev_link: Option<String>,
+    next_link: Option<String>,
+}
+
+pub async fn tracker_old_redirect(Query(q): Query<TrackerQuery>) -> Redirect {
+    match q.filter {
+        Some(filter) if !filter.trim().is_empty() && filter != "all" => {
+            Redirect::to(&format!("/tracker/?filter={}", urlencoding::encode(&filter)))
+        }
+        _ => Redirect::to("/tracker/"),
+    }
+}
+
+pub async fn tracker(State(state): State<AppState>, Query(q): Query<TrackerQuery>) -> Result<Html<String>> {
+    let offset = q.offset.unwrap_or(0).clamp(0, 300);
+    let filter = q.filter.unwrap_or_else(|| "all".to_string());
+    let limit = state.config.page_size.max(1);
+    let section = match filter.as_str() {
+        "news" | "forum" | "articles" | "gallery" | "polls" => Some(filter.as_str()),
+        _ => None,
+    };
+    let topics = crate::routes::topics::list_topics(&state, section, None, offset, limit).await?;
+    let title = if filter == "all" { "Активные топики".to_string() } else { format!("Активные топики ({filter})") };
+    let extra = if filter == "all" { String::new() } else { format!("filter={}", urlencoding::encode(&filter)) };
+    let next_link = if topics.len() as i64 == limit && offset < 300 {
+        let sep = if extra.is_empty() { "" } else { "&" };
+        Some(format!("/tracker/?offset={}{}{}", offset + limit, sep, extra))
+    } else {
+        None
+    };
+    let prev_link = if offset >= limit {
+        let new_offset = offset - limit;
+        if extra.is_empty() {
+            Some(if new_offset == 0 { "/tracker/".to_string() } else { format!("/tracker/?offset={new_offset}") })
+        } else {
+            Some(if new_offset == 0 { format!("/tracker/?{extra}") } else { format!("/tracker/?offset={new_offset}&{extra}") })
+        }
+    } else {
+        None
+    };
+    Ok(Html(TrackerTemplate { title, filter, topics, prev_link, next_link }.render()?))
 }
 
 pub async fn top10_boxlet(State(state): State<AppState>) -> Result<Html<String>> {

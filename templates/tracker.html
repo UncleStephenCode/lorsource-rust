@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<h1>{{ title }}</h1>
+
+<nav class="tracker-filter">
+  <a href="/tracker/"{% if filter == "all" %} class="selected"{% endif %}>Все</a>
+  <a href="/tracker/?filter=news"{% if filter == "news" %} class="selected"{% endif %}>Новости</a>
+  <a href="/tracker/?filter=forum"{% if filter == "forum" %} class="selected"{% endif %}>Форум</a>
+  <a href="/tracker/?filter=articles"{% if filter == "articles" %} class="selected"{% endif %}>Статьи</a>
+  <a href="/tracker/?filter=gallery"{% if filter == "gallery" %} class="selected"{% endif %}>Галерея</a>
+  <a href="/tracker/?filter=polls"{% if filter == "polls" %} class="selected"{% endif %}>Опросы</a>
+</nav>
+
+{% if topics.len() == 0 %}
+  <p class="muted">В трекере пока нет активных тем.</p>
+{% endif %}
+
+<div class="tracker-list">
+{% for t in topics %}
+  <article class="topic-card tracker-item{% if t.sticky %} sticky{% endif %}">
+    <h2><a href="{{ t.topic_url() }}">{{ t.title }}</a></h2>
+    <div class="meta">
+      <a href="/{{ t.section_prefix }}/">{{ t.section_name }}</a> /
+      <a href="/{{ t.section_prefix }}/{{ t.group_urlname }}">{{ t.group_title }}</a> ·
+      <a href="/people/{{ t.author }}/profile">{{ t.author }}</a> ·
+      {{ t.postdate }} · {{ t.comments }} комм. · {{ t.views }} просмотров
+    </div>
+    {% if t.tags_vec().len() > 0 %}
+    <div class="tags">
+      {% for tag in t.tags_vec() %}<a href="/tag/{{ tag }}">#{{ tag }}</a>{% endfor %}
+    </div>
+    {% endif %}
+  </article>
+{% endfor %}
+</div>
+
+<nav class="pager">
+  {% match prev_link %}{% when Some with (link) %}<a href="{{ link }}">← новее</a>{% when None %}{% endmatch %}
+  {% match next_link %}{% when Some with (link) %}<a href="{{ link }}">старее →</a>{% when None %}{% endmatch %}
+</nav>
+{% endblock %}

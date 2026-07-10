@@ -47,3 +47,4 @@ ON CONFLICT DO NOTHING;
 
 SELECT setval('s_uid', GREATEST((SELECT max(id) FROM users), 10), true);
 SELECT setval('s_msgid', GREATEST((SELECT max(id) FROM msgbase), 100), true);
+SELECT setval(pg_get_serial_sequence('tags_values', 'id'), GREATEST((SELECT COALESCE(max(id), 0) FROM tags_values), 1), true);
