@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 /// Maps UserEventFilterEnum's `getName` (lowercase enum case) to its `dbType`.
-fn filter_db_type(filter: &str) -> Option<&'static str> {
+pub(crate) fn filter_db_type(filter: &str) -> Option<&'static str> {
     match filter {
         "answers" => Some("REPLY"),
         "favorites" => Some("WATCH"),
@@ -19,23 +19,55 @@ fn filter_db_type(filter: &str) -> Option<&'static str> {
 }
 
 #[derive(Debug, sqlx::FromRow)]
-struct NotificationEvent {
-    id: i32,
-    event_date: chrono::DateTime<chrono::Utc>,
-    subj: String,
-    msgid: i32,
-    cid: Option<i32>,
-    unread: bool,
-    event_type: String,
-    section_prefix: String,
-    group_urlname: String,
+pub(crate) struct NotificationEvent {
+    pub id: i32,
+    pub event_date: chrono::DateTime<chrono::Utc>,
+    pub subj: String,
+    pub msgid: i32,
+    pub cid: Option<i32>,
+    pub unread: bool,
+    pub event_type: String,
+    pub section_prefix: String,
+    pub group_urlname: String,
 }
 
 impl NotificationEvent {
-    fn link(&self) -> String {
+    pub(crate) fn link(&self) -> String {
         let anchor = self.cid.map(|id| format!("?cid={id}")).unwrap_or_default();
         format!("/{}/{}/{}{anchor}", self.section_prefix, self.group_urlname, self.msgid)
     }
+}
+
+/// Shared query behind /notifications and /show-replies.jsp's moderator
+/// view + RSS/Atom feed - matches UserEventDao.getRepliesForUser: when
+/// `show_private` is false (viewing someone else's feed), events flagged
+/// `private` are excluded.
+pub(crate) async fn fetch_events(
+    state: &AppState,
+    user_id: i32,
+    db_type: Option<&str>,
+    show_private: bool,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<NotificationEvent>> {
+    Ok(sqlx::query_as::<_, NotificationEvent>(
+        r#"SELECT e.id, e.event_date, t.title AS subj, t.id AS msgid, e.comment_id AS cid, e.unread, e.type::text AS event_type,
+                  CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END AS section_prefix,
+                  g.urlname AS group_urlname
+           FROM user_events e
+           JOIN topics t ON t.id=e.message_id
+           JOIN groups g ON g.id=t.groupid
+           JOIN sections s ON s.id=g.section
+           WHERE e.userid=$1 AND ($2::text IS NULL OR e.type::text=$2) AND ($3 OR NOT e.private)
+           ORDER BY e.id DESC LIMIT $4 OFFSET $5"#,
+    )
+    .bind(user_id)
+    .bind(db_type)
+    .bind(show_private)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.pool)
+    .await?)
 }
 
 #[derive(Deserialize)]
@@ -62,23 +94,7 @@ pub async fn notifications(State(state): State<AppState>, CurrentUser(user): Cur
     let offset = q.offset.unwrap_or(0).max(0);
     let limit = 20i64;
 
-    let events = sqlx::query_as::<_, NotificationEvent>(
-        r#"SELECT e.id, e.event_date, t.title AS subj, t.id AS msgid, e.comment_id AS cid, e.unread, e.type::text AS event_type,
-                  CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END AS section_prefix,
-                  g.urlname AS group_urlname
-           FROM user_events e
-           JOIN topics t ON t.id=e.message_id
-           JOIN groups g ON g.id=t.groupid
-           JOIN sections s ON s.id=g.section
-           WHERE e.userid=$1 AND ($2::text IS NULL OR e.type::text=$2)
-           ORDER BY e.id DESC LIMIT $3 OFFSET $4"#,
-    )
-    .bind(user.id)
-    .bind(db_type)
-    .bind(limit + 1)
-    .bind(offset)
-    .fetch_all(&state.pool)
-    .await?;
+    let events = fetch_events(&state, user.id, db_type, true, limit + 1, offset).await?;
 
     let has_more = events.len() as i64 > limit;
     let events: Vec<_> = events.into_iter().take(limit as usize).collect();
@@ -225,7 +241,17 @@ pub async fn tracker(State(state): State<AppState>, CurrentUser(user): CurrentUs
         return Err(AppError::BadRequest("Некорректное значение offset".into()));
     }
     let offset = q.offset.unwrap_or(0).clamp(0, 300);
-    let limit = state.config.page_size.max(1);
+    // GroupListDao.getTrackerTopics uses session.profile.topics, not a
+    // global page size - each user's own "topics per page" setting.
+    let limit: i64 = if let Some(u) = &user {
+        let settings_text: Option<String> = sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
+            .bind(u.id)
+            .fetch_optional(&state.pool)
+            .await?;
+        crate::profile::ProfileSettings::from_hstore_text(settings_text).topics as i64
+    } else {
+        crate::profile::DEFAULT_TOPICS as i64
+    };
 
     let default_filter: String = if let Some(u) = &user {
         sqlx::query_scalar::<_, Option<String>>("SELECT settings->'trackerMode' FROM user_settings WHERE id=$1")
@@ -240,8 +266,11 @@ pub async fn tracker(State(state): State<AppState>, CurrentUser(user): CurrentUs
     };
     let filter = q.filter.filter(|f| ["all", "main", "notalks", "tech"].contains(&f.as_str())).unwrap_or_else(|| default_filter.clone());
 
+    // GroupListDao.getTrackerTopics: showUncommited = filter==ALL ||
+    // session.moderator || session.corrector.
     let is_moderator = user.as_ref().map(|u| u.canmod).unwrap_or(false);
-    let show_uncommitted = filter == "all" || is_moderator;
+    let is_corrector = user.as_ref().map(|u| u.corrector).unwrap_or(false);
+    let show_uncommitted = filter == "all" || is_moderator || is_corrector;
 
     let sql = format!(
         r#"SELECT t.id, t.title, t.url, t.postdate, t.lastmod, u.id AS author_id, u.nick AS author,
@@ -259,11 +288,16 @@ pub async fn tracker(State(state): State<AppState>, CurrentUser(user): CurrentUs
            WHERE NOT t.draft AND NOT t.deleted
              AND COALESCE(t.lastmod, t.postdate) > now() - interval '7 days'
              {uncommitted}
+             {open_warnings}
              {group_clause}
            GROUP BY t.id,u.id,g.id,s.id
            ORDER BY COALESCE(t.lastmod, t.postdate) DESC
            OFFSET $1 LIMIT $2"#,
         uncommitted = if show_uncommitted { "" } else { "AND NOT t.moderate" },
+        // TopicPermissionService's noHidden clause: only applied to
+        // unauthorized (anonymous) viewers - an authorized user of any
+        // score can see warned topics in the tracker.
+        open_warnings = if user.is_none() { "AND t.open_warnings <= 2" } else { "" },
         group_clause = tracker_filter_group_clause(&filter),
     );
     let topics = sqlx::query_as::<_, TopicSummary>(&sql)
@@ -377,9 +411,33 @@ pub async fn reactions_get(State(state): State<AppState>, CurrentUser(user): Cur
     let (topic_id, comment_id) = resolve_reaction_target(&state.pool, q.topic, q.comment, q.msgid).await?;
     let link = reaction_target_link(&state.pool, topic_id, comment_id).await?;
 
-    let Some(_user) = user else {
+    if user.is_none() {
         return Ok(Redirect::to(&link).into_response());
-    };
+    }
+
+    // ReactionController.commentReaction/topicReaction: a deleted
+    // topic/comment (or a topic with comments hidden) isn't viewable even
+    // by an authorized user; a plain topic view additionally runs the full
+    // checkView gate (deleted/draft/expired/open-warnings visibility).
+    if let Some(comment_id) = comment_id {
+        let (comment_deleted, topic_deleted, topic_postscore): (bool, bool, i32) = sqlx::query_as(
+            "SELECT c.deleted, t.deleted, t.postscore FROM comments c JOIN topics t ON t.id=c.topic WHERE c.id=$1",
+        )
+        .bind(comment_id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
+        const POSTSCORE_HIDE_COMMENTS: i32 = 10002;
+        if comment_deleted || topic_deleted || topic_postscore == POSTSCORE_HIDE_COMMENTS {
+            return Err(AppError::Forbidden);
+        }
+    } else {
+        crate::routes::topics::check_topic_viewable(&state, topic_id, &user).await?;
+        let topic_deleted: bool = sqlx::query_scalar("SELECT deleted FROM topics WHERE id=$1").bind(topic_id).fetch_one(&state.pool).await?;
+        if topic_deleted {
+            return Err(AppError::Forbidden);
+        }
+    }
 
     let rows = sqlx::query_as::<_, (i32, String, String, chrono::DateTime<chrono::Utc>)>(
         r#"SELECT rl.origin_user, u.nick, rl.reaction, rl.set_date
@@ -407,12 +465,27 @@ pub async fn reactions_get(State(state): State<AppState>, CurrentUser(user): Cur
     Ok(Html(html).into_response())
 }
 
-const ALLOWED_REACTIONS: &[&str] = &[
-    "👍", "👎", "😊", "😱", "🤦", "🔥", "🤔", "🤡", "☕☕", "🪗", "😢", "🚮", "🎉", "🤬",
+/// ReactionService.DefinedReactions - order matters (matches insertion order
+/// in the Java `Map`, which the JSP iterates for button layout).
+pub(crate) const REACTIONS: &[(&str, &str)] = &[
+    ("👍", "большой палец вверх"),
+    ("👎", "большой палец вниз"),
+    ("😊", "улыбающееся лицо"),
+    ("😱", "лицо, кричащее от страха"),
+    ("🤦", "facepalm"),
+    ("🔥", "огонь"),
+    ("🤔", "задумчивое лицо"),
+    ("🤡", "клоунада"),
+    ("☕☕", "два чая этому господину!"),
+    ("🪗", "боян!!!1111"),
+    ("😢", "грусть-печаль"),
+    ("🚮", "не нужно!"),
+    ("🎉", "хлопушка"),
+    ("🤬", "нет слов!"),
 ];
 
 async fn check_reaction_allowed(pool: &sqlx::PgPool, user_id: i32, topic_id: i32, comment_id: Option<i32>, set: bool, reaction: &str) -> Result<()> {
-    if set && !ALLOWED_REACTIONS.contains(&reaction) {
+    if set && !REACTIONS.iter().any(|(r, _)| *r == reaction) {
         return Err(crate::error::AppError::Forbidden);
     }
     if set {
@@ -427,12 +500,13 @@ async fn check_reaction_allowed(pool: &sqlx::PgPool, user_id: i32, topic_id: i32
         }
     }
 
-    let (author_id, topic_deleted, topic_expired, comment_deleted): (i32, bool, bool, Option<bool>) = if let Some(comment_id) = comment_id {
-        sqlx::query_as(
+    let (author_id, topic_deleted, topic_expired, comment_deleted, topic_postscore): (i32, bool, bool, Option<bool>, i32) = if let Some(comment_id) = comment_id {
+        let row: (i32, bool, bool, bool, i32) = sqlx::query_as(
             r#"SELECT c.userid,
                       t.deleted,
-                      (t.postdate + s.expire < now()) AS expired,
-                      c.deleted
+                      NOT t.sticky AND COALESCE(t.commitdate,t.postdate) < now() - s.expire AS expired,
+                      c.deleted,
+                      t.postscore
                FROM comments c
                JOIN topics t ON t.id=c.topic
                JOIN groups g ON g.id=t.groupid
@@ -443,22 +517,34 @@ async fn check_reaction_allowed(pool: &sqlx::PgPool, user_id: i32, topic_id: i32
         .bind(topic_id)
         .fetch_optional(pool)
         .await?
-        .ok_or(crate::error::AppError::NotFound)?
+        .ok_or(crate::error::AppError::NotFound)?;
+        (row.0, row.1, row.2, Some(row.3), row.4)
     } else {
-        let (author_id, deleted, expired): (i32, bool, bool) = sqlx::query_as(
-            r#"SELECT t.userid, t.deleted, (t.postdate + s.expire < now()) AS expired
+        let (author_id, deleted, expired, postscore): (i32, bool, bool, i32) = sqlx::query_as(
+            r#"SELECT t.userid, t.deleted, NOT t.sticky AND COALESCE(t.commitdate,t.postdate) < now() - s.expire AS expired, t.postscore
                FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section WHERE t.id=$1"#,
         )
         .bind(topic_id)
         .fetch_optional(pool)
         .await?
         .ok_or(crate::error::AppError::NotFound)?;
-        (author_id, deleted, expired, None)
+        (author_id, deleted, expired, None, postscore)
     };
 
-    if user_id == author_id || topic_deleted || topic_expired || comment_deleted.unwrap_or(false) {
+    // ReactionService.allowInteract: comment reactions are additionally
+    // blocked once the topic's comments are hidden (POSTSCORE_HIDE_COMMENTS).
+    const POSTSCORE_HIDE_COMMENTS: i32 = 10002;
+    let comments_hidden = comment_id.is_some() && topic_postscore == POSTSCORE_HIDE_COMMENTS;
+
+    if user_id == author_id || topic_deleted || topic_expired || comment_deleted.unwrap_or(false) || comments_hidden {
         return Err(crate::error::AppError::Forbidden);
     }
+
+    let frozen_until: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar("SELECT frozen_until FROM users WHERE id=$1").bind(user_id).fetch_optional(pool).await?.flatten();
+    if frozen_until.map(|u| u > chrono::Utc::now()).unwrap_or(false) {
+        return Err(crate::error::AppError::Forbidden);
+    }
+
     Ok(())
 }
 
@@ -531,17 +617,20 @@ pub async fn reactions_post_ajax(State(state): State<AppState>, CurrentUser(user
     Ok(Json(json!({"count": result.count})))
 }
 
-#[derive(serde::Deserialize)]
 pub struct VoteForm {
     /// Poll id (`voteid` in the original VoteController).
     pub voteid: i32,
     /// Selected variant ids. The original form submits this field as repeated `vote`.
-    #[serde(default)]
     pub vote: Vec<i32>,
 }
 
-pub async fn vote(State(state): State<AppState>, CurrentUser(user): CurrentUser, axum::Form(form): axum::Form<VoteForm>) -> Result<axum::response::Redirect> {
+pub async fn vote(State(state): State<AppState>, CurrentUser(user): CurrentUser, body: axum::body::Bytes) -> Result<axum::response::Redirect> {
     let Some(user) = user else { return Err(crate::error::AppError::Forbidden); };
+    let pairs = crate::form::parse_pairs(&body)?;
+    let form = VoteForm {
+        voteid: crate::form::get(&pairs, "voteid").and_then(|v| v.parse().ok()).ok_or_else(|| AppError::BadRequest("missing voteid".into()))?,
+        vote: crate::form::get_all(&pairs, "vote").into_iter().filter_map(|v| v.parse().ok()).collect(),
+    };
     if form.vote.is_empty() {
         return Err(crate::error::AppError::BadRequest("ничего не выбрано".into()));
     }
@@ -550,7 +639,7 @@ pub async fn vote(State(state): State<AppState>, CurrentUser(user): CurrentUser,
         r#"SELECT p.topic, p.multiselect,
                   CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END AS section_prefix,
                   g.urlname,
-                  (t.postdate + s.expire < now()) AS expired
+                  NOT t.sticky AND COALESCE(t.commitdate,t.postdate) < now() - s.expire AS expired
            FROM polls p
            JOIN topics t ON t.id=p.topic
            JOIN groups g ON g.id=t.groupid

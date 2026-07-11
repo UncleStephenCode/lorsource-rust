@@ -8,6 +8,7 @@
   <a class="btn btn-default" href="/people/{{ user.nick }}/settings">Настройки</a>
 </nav>
 <form method="post" action="/people/{{ user.nick }}/edit" id="editRegForm" class="form wide">
+  <input type="hidden" name="csrf" value="{{ csrf_token }}">
   <dl>
     <dt><label for="name">Имя</label></dt><dd><input id="name" name="name" maxlength="255" value="{% match user.name %}{% when Some with (name) %}{{ name }}{% when None %}{% endmatch %}"><span class="help-block">&nbsp;</span></dd>
     <dt><label for="password">Новый пароль</label></dt><dd><input id="password" type="password" name="password"><span class="help-block">не заполняйте если не хотите менять пароль</span></dd>

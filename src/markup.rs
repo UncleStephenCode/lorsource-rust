@@ -9,6 +9,21 @@ use regex::Regex;
 static URL_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"https?://[^\s<>"']+"#).expect("url regex"));
 static USER_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"@([A-Za-z0-9_][A-Za-z0-9_.-]{1,79})" ).expect("user regex"));
 
+/// CommentCreateService.notifyMentions: pulls @nick references out of raw
+/// (unrendered) message source, deduplicated, in first-seen order - used to
+/// generate REFERENCE ("REF") notifications for mentioned users.
+pub fn extract_mentions(source: &str) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for caps in USER_RE.captures_iter(source) {
+        let nick = caps[1].to_string();
+        if seen.insert(nick.to_lowercase()) {
+            out.push(nick);
+        }
+    }
+    out
+}
+
 pub fn render_message(source: &str, bbcode: Option<bool>) -> String {
     let html = if bbcode.unwrap_or(true) {
         render_lor_markup(source)

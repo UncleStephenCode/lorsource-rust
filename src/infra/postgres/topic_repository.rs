@@ -104,13 +104,19 @@ impl TrTopicRepository for CTopicPgRepository {
     async fn vReplaceTags(&self, txPg: &mut Transaction<'_, Postgres>, iMsgId: i32, optTags: Option<&str>) -> Result<()> {
         sqlx::query("DELETE FROM tags WHERE msgid=$1").bind(iMsgId).execute(&mut **txPg).await?;
         if let Some(sTags) = optTags {
-            for sTag in sTags.split(',').map(str::trim).filter(|sTag| !sTag.is_empty()).take(20) {
+            // Callers (create_topic/edit_topic) already ran
+            // parse_and_validate_tags/check_can_create_new_tags against
+            // this same string, so re-parsing here with TagName.parseTags'
+            // exact rules (lowercase, dedupe, comma-or-pipe separated) just
+            // keeps this method idempotent on its own - it is not
+            // re-validating.
+            for sTag in crate::routes::tags::parse_tags(sTags).into_iter().take(crate::routes::tags::MAX_TAGS_PER_TOPIC) {
                 let iTagId: i32 = sqlx::query_scalar(
                     r#"INSERT INTO tags_values(value,counter) VALUES ($1,1)
                        ON CONFLICT(value) DO UPDATE SET counter=tags_values.counter+1
                        RETURNING id"#,
                 )
-                .bind(sTag)
+                .bind(&sTag)
                 .fetch_one(&mut **txPg)
                 .await?;
                 sqlx::query("INSERT INTO tags(msgid, tagid) VALUES ($1,$2) ON CONFLICT DO NOTHING")
@@ -227,11 +233,15 @@ WHERE t.id=$1
 GROUP BY t.id,m.id,u.id,g.id,s.id
 "#;
 
+// `comments.topic_deleted` was dropped from the real schema years ago (see
+// db/migrations/0013) - a deleted topic's own visibility is gated
+// separately (render_topic_view checks topics.deleted), so comments are
+// listed here regardless of that flag, matching current Java behavior.
 const S_LIST_COMMENTS_SQL: &str = r#"
 SELECT c.id, c.topic, c.replyto, c.title, m.message, c.postdate, u.id AS author_id, u.nick AS author, c.deleted
 FROM comments c
 JOIN msgbase m ON m.id=c.id
 JOIN users u ON u.id=c.userid
-WHERE c.topic=$1 AND NOT c.topic_deleted
+WHERE c.topic=$1
 ORDER BY c.postdate ASC
 "#;

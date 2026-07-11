@@ -10,7 +10,7 @@ use askama::Template;
 use axum::{
     extract::{Multipart, Path, Query, State},
     http::{StatusCode, Uri},
-    response::{Html, IntoResponse, Redirect},
+    response::{Html, IntoResponse, Redirect, Response},
     Form, Json,
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
@@ -182,9 +182,67 @@ pub async fn help_page(State(state): State<AppState>, Path(page): Path<String>) 
     Ok(Html(format!("<h1>{}</h1>{html}", html_escape::encode_text(title))))
 }
 
-pub async fn archive_section(State(state): State<AppState>, uri: Uri, Query(q): Query<PagerQuery>, CurrentUser(current_user): CurrentUser) -> Result<Html<String>> {
+const MONTH_NAMES: [&str; 12] = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
+
+pub(crate) fn month_name(month: i32) -> &'static str {
+    MONTH_NAMES.get((month - 1) as usize).copied().unwrap_or("?")
+}
+
+#[derive(Template)]
+#[template(path = "archive_index.html")]
+pub(crate) struct ArchiveIndexTemplate {
+    pub(crate) title: String,
+    pub(crate) heading: String,
+    pub(crate) back_url: String,
+    pub(crate) back_label: String,
+    pub(crate) months: Vec<ArchiveMonthLink>,
+}
+
+pub(crate) struct ArchiveMonthLink {
+    pub(crate) year: i32,
+    pub(crate) month: i32,
+    pub(crate) month_name: &'static str,
+    pub(crate) count: i64,
+    pub(crate) url: String,
+}
+
+/// ArchiveDao.getArchiveStats: rather than maintaining a separate
+/// `monthly_stats` side-table (unpopulated in this port - no triggers
+/// write to it), the year/month breakdown is computed live from `topics`.
+/// Functionally equivalent to Java's precomputed table for this dataset
+/// size; matches `list_archive_topics`' own visibility filter (`NOT
+/// deleted`) so the counts always agree with what the drill-down page
+/// actually lists.
+pub(crate) async fn list_archive_year_months(state: &AppState, section: Option<&str>, group: Option<&str>) -> Result<Vec<(i32, i32, i64)>> {
+    Ok(sqlx::query_as::<_, (i32, i32, i64)>(
+        r#"SELECT EXTRACT(YEAR FROM t.postdate)::int AS y, EXTRACT(MONTH FROM t.postdate)::int AS m, count(*) AS c
+           FROM topics t
+           JOIN groups g ON g.id=t.groupid
+           JOIN sections s ON s.id=g.section
+           WHERE ($1::text IS NULL OR CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END = $1)
+             AND ($2::text IS NULL OR g.urlname=$2)
+             AND NOT t.deleted
+           GROUP BY y, m
+           ORDER BY y, m"#,
+    )
+    .bind(section)
+    .bind(group)
+    .fetch_all(&state.pool)
+    .await?)
+}
+
+pub async fn archive_section(State(state): State<AppState>, uri: Uri, CurrentUser(_current_user): CurrentUser) -> Result<Html<String>> {
     let section = section_from_uri(&uri).unwrap_or("news");
-    render_archive(state, Some(section), None, None, None, q, current_user).await
+    let section_name = match section { "news" => "Новости", "forum" => "Форум", "gallery" => "Галерея", "articles" => "Статьи", "polls" => "Опросы", _ => "Темы" };
+    let rows = list_archive_year_months(&state, Some(section), None).await?;
+    let months = rows.into_iter().map(|(y, m, c)| ArchiveMonthLink { year: y, month: m, month_name: month_name(m), count: c, url: format!("/{section}/archive/{y}/{m}") }).collect();
+    Ok(Html(ArchiveIndexTemplate {
+        title: format!("{section_name} - Архив"),
+        heading: section_name.to_string(),
+        back_url: format!("/{section}/"),
+        back_label: "Лента".to_string(),
+        months,
+    }.render()?))
 }
 
 pub async fn archive_section_month(State(state): State<AppState>, uri: Uri, Path((year, month)): Path<(i32, i32)>, Query(q): Query<PagerQuery>, CurrentUser(current_user): CurrentUser) -> Result<Html<String>> {
@@ -251,11 +309,6 @@ async fn list_archive_topics(state: &AppState, section: Option<&str>, group: Opt
     .await?)
 }
 
-pub async fn topic_thread_redirect(uri: Uri, Path((group, id, thread_root)): Path<(String, i32, i32)>) -> Redirect {
-    let section = section_from_uri(&uri).unwrap_or("forum");
-    Redirect::to(&format!("/{section}/{group}/{id}#comment-{thread_root}"))
-}
-
 /// Java's EditHistoryController.canViewHistory requires an authenticated
 /// viewer in every branch (moderator, author, or "any logged-in user on a
 /// non-expired topic") - anonymous visitors are always rejected. Rust's
@@ -308,13 +361,117 @@ pub async fn show_comments_jsp(Query(q): Query<ShowCommentsQuery>) -> Redirect {
 }
 
 #[derive(Deserialize)]
-pub struct ShowRepliesQuery { pub nick: Option<String>, pub output: Option<String> }
+pub struct ShowRepliesQuery {
+    pub nick: Option<String>,
+    pub output: Option<String>,
+    pub filter: Option<String>,
+    pub offset: Option<i64>,
+}
 
-pub async fn show_replies_jsp(CurrentUser(user): CurrentUser, Query(q): Query<ShowRepliesQuery>) -> impl IntoResponse {
-    if q.output.is_some() {
-        return Json(json!({"items": [], "nick": q.nick.or_else(|| user.as_ref().map(|u| u.nick.clone()))})).into_response();
+/// UserEventController's three `/show-replies.jsp` branches (Spring
+/// disambiguates them via param presence - `!output`+`!nick`,
+/// `!output`+`nick`, `output`):
+/// 1. bare -> redirect to /notifications (must be logged in)
+/// 2. `?nick=X` (no output) -> moderator-only read view of X's notifications
+/// 3. `?output=rss|atom&nick=X` -> real XML feed of X's events
+pub async fn show_replies_jsp(State(state): State<AppState>, CurrentUser(user): CurrentUser, Query(q): Query<ShowRepliesQuery>) -> Result<Response> {
+    if let Some(output) = q.output.as_deref() {
+        let nick = q.nick.clone().unwrap_or_default();
+        if !valid_login_name_for_java(&nick) {
+            return Err(AppError::BadRequest("некорректное имя пользователя".into()));
+        }
+        let target: Option<(i32, String)> = sqlx::query_as("SELECT id, nick FROM users WHERE lower(nick)=lower($1)")
+            .bind(&nick)
+            .fetch_optional(&state.pool)
+            .await?;
+        let Some((target_id, target_nick)) = target else { return Err(AppError::NotFound); };
+        let view_by_owner = user.as_ref().map(|u| u.nick.eq_ignore_ascii_case(&target_nick)).unwrap_or(false);
+        let db_type = q.filter.as_deref().and_then(crate::routes::api::filter_db_type);
+        let events = crate::routes::api::fetch_events(&state, target_id, db_type, view_by_owner, 200, 0).await?;
+
+        let is_atom = output == "atom";
+        let body = render_replies_feed(&state, &target_nick, &events, is_atom);
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            (if is_atom { "application/atom+xml; charset=utf-8" } else { "application/rss+xml; charset=utf-8" }).parse().unwrap(),
+        );
+        // Java sets `Expires: now + 90s` on this feed endpoint.
+        let expires = (chrono::Utc::now() + chrono::Duration::seconds(90)).to_rfc2822();
+        headers.insert(axum::http::header::EXPIRES, expires.parse().unwrap());
+        return Ok((headers, body).into_response());
     }
-    Redirect::to("/notifications").into_response()
+
+    let Some(nick) = q.nick.clone() else {
+        if user.is_none() { return Err(AppError::Forbidden); }
+        return Ok(Redirect::to("/notifications").into_response());
+    };
+    if !valid_login_name_for_java(&nick) {
+        return Err(AppError::BadRequest("некорректное имя пользователя".into()));
+    }
+    let Some(current) = user else { return Err(AppError::Forbidden); };
+    if current.nick.eq_ignore_ascii_case(&nick) {
+        return Ok(Redirect::to("/notifications").into_response());
+    }
+    if !current.canmod {
+        return Err(AppError::Forbidden);
+    }
+
+    let target_id: Option<i32> = sqlx::query_scalar("SELECT id FROM users WHERE lower(nick)=lower($1)").bind(&nick).fetch_optional(&state.pool).await?;
+    let Some(target_id) = target_id else { return Err(AppError::NotFound); };
+    let db_type = q.filter.as_deref().and_then(crate::routes::api::filter_db_type);
+    let offset = q.offset.unwrap_or(0).max(0);
+    let events = crate::routes::api::fetch_events(&state, target_id, db_type, true, 20, offset).await?;
+
+    let mut html = format!("<h1>Уведомления {}</h1><p class=\"muted\">Просмотр от имени модератора {}.</p><ul class=\"notifications-list\">", html_escape::encode_text(&nick), html_escape::encode_text(&current.nick));
+    for e in &events {
+        html.push_str(&format!(
+            "<li{}><a href=\"{}\">{}</a> <small>{} · {}</small></li>",
+            if e.unread { " class=\"unread\"" } else { "" },
+            e.link(),
+            html_escape::encode_text(&e.subj),
+            e.event_date,
+            html_escape::encode_text(&e.event_type),
+        ));
+    }
+    if events.is_empty() {
+        html.push_str("<li class=\"muted\">Нет уведомлений</li>");
+    }
+    html.push_str("</ul>");
+    Ok(Html(html).into_response())
+}
+
+fn render_replies_feed(state: &AppState, nick: &str, events: &[crate::routes::api::NotificationEvent], atom: bool) -> String {
+    let title = format!("Ответы пользователю {nick}");
+    if atom {
+        let mut body = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"><title>{}</title><link href="{}/show-replies.jsp?nick={}&amp;output=atom" rel="self"/><id>{}/show-replies.jsp?nick={}</id>"#,
+            html_escape::encode_text(&title), state.config.public_url, urlencoding::encode(nick), state.config.public_url, urlencoding::encode(nick),
+        );
+        for e in events {
+            let link = format!("{}{}", state.config.public_url, e.link());
+            body.push_str(&format!(
+                "<entry><title>{}</title><link href=\"{link}\"/><id>{link}</id><updated>{}</updated></entry>",
+                html_escape::encode_text(&e.subj), e.event_date.to_rfc3339(),
+            ));
+        }
+        body.push_str("</feed>");
+        body
+    } else {
+        let mut body = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>{}</title><link>{}/show-replies.jsp?nick={}</link><description>{}</description>"#,
+            html_escape::encode_text(&title), state.config.public_url, urlencoding::encode(nick), html_escape::encode_text(&title),
+        );
+        for e in events {
+            let link = format!("{}{}", state.config.public_url, e.link());
+            body.push_str(&format!(
+                "<item><title>{}</title><link>{link}</link><guid>{link}</guid><pubDate>{}</pubDate></item>",
+                html_escape::encode_text(&e.subj), e.event_date.to_rfc2822(),
+            ));
+        }
+        body.push_str("</channel></rss>");
+        body
+    }
 }
 
 pub async fn view_deleted(State(state): State<AppState>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
@@ -417,8 +574,8 @@ pub struct ActivationQuery {
     pub error: Option<String>,
 }
 
-pub async fn activate_form(Query(q): Query<ActivationQuery>) -> Html<String> {
-    render_activation_form(q.nick.as_deref().unwrap_or(""), q.activation.as_deref().unwrap_or(""), q.error.as_deref())
+pub async fn activate_form(Query(q): Query<ActivationQuery>, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Html<String> {
+    render_activation_form(q.nick.as_deref().unwrap_or(""), q.activation.as_deref().unwrap_or(""), q.error.as_deref(), &csrf_token)
 }
 
 #[derive(Deserialize)]
@@ -431,8 +588,10 @@ pub struct ActivationForm {
 
 pub async fn activate_post(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     jar: CookieJar,
     CurrentUser(current_user): CurrentUser,
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
     Form(form): Form<ActivationForm>,
 ) -> Result<impl IntoResponse> {
     if form.action.is_some() {
@@ -444,26 +603,26 @@ pub async fn activate_post(
         .bind(nick)
         .fetch_optional(&state.pool)
         .await? else {
-            return Ok(render_activation_form(nick, &form.activation, Some("Пользователь не найден")).into_response());
+            return Ok(render_activation_form(nick, &form.activation, Some("Пользователь не найден"), &csrf_token).into_response());
         };
 
         if activated {
             return Ok(Redirect::to("/").into_response());
         }
 
-        if crate::auth::verify_login(&state.pool, nick, password).await?.is_none() {
+        if matches!(crate::auth::verify_login(&state.pool, nick, password).await?, crate::auth::LoginOutcome::Failed) {
             // verify_login deliberately refuses inactive users, so do a direct password check here.
             let encoded: Option<String> = sqlx::query_scalar("SELECT passwd FROM users WHERE id=$1")
                 .bind(id)
                 .fetch_one(&state.pool)
                 .await?;
             if !encoded.as_deref().map(|hash| crate::security::password::verify(password, hash)).unwrap_or(false) {
-                return Ok(render_activation_form(nick, &form.activation, Some("Неправильный логин или пароль")).into_response());
+                return Ok(render_activation_form(nick, &form.activation, Some("Неправильный логин или пароль"), &csrf_token).into_response());
             }
         }
 
         if !verify_activation_code(&state, &db_nick, email.as_deref().unwrap_or(""), regdate, &form.activation) {
-            return Ok(render_activation_form(nick, &form.activation, Some("Неправильный код активации")).into_response());
+            return Ok(render_activation_form(nick, &form.activation, Some("Неправильный код активации"), &csrf_token).into_response());
         }
 
         sqlx::query("UPDATE users SET activated=true,lastlogin=now() WHERE id=$1")
@@ -474,6 +633,7 @@ pub async fn activate_post(
         let cookie = Cookie::build(("lor_session", crate::auth::make_session(id, &state.config.cookie_secret)))
             .path("/")
             .http_only(true)
+            .secure(crate::security::is_secure_request(&headers))
             .same_site(SameSite::Lax)
             .build();
         return Ok((jar.add(cookie), Redirect::to("/")).into_response());
@@ -489,7 +649,7 @@ pub async fn activate_post(
     let Some(new_email) = email else { return Err(AppError::BadRequest("new_email == null".into())); };
 
     if !verify_activation_code(&state, &user.nick, &new_email, regdate, &form.activation) {
-        return Ok(render_activation_form(&user.nick, &form.activation, Some("Неправильный код активации")).into_response());
+        return Ok(render_activation_form(&user.nick, &form.activation, Some("Неправильный код активации"), &csrf_token).into_response());
     }
     sqlx::query("UPDATE users SET email=new_email,new_email=NULL WHERE id=$1")
         .bind(user.id)
@@ -499,12 +659,13 @@ pub async fn activate_post(
     Ok(Redirect::to(&format!("/people/{}/profile", urlencoding::encode(&user.nick))).into_response())
 }
 
-fn render_activation_form(nick: &str, activation: &str, error: Option<&str>) -> Html<String> {
+fn render_activation_form(nick: &str, activation: &str, error: Option<&str>, csrf_token: &str) -> Html<String> {
     let error_html = error.map(|e| format!("<p class=\"error\">{}</p>", html_escape::encode_text(e))).unwrap_or_default();
     Html(format!(r#"
 <h1>Активация аккаунта</h1>
 {error_html}
 <form method="post" action="/activate" class="form">
+  <input type="hidden" name="csrf" value="{csrf_token}">
   <input type="hidden" name="action" value="activate">
   <label>Ник <input name="nick" value="{nick}" required></label>
   <label>Пароль <input name="passwd" type="password" required></label>
@@ -515,7 +676,7 @@ fn render_activation_form(nick: &str, activation: &str, error: Option<&str>) -> 
 }
 
 fn verify_activation_code(state: &AppState, nick: &str, email: &str, regdate: Option<chrono::NaiveDateTime>, supplied: &str) -> bool {
-    if supplied == "dev-activate" {
+    if state.config.enable_dev_bypasses && supplied == "dev-activate" {
         return true;
     }
     let Some(regdate) = regdate else { return false; };
@@ -588,6 +749,163 @@ fn validate_userpic_bytes(data: &[u8]) -> Result<&'static str> {
     Ok(extension)
 }
 
+/// Image.MaxFileSize/MinDimension/MaxDimension (Java uses a 4-size srcset
+/// instead - this port's `images` table has concrete original/medium/
+/// thumbnail columns, so three fixed sizes are stored instead of Java's
+/// dynamic srcset).
+const GALLERY_MAX_FILE_SIZE: usize = 8 * 1024 * 1024;
+const GALLERY_MIN_DIMENSION: u32 = 400;
+const GALLERY_MAX_DIMENSION: u32 = 5120;
+const GALLERY_SIZES: [(&str, u32); 3] = [("original", 2000), ("medium", 800), ("thumbnail", 200)];
+
+#[derive(Deserialize)]
+pub struct AddPhotoTopicQuery {
+    pub msgid: i32,
+}
+
+/// Loads (author_id, section.imagepost) for a topic, or 404s. Both the GET
+/// form and the POST handler need this same author/section check.
+async fn topic_for_photo_upload(state: &AppState, msgid: i32) -> Result<(i32, bool, String, String)> {
+    sqlx::query_as(
+        r#"SELECT t.userid, s.imagepost,
+                  CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END,
+                  g.urlname
+           FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section WHERE t.id=$1"#,
+    )
+    .bind(msgid)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)
+}
+
+/// No `csrf` hidden field, matching `addphoto_form`'s existing precedent:
+/// a multipart POST body isn't inspected by the CSRF middleware (see
+/// `src/csrf.rs`), so a token here would be decorative.
+pub async fn addphoto_topic_form(State(state): State<AppState>, Query(q): Query<AddPhotoTopicQuery>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    let (author_id, imagepost, _section_prefix, _group_urlname) = topic_for_photo_upload(&state, q.msgid).await?;
+    if !imagepost {
+        return Err(AppError::BadRequest("этот раздел не поддерживает изображения".into()));
+    }
+    if !user.canmod && user.id != author_id {
+        return Err(AppError::Forbidden);
+    }
+    Ok(Html(format!(r#"
+<h1>Загрузить изображение</h1>
+<form method="post" action="/addphoto-topic.jsp" enctype="multipart/form-data" class="form">
+  <input type="hidden" name="msgid" value="{}">
+  <label>Файл PNG/JPEG/WEBP, {}-{} px, до {} МиБ <input type="file" name="file" accept="image/png,image/jpeg,image/webp" required></label>
+  <button type="submit">Загрузить</button>
+</form>
+"#, q.msgid, GALLERY_MIN_DIMENSION, GALLERY_MAX_DIMENSION, GALLERY_MAX_FILE_SIZE / 1024 / 1024)))
+}
+
+fn validate_gallery_image_bytes(data: &[u8]) -> Result<image::DynamicImage> {
+    if data.is_empty() {
+        return Err(AppError::BadRequest("изображение не задано".into()));
+    }
+    if data.len() > GALLERY_MAX_FILE_SIZE {
+        return Err(AppError::BadRequest("Сбой загрузки изображения: слишком большой файл".into()));
+    }
+    let format = image::guess_format(data).map_err(|_| AppError::BadRequest("Сбой загрузки изображения: неизвестный формат".into()))?;
+    if !matches!(format, image::ImageFormat::Png | image::ImageFormat::Jpeg | image::ImageFormat::WebP) {
+        return Err(AppError::BadRequest("Сбой загрузки изображения: неподдерживаемый или потенциально анимированный формат".into()));
+    }
+    let img = image::load_from_memory_with_format(data, format).map_err(|e| AppError::BadRequest(format!("Сбой загрузки изображения: {e}")))?;
+    let (width, height) = img.dimensions();
+    if width < GALLERY_MIN_DIMENSION || height < GALLERY_MIN_DIMENSION {
+        return Err(AppError::BadRequest("Сбой загрузки изображения: изображение слишком маленькое".into()));
+    }
+    if width > GALLERY_MAX_DIMENSION || height > GALLERY_MAX_DIMENSION {
+        return Err(AppError::BadRequest("Сбой загрузки изображения: изображение слишком большое".into()));
+    }
+    Ok(img)
+}
+
+/// Never upscales - `resize` bounds by `max_side` on the longer dimension,
+/// but an image already smaller than that is returned as-is.
+fn resize_capped(img: &image::DynamicImage, max_side: u32) -> image::DynamicImage {
+    let (w, h) = img.dimensions();
+    if w.max(h) <= max_side {
+        img.clone()
+    } else {
+        img.resize(max_side, max_side, image::imageops::FilterType::Lanczos3)
+    }
+}
+
+fn encode_jpeg(img: &image::DynamicImage) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Jpeg)
+        .map_err(|e| AppError::Anyhow(e.into()))?;
+    Ok(buf)
+}
+
+/// ImageService.saveImage: only the single "main" gallery image is
+/// supported (Java also allows several additional images per topic - not
+/// implemented here). Sets `topics.image` only if it isn't already set, so
+/// re-uploading doesn't silently orphan the previous main image's row.
+pub async fn upload_topic_photo(State(state): State<AppState>, CurrentUser(user): CurrentUser, mut multipart: Multipart) -> Result<Redirect> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    let mut msgid: Option<i32> = None;
+    let mut upload: Option<bytes::Bytes> = None;
+    while let Some(field) = multipart.next_field().await.map_err(|e| AppError::BadRequest(format!("ошибка multipart: {e}")))? {
+        match field.name() {
+            Some("msgid") => {
+                let text = field.text().await.map_err(|e| AppError::BadRequest(format!("ошибка чтения msgid: {e}")))?;
+                msgid = text.trim().parse().ok();
+            }
+            Some("file") => {
+                upload = Some(field.bytes().await.map_err(|e| AppError::BadRequest(format!("ошибка чтения файла: {e}")))?);
+            }
+            _ => {}
+        }
+    }
+    let msgid = msgid.ok_or_else(|| AppError::BadRequest("missing msgid".into()))?;
+    let bytes = upload.ok_or_else(|| AppError::BadRequest("изображение не задано".into()))?;
+
+    let (author_id, imagepost, section_prefix, group_urlname) = topic_for_photo_upload(&state, msgid).await?;
+    if !imagepost {
+        return Err(AppError::BadRequest("этот раздел не поддерживает изображения".into()));
+    }
+    if !user.canmod && user.id != author_id {
+        return Err(AppError::Forbidden);
+    }
+
+    let img = validate_gallery_image_bytes(&bytes)?;
+    let (width, height) = img.dimensions();
+
+    let image_id: i32 = sqlx::query_scalar("SELECT nextval('images_id_seq')::int").fetch_one(&state.pool).await?;
+    let dir = format!("{}/gallery/{image_id}", state.config.upload_dir);
+    tokio::fs::create_dir_all(&dir).await.map_err(|e| AppError::Anyhow(e.into()))?;
+    for (name, max_side) in GALLERY_SIZES {
+        let resized = resize_capped(&img, max_side);
+        let jpeg = encode_jpeg(&resized)?;
+        tokio::fs::write(format!("{dir}/{name}.jpg"), &jpeg).await.map_err(|e| AppError::Anyhow(e.into()))?;
+    }
+
+    sqlx::query(
+        "INSERT INTO images(id, userid, topic, original, medium, thumbnail, width, height, primary_image) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true)",
+    )
+    .bind(image_id)
+    .bind(user.id)
+    .bind(msgid)
+    .bind(format!("{image_id}/original.jpg"))
+    .bind(format!("{image_id}/medium.jpg"))
+    .bind(format!("{image_id}/thumbnail.jpg"))
+    .bind(width as i32)
+    .bind(height as i32)
+    .execute(&state.pool)
+    .await?;
+
+    sqlx::query("UPDATE topics SET image=$1, lastmod=now() WHERE id=$2 AND image IS NULL")
+        .bind(image_id)
+        .bind(msgid)
+        .execute(&state.pool)
+        .await?;
+
+    Ok(Redirect::to(&format!("/{section_prefix}/{group_urlname}/{msgid}")))
+}
+
 #[derive(Deserialize)]
 pub struct DeregisterForm {
     pub password: String,
@@ -597,13 +915,14 @@ pub struct DeregisterForm {
     pub acceptOneway: Option<String>,
 }
 
-pub async fn deregister_form(State(state): State<AppState>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+pub async fn deregister_form(State(state): State<AppState>, CurrentUser(user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
     ensure_deregister_allowed(&state, &user).await?;
     Ok(Html(format!(r#"
 <h1>Удаление аккаунта {nick}</h1>
 <p>Операция соответствует исходной логике: аккаунт блокируется, профиль очищается, восстановление через эту форму не предусмотрено.</p>
 <form method="post" action="/deregister.jsp" class="form">
+  <input type="hidden" name="csrf" value="{csrf_token}">
   <label>Пароль <input name="password" type="password" required></label>
   <label><input type="checkbox" name="acceptBlock" value="true" required> Я согласен с блокировкой аккаунта</label>
   <label><input type="checkbox" name="acceptOneway" value="true" required> Я понимаю, что действие необратимо</label>
@@ -621,7 +940,7 @@ pub async fn deregister_post(State(state): State<AppState>, jar: CookieJar, Curr
     if form.accept_oneway.or(form.acceptOneway).is_none() {
         return Err(AppError::BadRequest("Вы не согласились с невозможностью восстановления аккаунта".into()));
     }
-    let ok = crate::auth::verify_login(&state.pool, &user.nick, &form.password).await?.is_some();
+    let ok = matches!(crate::auth::verify_login(&state.pool, &user.nick, &form.password).await?, crate::auth::LoginOutcome::Success(_));
     if !ok {
         return Err(AppError::BadRequest("Неверный пароль".into()));
     }
@@ -695,16 +1014,17 @@ pub async fn forum_page_or_archive(
     Path((group, id_or_year, page_or_month)): Path<(String, String, String)>,
     Query(q): Query<PagerQuery>,
     CurrentUser(current_user): CurrentUser,
-) -> Result<Html<String>> {
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+) -> Result<axum::response::Response> {
     if let Some(page) = page_or_month.strip_prefix("page") {
-        let _page: i64 = page.parse().map_err(|_| AppError::NotFound)?;
+        let page: i64 = page.parse().map_err(|_| AppError::NotFound)?;
         let id: i32 = id_or_year.parse().map_err(|_| AppError::NotFound)?;
-        return crate::routes::topics::render_topic(state, id, current_user).await;
+        return crate::routes::topics::render_topic_page(state, "forum", group, id, page, current_user, csrf_token).await;
     }
 
     let year: i32 = id_or_year.parse().map_err(|_| AppError::NotFound)?;
     let month: i32 = page_or_month.parse().map_err(|_| AppError::NotFound)?;
-    forum_archive_month(State(state), Path((group, year, month)), Query(q), CurrentUser(current_user)).await
+    Ok(forum_archive_month(State(state), Path((group, year, month)), Query(q), CurrentUser(current_user)).await?.into_response())
 }
 
 fn validate_year_month(year: i32, month: i32) -> Result<()> {
@@ -726,23 +1046,50 @@ fn section_from_uri(uri: &Uri) -> Option<&'static str> {
 
 #[derive(Deserialize)]
 pub struct MemoryForm {
-    pub topic: i32,
+    pub msgid: Option<i32>,
     pub watch: Option<bool>,
-    pub notify: Option<bool>,
-    pub action: Option<String>,
+    pub id: Option<i32>,
+    pub add: Option<String>,
+    pub remove: Option<String>,
 }
 
-pub async fn memories(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<MemoryForm>) -> Result<Redirect> {
+/// MemoriesController.add/remove: "favorite" (watch=false) and "watch"
+/// (watch=true) are independent rows per topic - `add` upserts the row for
+/// the requested `watch` value only, `remove` deletes one specific row by
+/// its own id (never the whole userid+topic pair), matching the frontend
+/// contract in `static/js/lor/memories.js` (`{msgid,watch}` to add,
+/// `{id}` to remove, JSON `{id,count}`/bare count responses).
+pub async fn memories(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<MemoryForm>) -> Result<Json<serde_json::Value>> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
-    if form.action.as_deref() == Some("delete") {
-        sqlx::query("DELETE FROM memories WHERE userid=$1 AND topic=$2").bind(user.id).bind(form.topic).execute(&state.pool).await?;
-    } else {
-        sqlx::query(
-            "INSERT INTO memories(userid,topic,watch,notify) VALUES($1,$2,$3,$4) ON CONFLICT(userid,topic) DO UPDATE SET watch=EXCLUDED.watch, notify=EXCLUDED.notify",
-        )
-        .bind(user.id).bind(form.topic).bind(form.watch.unwrap_or(false)).bind(form.notify.unwrap_or(false)).execute(&state.pool).await?;
+
+    if form.remove.is_some() {
+        let Some(id) = form.id else { return Err(AppError::BadRequest("missing id".into())); };
+        let row: Option<(i32, i32, bool)> = sqlx::query_as("SELECT userid, topic, watch FROM memories WHERE id=$1").bind(id).fetch_optional(&state.pool).await?;
+        let Some((owner_id, topic_id, watch)) = row else {
+            return Ok(Json(serde_json::json!(-1)));
+        };
+        if owner_id != user.id {
+            return Err(AppError::Forbidden);
+        }
+        sqlx::query("DELETE FROM memories WHERE id=$1").bind(id).execute(&state.pool).await?;
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM memories WHERE topic=$1 AND watch=$2").bind(topic_id).bind(watch).fetch_one(&state.pool).await?;
+        return Ok(Json(serde_json::json!(count)));
     }
-    Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.topic)))
+
+    let msgid = form.msgid.ok_or_else(|| AppError::BadRequest("missing msgid".into()))?;
+    let watch = form.watch.unwrap_or(false);
+    let deleted: bool = sqlx::query_scalar("SELECT deleted FROM topics WHERE id=$1").bind(msgid).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
+    if deleted {
+        return Err(AppError::BadRequest("Тема удалена".into()));
+    }
+    let id: i32 = sqlx::query_scalar(
+        "INSERT INTO memories(userid,topic,watch) VALUES($1,$2,$3) ON CONFLICT(userid,topic,watch) DO UPDATE SET topic=EXCLUDED.topic RETURNING id",
+    )
+    .bind(user.id).bind(msgid).bind(watch)
+    .fetch_one(&state.pool)
+    .await?;
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM memories WHERE topic=$1 AND watch=$2").bind(msgid).bind(watch).fetch_one(&state.pool).await?;
+    Ok(Json(serde_json::json!({"id": id, "count": count})))
 }
 
 pub async fn user_filter(State(state): State<AppState>, CurrentUser(user): CurrentUser) -> Result<Json<serde_json::Value>> {
@@ -832,9 +1179,10 @@ pub struct IgnoreUserForm {
 
 pub async fn ignore_user(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<IgnoreUserForm>) -> Result<Json<serde_json::Value>> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
-    if user.canmod {
-        return Err(AppError::Forbidden);
-    }
+    // UserFilterController.listAdd/listDel: the personal user-ignore list
+    // has no moderator restriction at all - only ignore-*tags* is
+    // moderator-restricted (moderators must see every tag), see
+    // ignore_tag below.
     let ignored_id: i32 = if let Some(id) = form.id {
         id
     } else {
@@ -870,11 +1218,12 @@ pub struct LegacyMsgIdQuery { pub msgid: i32 }
 #[derive(Deserialize)]
 pub struct ScoreForm { pub msgid: i32, pub score: Option<i32>, pub postscore: Option<i32> }
 
-pub async fn set_post_score_form(Query(q): Query<LegacyMsgIdQuery>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+pub async fn set_post_score_form(Query(q): Query<LegacyMsgIdQuery>, CurrentUser(user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
     Ok(Html(format!(r#"
 <h1>Изменить score темы #{}</h1>
 <form method="post" action="/setpostscore.jsp">
+<input type="hidden" name="csrf" value="{csrf_token}">
 <input type="hidden" name="msgid" value="{}">
 <input name="score" type="number" value="0">
 <button type="submit">Сохранить</button>
@@ -892,11 +1241,11 @@ pub async fn set_post_score(State(state): State<AppState>, CurrentUser(user): Cu
 #[derive(Deserialize)]
 pub struct ImageForm { pub id: i32 }
 
-pub async fn delete_image_form(Query(q): Query<ImageForm>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+pub async fn delete_image_form(Query(q): Query<ImageForm>, CurrentUser(user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     if user.is_none() { return Err(AppError::Forbidden); }
     Ok(Html(format!(r#"
 <h1>Удалить изображение #{}</h1>
-<form method="post" action="/delete_image"><input type="hidden" name="id" value="{}"><button type="submit">Удалить</button></form>
+<form method="post" action="/delete_image"><input type="hidden" name="csrf" value="{csrf_token}"><input type="hidden" name="id" value="{}"><button type="submit">Удалить</button></form>
 "#, q.id, q.id)))
 }
 
@@ -946,27 +1295,15 @@ pub async fn remove_userpic(State(state): State<AppState>, CurrentUser(user): Cu
     Ok(Redirect::to(&format!("/people/{}/profile", urlencoding::encode(&target_nick))))
 }
 
-pub async fn reset_password_form() -> Result<Html<String>> {
-    Ok(Html(r#"
+pub async fn reset_password_form(crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
+    Ok(Html(format!(r#"
 <h1>Сбросить пароль</h1>
 <form method="post" action="/reset-password" class="form">
+<input type="hidden" name="csrf" value="{csrf_token}">
 <label>Ник <input name="nick" required></label>
 <label>Код из письма <input name="code" required></label>
 <button type="submit">Сбросить пароль</button>
 </form>
-"#.to_string()))
+"#)))
 }
 
-#[derive(Deserialize)]
-pub struct ResetPasswordForm { pub nick: String, pub passwd: String }
-
-pub async fn reset_password(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<ResetPasswordForm>) -> Result<Redirect> {
-    let Some(current) = user else { return Err(AppError::Forbidden); };
-    let target: (i32, String) = sqlx::query_as("SELECT id,nick FROM users WHERE lower(nick)=lower($1)")
-        .bind(form.nick.trim()).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
-    if current.id != target.0 && !current.canmod { return Err(AppError::Forbidden); }
-    let hash = crate::security::password::hash(&form.passwd).map_err(|e| AppError::Anyhow(e.into()))?;
-    sqlx::query("UPDATE users SET passwd=$2 WHERE id=$1").bind(target.0).bind(hash).execute(&state.pool).await?;
-    crate::audit::log_user_action(&state.pool, target.0, current.id, "set_password", &[]).await?;
-    Ok(Redirect::to(&format!("/people/{}/profile", urlencoding::encode(&target.1))))
-}

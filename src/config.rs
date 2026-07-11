@@ -12,6 +12,17 @@ pub struct StConfig {
     pub smtp_url: Option<String>,
     pub run_migrations: bool,
     pub page_size: i64,
+    /// SiteConfig.enableHsts - off unless explicitly set, matching Java's
+    /// property-absent-means-false default (HSTS is dangerous to enable
+    /// prematurely: it makes HTTPS mandatory in the browser for the
+    /// configured max-age, so it must be an explicit opt-in).
+    pub enable_hsts: bool,
+    /// Enables the `dev-activate`/`dev-permit` literal bypasses for account
+    /// activation and the registration anti-bot permit token, used by
+    /// local/CI test fixtures that can't run a real mail server or captcha.
+    /// Off unless explicitly set - these bypasses must never be reachable
+    /// in a real deployment.
+    pub enable_dev_bypasses: bool,
 }
 
 pub type Config = StConfig;
@@ -31,6 +42,8 @@ impl StConfig {
             smtp_url: std::env::var("SMTP_URL").ok(),
             run_migrations: std::env::var("RUN_MIGRATIONS").map(|sValue| sValue != "0" && sValue != "false").unwrap_or(true),
             page_size: std::env::var("PAGE_SIZE").ok().and_then(|sValue| sValue.parse().ok()).unwrap_or(30),
+            enable_hsts: std::env::var("ENABLE_HSTS").map(|sValue| sValue == "true" || sValue == "1").unwrap_or(false),
+            enable_dev_bypasses: std::env::var("ENABLE_DEV_BYPASSES").map(|sValue| sValue == "true" || sValue == "1").unwrap_or(false),
         }
     }
 

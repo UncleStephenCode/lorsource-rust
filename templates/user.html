@@ -5,15 +5,15 @@
 <nav class="profile-nav">
   <a href="/people/{{ profile.nick }}/edit" class="btn btn-default">Редактировать профиль</a>
   <a href="/people/{{ profile.nick }}/settings" class="btn btn-default">Настройки</a>
-  <form action="/logout" method="post" class="inline-form"><button type="submit" class="btn btn-danger">Выйти</button></form>
-  <form action="/logout_all_sessions" method="post" class="inline-form"><button type="submit" class="btn btn-danger">Выйти со всех устройств</button></form>
+  <form action="/logout" method="post" class="inline-form"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button type="submit" class="btn btn-danger">Выйти</button></form>
+  <form action="/logout_all_sessions" method="post" class="inline-form"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button type="submit" class="btn btn-danger">Выйти со всех устройств</button></form>
 </nav>
 {% else %}
 <h1>Информация о пользователе {{ profile.nick }}</h1>
 {% endif %}
 
 <div id="whois_userpic" class="userpic-box">
-  {% match profile.photo_url() %}{% when Some with (photo_url) %}<img src="{{ photo_url }}" alt="{{ profile.nick }}" class="userpic">{% when None %}<div class="userpic userpic-placeholder">?</div>{% endmatch %}
+  <img src="{{ userpic_url }}" alt="{{ profile.nick }}" class="userpic">
   {% if is_owner %}<a class="btn btn-small btn-default" href="/addphoto.jsp">Изменить</a>{% endif %}
 </div>
 
@@ -42,14 +42,42 @@
 {% when None %}{% endmatch %}
 {% if can_view_private && (blockable || freezable) %}
 <nav class="profile-nav">
-  {% if blockable %}<a href="/usermod.jsp?id={{ profile.id }}&amp;action=block" class="btn btn-danger">Заблокировать</a>{% endif %}
-  {% if freezable %}<a href="/usermod.jsp?id={{ profile.id }}&amp;action=freeze" class="btn btn-default">Заморозить</a>{% endif %}
+  {% if blockable %}
+  <form method="post" action="/usermod.jsp" class="inline-form">
+    <input type="hidden" name="csrf" value="{{ csrf_token }}">
+    <input type="hidden" name="id" value="{{ profile.id }}">
+    <input type="hidden" name="action" value="block">
+    <input name="reason" placeholder="причина">
+    <button type="submit" class="btn btn-danger">Заблокировать</button>
+  </form>
+  {% endif %}
+  {% if freezable %}
+  <form method="post" action="/usermod.jsp" class="inline-form">
+    <input type="hidden" name="csrf" value="{{ csrf_token }}">
+    <input type="hidden" name="id" value="{{ profile.id }}">
+    <input type="hidden" name="action" value="freeze">
+    <input name="reason" placeholder="причина">
+    <select name="shift">
+      <option>30 минут</option><option>час</option><option>2 часа</option><option>3 часа</option>
+      <option>6 часов</option><option>9 часов</option><option>12 часов</option><option>сутки</option>
+      <option>двое суток</option><option>3 дня</option><option>5 дней</option><option>неделя</option>
+      <option>две недели</option><option>месяц</option><option>2 месяца</option><option>3 месяца</option>
+      {% if is_frozen %}<option selected>Разморозить</option>{% endif %}
+    </select>
+    <button type="submit" class="btn btn-default">Заморозить</button>
+  </form>
+  {% endif %}
 </nav>
 {% endif %}
 {% if other_accounts.len() > 0 %}
 <p><b>Другие аккаунты с тем же email:</b>
 {% for nick in other_accounts %}<a href="/people/{{ nick }}/profile">{{ nick }}</a>{% if loop.last %}{% else %}, {% endif %}{% endfor %}</p>
 {% endif %}
+{% endif %}
+
+{% if invited_users.len() > 0 %}
+<p><b>Приглашённые пользователи:</b>
+{% for nick in invited_users %}<a href="/people/{{ nick }}/profile">{{ nick }}</a>{% if loop.last %}{% else %}, {% endif %}{% endfor %}</p>
 {% endif %}
 
 {% if favorite_tags.len() > 0 %}

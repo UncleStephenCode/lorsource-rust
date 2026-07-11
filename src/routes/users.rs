@@ -43,13 +43,6 @@ impl UserProfileData {
         else { "новый пользователь" }
     }
 
-    fn photo_url(&self) -> Option<String> {
-        self.photo.as_ref().map(|p| if p.starts_with('/') || p.starts_with("http://") || p.starts_with("https://") {
-            p.clone()
-        } else {
-            format!("/photos/{p}")
-        })
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -98,6 +91,13 @@ struct UserTemplate {
     freezable: bool,
     other_accounts: Vec<String>,
     user_log: Vec<UserLogEntry>,
+    invited_users: Vec<String>,
+    /// `UserService.getUserpic(user, viewer.avatarMode, misteryMan=true)` -
+    /// always renders as an `<img>`, falling back to a 1x1 transparent gif
+    /// (`DisabledUserpic`) rather than a "no photo" box when the viewer has
+    /// avatars disabled or the target has neither a local photo nor email.
+    userpic_url: String,
+    csrf_token: String,
 }
 
 #[derive(Template)]
@@ -111,6 +111,7 @@ struct SettingsTemplate {
     format_modes: Vec<ChoiceOption>,
     topic_values: Vec<NumberOption>,
     message_values: Vec<NumberOption>,
+    csrf_token: String,
 }
 
 #[derive(Template)]
@@ -118,6 +119,7 @@ struct SettingsTemplate {
 struct EditProfileTemplate {
     user: UserSummary,
     profile: UserProfileData,
+    csrf_token: String,
 }
 
 #[derive(Deserialize)]
@@ -167,11 +169,11 @@ pub async fn topic_feed(State(state): State<AppState>, Path(nick): Path<String>,
     Ok(Html(simple_topic_list(&format!("Сообщения {}", user.nick), &topics)))
 }
 
-pub async fn profile_full(State(state): State<AppState>, Path(nick): Path<String>, Query(q): Query<PagerQuery>, current: CurrentUser) -> Result<Html<String>> {
-    render_profile(state, nick, q, current).await
+pub async fn profile_full(State(state): State<AppState>, Path(nick): Path<String>, Query(q): Query<PagerQuery>, current: CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
+    render_profile(state, nick, q, current, csrf_token).await
 }
 
-async fn render_profile(state: AppState, nick: String, q: PagerQuery, current: CurrentUser) -> Result<Html<String>> {
+async fn render_profile(state: AppState, nick: String, q: PagerQuery, current: CurrentUser, csrf_token: String) -> Result<Html<String>> {
     let profile = get_user_profile(&state, &nick).await?;
     if profile.blocked && current.0.is_none() {
         return Err(AppError::Forbidden);
@@ -218,8 +220,11 @@ async fn render_profile(state: AppState, nick: String, q: PagerQuery, current: C
     let is_frozen = frozen_until.map(|u| u > chrono::Utc::now()).unwrap_or(false);
     let frozen_until_text = is_frozen.then(|| frozen_until.unwrap().to_string());
 
-    let blockable = current.0.as_ref().map(|u| u.canmod && !profile.canmod).unwrap_or(false);
-    let freezable = blockable;
+    // UserService.isBlockable/isFreezable: reuse the exact same rules
+    // enforced server-side in usermod.jsp so the profile page never shows
+    // a button that would then 403.
+    let blockable = current.0.as_ref().map(|u| crate::routes::admin::is_blockable(profile.id, profile.canmod, u)).unwrap_or(false);
+    let freezable = current.0.as_ref().map(|u| u.canmod && !profile.canmod).unwrap_or(false);
 
     let other_accounts = if is_moderator {
         match profile.email.as_deref().filter(|e| !e.is_empty()) {
@@ -248,9 +253,38 @@ async fn render_profile(state: AppState, nick: String, q: PagerQuery, current: C
         vec![]
     };
 
+    // UserService.getUserpic: avatar fallback style is the *viewer's*
+    // profile setting, not the target's.
+    let viewer_avatar_mode = match &current.0 {
+        Some(viewer) => {
+            let settings_text: Option<String> = sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
+                .bind(viewer.id).fetch_optional(&state.pool).await?;
+            crate::profile::ProfileSettings::from_hstore_text(settings_text).avatar
+        }
+        None => crate::profile::DEFAULT_AVATAR.to_string(),
+    };
+    let userpic_url = crate::profile::userpic_url(
+        &viewer_avatar_mode,
+        true,
+        profile.id == crate::routes::comments::ANONYMOUS_USER_ID,
+        profile.photo.as_deref(),
+        profile.email.as_deref(),
+    ).unwrap_or_else(|| crate::profile::DISABLED_USERPIC.to_string());
+
+    // UserService.getAllInvitedUsers / WhoisController "invitedUsers":
+    // shown to everyone, not gated to owner/moderator, matching the original.
+    let invited_users: Vec<String> = sqlx::query_scalar(
+        r#"SELECT u.nick FROM user_invites i JOIN users u ON u.id=i.invited_user
+           WHERE i.owner=$1 AND i.invited_user IS NOT NULL ORDER BY i.issue_date"#,
+    )
+    .bind(profile.id)
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+
     Ok(Html(UserTemplate {
         profile, stats, topics, favorite_tags, ignore_tags, drafts_count, is_owner, can_view_private, userinfo_html,
-        ban_info, frozen_until_text, is_frozen, blockable, freezable, other_accounts, user_log,
+        ban_info, frozen_until_text, is_frozen, blockable, freezable, other_accounts, user_log, invited_users, userpic_url, csrf_token,
     }.render()?))
 }
 
@@ -261,21 +295,198 @@ pub async fn legacy_whois(Query(q): Query<WhoisQuery>) -> Redirect {
     Redirect::to(&format!("/people/{}/profile", urlencoding::encode(&q.nick)))
 }
 
-pub async fn reactions(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser) -> Result<Html<String>> {
-    let user = get_user(&state, &nick).await?;
-    ensure_self_or_moderator(&current.0, &user)?;
-    let rows = sqlx::query_as::<_, (i32, Option<i32>, chrono::DateTime<chrono::Utc>, String)>(
-        "SELECT topic_id, comment_id, set_date, reaction FROM reactions_log WHERE origin_user=$1 ORDER BY set_date DESC LIMIT 100",
-    )
-    .bind(user.id)
-    .fetch_all(&state.pool)
-    .await?;
-    let mut html = format!("<h1>Реакции {}</h1><ul>", html_escape::encode_text(&user.nick));
-    for (topic, comment, date, reaction) in rows {
-        let target = comment.map(|id| format!("#comment-{id}")).unwrap_or_default();
-        html.push_str(&format!(r#"<li>{date}: <a href="/jump-message.jsp?msgid={topic}{target}">{}</a></li>"#, html_escape::encode_text(&reaction)));
+const REACTIONS_ITEMS_PER_PAGE: i64 = 50;
+const REACTIONS_MAX_OFFSET: i64 = 10000;
+
+const SECTION_PREFIX_CASE: &str = "CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END";
+
+#[derive(Debug, sqlx::FromRow)]
+struct ReactionViewRow {
+    topic_id: i32,
+    comment_id: Option<i32>,
+    set_date: chrono::DateTime<chrono::Utc>,
+    reaction: String,
+    title: String,
+    target_user: i32,
+    section_prefix: String,
+    group_urlname: String,
+}
+
+impl ReactionViewRow {
+    fn link(&self) -> String {
+        let anchor = self.comment_id.map(|id| format!("?cid={id}")).unwrap_or_default();
+        format!("/{}/{}/{}{anchor}", self.section_prefix, self.group_urlname, self.topic_id)
     }
-    html.push_str("</ul>");
+}
+
+#[derive(Deserialize)]
+pub struct ReactionsQuery {
+    pub offset: Option<i64>,
+}
+
+/// UserReactionsController.reactions ("мои реакции" mode, mode == null).
+pub async fn reactions(State(state): State<AppState>, Path(nick): Path<String>, Query(q): Query<ReactionsQuery>, current: CurrentUser) -> Result<Html<String>> {
+    reactions_view(&state, nick, None, q, current).await
+}
+
+/// UserReactionsController.reactions with `{mode}` path segment - only "to"
+/// ("реакции на меня") is recognised, matching the Java `BadParameterException`
+/// for anything else.
+pub async fn reactions_mode(State(state): State<AppState>, Path((nick, mode)): Path<(String, String)>, Query(q): Query<ReactionsQuery>, current: CurrentUser) -> Result<Html<String>> {
+    reactions_view(&state, nick, Some(mode), q, current).await
+}
+
+async fn reactions_view(state: &AppState, nick: String, mode: Option<String>, q: ReactionsQuery, current: CurrentUser) -> Result<Html<String>> {
+    let user = get_user(state, &nick).await?;
+    ensure_self_or_moderator(&current.0, &user)?;
+    let current_user = current.0.expect("checked by ensure_self_or_moderator");
+
+    let offset = q.offset.unwrap_or(0);
+    if offset > REACTIONS_MAX_OFFSET {
+        return Err(AppError::BadRequest("offset too big".into()));
+    }
+
+    let mode_to = match mode.as_deref() {
+        None => false,
+        Some(m) if m.eq_ignore_ascii_case("to") => true,
+        Some(_) => return Err(AppError::BadRequest("incorrect mode".into())),
+    };
+
+    // Java's ReactionDao.getReactionsView `includeDeleted` flag - only
+    // moderators see reactions on deleted topics/comments.
+    let show_deleted = current_user.canmod;
+    let limit = REACTIONS_ITEMS_PER_PAGE + 1;
+
+    let items: Vec<ReactionViewRow> = if mode_to {
+        let not_deleted_topic = if show_deleted { "" } else { "AND NOT t.deleted" };
+        let not_deleted_comment = if show_deleted { "" } else { "AND NOT c.deleted" };
+        let sql = format!(
+            r#"SELECT r.topic_id, r.comment_id, r.set_date, r.reaction, t.title,
+                      r.origin_user AS target_user,
+                      {SECTION_PREFIX_CASE} AS section_prefix,
+                      g.urlname AS group_urlname
+               FROM reactions_log r
+               JOIN topics t ON r.topic_id = t.id {not_deleted_topic}
+               JOIN groups g ON t.groupid = g.id
+               JOIN sections s ON s.id = g.section
+               WHERE r.comment_id IS NULL AND t.userid = $1
+               UNION ALL
+               SELECT r.topic_id, r.comment_id, r.set_date, r.reaction, t.title,
+                      r.origin_user AS target_user,
+                      {SECTION_PREFIX_CASE} AS section_prefix,
+                      g.urlname AS group_urlname
+               FROM reactions_log r
+               JOIN topics t ON r.topic_id = t.id {not_deleted_topic}
+               JOIN comments c ON c.id = r.comment_id
+               JOIN groups g ON t.groupid = g.id
+               JOIN sections s ON s.id = g.section
+               WHERE c.userid = $1 {not_deleted_comment}
+               ORDER BY set_date DESC OFFSET $2 LIMIT $3"#
+        );
+        sqlx::query_as(&sql).bind(user.id).bind(offset).bind(limit).fetch_all(&state.pool).await?
+    } else {
+        let not_deleted = if show_deleted { "" } else { "AND NOT t.deleted AND c.deleted IS NOT TRUE" };
+        let sql = format!(
+            r#"SELECT r.topic_id, r.comment_id, r.set_date, r.reaction, t.title,
+                      COALESCE(c.userid, t.userid) AS target_user,
+                      {SECTION_PREFIX_CASE} AS section_prefix,
+                      g.urlname AS group_urlname
+               FROM reactions_log r
+               JOIN topics t ON r.topic_id = t.id
+               JOIN groups g ON t.groupid = g.id
+               JOIN sections s ON s.id = g.section
+               LEFT JOIN comments c ON r.comment_id = c.id
+               WHERE r.origin_user = $1 {not_deleted}
+               ORDER BY r.set_date DESC OFFSET $2 LIMIT $3"#
+        );
+        sqlx::query_as(&sql).bind(user.id).bind(offset).bind(limit).fetch_all(&state.pool).await?
+    };
+
+    let has_more = items.len() as i64 > REACTIONS_ITEMS_PER_PAGE;
+    let items: Vec<ReactionViewRow> = items.into_iter().take(REACTIONS_ITEMS_PER_PAGE as usize).collect();
+
+    let target_ids: Vec<i32> = items.iter().map(|r| r.target_user).collect();
+    let target_nicks: HashMap<i32, String> = if target_ids.is_empty() {
+        HashMap::new()
+    } else {
+        sqlx::query_as::<_, (i32, String)>("SELECT id, nick FROM users WHERE id = ANY($1)")
+            .bind(&target_ids)
+            .fetch_all(&state.pool)
+            .await?
+            .into_iter()
+            .collect()
+    };
+
+    let message_ids: Vec<i64> = items.iter().map(|r| (r.comment_id.unwrap_or(r.topic_id)) as i64).collect();
+    let previews: HashMap<i32, String> = if message_ids.is_empty() {
+        HashMap::new()
+    } else {
+        sqlx::query_as::<_, (i64, String)>("SELECT id, message FROM msgbase WHERE id = ANY($1)")
+            .bind(&message_ids)
+            .fetch_all(&state.pool)
+            .await?
+            .into_iter()
+            .map(|(id, message)| {
+                let id = id as i32;
+                let plain = markup::plain_text_for_index(&message);
+                let trimmed = if plain.chars().count() > 250 {
+                    format!("{}...", plain.chars().take(250).collect::<String>().trim())
+                } else {
+                    plain
+                };
+                (id, trimmed)
+            })
+            .collect()
+    };
+
+    let base_url = format!("/people/{}/reactions", user.nick);
+    let to_url = format!("{base_url}/to");
+    let url = if mode_to { to_url.clone() } else { base_url.clone() };
+    let me_title = if user.id == current_user.id { "мои реакции".to_string() } else { format!("реакции {}", user.nick) };
+    let reactions_title = if user.id == current_user.id { "на мои сообщения".to_string() } else { format!("реакции на {}", user.nick) };
+
+    let mut html = String::from("<h1>Реакции</h1><div class=\"reactions-view\"><p>");
+    if mode_to {
+        html.push_str(&format!("<a class=\"btn btn-default\" href=\"{}\">{}</a> ", html_escape::encode_text(&base_url), html_escape::encode_text(&me_title)));
+        html.push_str(&format!("<a class=\"btn btn-selected\" href=\"{}\">{}</a>", html_escape::encode_text(&to_url), html_escape::encode_text(&reactions_title)));
+    } else {
+        html.push_str(&format!("<a class=\"btn btn-selected\" href=\"{}\">{}</a> ", html_escape::encode_text(&base_url), html_escape::encode_text(&me_title)));
+        html.push_str(&format!("<a class=\"btn btn-default\" href=\"{}\">{}</a>", html_escape::encode_text(&to_url), html_escape::encode_text(&reactions_title)));
+    }
+    html.push_str("</p>");
+
+    for item in &items {
+        let target_nick = target_nicks.get(&item.target_user).map(|s| s.as_str()).unwrap_or("");
+        let preview = previews.get(&item.comment_id.unwrap_or(item.topic_id)).map(|s| s.as_str()).unwrap_or("");
+        html.push_str(&format!(
+            r#"<a class="reactions-view-item" href="{}">
+                 <div class="reactions-view-reaction"><p>{}</p></div>
+                 <div class="reactions-view-title"><p>{}{}</p></div>
+                 <div class="reactions-view-date"><p>{}</p></div>
+                 <div class="reactions-view-preview"><div class="text-preview-box"><div class="text-preview">{}: {}</div></div></div>
+               </a>"#,
+            html_escape::encode_text(&item.link()),
+            html_escape::encode_text(&item.reaction),
+            if item.comment_id.is_some() { "<i class=\"icon-comment\"></i> " } else { "" },
+            html_escape::encode_text(&item.title),
+            item.set_date.format("%d.%m.%Y %H:%M"),
+            html_escape::encode_text(target_nick),
+            html_escape::encode_text(preview),
+        ));
+    }
+    html.push_str("</div>");
+
+    html.push_str("<table class=\"nav\"><tr>");
+    if offset >= REACTIONS_ITEMS_PER_PAGE {
+        let prev_offset = offset - REACTIONS_ITEMS_PER_PAGE;
+        let prev_url = if prev_offset == 0 { url.clone() } else { format!("{url}?offset={prev_offset}") };
+        html.push_str(&format!(r#"<td width="35%" align="left"><a href="{}">← предыдущие</a></td>"#, html_escape::encode_text(&prev_url)));
+    }
+    if has_more && offset + REACTIONS_ITEMS_PER_PAGE < REACTIONS_MAX_OFFSET {
+        html.push_str(&format!(r#"<td align="right" width="35%"><a href="{url}?offset={}">следующие →</a></td>"#, offset + REACTIONS_ITEMS_PER_PAGE, url = html_escape::encode_text(&url)));
+    }
+    html.push_str("</tr></table>");
+
     Ok(Html(html))
 }
 
@@ -304,7 +515,7 @@ pub async fn remarks(State(state): State<AppState>, Path(nick): Path<String>, cu
 
 pub async fn get_user(state: &AppState, nick: &str) -> Result<UserSummary> {
     sqlx::query_as::<_, UserSummary>(
-        "SELECT id,nick,name,score,max_score,photo,town,regdate,canmod,blocked,userinfo FROM users WHERE lower(nick)=lower($1)",
+        "SELECT id,nick,name,score,max_score,photo,town,regdate,canmod,COALESCE(candel,false) AS candel,COALESCE(corrector,false) AS corrector,blocked,userinfo FROM users WHERE lower(nick)=lower($1)",
     )
     .bind(nick)
     .fetch_optional(&state.pool)
@@ -417,7 +628,7 @@ pub async fn favs(State(state): State<AppState>, Path(nick): Path<String>, Query
            JOIN sections s ON s.id=g.section
            LEFT JOIN tags tg ON tg.msgid=t.id
            LEFT JOIN tags_values tv ON tv.id=tg.tagid
-           WHERE mem.userid=$1 AND NOT t.deleted
+           WHERE mem.userid=$1 AND NOT mem.watch AND NOT t.deleted
            GROUP BY t.id,au.id,g.id,s.id,mem.add_date
            ORDER BY mem.add_date DESC OFFSET $2 LIMIT $3"#,
     )
@@ -506,11 +717,11 @@ pub struct ProfileForm {
     pub oldpass: Option<String>,
 }
 
-pub async fn edit_profile_form(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser) -> Result<Html<String>> {
+pub async fn edit_profile_form(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     let user = get_user(&state, &nick).await?;
     let profile = get_user_profile(&state, &nick).await?;
     ensure_self(&current.0, &user)?;
-    Ok(Html(EditProfileTemplate { user, profile }.render()?))
+    Ok(Html(EditProfileTemplate { user, profile, csrf_token }.render()?))
 }
 
 pub async fn edit_profile(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser, Form(form): axum::Form<ProfileForm>) -> Result<impl axum::response::IntoResponse> {
@@ -586,7 +797,7 @@ pub async fn edit_profile(State(state): State<AppState>, Path(nick): Path<String
     }
 }
 
-pub async fn settings(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser) -> Result<Html<String>> {
+pub async fn settings(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     let user = get_user(&state, &nick).await?;
     // Java's EditSettingsController is strictly self-service, no moderator override.
     ensure_self(&current.0, &user)?;
@@ -599,18 +810,24 @@ pub async fn settings(State(state): State<AppState>, Path(nick): Path<String>, c
         themes: settings.theme_options(user.score.unwrap_or(0)),
         avatars: settings.avatar_options(),
         tracker_modes: settings.tracker_options(),
-        format_modes: settings.format_options(),
+        format_modes: settings.format_options(user.score.unwrap_or(0)),
         topic_values: settings.topic_options(),
         message_values: settings.message_options(),
         user,
         settings,
+        csrf_token,
     }.render()?))
 }
 
 pub async fn save_settings(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser, Form(form): axum::Form<HashMap<String, String>>) -> Result<Redirect> {
     let user = get_user(&state, &nick).await?;
     ensure_self(&current.0, &user)?;
-    let settings = ProfileSettings::from_form(&form);
+    let settings_text: Option<String> = sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
+        .bind(user.id)
+        .fetch_optional(&state.pool)
+        .await?;
+    let current_settings = ProfileSettings::from_hstore_text(settings_text);
+    let settings = current_settings.apply_form(&form).map_err(AppError::BadRequest)?;
     let (keys, values) = settings.to_hstore_arrays();
     sqlx::query(
         "INSERT INTO user_settings(id,settings) VALUES($1,hstore($2::text[],$3::text[])) ON CONFLICT(id) DO UPDATE SET settings=EXCLUDED.settings",
@@ -626,7 +843,7 @@ pub async fn save_settings(State(state): State<AppState>, Path(nick): Path<Strin
 #[derive(Deserialize)]
 pub struct RemarkForm { pub remark: String }
 
-pub async fn remark_form(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser) -> Result<Html<String>> {
+pub async fn remark_form(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     let target = get_user(&state, &nick).await?;
     let Some(me) = current.0 else { return Err(AppError::Forbidden); };
     if me.id == target.id {
@@ -637,6 +854,7 @@ pub async fn remark_form(State(state): State<AppState>, Path(nick): Path<String>
     Ok(Html(format!(r#"
 <h1>Заметка о {}</h1>
 <form method="post" action="/people/{}/remark">
+<input type="hidden" name="csrf" value="{csrf_token}">
 <textarea name="remark" rows="8">{}</textarea>
 <button type="submit">Сохранить</button>
 </form>
@@ -669,10 +887,10 @@ pub async fn save_remark(State(state): State<AppState>, Path(nick): Path<String>
 /// collapsed both into one plain GET that any logged-in user (self included)
 /// could trigger with no confirmation step - fixed to match: moderator-only,
 /// no side effects, renders a form that posts to the real action endpoint.
-pub async fn profile_wipe(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser) -> Result<Html<String>> {
+pub async fn profile_wipe(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     let moderator = current.0.as_ref().filter(|u| u.canmod).ok_or(AppError::Forbidden)?;
     let user = get_user(&state, &nick).await?;
-    if !is_blockable(&user, moderator) {
+    if !crate::routes::admin::is_blockable(user.id, user.canmod, moderator) {
         return Err(AppError::Forbidden);
     }
     if user.blocked.unwrap_or(false) {
@@ -686,20 +904,13 @@ pub async fn profile_wipe(State(state): State<AppState>, Path(nick): Path<String
 <h1>Заблокировать и удалить сообщения {nick}</h1>
 <p>Комментариев будет удалено: {comment_count}</p>
 <form method="post" action="/usermod.jsp">
+  <input type="hidden" name="csrf" value="{csrf_token}">
   <input type="hidden" name="action" value="block-n-delete-comments">
   <input type="hidden" name="id" value="{id}">
   <label>Причина <input name="reason"></label>
   <button type="submit">Заблокировать и удалить</button>
 </form>
 "#, nick = html_escape::encode_text(&user.nick), id = user.id)))
-}
-
-fn is_blockable(target: &UserSummary, moderator: &UserSummary) -> bool {
-    // Approximates Java's UserService.isBlockable (!user.anonymous && by.isModerator
-    // && (!user.isModerator || by.isAdministrator)). Rust's role model has no separate
-    // administrator tier, so moderator-on-moderator wipe is disallowed outright rather
-    // than risking a moderator wiping another moderator.
-    !target.canmod
 }
 
 fn ensure_self_or_moderator(current: &Option<UserSummary>, target: &UserSummary) -> Result<()> {

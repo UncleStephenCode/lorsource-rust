@@ -4,10 +4,10 @@
 <h1>{{ title }} <small class="muted">({{ counter }})</small></h1>
 
 <nav class="tag-actions">
-  {% if show_favorite_button %}<form method="post" action="/user-filter/favorite-tag" class="inline-form"><input type="hidden" name="tagName" value="{{ tag }}"><input type="hidden" name="add" value="1"><button type="submit" class="btn btn-default">В избранное</button></form>{% endif %}
-  {% if show_unfavorite_button %}<form method="post" action="/user-filter/favorite-tag" class="inline-form"><input type="hidden" name="tagName" value="{{ tag }}"><input type="hidden" name="del" value="1"><button type="submit" class="btn btn-default">Убрать из избранного</button></form>{% endif %}
-  {% if show_ignore_button %}<form method="post" action="/user-filter/ignore-tag" class="inline-form"><input type="hidden" name="tagName" value="{{ tag }}"><input type="hidden" name="add" value="1"><button type="submit" class="btn btn-default">Игнорировать</button></form>{% endif %}
-  {% if show_unignore_button %}<form method="post" action="/user-filter/ignore-tag" class="inline-form"><input type="hidden" name="tagName" value="{{ tag }}"><input type="hidden" name="del" value="1"><button type="submit" class="btn btn-default">Не игнорировать</button></form>{% endif %}
+  {% if show_favorite_button %}<form method="post" action="/user-filter/favorite-tag" class="inline-form"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="tagName" value="{{ tag }}"><input type="hidden" name="add" value="1"><button type="submit" class="btn btn-default">В избранное</button></form>{% endif %}
+  {% if show_unfavorite_button %}<form method="post" action="/user-filter/favorite-tag" class="inline-form"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="tagName" value="{{ tag }}"><input type="hidden" name="del" value="1"><button type="submit" class="btn btn-default">Убрать из избранного</button></form>{% endif %}
+  {% if show_ignore_button %}<form method="post" action="/user-filter/ignore-tag" class="inline-form"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="tagName" value="{{ tag }}"><input type="hidden" name="add" value="1"><button type="submit" class="btn btn-default">Игнорировать</button></form>{% endif %}
+  {% if show_unignore_button %}<form method="post" action="/user-filter/ignore-tag" class="inline-form"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="tagName" value="{{ tag }}"><input type="hidden" name="del" value="1"><button type="submit" class="btn btn-default">Не игнорировать</button></form>{% endif %}
   {% if show_delete %}
     <a href="/tags/change?tagName={{ tag }}" class="btn btn-default">Переименовать</a>
     <a href="/tags/delete?tagName={{ tag }}" class="btn btn-danger">Удалить</a>

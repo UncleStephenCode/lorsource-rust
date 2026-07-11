@@ -4,29 +4,100 @@
 <article class="topic-full">
   <h1>{{ topic.title }}</h1>
   <div class="meta">
-    <a href="/{{ topic.section_prefix }}/">{{ topic.section_name }}</a> / 
+    <a href="/{{ topic.section_prefix }}/">{{ topic.section_name }}</a> /
     <a href="/{{ topic.section_prefix }}/{{ topic.group_urlname }}">{{ topic.group_title }}</a> ·
     <a href="/people/{{ topic.author }}">{{ topic.author }}</a> · {{ topic.postdate }}
   </div>
   {% match topic.url %}{% when Some with (url) %}<p class="source"><a rel="nofollow" href="{{ url }}">{% match topic.linktext %}{% when Some with (lt) %}{{ lt }}{% when None %}{{ url }}{% endmatch %}</a></p>{% when None %}{% endmatch %}
-  <div class="message">{{ topic_html|safe }}</div>
+  {% match image %}
+  {% when Some with (img) %}
+  <p class="topic-image"><a href="{{ img.original_url }}"><img src="{{ img.medium_url }}" width="{{ img.width }}" height="{{ img.height }}" alt=""></a></p>
+  {% when None %}
+  {% endmatch %}
+  {% if show_add_image_link %}
+  <p><a href="/addphoto-topic.jsp?msgid={{ topic.id }}">Добавить изображение</a></p>
+  {% endif %}
+  <div class="msg_body">
+    <div class="message">{{ topic_html|safe }}</div>
+    {{ topic_reactions_html|safe }}
+  </div>
   {% if topic.tags_vec().len() > 0 %}
   <div class="tags">{% for tag in topic.tags_vec() %}<a href="/tag/{{ tag }}">#{{ tag }}</a>{% endfor %}</div>
   {% endif %}
 </article>
 
+{% match poll %}
+{% when Some with (p) %}
+<div class="poll">
+  {% if p.can_vote %}
+  <form action="/vote.jsp" method="post" class="inline-form">
+    <input type="hidden" name="csrf" value="{{ csrf_token }}">
+    <input type="hidden" name="voteid" value="{{ p.voteid }}">
+    {% for v in p.variants %}
+    <label class="poll-variant"><input type="{% if p.multiselect %}checkbox{% else %}radio{% endif %}" name="vote" value="{{ v.id }}"> {{ v.label }}</label><br>
+    {% endfor %}
+    <button type="submit">Голосовать</button>
+  </form>
+  {% else %}
+  {% for v in p.variants %}
+  <div class="poll-variant-result">{{ v.label }} - {{ v.votes }} ({{ v.pct }}%)</div>
+  {% endfor %}
+  <p class="muted">Всего голосов: {{ p.total_votes }}</p>
+  {% endif %}
+</div>
+{% when None %}
+{% endmatch %}
+
+{% match thread_root %}
+{% when Some with (root) %}
+<p class="meta"><a href="{{ topic.topic_url() }}">← вернуться ко всем комментариям</a> (режим ветки, корень #{{ root }})</p>
+{% when None %}{% endmatch %}
+{% if show_deleted %}
+<p class="meta">Просмотр удалённых комментариев. <a href="{{ topic.topic_url() }}">Скрыть удалённые</a></p>
+{% endif %}
+
 <section class="comments">
-  <h2>Комментарии: {{ comments.len() }}</h2>
+  <h2>Комментарии: {{ filtered_count }}</h2>
+  {% if unfiltered_count > filtered_count %}
+  <p class="muted">Скрыто {{ unfiltered_count - filtered_count }} (игнорируемые пользователи). <a href="?filter=show">Показать все</a></p>
+  {% endif %}
   {% for c in comments %}
   <article id="comment-{{ c.item.id }}" class="comment{% if c.item.deleted %} deleted{% endif %}">
-    <header><a href="/people/{{ c.item.author }}">{{ c.item.author }}</a> · {{ c.item.postdate }} · <a href="#comment-{{ c.item.id }}">#{{ c.item.id }}</a></header>
-    <div class="message">{{ c.html|safe }}</div>
+    <header>
+      <a href="/people/{{ c.item.author }}">{{ c.item.author }}</a> · {{ c.item.postdate }} ·
+      <a href="#comment-{{ c.item.id }}">#{{ c.item.id }}</a>
+      {% if !thread_mode %} · <a href="/{{ topic.section_prefix }}/{{ topic.group_urlname }}/{{ topic.id }}/thread/{{ c.item.id }}">ветка</a>{% endif %}
+    </header>
+    {% if c.item.deleted %}
+    <div class="message muted">[комментарий удалён]</div>
+    {% else %}
+    <div class="msg_body">
+      <div class="message">{{ c.html|safe }}</div>
+      {{ c.reactions_html|safe }}
+    </div>
+    {% endif %}
   </article>
   {% endfor %}
+  {% if comments.len() == 0 %}
+  <p class="muted">Комментариев нет.</p>
+  {% endif %}
 </section>
+
+{% if pages.len() > 1 %}
+<nav class="pager comment-pages">
+  {% for p in pages %}
+    {% if p.current %}<b>{{ p.page + 1 }}</b>{% else %}<a href="{% if p.page == 0 %}{{ topic.topic_url() }}{% else %}{{ topic.topic_url() }}/page{{ p.page }}{% endif %}">{{ p.page + 1 }}</a>{% endif %}
+  {% endfor %}
+</nav>
+{% endif %}
+
+{% if show_deleted_button %}
+<p><a href="?deleted=true">Показать удалённые комментарии</a></p>
+{% endif %}
 
 <form class="comment-form" method="post" action="/add_comment.jsp">
   <h3>Добавить комментарий</h3>
+  <input type="hidden" name="csrf" value="{{ csrf_token }}">
   <input type="hidden" name="topic" value="{{ topic.id }}">
   <input type="text" name="title" value="Комментарий">
   <textarea name="msg" rows="8" required></textarea>
