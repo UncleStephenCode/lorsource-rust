@@ -12,12 +12,26 @@ struct TagsTemplate {
     tags: Vec<TagItem>,
 }
 
-#[derive(Template)]
-#[template(path = "index.html")]
-struct TagTopicsTemplate {
-    title: String,
+#[derive(Debug, Clone)]
+struct TagSectionGroup {
+    section_prefix: String,
+    section_name: String,
     topics: Vec<TopicSummary>,
-    pager: Pager,
+}
+
+#[derive(Template)]
+#[template(path = "tag_page.html")]
+struct TagPageTemplate {
+    tag: String,
+    title: String,
+    counter: i64,
+    sections: Vec<TagSectionGroup>,
+    synonyms: Vec<String>,
+    show_favorite_button: bool,
+    show_unfavorite_button: bool,
+    show_ignore_button: bool,
+    show_unignore_button: bool,
+    show_delete: bool,
     current_user: Option<crate::models::UserSummary>,
 }
 
@@ -34,29 +48,132 @@ pub async fn tags_by_letter(State(state): State<AppState>, Path(first_letter): P
     Ok(Html(TagsTemplate { title: format!("Метки: {first_letter}"), tags }.render()?))
 }
 
-pub async fn tag_page(State(state): State<AppState>, Path(tag): Path<String>, Query(q): Query<PagerQuery>, current_user: crate::auth::CurrentUser) -> Result<Html<String>> {
-    let pager = Pager::new(q.offset.unwrap_or(0), state.config.page_size);
-    let topics = sqlx::query_as::<_, TopicSummary>(
-        r#"SELECT t.id, t.title, t.url, t.postdate, t.lastmod, u.id AS author_id, u.nick AS author,
-                  g.id AS group_id, g.title AS group_title, g.urlname AS group_urlname,
-                  s.id AS section_id, s.name AS section_name,
-                  CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END AS section_prefix,
-                  t.stat1 AS comments, t.stat2 AS views, t.deleted, t.sticky, t.resolved,
-                  string_agg(tv2.value, ',' ORDER BY tv2.value) AS tags
-           FROM topics t
-           JOIN users u ON u.id=t.userid
-           JOIN groups g ON g.id=t.groupid
-           JOIN sections s ON s.id=g.section
-           JOIN tags tg ON tg.msgid=t.id
-           JOIN tags_values tv ON tv.id=tg.tagid
-           LEFT JOIN tags tg2 ON tg2.msgid=t.id
-           LEFT JOIN tags_values tv2 ON tv2.id=tg2.tagid
-           WHERE lower(tv.value)=lower($1) AND NOT t.deleted
-           GROUP BY t.id,u.id,g.id,s.id
-           ORDER BY t.postdate DESC OFFSET $2 LIMIT $3"#,
+/// Per-section topic caps, matching TagPageController's TotalNewsCount(21)/
+/// ForumTopicCount(20)/GalleryCount(6) (polls/articles use the forum count
+/// in the original too - no dedicated constant).
+fn section_topic_limit(section_prefix: &str) -> i64 {
+    match section_prefix {
+        "news" => 21,
+        "gallery" => 6,
+        _ => 20,
+    }
+}
+
+const TAG_SECTION_ORDER: &[(&str, &str)] = &[
+    ("news", "Новости"),
+    ("gallery", "Галерея"),
+    ("forum", "Форум"),
+    ("polls", "Опросы"),
+    ("articles", "Статьи"),
+];
+
+/// TagPageController.tagPage: aggregates the tag's topics across all 5
+/// sections (news/gallery/forum/polls/articles) on one page instead of a
+/// flat single-section list, resolves a synonym redirect if the tag itself
+/// has no direct topics, lists sibling synonyms, and surfaces
+/// favorite/ignore-tag button state - none of which the previous flat
+/// listing did.
+pub async fn tag_page(State(state): State<AppState>, Path(tag): Path<String>, CurrentUser(user): CurrentUser) -> Result<axum::response::Response> {
+    use axum::response::IntoResponse;
+
+    if !is_good_tag(&tag) {
+        return Err(AppError::NotFound);
+    }
+
+    let is_moderator = user.as_ref().map(|u| u.canmod).unwrap_or(false);
+    let tag_row: Option<(i32, i64)> = sqlx::query_as(
+        "SELECT id, counter::bigint FROM tags_values WHERE lower(value)=lower($1)",
     )
-    .bind(&tag).bind(pager.offset).bind(pager.limit).fetch_all(&state.pool).await?;
-    Ok(Html(TagTopicsTemplate { title: format!("Метка: {tag}"), topics, pager, current_user: current_user.0 }.render()?))
+    .bind(&tag)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    let Some((tag_id, counter)) = tag_row.filter(|(_, counter)| is_moderator || *counter > 0) else {
+        // No direct tag (or a moderator-only zero-count tag hidden from
+        // regular users) - check whether `tag` is actually a synonym
+        // pointing at a real tag, and redirect there if so.
+        let synonym_target: Option<String> = sqlx::query_scalar(
+            "SELECT tv.value FROM tags_synonyms ts JOIN tags_values tv ON tv.id=ts.tagid WHERE ts.value=$1",
+        )
+        .bind(&tag)
+        .fetch_optional(&state.pool)
+        .await?;
+        return match synonym_target {
+            Some(main_tag) => Ok(Redirect::to(&format!("/tag/{}", urlencoding::encode(&main_tag))).into_response()),
+            None => Err(AppError::NotFound),
+        };
+    };
+
+    let mut sections = Vec::new();
+    for (prefix, name) in TAG_SECTION_ORDER {
+        let limit = section_topic_limit(prefix);
+        let topics = sqlx::query_as::<_, TopicSummary>(
+            r#"SELECT t.id, t.title, t.url, t.postdate, t.lastmod, u.id AS author_id, u.nick AS author,
+                      g.id AS group_id, g.title AS group_title, g.urlname AS group_urlname,
+                      s.id AS section_id, s.name AS section_name,
+                      $1::text AS section_prefix,
+                      t.stat1 AS comments, t.stat2 AS views, t.deleted, t.sticky, t.resolved,
+                      string_agg(tv2.value, ',' ORDER BY tv2.value) AS tags
+               FROM topics t
+               JOIN users u ON u.id=t.userid
+               JOIN groups g ON g.id=t.groupid
+               JOIN sections s ON s.id=g.section
+               JOIN tags tg ON tg.msgid=t.id AND tg.tagid=$2
+               LEFT JOIN tags tg2 ON tg2.msgid=t.id
+               LEFT JOIN tags_values tv2 ON tv2.id=tg2.tagid
+               WHERE (CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END) = $1
+                 AND NOT t.deleted AND NOT COALESCE(t.draft,false) AND ($3 OR NOT t.moderate)
+               GROUP BY t.id,u.id,g.id,s.id
+               ORDER BY t.postdate DESC LIMIT $4"#,
+        )
+        .bind(prefix)
+        .bind(tag_id)
+        .bind(is_moderator)
+        .bind(limit)
+        .fetch_all(&state.pool)
+        .await?;
+        if !topics.is_empty() {
+            sections.push(TagSectionGroup { section_prefix: prefix.to_string(), section_name: name.to_string(), topics });
+        }
+    }
+
+    let synonyms: Vec<String> = sqlx::query_scalar("SELECT value FROM tags_synonyms WHERE tagid=$1 ORDER BY value")
+        .bind(tag_id)
+        .fetch_all(&state.pool)
+        .await?;
+
+    let (show_favorite_button, show_unfavorite_button, show_ignore_button, show_unignore_button) = match &user {
+        Some(u) => {
+            let is_fav: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM user_tags WHERE userid=$1 AND tag_id=$2 AND is_favorite)")
+                .bind(u.id).bind(tag_id).fetch_one(&state.pool).await?;
+            let is_ignored: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM user_tags WHERE userid=$1 AND tag_id=$2 AND NOT is_favorite)")
+                .bind(u.id).bind(tag_id).fetch_one(&state.pool).await?;
+            (!is_fav, is_fav, !is_moderator && !is_ignored, !is_moderator && is_ignored)
+        }
+        None => (false, false, false, false),
+    };
+
+    Ok(Html(TagPageTemplate {
+        tag: tag.clone(),
+        title: format!("Метка: {}", capitalize_first(&tag)),
+        counter,
+        sections,
+        synonyms,
+        show_favorite_button,
+        show_unfavorite_button,
+        show_ignore_button,
+        show_unignore_button,
+        show_delete: is_moderator,
+        current_user: user,
+    }.render()?).into_response())
+}
+
+fn capitalize_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 /// TagName.isGoodTag: unicode letters/digits/hyphen, optionally with
