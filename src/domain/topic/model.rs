@@ -73,6 +73,8 @@ pub struct StTopicDetail {
     pub sticky: bool,
     pub resolved: Option<bool>,
     pub tags: Option<String>,
+    pub draft: bool,
+    pub moderate: bool,
 }
 
 impl StTopicDetail {

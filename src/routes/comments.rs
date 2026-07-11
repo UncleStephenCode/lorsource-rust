@@ -45,16 +45,28 @@ pub struct CommentFormQuery {
     pub replyto: Option<i32>,
 }
 
+/// Java redirects comment actions to `topic.getLink + "?cid=" + msgid`
+/// (see AddCommentController.scala:132, EditCommentController, DeleteCommentController)
+/// rather than through a jump/redirect endpoint. Reuses the topic/comment
+/// lookup already needed by `/jump-message.jsp` so both stay consistent.
+async fn comment_link(state: &AppState, comment_id: i32) -> Result<String> {
+    match locate_topic_or_comment(state, comment_id).await? {
+        Some((section, group, topic_id, _)) => Ok(format!("/{section}/{group}/{topic_id}?cid={comment_id}")),
+        None => Ok(format!("/jump-message.jsp?msgid={comment_id}")),
+    }
+}
+
 pub async fn add_comment(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<CommentForm>) -> Result<Redirect> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
     let id = insert_comment(&state, user.id, form).await?;
-    Ok(Redirect::to(&format!("/jump-message.jsp?msgid={id}")))
+    Ok(Redirect::to(&comment_link(&state, id).await?))
 }
 
 pub async fn add_comment_ajax(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<CommentForm>) -> Result<axum::Json<serde_json::Value>> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
     let id = insert_comment(&state, user.id, form).await?;
-    Ok(axum::Json(serde_json::json!({"id": id, "ok": true})))
+    let url = comment_link(&state, id).await?;
+    Ok(axum::Json(serde_json::json!({"id": id, "ok": true, "url": url})))
 }
 
 pub async fn comment_message(Query(q): Query<JumpQuery>) -> Redirect {
@@ -110,7 +122,7 @@ pub async fn edit_comment(State(state): State<AppState>, CurrentUser(user): Curr
     if let Some(title) = form.title {
         sqlx::query("UPDATE comments SET title=$2 WHERE id=$1").bind(form.msgid).bind(title).execute(&state.pool).await?;
     }
-    Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.msgid)))
+    Ok(Redirect::to(&comment_link(&state, form.msgid).await?))
 }
 
 
@@ -194,7 +206,7 @@ pub async fn delete_comment(State(state): State<AppState>, CurrentUser(user): Cu
     if bonus != 0 {
         sqlx::query("UPDATE users SET score=GREATEST(score-$2,0) WHERE id=$1").bind(author_id).bind(bonus).execute(&state.pool).await?;
     }
-    Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.msgid)))
+    Ok(Redirect::to(&comment_link(&state, form.msgid).await?))
 }
 
 pub async fn undelete_comment(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<CommentAction>) -> Result<Redirect> {
@@ -226,7 +238,7 @@ pub async fn undelete_comment(State(state): State<AppState>, CurrentUser(user): 
 
     sqlx::query("UPDATE comments SET deleted=false WHERE id=$1").bind(form.msgid).execute(&state.pool).await?;
     sqlx::query("DELETE FROM del_info WHERE msgid=$1").bind(form.msgid).execute(&state.pool).await?;
-    Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.msgid)))
+    Ok(Redirect::to(&comment_link(&state, form.msgid).await?))
 }
 
 async fn insert_comment(state: &AppState, user_id: i32, form: CommentForm) -> Result<i32> {

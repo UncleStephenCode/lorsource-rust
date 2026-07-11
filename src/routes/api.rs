@@ -1,18 +1,162 @@
-use crate::{auth::CurrentUser, error::Result, state::AppState};
+use crate::{auth::CurrentUser, error::{AppError, Result}, state::AppState};
 use axum::{extract::{Query, State}, response::{Html, Redirect}, Json};
 use askama::Template;
+use serde::Deserialize;
 use serde_json::json;
 
-pub async fn notifications(CurrentUser(user): CurrentUser) -> Json<serde_json::Value> {
-    Json(json!({"user": user.map(|u| u.nick), "events": []}))
+/// Maps UserEventFilterEnum's `getName` (lowercase enum case) to its `dbType`.
+fn filter_db_type(filter: &str) -> Option<&'static str> {
+    match filter {
+        "answers" => Some("REPLY"),
+        "favorites" => Some("WATCH"),
+        "deleted" => Some("DEL"),
+        "reference" => Some("REF"),
+        "tag" => Some("TAG"),
+        "reaction" => Some("REACTION"),
+        "warning" => Some("WARNING"),
+        _ => None, // "all" or unrecognized
+    }
 }
 
-pub async fn notifications_count(CurrentUser(user): CurrentUser) -> Json<serde_json::Value> {
-    Json(json!({"user": user.map(|u| u.nick), "count": 0}))
+#[derive(Debug, sqlx::FromRow)]
+struct NotificationEvent {
+    id: i32,
+    event_date: chrono::DateTime<chrono::Utc>,
+    subj: String,
+    msgid: i32,
+    cid: Option<i32>,
+    unread: bool,
+    event_type: String,
+    section_prefix: String,
+    group_urlname: String,
 }
 
-pub async fn notifications_reset() -> Json<serde_json::Value> {
-    Json(json!({"ok": true}))
+impl NotificationEvent {
+    fn link(&self) -> String {
+        let anchor = self.cid.map(|id| format!("?cid={id}")).unwrap_or_default();
+        format!("/{}/{}/{}{anchor}", self.section_prefix, self.group_urlname, self.msgid)
+    }
+}
+
+#[derive(Deserialize)]
+pub struct NotificationsQuery {
+    pub filter: Option<String>,
+    pub offset: Option<i64>,
+}
+
+/// UserEventController.showNotifications - requires auth, lists user_events
+/// for the current user (newest first), with an "answers/favorites/deleted/
+/// reference/tag/reaction/warning" filter and offset pagination.
+pub async fn notifications(State(state): State<AppState>, CurrentUser(user): CurrentUser, Query(q): Query<NotificationsQuery>) -> Result<Html<String>> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    let filter = q.filter.unwrap_or_else(|| "all".to_string());
+    let db_type = filter_db_type(&filter);
+    let offset = q.offset.unwrap_or(0).max(0);
+    let limit = 20i64;
+
+    let events = sqlx::query_as::<_, NotificationEvent>(
+        r#"SELECT e.id, e.event_date, t.title AS subj, t.id AS msgid, e.comment_id AS cid, e.unread, e.type::text AS event_type,
+                  CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END AS section_prefix,
+                  g.urlname AS group_urlname
+           FROM user_events e
+           JOIN topics t ON t.id=e.message_id
+           JOIN groups g ON g.id=t.groupid
+           JOIN sections s ON s.id=g.section
+           WHERE e.userid=$1 AND ($2::text IS NULL OR e.type::text=$2)
+           ORDER BY e.id DESC LIMIT $3 OFFSET $4"#,
+    )
+    .bind(user.id)
+    .bind(db_type)
+    .bind(limit + 1)
+    .bind(offset)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let has_more = events.len() as i64 > limit;
+    let events: Vec<_> = events.into_iter().take(limit as usize).collect();
+    let top_id = events.iter().map(|e| e.id).max();
+
+    let mut html = format!("<h1>Уведомления {}</h1>", html_escape::encode_text(&user.nick));
+    html.push_str("<nav class=\"filters\">");
+    for (label, value) in [("все", "all"), ("ответы", "answers"), ("отслеживаемое", "favorites"), ("упоминания", "reference"), ("теги", "tag"), ("реакции", "reaction"), ("предупреждения", "warning")] {
+        let active = if value == filter { " class=\"active\"" } else { "" };
+        html.push_str(&format!("<a{active} href=\"/notifications?filter={value}\">{label}</a> "));
+    }
+    html.push_str("</nav>");
+
+    if let Some(top_id) = top_id {
+        html.push_str(&format!(
+            "<form method=\"post\" action=\"/notifications\"><input type=\"hidden\" name=\"topId\" value=\"{top_id}\"><button type=\"submit\">Отметить всё прочитанным</button></form>"
+        ));
+    }
+
+    html.push_str("<ul class=\"notifications-list\">");
+    for e in &events {
+        let unread_class = if e.unread { " class=\"unread\"" } else { "" };
+        html.push_str(&format!(
+            "<li{unread_class}><a href=\"{link}\">{subj}</a> <small>{date} · {etype}</small></li>",
+            link = e.link(),
+            subj = html_escape::encode_text(&e.subj),
+            date = e.event_date,
+            etype = html_escape::encode_text(&e.event_type),
+        ));
+    }
+    if events.is_empty() {
+        html.push_str("<li class=\"muted\">Нет уведомлений</li>");
+    }
+    html.push_str("</ul>");
+
+    if has_more {
+        html.push_str(&format!("<a href=\"/notifications?filter={filter}&offset={}\">Далее »</a>", offset + limit));
+    }
+
+    Ok(Html(html))
+}
+
+#[derive(Deserialize)]
+pub struct NotificationsResetForm {
+    #[serde(rename = "topId")]
+    pub top_id: i32,
+}
+
+async fn reset_unread_events(state: &AppState, user_id: i32, top_id: i32) -> Result<()> {
+    sqlx::query("UPDATE user_events SET unread=false WHERE userid=$1 AND unread AND id<=$2")
+        .bind(user_id)
+        .bind(top_id)
+        .execute(&state.pool)
+        .await?;
+    sqlx::query("UPDATE users SET unread_events=(SELECT count(*) FROM user_events e WHERE e.unread AND e.userid=users.id) WHERE id=$1")
+        .bind(user_id)
+        .execute(&state.pool)
+        .await?;
+    Ok(())
+}
+
+/// POST /notifications (UserEventController.resetNotifications) - HTML flow,
+/// redirects back to the notifications page.
+pub async fn notifications_mark_read(State(state): State<AppState>, CurrentUser(user): CurrentUser, axum::Form(form): axum::Form<NotificationsResetForm>) -> Result<Redirect> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    reset_unread_events(&state, user.id, form.top_id).await?;
+    Ok(Redirect::to("/notifications"))
+}
+
+/// GET /notifications-count (UserEventApiController.getEventsCount) - bare
+/// JSON integer, not an object, matching the Java `Json` response shape.
+pub async fn notifications_count(State(state): State<AppState>, CurrentUser(user): CurrentUser) -> Result<Json<serde_json::Value>> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    let count: i32 = sqlx::query_scalar("SELECT unread_events FROM users WHERE id=$1")
+        .bind(user.id)
+        .fetch_one(&state.pool)
+        .await?;
+    Ok(Json(json!(count)))
+}
+
+/// POST /notifications-reset (UserEventApiController.resetNotifications) -
+/// the JSON-API twin of the HTML `notifications_mark_read` above.
+pub async fn notifications_reset(State(state): State<AppState>, CurrentUser(user): CurrentUser, axum::Form(form): axum::Form<NotificationsResetForm>) -> Result<Json<serde_json::Value>> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    reset_unread_events(&state, user.id, form.top_id).await?;
+    Ok(Json(json!("ok")))
 }
 
 #[derive(Debug, serde::Deserialize)]

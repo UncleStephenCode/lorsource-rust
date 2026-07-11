@@ -32,6 +32,8 @@ pub struct StNewTopic<'a> {
     pub sTitle: &'a str,
     pub optUrl: Option<&'a str>,
     pub optLinkText: Option<&'a str>,
+    pub bDraft: bool,
+    pub bPremoderated: bool,
 }
 
 #[derive(Debug, Clone)]

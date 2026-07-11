@@ -45,6 +45,7 @@ pub struct TopicForm {
     pub url: Option<String>,
     pub linktext: Option<String>,
     pub tags: Option<String>,
+    pub draft: Option<String>,
 }
 
 pub async fn index(State(state): State<AppState>, Query(q): Query<PagerQuery>, CurrentUser(current_user): CurrentUser) -> Result<Html<String>> {
@@ -98,6 +99,14 @@ pub async fn topic_page_with_page(State(state): State<AppState>, Path((_group, i
 
 pub async fn render_topic(state: AppState, id: i32, current_user: Option<crate::models::UserSummary>) -> Result<Html<String>> {
     let topic = get_topic(&state, id).await?;
+    // GroupPermissionService.checkView / drafts: a draft or not-yet-committed
+    // premoderated topic is only visible to its author or a moderator.
+    if topic.draft || topic.moderate {
+        let allowed = current_user.as_ref().map(|u| u.canmod || u.id == topic.author_id).unwrap_or(false);
+        if !allowed {
+            return Err(AppError::NotFound);
+        }
+    }
     let topic_html = markup::render_message(&topic.message, topic.bbcode);
     let items = topic_service(&state).vecListComments(id).await?;
     let comments = items.into_iter().map(|item| CommentView { html: markup::render_message(&item.message, Some(true)), item }).collect();
@@ -109,8 +118,25 @@ pub async fn new_topic_form(State(state): State<AppState>) -> Result<Html<String
     Ok(Html(TopicFormTemplate { title: "Новая тема".into(), action: "/add.jsp".into(), topic: None, groups }.render()?))
 }
 
+/// AddTopicController.MaxMessageLength (anonymous posting isn't supported by
+/// Rust's session model, so only the registered-user limit applies).
+const TOPIC_MAX_MESSAGE_LENGTH: usize = 65536;
+
 pub async fn create_topic(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<TopicForm>) -> Result<Redirect> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
+    if form.msg.chars().count() > TOPIC_MAX_MESSAGE_LENGTH {
+        return Err(AppError::BadRequest("Слишком большое сообщение".into()));
+    }
+    if form.title.trim().is_empty() {
+        return Err(AppError::BadRequest("заголовок сообщения не может быть пустым".into()));
+    }
+    let is_draft = form.draft.as_deref().is_some_and(|v| v == "true" || v == "on" || v == "1");
+    let premoderated: bool = sqlx::query_scalar("SELECT s.moderate FROM groups g JOIN sections s ON s.id=g.section WHERE g.id=$1")
+        .bind(form.group)
+        .fetch_optional(&state.pool)
+        .await?
+        .unwrap_or(false);
+
     let mut tx = state.pool.begin().await?;
     let service = topic_service(&state);
     let id = service.iNextMessageId(&mut tx).await?;
@@ -122,10 +148,17 @@ pub async fn create_topic(State(state): State<AppState>, CurrentUser(user): Curr
         sTitle: form.title.trim(),
         optUrl: form.url.as_deref().filter(|sValue| !sValue.trim().is_empty()),
         optLinkText: form.linktext.as_deref().filter(|sValue| !sValue.trim().is_empty()),
+        bDraft: is_draft,
+        bPremoderated: premoderated,
     }).await?;
     service.vReplaceTags(&mut tx, id, form.tags.as_deref()).await?;
     tx.commit().await?;
-    Ok(Redirect::to(&format!("/jump-message.jsp?msgid={id}")))
+    // The topic-view gate (render_topic) lets the author through even while
+    // draft/pending, so redirecting straight to the topic works for both
+    // cases - Java instead shows a dedicated "add-done-moderated" interim
+    // page for the premoderated case, which isn't replicated here.
+    let topic = get_topic(&state, id).await?;
+    Ok(Redirect::to(&topic.topic_url()))
 }
 
 pub async fn edit_topic_form(State(state): State<AppState>, Query(q): Query<ViewMessageQuery>) -> Result<Html<String>> {
@@ -255,7 +288,10 @@ pub async fn undelete_topic(State(state): State<AppState>, CurrentUser(user): Cu
     }
     topic_service(&state).vSetDeleted(form.msgid, false).await?;
     sqlx::query("DELETE FROM del_info WHERE msgid=$1").bind(form.msgid).execute(&state.pool).await?;
-    Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.msgid)))
+    // Java: `new ModelAndView(new RedirectView(topic.getLink))` - a topic
+    // (not a comment), so no ?cid= here.
+    let topic = get_topic(&state, form.msgid).await?;
+    Ok(Redirect::to(&topic.topic_url()))
 }
 
 pub async fn resolve_topic_get(State(state): State<AppState>, Query(form): Query<TopicActionForm>, CurrentUser(user): CurrentUser) -> Result<Redirect> {

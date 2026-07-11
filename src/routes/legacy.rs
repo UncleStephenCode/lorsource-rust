@@ -134,12 +134,17 @@ pub async fn check_login(State(state): State<AppState>, Query(q): Query<CheckLog
     Ok(Json(json!(result)))
 }
 
-pub async fn yandex_tableau(State(state): State<AppState>) -> Json<serde_json::Value> {
-    Json(json!({
-        "version": 1,
-        "api_version": 1,
-        "layout": {"logo": format!("{}/static/app.css", state.config.public_url), "color": "#385e8e", "show_title": true},
-    }))
+/// Matches UserEventApiController.getYandexWidget: `{}` for anonymous,
+/// `{"notifications": N}` once authenticated - the previous implementation
+/// returned an unrelated widget-manifest shape that no real Yandex.Tableau
+/// integration understands.
+pub async fn yandex_tableau(State(state): State<AppState>, CurrentUser(user): CurrentUser) -> Result<Json<serde_json::Value>> {
+    let Some(user) = user else { return Ok(Json(json!({}))); };
+    let count: i32 = sqlx::query_scalar("SELECT unread_events FROM users WHERE id=$1")
+        .bind(user.id)
+        .fetch_one(&state.pool)
+        .await?;
+    Ok(Json(json!({"notifications": count})))
 }
 
 pub async fn help_page(Path(page): Path<String>) -> Result<Html<String>> {
@@ -305,8 +310,77 @@ pub async fn view_deleted(State(state): State<AppState>, CurrentUser(user): Curr
     Ok(Html(html))
 }
 
-pub async fn notifications_click() -> Json<serde_json::Value> {
-    Json(json!({"ok": true}))
+#[derive(Deserialize)]
+pub struct NotificationsClickForm {
+    #[serde(rename = "firstId")]
+    pub first_id: i32,
+    #[serde(rename = "lastId")]
+    pub last_id: i32,
+}
+
+async fn topic_link(state: &AppState, topic_id: i32, comment_id: Option<i32>) -> Result<String> {
+    let prefix: Option<(String, String)> = sqlx::query_as(
+        r#"SELECT CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END,
+                  g.urlname
+           FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section WHERE t.id=$1"#,
+    )
+    .bind(topic_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((section, group)) = prefix else { return Ok("/notifications".to_string()); };
+    let anchor = comment_id.map(|id| format!("?cid={id}")).unwrap_or_default();
+    Ok(format!("/{section}/{group}/{topic_id}{anchor}"))
+}
+
+/// Simplified from UserEventController.processClickNotifications: verifies
+/// both events belong to the current user, marks the id range read, and
+/// returns the link to the first event's topic/comment. The FAVORITES/
+/// REACTION grouped-range validation (isValidClickRange) isn't replicated -
+/// out of scope for a first pass, tracked as a follow-up.
+async fn process_notifications_click(state: &AppState, user_id: i32, form: &NotificationsClickForm) -> Result<String> {
+    let first: Option<(i32,)> = sqlx::query_as("SELECT userid FROM user_events WHERE id=$1").bind(form.first_id).fetch_optional(&state.pool).await?;
+    let last: Option<(i32, bool, i32, Option<i32>)> = sqlx::query_as(
+        "SELECT userid, unread, message_id, comment_id FROM user_events WHERE id=$1",
+    )
+    .bind(form.last_id)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    let (Some((first_owner,)), Some((last_owner, last_unread, _, _))) = (first, last) else {
+        return Ok("/notifications".to_string());
+    };
+    if user_id != first_owner || user_id != last_owner {
+        return Err(AppError::Forbidden);
+    }
+
+    if last_unread {
+        let (lo, hi) = (form.first_id.min(form.last_id), form.first_id.max(form.last_id));
+        sqlx::query("UPDATE user_events SET unread=false WHERE userid=$1 AND unread AND id BETWEEN $2 AND $3")
+            .bind(user_id).bind(lo).bind(hi).execute(&state.pool).await?;
+        sqlx::query("UPDATE users SET unread_events=(SELECT count(*) FROM user_events e WHERE e.unread AND e.userid=users.id) WHERE id=$1")
+            .bind(user_id).execute(&state.pool).await?;
+    }
+
+    let first_target: Option<(i32, Option<i32>)> = sqlx::query_as("SELECT message_id, comment_id FROM user_events WHERE id=$1")
+        .bind(form.first_id)
+        .fetch_optional(&state.pool)
+        .await?;
+    match first_target {
+        Some((topic_id, comment_id)) => topic_link(state, topic_id, comment_id).await,
+        None => Ok("/notifications".to_string()),
+    }
+}
+
+pub async fn notifications_click(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<NotificationsClickForm>) -> Result<Redirect> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    let url = process_notifications_click(&state, user.id, &form).await?;
+    Ok(Redirect::to(&url))
+}
+
+pub async fn notifications_click_ajax(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<NotificationsClickForm>) -> Result<Json<serde_json::Value>> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    let url = process_notifications_click(&state, user.id, &form).await?;
+    Ok(Json(json!({"url": url})))
 }
 
 #[derive(Deserialize)]

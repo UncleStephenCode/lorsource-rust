@@ -60,9 +60,13 @@ impl TrTopicRepository for CTopicPgRepository {
     }
 
     async fn vInsertTopic(&self, txPg: &mut Transaction<'_, Postgres>, stNewTopic: StNewTopic<'_>) -> Result<()> {
+        // moderate=true means "awaiting moderator commit" (GroupPermissionService's
+        // premoderated-and-not-committed gate) - only meaningful for published
+        // (non-draft) topics in a premoderated section.
+        let bModerate = stNewTopic.bPremoderated && !stNewTopic.bDraft;
         sqlx::query(
-            r#"INSERT INTO topics(id, groupid, userid, title, url, postdate, linktext, stat1, stat2, lastmod, moderate)
-               VALUES ($1,$2,$3,$4,$5,now(),$6,0,0,now(),true)"#,
+            r#"INSERT INTO topics(id, groupid, userid, title, url, postdate, linktext, stat1, stat2, lastmod, moderate, draft)
+               VALUES ($1,$2,$3,$4,$5,now(),$6,0,0,now(),$7,$8)"#,
         )
         .bind(stNewTopic.iMsgId)
         .bind(stNewTopic.iGroupId)
@@ -70,6 +74,8 @@ impl TrTopicRepository for CTopicPgRepository {
         .bind(stNewTopic.sTitle)
         .bind(stNewTopic.optUrl)
         .bind(stNewTopic.optLinkText)
+        .bind(bModerate)
+        .bind(stNewTopic.bDraft)
         .execute(&mut **txPg)
         .await?;
         Ok(())
@@ -194,6 +200,8 @@ LEFT JOIN tags_values tv ON tv.id=tg.tagid
 WHERE ($1::text IS NULL OR CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END = $1)
   AND ($2::text IS NULL OR g.urlname=$2)
   AND NOT t.deleted
+  AND NOT t.draft
+  AND NOT t.moderate
 GROUP BY t.id,u.id,g.id,s.id
 ORDER BY t.sticky DESC, COALESCE(t.lastmod,t.postdate) DESC
 OFFSET $3 LIMIT $4
@@ -206,7 +214,8 @@ SELECT t.id, t.title, m.message, m.bbcode, t.url, t.linktext, t.postdate, t.last
        s.id AS section_id, s.name AS section_name,
        CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END AS section_prefix,
        t.stat1 AS comments, t.stat2 AS views, t.deleted, t.sticky, t.resolved,
-       string_agg(tv.value, ',' ORDER BY tv.value) AS tags
+       string_agg(tv.value, ',' ORDER BY tv.value) AS tags,
+       t.draft, t.moderate
 FROM topics t
 JOIN msgbase m ON m.id=t.id
 JOIN users u ON u.id=t.userid
