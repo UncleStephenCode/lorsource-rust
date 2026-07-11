@@ -465,12 +465,27 @@ pub async fn reactions_get(State(state): State<AppState>, CurrentUser(user): Cur
     Ok(Html(html).into_response())
 }
 
-const ALLOWED_REACTIONS: &[&str] = &[
-    "👍", "👎", "😊", "😱", "🤦", "🔥", "🤔", "🤡", "☕☕", "🪗", "😢", "🚮", "🎉", "🤬",
+/// ReactionService.DefinedReactions - order matters (matches insertion order
+/// in the Java `Map`, which the JSP iterates for button layout).
+pub(crate) const REACTIONS: &[(&str, &str)] = &[
+    ("👍", "большой палец вверх"),
+    ("👎", "большой палец вниз"),
+    ("😊", "улыбающееся лицо"),
+    ("😱", "лицо, кричащее от страха"),
+    ("🤦", "facepalm"),
+    ("🔥", "огонь"),
+    ("🤔", "задумчивое лицо"),
+    ("🤡", "клоунада"),
+    ("☕☕", "два чая этому господину!"),
+    ("🪗", "боян!!!1111"),
+    ("😢", "грусть-печаль"),
+    ("🚮", "не нужно!"),
+    ("🎉", "хлопушка"),
+    ("🤬", "нет слов!"),
 ];
 
 async fn check_reaction_allowed(pool: &sqlx::PgPool, user_id: i32, topic_id: i32, comment_id: Option<i32>, set: bool, reaction: &str) -> Result<()> {
-    if set && !ALLOWED_REACTIONS.contains(&reaction) {
+    if set && !REACTIONS.iter().any(|(r, _)| *r == reaction) {
         return Err(crate::error::AppError::Forbidden);
     }
     if set {
@@ -602,17 +617,20 @@ pub async fn reactions_post_ajax(State(state): State<AppState>, CurrentUser(user
     Ok(Json(json!({"count": result.count})))
 }
 
-#[derive(serde::Deserialize)]
 pub struct VoteForm {
     /// Poll id (`voteid` in the original VoteController).
     pub voteid: i32,
     /// Selected variant ids. The original form submits this field as repeated `vote`.
-    #[serde(default)]
     pub vote: Vec<i32>,
 }
 
-pub async fn vote(State(state): State<AppState>, CurrentUser(user): CurrentUser, axum::Form(form): axum::Form<VoteForm>) -> Result<axum::response::Redirect> {
+pub async fn vote(State(state): State<AppState>, CurrentUser(user): CurrentUser, body: axum::body::Bytes) -> Result<axum::response::Redirect> {
     let Some(user) = user else { return Err(crate::error::AppError::Forbidden); };
+    let pairs = crate::form::parse_pairs(&body)?;
+    let form = VoteForm {
+        voteid: crate::form::get(&pairs, "voteid").and_then(|v| v.parse().ok()).ok_or_else(|| AppError::BadRequest("missing voteid".into()))?,
+        vote: crate::form::get_all(&pairs, "vote").into_iter().filter_map(|v| v.parse().ok()).collect(),
+    };
     if form.vote.is_empty() {
         return Err(crate::error::AppError::BadRequest("ничего не выбрано".into()));
     }

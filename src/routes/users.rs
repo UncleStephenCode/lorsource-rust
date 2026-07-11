@@ -295,21 +295,198 @@ pub async fn legacy_whois(Query(q): Query<WhoisQuery>) -> Redirect {
     Redirect::to(&format!("/people/{}/profile", urlencoding::encode(&q.nick)))
 }
 
-pub async fn reactions(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser) -> Result<Html<String>> {
-    let user = get_user(&state, &nick).await?;
-    ensure_self_or_moderator(&current.0, &user)?;
-    let rows = sqlx::query_as::<_, (i32, Option<i32>, chrono::DateTime<chrono::Utc>, String)>(
-        "SELECT topic_id, comment_id, set_date, reaction FROM reactions_log WHERE origin_user=$1 ORDER BY set_date DESC LIMIT 100",
-    )
-    .bind(user.id)
-    .fetch_all(&state.pool)
-    .await?;
-    let mut html = format!("<h1>Реакции {}</h1><ul>", html_escape::encode_text(&user.nick));
-    for (topic, comment, date, reaction) in rows {
-        let target = comment.map(|id| format!("#comment-{id}")).unwrap_or_default();
-        html.push_str(&format!(r#"<li>{date}: <a href="/jump-message.jsp?msgid={topic}{target}">{}</a></li>"#, html_escape::encode_text(&reaction)));
+const REACTIONS_ITEMS_PER_PAGE: i64 = 50;
+const REACTIONS_MAX_OFFSET: i64 = 10000;
+
+const SECTION_PREFIX_CASE: &str = "CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END";
+
+#[derive(Debug, sqlx::FromRow)]
+struct ReactionViewRow {
+    topic_id: i32,
+    comment_id: Option<i32>,
+    set_date: chrono::DateTime<chrono::Utc>,
+    reaction: String,
+    title: String,
+    target_user: i32,
+    section_prefix: String,
+    group_urlname: String,
+}
+
+impl ReactionViewRow {
+    fn link(&self) -> String {
+        let anchor = self.comment_id.map(|id| format!("?cid={id}")).unwrap_or_default();
+        format!("/{}/{}/{}{anchor}", self.section_prefix, self.group_urlname, self.topic_id)
     }
-    html.push_str("</ul>");
+}
+
+#[derive(Deserialize)]
+pub struct ReactionsQuery {
+    pub offset: Option<i64>,
+}
+
+/// UserReactionsController.reactions ("мои реакции" mode, mode == null).
+pub async fn reactions(State(state): State<AppState>, Path(nick): Path<String>, Query(q): Query<ReactionsQuery>, current: CurrentUser) -> Result<Html<String>> {
+    reactions_view(&state, nick, None, q, current).await
+}
+
+/// UserReactionsController.reactions with `{mode}` path segment - only "to"
+/// ("реакции на меня") is recognised, matching the Java `BadParameterException`
+/// for anything else.
+pub async fn reactions_mode(State(state): State<AppState>, Path((nick, mode)): Path<(String, String)>, Query(q): Query<ReactionsQuery>, current: CurrentUser) -> Result<Html<String>> {
+    reactions_view(&state, nick, Some(mode), q, current).await
+}
+
+async fn reactions_view(state: &AppState, nick: String, mode: Option<String>, q: ReactionsQuery, current: CurrentUser) -> Result<Html<String>> {
+    let user = get_user(state, &nick).await?;
+    ensure_self_or_moderator(&current.0, &user)?;
+    let current_user = current.0.expect("checked by ensure_self_or_moderator");
+
+    let offset = q.offset.unwrap_or(0);
+    if offset > REACTIONS_MAX_OFFSET {
+        return Err(AppError::BadRequest("offset too big".into()));
+    }
+
+    let mode_to = match mode.as_deref() {
+        None => false,
+        Some(m) if m.eq_ignore_ascii_case("to") => true,
+        Some(_) => return Err(AppError::BadRequest("incorrect mode".into())),
+    };
+
+    // Java's ReactionDao.getReactionsView `includeDeleted` flag - only
+    // moderators see reactions on deleted topics/comments.
+    let show_deleted = current_user.canmod;
+    let limit = REACTIONS_ITEMS_PER_PAGE + 1;
+
+    let items: Vec<ReactionViewRow> = if mode_to {
+        let not_deleted_topic = if show_deleted { "" } else { "AND NOT t.deleted" };
+        let not_deleted_comment = if show_deleted { "" } else { "AND NOT c.deleted" };
+        let sql = format!(
+            r#"SELECT r.topic_id, r.comment_id, r.set_date, r.reaction, t.title,
+                      r.origin_user AS target_user,
+                      {SECTION_PREFIX_CASE} AS section_prefix,
+                      g.urlname AS group_urlname
+               FROM reactions_log r
+               JOIN topics t ON r.topic_id = t.id {not_deleted_topic}
+               JOIN groups g ON t.groupid = g.id
+               JOIN sections s ON s.id = g.section
+               WHERE r.comment_id IS NULL AND t.userid = $1
+               UNION ALL
+               SELECT r.topic_id, r.comment_id, r.set_date, r.reaction, t.title,
+                      r.origin_user AS target_user,
+                      {SECTION_PREFIX_CASE} AS section_prefix,
+                      g.urlname AS group_urlname
+               FROM reactions_log r
+               JOIN topics t ON r.topic_id = t.id {not_deleted_topic}
+               JOIN comments c ON c.id = r.comment_id
+               JOIN groups g ON t.groupid = g.id
+               JOIN sections s ON s.id = g.section
+               WHERE c.userid = $1 {not_deleted_comment}
+               ORDER BY set_date DESC OFFSET $2 LIMIT $3"#
+        );
+        sqlx::query_as(&sql).bind(user.id).bind(offset).bind(limit).fetch_all(&state.pool).await?
+    } else {
+        let not_deleted = if show_deleted { "" } else { "AND NOT t.deleted AND c.deleted IS NOT TRUE" };
+        let sql = format!(
+            r#"SELECT r.topic_id, r.comment_id, r.set_date, r.reaction, t.title,
+                      COALESCE(c.userid, t.userid) AS target_user,
+                      {SECTION_PREFIX_CASE} AS section_prefix,
+                      g.urlname AS group_urlname
+               FROM reactions_log r
+               JOIN topics t ON r.topic_id = t.id
+               JOIN groups g ON t.groupid = g.id
+               JOIN sections s ON s.id = g.section
+               LEFT JOIN comments c ON r.comment_id = c.id
+               WHERE r.origin_user = $1 {not_deleted}
+               ORDER BY r.set_date DESC OFFSET $2 LIMIT $3"#
+        );
+        sqlx::query_as(&sql).bind(user.id).bind(offset).bind(limit).fetch_all(&state.pool).await?
+    };
+
+    let has_more = items.len() as i64 > REACTIONS_ITEMS_PER_PAGE;
+    let items: Vec<ReactionViewRow> = items.into_iter().take(REACTIONS_ITEMS_PER_PAGE as usize).collect();
+
+    let target_ids: Vec<i32> = items.iter().map(|r| r.target_user).collect();
+    let target_nicks: HashMap<i32, String> = if target_ids.is_empty() {
+        HashMap::new()
+    } else {
+        sqlx::query_as::<_, (i32, String)>("SELECT id, nick FROM users WHERE id = ANY($1)")
+            .bind(&target_ids)
+            .fetch_all(&state.pool)
+            .await?
+            .into_iter()
+            .collect()
+    };
+
+    let message_ids: Vec<i64> = items.iter().map(|r| (r.comment_id.unwrap_or(r.topic_id)) as i64).collect();
+    let previews: HashMap<i32, String> = if message_ids.is_empty() {
+        HashMap::new()
+    } else {
+        sqlx::query_as::<_, (i64, String)>("SELECT id, message FROM msgbase WHERE id = ANY($1)")
+            .bind(&message_ids)
+            .fetch_all(&state.pool)
+            .await?
+            .into_iter()
+            .map(|(id, message)| {
+                let id = id as i32;
+                let plain = markup::plain_text_for_index(&message);
+                let trimmed = if plain.chars().count() > 250 {
+                    format!("{}...", plain.chars().take(250).collect::<String>().trim())
+                } else {
+                    plain
+                };
+                (id, trimmed)
+            })
+            .collect()
+    };
+
+    let base_url = format!("/people/{}/reactions", user.nick);
+    let to_url = format!("{base_url}/to");
+    let url = if mode_to { to_url.clone() } else { base_url.clone() };
+    let me_title = if user.id == current_user.id { "мои реакции".to_string() } else { format!("реакции {}", user.nick) };
+    let reactions_title = if user.id == current_user.id { "на мои сообщения".to_string() } else { format!("реакции на {}", user.nick) };
+
+    let mut html = String::from("<h1>Реакции</h1><div class=\"reactions-view\"><p>");
+    if mode_to {
+        html.push_str(&format!("<a class=\"btn btn-default\" href=\"{}\">{}</a> ", html_escape::encode_text(&base_url), html_escape::encode_text(&me_title)));
+        html.push_str(&format!("<a class=\"btn btn-selected\" href=\"{}\">{}</a>", html_escape::encode_text(&to_url), html_escape::encode_text(&reactions_title)));
+    } else {
+        html.push_str(&format!("<a class=\"btn btn-selected\" href=\"{}\">{}</a> ", html_escape::encode_text(&base_url), html_escape::encode_text(&me_title)));
+        html.push_str(&format!("<a class=\"btn btn-default\" href=\"{}\">{}</a>", html_escape::encode_text(&to_url), html_escape::encode_text(&reactions_title)));
+    }
+    html.push_str("</p>");
+
+    for item in &items {
+        let target_nick = target_nicks.get(&item.target_user).map(|s| s.as_str()).unwrap_or("");
+        let preview = previews.get(&item.comment_id.unwrap_or(item.topic_id)).map(|s| s.as_str()).unwrap_or("");
+        html.push_str(&format!(
+            r#"<a class="reactions-view-item" href="{}">
+                 <div class="reactions-view-reaction"><p>{}</p></div>
+                 <div class="reactions-view-title"><p>{}{}</p></div>
+                 <div class="reactions-view-date"><p>{}</p></div>
+                 <div class="reactions-view-preview"><div class="text-preview-box"><div class="text-preview">{}: {}</div></div></div>
+               </a>"#,
+            html_escape::encode_text(&item.link()),
+            html_escape::encode_text(&item.reaction),
+            if item.comment_id.is_some() { "<i class=\"icon-comment\"></i> " } else { "" },
+            html_escape::encode_text(&item.title),
+            item.set_date.format("%d.%m.%Y %H:%M"),
+            html_escape::encode_text(target_nick),
+            html_escape::encode_text(preview),
+        ));
+    }
+    html.push_str("</div>");
+
+    html.push_str("<table class=\"nav\"><tr>");
+    if offset >= REACTIONS_ITEMS_PER_PAGE {
+        let prev_offset = offset - REACTIONS_ITEMS_PER_PAGE;
+        let prev_url = if prev_offset == 0 { url.clone() } else { format!("{url}?offset={prev_offset}") };
+        html.push_str(&format!(r#"<td width="35%" align="left"><a href="{}">← предыдущие</a></td>"#, html_escape::encode_text(&prev_url)));
+    }
+    if has_more && offset + REACTIONS_ITEMS_PER_PAGE < REACTIONS_MAX_OFFSET {
+        html.push_str(&format!(r#"<td align="right" width="35%"><a href="{url}?offset={}">следующие →</a></td>"#, offset + REACTIONS_ITEMS_PER_PAGE, url = html_escape::encode_text(&url)));
+    }
+    html.push_str("</tr></table>");
+
     Ok(Html(html))
 }
 

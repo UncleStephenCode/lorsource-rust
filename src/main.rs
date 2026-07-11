@@ -8,6 +8,7 @@ mod csrf;
 mod infra;
 mod domain;
 mod error;
+mod form;
 mod markup;
 mod models;
 mod models_compat;
@@ -43,6 +44,8 @@ async fn main() -> anyhow::Result<()> {
 
     std::fs::create_dir_all(format!("{}/photos", config.upload_dir))
         .context("failed to create upload photos directory")?;
+    std::fs::create_dir_all(format!("{}/gallery", config.upload_dir))
+        .context("failed to create upload gallery directory")?;
 
     let state = AppState::new(config.clone(), pool);
     search_index::ensure_index(&state).await;
@@ -60,6 +63,7 @@ async fn main() -> anyhow::Result<()> {
         .nest_service("/zomg_ponies", ServeDir::new(format!("{}/zomg_ponies", &config.static_dir)))
         .nest_service("/adv", ServeDir::new(format!("{}/adv", &config.static_dir)))
         .nest_service("/photos", ServeDir::new(format!("{}/photos", &config.upload_dir)))
+        .nest_service("/gallery-uploads", ServeDir::new(format!("{}/gallery", &config.upload_dir)))
         .fallback(routes::not_found)
         .layer(axum::middleware::from_fn_with_state(state.clone(), security_headers::apply))
         .layer(axum::middleware::from_fn_with_state(state.clone(), theme_middleware::apply_theme))

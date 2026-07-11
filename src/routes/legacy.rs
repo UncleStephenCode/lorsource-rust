@@ -182,9 +182,67 @@ pub async fn help_page(State(state): State<AppState>, Path(page): Path<String>) 
     Ok(Html(format!("<h1>{}</h1>{html}", html_escape::encode_text(title))))
 }
 
-pub async fn archive_section(State(state): State<AppState>, uri: Uri, Query(q): Query<PagerQuery>, CurrentUser(current_user): CurrentUser) -> Result<Html<String>> {
+const MONTH_NAMES: [&str; 12] = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
+
+pub(crate) fn month_name(month: i32) -> &'static str {
+    MONTH_NAMES.get((month - 1) as usize).copied().unwrap_or("?")
+}
+
+#[derive(Template)]
+#[template(path = "archive_index.html")]
+pub(crate) struct ArchiveIndexTemplate {
+    pub(crate) title: String,
+    pub(crate) heading: String,
+    pub(crate) back_url: String,
+    pub(crate) back_label: String,
+    pub(crate) months: Vec<ArchiveMonthLink>,
+}
+
+pub(crate) struct ArchiveMonthLink {
+    pub(crate) year: i32,
+    pub(crate) month: i32,
+    pub(crate) month_name: &'static str,
+    pub(crate) count: i64,
+    pub(crate) url: String,
+}
+
+/// ArchiveDao.getArchiveStats: rather than maintaining a separate
+/// `monthly_stats` side-table (unpopulated in this port - no triggers
+/// write to it), the year/month breakdown is computed live from `topics`.
+/// Functionally equivalent to Java's precomputed table for this dataset
+/// size; matches `list_archive_topics`' own visibility filter (`NOT
+/// deleted`) so the counts always agree with what the drill-down page
+/// actually lists.
+pub(crate) async fn list_archive_year_months(state: &AppState, section: Option<&str>, group: Option<&str>) -> Result<Vec<(i32, i32, i64)>> {
+    Ok(sqlx::query_as::<_, (i32, i32, i64)>(
+        r#"SELECT EXTRACT(YEAR FROM t.postdate)::int AS y, EXTRACT(MONTH FROM t.postdate)::int AS m, count(*) AS c
+           FROM topics t
+           JOIN groups g ON g.id=t.groupid
+           JOIN sections s ON s.id=g.section
+           WHERE ($1::text IS NULL OR CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END = $1)
+             AND ($2::text IS NULL OR g.urlname=$2)
+             AND NOT t.deleted
+           GROUP BY y, m
+           ORDER BY y, m"#,
+    )
+    .bind(section)
+    .bind(group)
+    .fetch_all(&state.pool)
+    .await?)
+}
+
+pub async fn archive_section(State(state): State<AppState>, uri: Uri, CurrentUser(_current_user): CurrentUser) -> Result<Html<String>> {
     let section = section_from_uri(&uri).unwrap_or("news");
-    render_archive(state, Some(section), None, None, None, q, current_user).await
+    let section_name = match section { "news" => "Новости", "forum" => "Форум", "gallery" => "Галерея", "articles" => "Статьи", "polls" => "Опросы", _ => "Темы" };
+    let rows = list_archive_year_months(&state, Some(section), None).await?;
+    let months = rows.into_iter().map(|(y, m, c)| ArchiveMonthLink { year: y, month: m, month_name: month_name(m), count: c, url: format!("/{section}/archive/{y}/{m}") }).collect();
+    Ok(Html(ArchiveIndexTemplate {
+        title: format!("{section_name} - Архив"),
+        heading: section_name.to_string(),
+        back_url: format!("/{section}/"),
+        back_label: "Лента".to_string(),
+        months,
+    }.render()?))
 }
 
 pub async fn archive_section_month(State(state): State<AppState>, uri: Uri, Path((year, month)): Path<(i32, i32)>, Query(q): Query<PagerQuery>, CurrentUser(current_user): CurrentUser) -> Result<Html<String>> {
@@ -689,6 +747,163 @@ fn validate_userpic_bytes(data: &[u8]) -> Result<&'static str> {
         return Err(AppError::BadRequest("Сбой загрузки изображения: недопустимые размеры фотографии".into()));
     }
     Ok(extension)
+}
+
+/// Image.MaxFileSize/MinDimension/MaxDimension (Java uses a 4-size srcset
+/// instead - this port's `images` table has concrete original/medium/
+/// thumbnail columns, so three fixed sizes are stored instead of Java's
+/// dynamic srcset).
+const GALLERY_MAX_FILE_SIZE: usize = 8 * 1024 * 1024;
+const GALLERY_MIN_DIMENSION: u32 = 400;
+const GALLERY_MAX_DIMENSION: u32 = 5120;
+const GALLERY_SIZES: [(&str, u32); 3] = [("original", 2000), ("medium", 800), ("thumbnail", 200)];
+
+#[derive(Deserialize)]
+pub struct AddPhotoTopicQuery {
+    pub msgid: i32,
+}
+
+/// Loads (author_id, section.imagepost) for a topic, or 404s. Both the GET
+/// form and the POST handler need this same author/section check.
+async fn topic_for_photo_upload(state: &AppState, msgid: i32) -> Result<(i32, bool, String, String)> {
+    sqlx::query_as(
+        r#"SELECT t.userid, s.imagepost,
+                  CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END,
+                  g.urlname
+           FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section WHERE t.id=$1"#,
+    )
+    .bind(msgid)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)
+}
+
+/// No `csrf` hidden field, matching `addphoto_form`'s existing precedent:
+/// a multipart POST body isn't inspected by the CSRF middleware (see
+/// `src/csrf.rs`), so a token here would be decorative.
+pub async fn addphoto_topic_form(State(state): State<AppState>, Query(q): Query<AddPhotoTopicQuery>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    let (author_id, imagepost, _section_prefix, _group_urlname) = topic_for_photo_upload(&state, q.msgid).await?;
+    if !imagepost {
+        return Err(AppError::BadRequest("этот раздел не поддерживает изображения".into()));
+    }
+    if !user.canmod && user.id != author_id {
+        return Err(AppError::Forbidden);
+    }
+    Ok(Html(format!(r#"
+<h1>Загрузить изображение</h1>
+<form method="post" action="/addphoto-topic.jsp" enctype="multipart/form-data" class="form">
+  <input type="hidden" name="msgid" value="{}">
+  <label>Файл PNG/JPEG/WEBP, {}-{} px, до {} МиБ <input type="file" name="file" accept="image/png,image/jpeg,image/webp" required></label>
+  <button type="submit">Загрузить</button>
+</form>
+"#, q.msgid, GALLERY_MIN_DIMENSION, GALLERY_MAX_DIMENSION, GALLERY_MAX_FILE_SIZE / 1024 / 1024)))
+}
+
+fn validate_gallery_image_bytes(data: &[u8]) -> Result<image::DynamicImage> {
+    if data.is_empty() {
+        return Err(AppError::BadRequest("изображение не задано".into()));
+    }
+    if data.len() > GALLERY_MAX_FILE_SIZE {
+        return Err(AppError::BadRequest("Сбой загрузки изображения: слишком большой файл".into()));
+    }
+    let format = image::guess_format(data).map_err(|_| AppError::BadRequest("Сбой загрузки изображения: неизвестный формат".into()))?;
+    if !matches!(format, image::ImageFormat::Png | image::ImageFormat::Jpeg | image::ImageFormat::WebP) {
+        return Err(AppError::BadRequest("Сбой загрузки изображения: неподдерживаемый или потенциально анимированный формат".into()));
+    }
+    let img = image::load_from_memory_with_format(data, format).map_err(|e| AppError::BadRequest(format!("Сбой загрузки изображения: {e}")))?;
+    let (width, height) = img.dimensions();
+    if width < GALLERY_MIN_DIMENSION || height < GALLERY_MIN_DIMENSION {
+        return Err(AppError::BadRequest("Сбой загрузки изображения: изображение слишком маленькое".into()));
+    }
+    if width > GALLERY_MAX_DIMENSION || height > GALLERY_MAX_DIMENSION {
+        return Err(AppError::BadRequest("Сбой загрузки изображения: изображение слишком большое".into()));
+    }
+    Ok(img)
+}
+
+/// Never upscales - `resize` bounds by `max_side` on the longer dimension,
+/// but an image already smaller than that is returned as-is.
+fn resize_capped(img: &image::DynamicImage, max_side: u32) -> image::DynamicImage {
+    let (w, h) = img.dimensions();
+    if w.max(h) <= max_side {
+        img.clone()
+    } else {
+        img.resize(max_side, max_side, image::imageops::FilterType::Lanczos3)
+    }
+}
+
+fn encode_jpeg(img: &image::DynamicImage) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Jpeg)
+        .map_err(|e| AppError::Anyhow(e.into()))?;
+    Ok(buf)
+}
+
+/// ImageService.saveImage: only the single "main" gallery image is
+/// supported (Java also allows several additional images per topic - not
+/// implemented here). Sets `topics.image` only if it isn't already set, so
+/// re-uploading doesn't silently orphan the previous main image's row.
+pub async fn upload_topic_photo(State(state): State<AppState>, CurrentUser(user): CurrentUser, mut multipart: Multipart) -> Result<Redirect> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    let mut msgid: Option<i32> = None;
+    let mut upload: Option<bytes::Bytes> = None;
+    while let Some(field) = multipart.next_field().await.map_err(|e| AppError::BadRequest(format!("ошибка multipart: {e}")))? {
+        match field.name() {
+            Some("msgid") => {
+                let text = field.text().await.map_err(|e| AppError::BadRequest(format!("ошибка чтения msgid: {e}")))?;
+                msgid = text.trim().parse().ok();
+            }
+            Some("file") => {
+                upload = Some(field.bytes().await.map_err(|e| AppError::BadRequest(format!("ошибка чтения файла: {e}")))?);
+            }
+            _ => {}
+        }
+    }
+    let msgid = msgid.ok_or_else(|| AppError::BadRequest("missing msgid".into()))?;
+    let bytes = upload.ok_or_else(|| AppError::BadRequest("изображение не задано".into()))?;
+
+    let (author_id, imagepost, section_prefix, group_urlname) = topic_for_photo_upload(&state, msgid).await?;
+    if !imagepost {
+        return Err(AppError::BadRequest("этот раздел не поддерживает изображения".into()));
+    }
+    if !user.canmod && user.id != author_id {
+        return Err(AppError::Forbidden);
+    }
+
+    let img = validate_gallery_image_bytes(&bytes)?;
+    let (width, height) = img.dimensions();
+
+    let image_id: i32 = sqlx::query_scalar("SELECT nextval('images_id_seq')::int").fetch_one(&state.pool).await?;
+    let dir = format!("{}/gallery/{image_id}", state.config.upload_dir);
+    tokio::fs::create_dir_all(&dir).await.map_err(|e| AppError::Anyhow(e.into()))?;
+    for (name, max_side) in GALLERY_SIZES {
+        let resized = resize_capped(&img, max_side);
+        let jpeg = encode_jpeg(&resized)?;
+        tokio::fs::write(format!("{dir}/{name}.jpg"), &jpeg).await.map_err(|e| AppError::Anyhow(e.into()))?;
+    }
+
+    sqlx::query(
+        "INSERT INTO images(id, userid, topic, original, medium, thumbnail, width, height, primary_image) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true)",
+    )
+    .bind(image_id)
+    .bind(user.id)
+    .bind(msgid)
+    .bind(format!("{image_id}/original.jpg"))
+    .bind(format!("{image_id}/medium.jpg"))
+    .bind(format!("{image_id}/thumbnail.jpg"))
+    .bind(width as i32)
+    .bind(height as i32)
+    .execute(&state.pool)
+    .await?;
+
+    sqlx::query("UPDATE topics SET image=$1, lastmod=now() WHERE id=$2 AND image IS NULL")
+        .bind(image_id)
+        .bind(msgid)
+        .execute(&state.pool)
+        .await?;
+
+    Ok(Redirect::to(&format!("/{section_prefix}/{group_urlname}/{msgid}")))
 }
 
 #[derive(Deserialize)]

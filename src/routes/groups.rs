@@ -19,12 +19,6 @@ struct GroupTopicsTemplate {
     current_user: Option<crate::models::UserSummary>,
 }
 
-#[derive(Deserialize)]
-pub struct ArchiveQuery {
-    year: Option<i32>,
-    month: Option<i32>,
-}
-
 pub async fn forum_index(State(state): State<AppState>) -> Result<Html<String>> {
     let groups = forum_service(&state).vecListForumGroups().await?;
     Ok(Html(GroupsTemplate { title: "Форум".into(), groups }.render()?))
@@ -165,9 +159,19 @@ pub async fn group_page(State(state): State<AppState>, method: Method, Path(grou
     Ok(Html(GroupTopicsTemplate { title, topics, pager, current_user: user }.render()?).into_response())
 }
 
-pub async fn group_archive(State(state): State<AppState>, Path(group): Path<String>, Query(_q): Query<ArchiveQuery>) -> Result<Html<String>> {
-    let group = forum_service(&state).stArchiveGroup(&group).await?;
-    Ok(Html(GroupsTemplate { title: format!("Архив / {}", group.title), groups: vec![group] }.render()?))
+pub async fn group_archive(State(state): State<AppState>, Path(group_name): Path<String>) -> Result<Html<String>> {
+    let group = forum_service(&state).stArchiveGroup(&group_name).await?;
+    let rows = crate::routes::legacy::list_archive_year_months(&state, Some("forum"), Some(&group_name)).await?;
+    let months = rows.into_iter().map(|(y, m, c)| crate::routes::legacy::ArchiveMonthLink {
+        year: y, month: m, month_name: crate::routes::legacy::month_name(m), count: c, url: format!("/forum/{group_name}/{y}/{m}"),
+    }).collect();
+    Ok(Html(crate::routes::legacy::ArchiveIndexTemplate {
+        title: format!("Форум - {} - Архив", group.title),
+        heading: format!("Форум «{}»", group.title),
+        back_url: format!("/forum/{group_name}"),
+        back_label: "Новые".to_string(),
+        months,
+    }.render()?))
 }
 
 pub async fn list_groups(state: &AppState) -> Result<Vec<Group>> {

@@ -15,6 +15,18 @@
   <label>Текст ссылки <input name="linktext" value="{% match topic %}{% when Some with (t) %}{% match t.linktext %}{% when Some with (lt) %}{{ lt }}{% when None %}{% endmatch %}{% when None %}{% endmatch %}"></label>
   <label>Метки через запятую <input name="tags" value="{% match topic %}{% when Some with (t) %}{% for tag in t.tags_vec() %}{{ tag }}{% if !loop.last %}, {% endif %}{% endfor %}{% when None %}{% endmatch %}"></label>
   <label>Сообщение <textarea name="msg" rows="16" required>{% match topic %}{% when Some with (t) %}{{ t.message }}{% when None %}{% endmatch %}</textarea></label>
+
+  <fieldset>
+    <legend>Опрос (используется только в разделе "Опросы")</legend>
+    {% for (vid, label) in poll_variants %}
+    <label>Вариант <input type="hidden" name="variant_id" value="{{ vid }}"><input name="poll" size="40" value="{{ label }}"></label><br>
+    {% endfor %}
+    {% for _ in poll_new_rows %}
+    <label>Новый вариант <input type="hidden" name="variant_id" value="0"><input name="poll" size="40"></label><br>
+    {% endfor %}
+    <label><input type="checkbox" name="multiselect" {% if poll_multiselect %}checked{% endif %}> Мультивыбор</label>
+  </fieldset>
+
   <button type="submit">Сохранить</button>
 </form>
 {% endblock %}

@@ -9,11 +9,44 @@
     <a href="/people/{{ topic.author }}">{{ topic.author }}</a> · {{ topic.postdate }}
   </div>
   {% match topic.url %}{% when Some with (url) %}<p class="source"><a rel="nofollow" href="{{ url }}">{% match topic.linktext %}{% when Some with (lt) %}{{ lt }}{% when None %}{{ url }}{% endmatch %}</a></p>{% when None %}{% endmatch %}
-  <div class="message">{{ topic_html|safe }}</div>
+  {% match image %}
+  {% when Some with (img) %}
+  <p class="topic-image"><a href="{{ img.original_url }}"><img src="{{ img.medium_url }}" width="{{ img.width }}" height="{{ img.height }}" alt=""></a></p>
+  {% when None %}
+  {% endmatch %}
+  {% if show_add_image_link %}
+  <p><a href="/addphoto-topic.jsp?msgid={{ topic.id }}">Добавить изображение</a></p>
+  {% endif %}
+  <div class="msg_body">
+    <div class="message">{{ topic_html|safe }}</div>
+    {{ topic_reactions_html|safe }}
+  </div>
   {% if topic.tags_vec().len() > 0 %}
   <div class="tags">{% for tag in topic.tags_vec() %}<a href="/tag/{{ tag }}">#{{ tag }}</a>{% endfor %}</div>
   {% endif %}
 </article>
+
+{% match poll %}
+{% when Some with (p) %}
+<div class="poll">
+  {% if p.can_vote %}
+  <form action="/vote.jsp" method="post" class="inline-form">
+    <input type="hidden" name="csrf" value="{{ csrf_token }}">
+    <input type="hidden" name="voteid" value="{{ p.voteid }}">
+    {% for v in p.variants %}
+    <label class="poll-variant"><input type="{% if p.multiselect %}checkbox{% else %}radio{% endif %}" name="vote" value="{{ v.id }}"> {{ v.label }}</label><br>
+    {% endfor %}
+    <button type="submit">Голосовать</button>
+  </form>
+  {% else %}
+  {% for v in p.variants %}
+  <div class="poll-variant-result">{{ v.label }} - {{ v.votes }} ({{ v.pct }}%)</div>
+  {% endfor %}
+  <p class="muted">Всего голосов: {{ p.total_votes }}</p>
+  {% endif %}
+</div>
+{% when None %}
+{% endmatch %}
 
 {% match thread_root %}
 {% when Some with (root) %}
@@ -38,7 +71,10 @@
     {% if c.item.deleted %}
     <div class="message muted">[комментарий удалён]</div>
     {% else %}
-    <div class="message">{{ c.html|safe }}</div>
+    <div class="msg_body">
+      <div class="message">{{ c.html|safe }}</div>
+      {{ c.reactions_html|safe }}
+    </div>
     {% endif %}
   </article>
   {% endfor %}
