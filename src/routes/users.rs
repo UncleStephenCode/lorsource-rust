@@ -99,8 +99,51 @@ struct EditProfileTemplate {
     profile: UserProfileData,
 }
 
-pub async fn profile(State(state): State<AppState>, Path(nick): Path<String>, Query(q): Query<PagerQuery>, current: CurrentUser) -> Result<Html<String>> {
-    render_profile(state, nick, q, current).await
+#[derive(Deserialize)]
+pub struct UserTopicFeedQuery {
+    pub offset: Option<i64>,
+    pub section: Option<i32>,
+}
+
+/// UserTopicListController.showUserTopics: `/people/{nick}` (bare, no
+/// suffix) is the user's topic feed, a distinct page from the profile at
+/// `/people/{nick}/profile` - the previous handler aliased this straight to
+/// the profile page. Optional `?section=` filter, 404s if the feed is
+/// empty (matches Java exactly, including on a valid user with zero posts).
+pub async fn topic_feed(State(state): State<AppState>, Path(nick): Path<String>, Query(q): Query<UserTopicFeedQuery>) -> Result<Html<String>> {
+    let user = get_user(&state, &nick).await?;
+    let pager = Pager::new(q.offset.unwrap_or(0).max(0), state.config.page_size);
+
+    let sql = format!(
+        r#"SELECT t.id, t.title, t.url, t.postdate, t.lastmod, u.id AS author_id, u.nick AS author,
+                  g.id AS group_id, g.title AS group_title, g.urlname AS group_urlname,
+                  s.id AS section_id, s.name AS section_name,
+                  CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END AS section_prefix,
+                  t.stat1 AS comments, t.stat2 AS views, t.deleted, t.sticky, t.resolved,
+                  string_agg(tv.value, ',' ORDER BY tv.value) AS tags
+           FROM topics t
+           JOIN users u ON u.id=t.userid
+           JOIN groups g ON g.id=t.groupid
+           JOIN sections s ON s.id=g.section
+           LEFT JOIN tags tg ON tg.msgid=t.id
+           LEFT JOIN tags_values tv ON tv.id=tg.tagid
+           WHERE u.id=$1 AND NOT t.deleted AND NOT COALESCE(t.draft,false) AND NOT t.moderate
+             {section_clause}
+           GROUP BY t.id,u.id,g.id,s.id
+           ORDER BY t.postdate DESC OFFSET $2 LIMIT $3"#,
+        section_clause = if q.section.is_some() { "AND s.id=$4" } else { "" },
+    );
+    let mut query = sqlx::query_as::<_, TopicSummary>(&sql).bind(user.id).bind(pager.offset).bind(pager.limit);
+    if let Some(section) = q.section {
+        query = query.bind(section);
+    }
+    let topics = query.fetch_all(&state.pool).await?;
+
+    if topics.is_empty() {
+        return Err(AppError::NotFound);
+    }
+
+    Ok(Html(simple_topic_list(&format!("Сообщения {}", user.nick), &topics)))
 }
 
 pub async fn profile_full(State(state): State<AppState>, Path(nick): Path<String>, Query(q): Query<PagerQuery>, current: CurrentUser) -> Result<Html<String>> {

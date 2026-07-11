@@ -14,6 +14,7 @@ mod security;
 mod pagination;
 mod profile;
 mod routes;
+mod search_index;
 mod state;
 mod theme_middleware;
 
@@ -42,6 +43,7 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to create upload photos directory")?;
 
     let state = AppState::new(config.clone(), pool);
+    search_index::ensure_index(&state).await;
     let app = Router::new()
         .merge(routes::router())
         .route("/healthz", get(routes::healthz))

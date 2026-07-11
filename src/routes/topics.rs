@@ -153,6 +153,7 @@ pub async fn create_topic(State(state): State<AppState>, CurrentUser(user): Curr
     }).await?;
     service.vReplaceTags(&mut tx, id, form.tags.as_deref()).await?;
     tx.commit().await?;
+    crate::search_index::index_topic(&state, id, false).await;
     // The topic-view gate (render_topic) lets the author through even while
     // draft/pending, so redirecting straight to the topic works for both
     // cases - Java instead shows a dedicated "add-done-moderated" interim
@@ -200,6 +201,7 @@ pub async fn edit_topic(State(state): State<AppState>, CurrentUser(user): Curren
     }).await?;
     service.vReplaceTags(&mut tx, id, form.tags.as_deref()).await?;
     tx.commit().await?;
+    crate::search_index::index_topic(&state, id, false).await;
     Ok(Redirect::to(&format!("/jump-message.jsp?msgid={id}")))
 }
 
@@ -274,6 +276,7 @@ pub async fn delete_topic(State(state): State<AppState>, CurrentUser(user): Curr
     if bonus != 0 {
         sqlx::query("UPDATE users SET score=GREATEST(score-$2,0) WHERE id=$1").bind(meta.author_id).bind(bonus).execute(&state.pool).await?;
     }
+    crate::search_index::index_topic(&state, form.msgid, true).await;
     Ok(Redirect::to("/"))
 }
 
@@ -288,6 +291,7 @@ pub async fn undelete_topic(State(state): State<AppState>, CurrentUser(user): Cu
     }
     topic_service(&state).vSetDeleted(form.msgid, false).await?;
     sqlx::query("DELETE FROM del_info WHERE msgid=$1").bind(form.msgid).execute(&state.pool).await?;
+    crate::search_index::index_topic(&state, form.msgid, true).await;
     // Java: `new ModelAndView(new RedirectView(topic.getLink))` - a topic
     // (not a comment), so no ?cid= here.
     let topic = get_topic(&state, form.msgid).await?;
@@ -390,6 +394,7 @@ pub async fn commit_topic(State(state): State<AppState>, CurrentUser(user): Curr
     let Some(user) = user else { return Err(AppError::Forbidden); };
     if !user.canmod { return Err(AppError::Forbidden); }
     topic_service(&state).vCommitTopic(form.msgid, user.id).await?;
+    crate::search_index::index_topic(&state, form.msgid, true).await;
     Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.msgid)))
 }
 
@@ -407,6 +412,7 @@ pub async fn uncommit_form(Query(q): Query<ViewMessageQuery>, CurrentUser(user):
 pub async fn uncommit(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<TopicActionForm>) -> Result<Redirect> {
     if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
     topic_service(&state).vUncommitTopic(form.msgid).await?;
+    crate::search_index::index_topic(&state, form.msgid, true).await;
     Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.msgid)))
 }
 

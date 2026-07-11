@@ -31,18 +31,18 @@
 
 ### Крупное (архитектурные пробелы, не косметика)
 1. ~~**Tracker**~~ — ЗАВЕРШЕНО: реализован реальный `TrackerFilterEnum` (all/main/notalks/tech), читает сохранённый `trackerMode`, сортировка по активности за 7 дней.
-2. **Поиск** — `/search.jsp` это просто `ILIKE`/tsvector без фасетов/сортировки/интервалов. `OPENSEARCH_URL` сконфигурирован, но нигде не используется — весь поисковый бэкенд не подключён. **Осталось.**
+2. ~~**Поиск**~~ — ЗАВЕРШЕНО: подключён OpenSearch (индекс `messages`, поля точно как в `MessageIndexDocument`), реальные facets (section/group), sort (relevance/date/date-reverse), interval/range фильтры, пагинация. Индексация на всех write-путях (создание/правка/удаление/commit темы и коммента), `/admin/search-reindex` делает настоящий bulk-reindex. Упрощения относительно оригинала: без highlighting (excerpt вместо `<em>`-подсветки), без significant_terms по тегам, без function_score recency-буста.
 3. **`/tag/{tag}`** — сильно упрощена: в оригинале агрегирует все секции, related tags, synonyms, избранное/игнор тега. Таблица `tags_synonyms` теперь используется (rename/delete/merge реализованы), но сама страница тега ещё не резолвит synonym и не агрегирует секции. **Частично осталось.**
-4. **`/forum/{group}`** — не хватает: фильтр по тегу, showDeleted/showignored, lastmod-режим, sticky-темы вперёд, redirect на архив при offset>300. **Осталось.**
+4. ~~**`/forum/{group}`**~~ — ЗАВЕРШЕНО (кроме showDeleted/ignore-list): фильтр по тегу (404 на несуществующий), sticky-темы вперёд, lastmod-режим, redirect на архив при offset>300. showDeleted/showignored не реализованы — ignore_list вообще нигде не подключён к листингам, это отдельная более крупная задача.
 5. ~~**Rename/delete тега**~~ — ЗАВЕРШЕНО: поля формы приведены к оригиналу (oldTagName/tagName/firstLetter/createSynonym), реализован merge с созданием synonym, починена схема `tags_synonyms`.
-6. **`/people/{nick}`** — сейчас алиас на профиль; в оригинале это отдельная страница — лента сообщений пользователя. **Осталось.**
+6. ~~**`/people/{nick}`**~~ — ЗАВЕРШЕНО: теперь реальная лента сообщений (с фильтром по секции, 404 на пустую ленту), не алиас профиля.
 7. **Топик-вью** (`TopicController`) — не хватает пагинации, canonical-редиректа при несовпадении group/section, thread-режима (сейчас просто якорь), скрытия удалённых комментариев по флагу.
 8. **Профиль** — не хватает большей части модераторских полей: бан-инфо, freeze-статус, "other accounts with same email", userlog, invited users, mystery-man аватар по умолчанию.
-9. **`usermod.jsp`** — нет relationship-проверок (isBlockable/isFreezable), нет unfreeze (только заморозка на фикс. 7 дней).
+9. ~~**`usermod.jsp` freeze/unfreeze**~~ — ЗАВЕРШЕНО: реальные длительности заморозки + разморозка, isFreezable-проверка. isBlockable-проверки на остальных действиях (block/unblock) пока не сделаны — это отдельный, меньший пункт.
 10. ~~**EditSettings**~~ — ПРОВЕРЕНО/ЗАВЕРШЕНО: валидация уже была (allow-list на все поля), реально не хватало: удаления HTML-режима разметки (Java явно его отключил), score-gating устаревших тем, self-only прав доступа (было self-or-moderator).
 11. **`/groupmod.jsp`** — не редактируется `urlName`, нет admin-vs-moderator разграничения.
 12. ~~**`/help/{page}`**~~ — ЗАВЕРШЕНО: подключён реальный markdown-контент (lorcode/markdown/rules), 404 на остальные.
-13. **`/sameip.jsp`** — упрощённый stub, нет CIDR-маски/UA-фильтра/score-фильтра/списка пользователей. **Осталось.**
+13. ~~**`/sameip.jsp`**~~ — ЗАВЕРШЕНО: CIDR-маска, UA-фильтр, score-фильтр, список пользователей, block-info для точного IP.
 14. **`GeoLocationController`** — заглушка, нет реального geo-бэкенда (возможно, ок как no-op).
 
 ### Среднее

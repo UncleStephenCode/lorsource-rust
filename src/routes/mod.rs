@@ -147,7 +147,7 @@ pub fn router() -> Router<AppState> {
         .route("/people/:nick/settings", get(users::settings).post(users::save_settings))
         .route("/people/:nick/settings/", get(users::settings).post(users::save_settings))
         .route("/people/:nick/tracked", get(users::tracked))
-        .route("/people/:nick", get(users::profile))
+        .route("/people/:nick", get(users::topic_feed))
         .route("/forum/:group/:id/history", get(legacy::topic_history))
         .route("/forum/:group/:id/:commentid/history", get(legacy::comment_history))
         .route("/news/:group/:id/history", get(legacy::topic_history))

@@ -122,6 +122,7 @@ pub async fn edit_comment(State(state): State<AppState>, CurrentUser(user): Curr
     if let Some(title) = form.title {
         sqlx::query("UPDATE comments SET title=$2 WHERE id=$1").bind(form.msgid).bind(title).execute(&state.pool).await?;
     }
+    crate::search_index::index_comment(&state, form.msgid).await;
     Ok(Redirect::to(&comment_link(&state, form.msgid).await?))
 }
 
@@ -206,6 +207,7 @@ pub async fn delete_comment(State(state): State<AppState>, CurrentUser(user): Cu
     if bonus != 0 {
         sqlx::query("UPDATE users SET score=GREATEST(score-$2,0) WHERE id=$1").bind(author_id).bind(bonus).execute(&state.pool).await?;
     }
+    crate::search_index::index_comment(&state, form.msgid).await;
     Ok(Redirect::to(&comment_link(&state, form.msgid).await?))
 }
 
@@ -238,6 +240,7 @@ pub async fn undelete_comment(State(state): State<AppState>, CurrentUser(user): 
 
     sqlx::query("UPDATE comments SET deleted=false WHERE id=$1").bind(form.msgid).execute(&state.pool).await?;
     sqlx::query("DELETE FROM del_info WHERE msgid=$1").bind(form.msgid).execute(&state.pool).await?;
+    crate::search_index::index_comment(&state, form.msgid).await;
     Ok(Redirect::to(&comment_link(&state, form.msgid).await?))
 }
 
@@ -319,6 +322,7 @@ async fn insert_comment(state: &AppState, user_id: i32, form: CommentForm) -> Re
     }
 
     tx.commit().await?;
+    crate::search_index::index_comment(state, id).await;
     Ok(id)
 }
 

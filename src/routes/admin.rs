@@ -1,7 +1,11 @@
 use crate::{auth::CurrentUser, error::{AppError, Result}, state::AppState};
 use axum::{extract::{Query, State}, response::{Html, Redirect}, routing::{get, post}, Form, Json, Router};
+use once_cell::sync::Lazy;
+use regex::Regex;
 use serde::Deserialize;
 use serde_json::json;
+
+static SAME_IP_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\d+\.\d+\.\d+\.\d+$").expect("ip regex"));
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -50,10 +54,19 @@ async fn search_reindex_form(CurrentUser(user): CurrentUser) -> Result<Html<Stri
 "#.to_string()))
 }
 
-async fn search_reindex(CurrentUser(user): CurrentUser, Form(form): Form<ReindexForm>) -> Result<Html<String>> {
+async fn search_reindex(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<ReindexForm>) -> Result<Html<String>> {
     require_admin(&user)?;
     let action = form.action.unwrap_or_else(|| "current".to_string());
-    Ok(Html(format!("<h1>Переиндексация поставлена в очередь</h1><p>action={}</p>", html_escape::encode_text(&action))))
+    match crate::search_index::reindex_all(&state).await {
+        Ok((topics, comments)) => Ok(Html(format!(
+            "<h1>Переиндексация завершена</h1><p>action={}</p><p>Тем: {topics}, комментариев: {comments}</p>",
+            html_escape::encode_text(&action),
+        ))),
+        Err(e) => Ok(Html(format!(
+            "<h1>Переиндексация не выполнена</h1><p class=\"error\">{}</p>",
+            html_escape::encode_text(&e),
+        ))),
+    }
 }
 
 #[derive(Deserialize)]
@@ -160,34 +173,128 @@ async fn del_ip(State(state): State<AppState>, CurrentUser(user): CurrentUser, F
     )))
 }
 
+/// Matches SameIPController: the previous handler only did an exact-IP
+/// equality lookup with no mask/UA/score filtering and no matched-user
+/// listing or block-info display.
 #[derive(Deserialize)]
-pub struct SameIpQuery { pub ip: Option<String>, pub limit: Option<i64> }
+pub struct SameIpQuery {
+    pub ip: Option<String>,
+    pub mask: Option<i32>,
+    pub ua: Option<i32>,
+    pub score: Option<i32>,
+}
+
+const SAME_IP_ANONYMOUS_SCORE_FILTER: i32 = -9999;
+const SAME_IP_ROWS_LIMIT: i64 = 50;
 
 async fn same_ip(State(state): State<AppState>, CurrentUser(user): CurrentUser, Query(q): Query<SameIpQuery>) -> Result<Html<String>> {
     require_moderator(&user)?;
-    let limit = q.limit.unwrap_or(50).clamp(1, 200);
-    let mut html = String::from("<h1>Пользователи и сообщения с IP</h1>");
-    html.push_str(r#"<form method="get"><input name="ip" placeholder="IP"><button>Искать</button></form>"#);
-    if let Some(ip) = q.ip {
-        let parsed: std::net::IpAddr = ip.parse().map_err(|_| AppError::BadRequest("Некорректный IP".into()))?;
-        let rows = sqlx::query_as::<_, (i32, String, String, chrono::DateTime<chrono::Utc>)>(
-            r#"SELECT DISTINCT u.id,u.nick,'topic' AS kind,t.postdate
-               FROM topics t JOIN users u ON u.id=t.userid WHERE t.postip=$1::inet
-               UNION ALL
-               SELECT DISTINCT u.id,u.nick,'comment' AS kind,c.postdate
-               FROM comments c JOIN users u ON u.id=c.userid WHERE c.postip=$1::inet
-               ORDER BY postdate DESC LIMIT $2"#,
+
+    let mask = q.mask.unwrap_or(32);
+    if !(0..=32).contains(&mask) {
+        return Err(AppError::BadRequest("bad mask".into()));
+    }
+    let ip_cidr: Option<String> = match &q.ip {
+        None => None,
+        Some(ip) => {
+            let re = Lazy::force(&SAME_IP_RE);
+            if !re.is_match(ip) {
+                return Err(AppError::BadRequest("not ip".into()));
+            }
+            if mask == 0 { None } else if mask != 32 { Some(format!("{ip}/{mask}")) } else { Some(ip.clone()) }
+        }
+    };
+
+    let mut html = String::from("<h1>Сообщения и пользователи по IP / user-agent</h1>");
+    html.push_str(&format!(
+        r#"<form method="get" class="form">
+<input name="ip" placeholder="IP" value="{}">
+<select name="mask"><option value="32">Только IP</option><option value="24">Сеть /24</option><option value="23">Сеть /23</option><option value="22">Сеть /22</option><option value="21">Сеть /21</option><option value="16">Сеть /16</option><option value="0">Любой IP</option></select>
+<select name="score"><option value="">Любой score</option><option value="-9999">anonymous</option><option value="46">score &lt;= 45</option><option value="50">score &lt; 50</option><option value="100">score &lt; 100</option></select>
+<button type="submit">Искать</button>
+</form>"#,
+        html_escape::encode_double_quoted_attribute(q.ip.as_deref().unwrap_or("")),
+    ));
+
+    // Matched comments/topics, IP/UA filtered.
+    let posts = sqlx::query_as::<_, (i32, String, String, chrono::DateTime<chrono::Utc>, Option<String>, Option<i32>)>(
+        r#"SELECT c.id, u.nick, 'comment', c.postdate, host(c.postip), c.ua_id
+           FROM comments c JOIN users u ON u.id=c.userid
+           WHERE ($1::inet IS NULL OR c.postip <<= $1::inet) AND ($2::int IS NULL OR c.ua_id=$2)
+           UNION ALL
+           SELECT t.id, u.nick, 'topic', t.postdate, host(t.postip), t.ua_id
+           FROM topics t JOIN users u ON u.id=t.userid
+           WHERE ($1::inet IS NULL OR t.postip <<= $1::inet) AND ($2::int IS NULL OR t.ua_id=$2)
+           ORDER BY postdate DESC LIMIT $3"#,
+    )
+    .bind(&ip_cidr)
+    .bind(q.ua)
+    .bind(SAME_IP_ROWS_LIMIT)
+    .fetch_all(&state.pool)
+    .await?;
+
+    html.push_str(&format!("<h2>Сообщения ({})</h2><ul>", posts.len()));
+    for (id, nick, kind, date, ip, ua) in &posts {
+        html.push_str(&format!(
+            "<li>#{id} <a href=\"/people/{nick}/profile\">{nick}</a> — {kind}, {date} · {} {}</li>",
+            ip.as_deref().unwrap_or(""),
+            ua.map(|u| format!("ua#{u}")).unwrap_or_default(),
+            nick = html_escape::encode_double_quoted_attribute(nick),
+        ));
+    }
+    html.push_str("</ul>");
+    if posts.len() as i64 == SAME_IP_ROWS_LIMIT {
+        html.push_str("<p class=\"muted\">Показаны не все результаты.</p>");
+    }
+
+    // Matched users, only meaningful when an ip/ua filter narrows things down
+    // and we're not specifically asking for the anonymous-only bucket.
+    if q.score != Some(SAME_IP_ANONYMOUS_SCORE_FILTER) && (ip_cidr.is_some() || q.ua.is_some()) {
+        let users = sqlx::query_as::<_, (i32, String, i32)>(
+            r#"SELECT DISTINCT u.id, u.nick, COALESCE(u.score,0) FROM users u
+               WHERE u.id IN (
+                 SELECT userid FROM comments WHERE ($1::inet IS NULL OR postip <<= $1::inet) AND ($2::int IS NULL OR ua_id=$2)
+                 UNION
+                 SELECT userid FROM topics WHERE ($1::inet IS NULL OR postip <<= $1::inet) AND ($2::int IS NULL OR ua_id=$2)
+               )
+               AND ($3::int IS NULL OR COALESCE(u.score,0) < $3)
+               ORDER BY u.nick LIMIT $4"#,
         )
-        .bind(parsed.to_string())
-        .bind(limit)
+        .bind(&ip_cidr)
+        .bind(q.ua)
+        .bind(q.score)
+        .bind(SAME_IP_ROWS_LIMIT)
         .fetch_all(&state.pool)
         .await?;
-        html.push_str("<ul>");
-        for (id, nick, kind, date) in rows {
-            html.push_str(&format!("<li>#{id} <a href=\"/people/{nick}\">{nick}</a> — {kind}, {date}</li>", nick = html_escape::encode_double_quoted_attribute(&nick)));
+        html.push_str(&format!("<h2>Пользователи ({})</h2><ul>", users.len()));
+        for (id, nick, score) in &users {
+            html.push_str(&format!(
+                "<li>#{id} <a href=\"/people/{nick}/profile\">{nick}</a> · score={score}</li>",
+                nick = html_escape::encode_double_quoted_attribute(nick),
+            ));
         }
         html.push_str("</ul>");
     }
+
+    // Block info, exact-IP lookups only.
+    if let (Some(ip), 32) = (&q.ip, mask) {
+        let block: Option<(chrono::DateTime<chrono::Utc>, Option<chrono::DateTime<chrono::Utc>>, Option<String>, bool, bool, i32)> = sqlx::query_as(
+            "SELECT date, ban_date, reason, allow_posting, captcha_required, mod_id FROM b_ips WHERE ip=$1::inet",
+        )
+        .bind(ip)
+        .fetch_optional(&state.pool)
+        .await?;
+        if let Some((date, ban_date, reason, allow_posting, captcha_required, mod_id)) = block {
+            let moderator: Option<String> = sqlx::query_scalar("SELECT nick FROM users WHERE id=$1").bind(mod_id).fetch_optional(&state.pool).await?;
+            html.push_str(&format!(
+                "<h2>Информация о блокировке</h2><p>С {date}{} · причина: {} · модератор: {} · регистр. можно постить: {allow_posting} · капча: {captcha_required}</p>",
+                ban_date.map(|d| format!(" до {d}")).unwrap_or_default(),
+                html_escape::encode_text(reason.as_deref().unwrap_or("")),
+                html_escape::encode_text(moderator.as_deref().unwrap_or("?")),
+            ));
+        }
+    }
+
     Ok(Html(html))
 }
 
@@ -238,6 +345,34 @@ pub struct UserModForm {
     pub reason: Option<String>,
     pub delta: Option<i32>,
     pub password: Option<String>,
+    pub shift: Option<String>,
+}
+
+/// UserModificationController's FreezeDurations/LongFreezeDurations/Unfreeze
+/// maps - the previous "freeze" action hardcoded a fixed 7-day freeze and
+/// had no way to unfreeze a user at all through this endpoint.
+fn freeze_duration(shift: &str) -> Option<chrono::Duration> {
+    use chrono::Duration;
+    Some(match shift {
+        "Разморозить" => Duration::zero(),
+        "30 минут" => Duration::minutes(30),
+        "час" => Duration::hours(1),
+        "2 часа" => Duration::hours(2),
+        "3 часа" => Duration::hours(3),
+        "6 часов" => Duration::hours(6),
+        "9 часов" => Duration::hours(9),
+        "12 часов" => Duration::hours(12),
+        "сутки" => Duration::days(1),
+        "двое суток" => Duration::days(2),
+        "3 дня" => Duration::days(3),
+        "5 дней" => Duration::days(5),
+        "неделя" => Duration::weeks(1),
+        "две недели" => Duration::weeks(2),
+        "месяц" => Duration::days(30),
+        "2 месяца" => Duration::days(60),
+        "3 месяца" => Duration::days(90),
+        _ => return None,
+    })
 }
 
 async fn usermod(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<UserModForm>) -> Result<Redirect> {
@@ -284,8 +419,28 @@ async fn usermod(State(state): State<AppState>, CurrentUser(user): CurrentUser, 
             crate::audit::log_user_action(&state.pool, form.id, moderator.id, "reset_url", &[]).await?;
         }
         "freeze" => {
-            sqlx::query("UPDATE users SET frozen_until=now()+interval '7 days' WHERE id=$1").bind(form.id).execute(&state.pool).await?;
-            crate::audit::log_user_action(&state.pool, form.id, moderator.id, "frozen", &[]).await?;
+            let reason = form.reason.clone().unwrap_or_default();
+            if reason.len() > 255 {
+                return Err(AppError::BadRequest("Причина слишком длиная, максимум 255 байт".into()));
+            }
+            let shift = form.shift.as_deref().unwrap_or("");
+            let Some(duration) = freeze_duration(shift) else {
+                return Err(AppError::BadRequest("некорректный срок заморозки".into()));
+            };
+            let (target_canmod, target_blocked): (bool, bool) = sqlx::query_as("SELECT COALESCE(canmod,false), COALESCE(blocked,false) FROM users WHERE id=$1")
+                .bind(form.id).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
+            // isFreezable: moderator can (un)freeze anyone except another moderator.
+            if target_canmod {
+                return Err(AppError::Forbidden);
+            }
+            let is_unfreeze = duration == chrono::Duration::zero();
+            if !is_unfreeze && target_blocked {
+                return Err(AppError::BadRequest("Пользователь блокирован, его нельзя заморозить".into()));
+            }
+            let until = chrono::Utc::now() + duration;
+            sqlx::query("UPDATE users SET frozen_until=$2 WHERE id=$1").bind(form.id).bind(until).execute(&state.pool).await?;
+            let action = if is_unfreeze { "defrosted" } else { "frozen" };
+            crate::audit::log_user_action(&state.pool, form.id, moderator.id, action, &[("reason", reason.as_str())]).await?;
         }
         "block-n-delete-comments" => {
             sqlx::query("UPDATE users SET blocked=true WHERE id=$1").bind(form.id).execute(&state.pool).await?;

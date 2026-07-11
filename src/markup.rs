@@ -84,3 +84,23 @@ pub fn excerpt(source: &str, max_len: usize) -> String {
     }
     out
 }
+
+static TAG_STRIP_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"<[^>]+>").expect("tag strip regex"));
+
+/// Plain text suitable for a search index: render markup to HTML (through
+/// the same sanitizing pipeline as normal display) then strip tags, so the
+/// index holds readable text rather than raw BBCode/markdown source or
+/// unrendered HTML.
+pub fn plain_text_for_index(source: &str) -> String {
+    let html = render_message(source, Some(true));
+    let stripped = TAG_STRIP_RE.replace_all(&html, " ");
+    stripped
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
