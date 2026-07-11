@@ -1,4 +1,4 @@
-FROM rust:1.82-bookworm
+FROM rust:1.97-bookworm
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-client \
@@ -18,3 +18,5 @@ RUN rustup component add rustfmt clippy
 # devcontainer can still build if crates.io is temporarily unavailable.
 RUN cargo install sqlx-cli --no-default-features --features postgres || true
 RUN cargo install cargo-watch || true
+
+EXPOSE 8181

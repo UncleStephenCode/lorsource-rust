@@ -20,7 +20,7 @@ docker compose up --build
 Открыть:
 
 ```text
-http://localhost:8080
+http://localhost:8181
 ```
 
 PostgreSQL будет поднят рядом, миграции и демо-данные применятся автоматически.
@@ -38,8 +38,8 @@ cargo run
 ## Проверка
 
 ```bash
-curl -fsS http://localhost:8080/healthz
-curl -fsS http://localhost:8080/rss | head
+curl -fsS http://localhost:8181/healthz
+curl -fsS http://localhost:8181/rss | head
 ```
 
 Проверка карты маршрутов и схемы:
@@ -51,14 +51,14 @@ curl -fsS http://localhost:8080/rss | head
 HTTP smoke-тесты по Rust-порту:
 
 ```bash
-NEW_BASE_URL=http://localhost:8080 python3 compat/test_http_compat.py
+NEW_BASE_URL=http://localhost:8181 python3 compat/test_http_compat.py
 ```
 
 Сравнение старого и нового приложения, если старый Scala-сайт запущен рядом:
 
 ```bash
 OLD_BASE_URL=http://localhost:8081 \
-NEW_BASE_URL=http://localhost:8080 \
+NEW_BASE_URL=http://localhost:8181 \
 python3 compat/test_http_compat.py
 ```
 
@@ -154,3 +154,13 @@ This archive includes an additional Java/Rust parity pass:
 - Adapted `.devcontainer` with Rust tooling, PostgreSQL and OpenSearch.
 
 See `docs/PARITY_AUDIT_V8.md` and `docs/DEVCONTAINER_PORT.md`.
+
+## Architecture refactor v9
+
+This archive contains the v9 architectural refactor: Rust 2024 / Rust 1.97 toolchain, domain/application/infra split, Hungarian-style identifiers in the new domain/service/repository layer, and PostgreSQL repositories for the forum/topic core flows. See `docs/ARCHITECTURE_REFACTOR_V9.md` and `docs/generated/architecture_report_v9.json`.
+
+### Profile and theme parity
+
+The Rust port includes a whois-like `/people/{nick}/profile` page and Java-compatible profile settings in `/people/{nick}/settings`. The settings are stored in `user_settings.settings` using the same keys as the Java `DefaultProfile`: `style`, `format.mode`, `topics`, `messages`, `photos`, `hideAdsense`, `mainGallery`, `avatar`, `trackerMode`, `oldTracker`, `reactionNotification`.
+
+Original webapp assets from the Java project are served under `/img`, `/font`, `/js`, `/black`, `/tango`, `/white2`, `/waltz`, `/zomg_ponies` and `/adv`. Supported theme IDs are `tango`, `tango-light`, `tango-auto`, `black`, `white2`, `waltz`, and `zomg_ponies`.

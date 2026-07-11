@@ -2,14 +2,67 @@
 {% block title %}Поиск{% endblock %}
 {% block content %}
 <h1>Поиск</h1>
-<form class="search" method="get" action="/search.jsp">
+<form class="search form" method="get" action="/search.jsp">
   <input type="search" name="q" value="{{ q }}" placeholder="что искать" autofocus>
+  <select name="range">
+    <option value="ALL"{% if range == "ALL" %} selected{% endif %}>темы и комментарии</option>
+    <option value="TOPICS"{% if range == "TOPICS" %} selected{% endif %}>только темы</option>
+    <option value="COMMENTS"{% if range == "COMMENTS" %} selected{% endif %}>только комментарии</option>
+  </select>
+  <select name="interval">
+    <option value="ALL"{% if interval == "ALL" %} selected{% endif %}>весь период</option>
+    <option value="MONTH"{% if interval == "MONTH" %} selected{% endif %}>месяц</option>
+    <option value="THREE_MONTH"{% if interval == "THREE_MONTH" %} selected{% endif %}>три месяца</option>
+    <option value="YEAR"{% if interval == "YEAR" %} selected{% endif %}>год</option>
+    <option value="THREE_YEAR"{% if interval == "THREE_YEAR" %} selected{% endif %}>три года</option>
+  </select>
+  <select name="sort">
+    <option value="RELEVANCE"{% if sort == "RELEVANCE" %} selected{% endif %}>по релевантности</option>
+    <option value="DATE"{% if sort == "DATE" %} selected{% endif %}>по дате: от новых к старым</option>
+    <option value="DATE_OLD_TO_NEW"{% if sort == "DATE_OLD_TO_NEW" %} selected{% endif %}>по дате: от старых к новым</option>
+  </select>
+  <input type="hidden" name="section" value="{{ section }}">
+  <input type="hidden" name="group" value="{{ group }}">
   <button type="submit">Найти</button>
 </form>
-{% if q.len() > 0 %}<p class="meta">Результаты по запросу: {{ q }}</p>{% endif %}
-<div class="topic-list">
-{% for t in topics %}
-  <article class="topic-card"><h2><a href="{{ t.topic_url() }}">{{ t.title }}</a></h2><div class="meta">{{ t.author }} · {{ t.postdate }}</div></article>
+
+{% match error %}
+{% when Some with (msg) %}<p class="error">{{ msg }}</p>{% when None %}{% endmatch %}
+
+{% if searched && error.is_none() %}
+<p class="meta">Найдено: {{ total }} за {{ took_ms }} мс</p>
+
+{% if section_facet.len() > 0 %}
+<nav class="search-facet">
+  {% for f in section_facet %}<a href="/search.jsp?q={{ q }}&amp;section={{ f.key }}">{{ f.label }}</a>{% endfor %}
+</nav>
+{% endif %}
+{% if group_facet.len() > 0 %}
+<nav class="search-facet">
+  {% for f in group_facet %}<a href="/search.jsp?q={{ q }}&amp;section={{ section }}&amp;group={{ f.key }}">{{ f.label }}</a>{% endfor %}
+</nav>
+{% endif %}
+
+<div class="topic-list search-results">
+{% for item in items %}
+  <article class="topic-card">
+    <h2><a href="{{ item.url }}">{{ item.title }}</a></h2>
+    <div class="meta">
+      <a href="/people/{{ item.author }}/profile">{{ item.author }}</a> · {{ item.postdate }}
+      {% if item.is_comment %}· комментарий{% endif %}
+    </div>
+    <p class="excerpt">{{ item.message_excerpt }}</p>
+    {% if item.tags.len() > 0 %}
+    <div class="tags">{% for tag in item.tags %}<a href="/tag/{{ tag }}">#{{ tag }}</a>{% endfor %}</div>
+    {% endif %}
+  </article>
 {% endfor %}
+{% if items.len() == 0 %}<p class="muted">Ничего не найдено.</p>{% endif %}
 </div>
+
+<nav class="pager">
+  {% match prev_link %}{% when Some with (link) %}<a href="{{ link }}">← новее</a>{% when None %}{% endmatch %}
+  {% match next_link %}{% when Some with (link) %}<a href="{{ link }}">старее →</a>{% when None %}{% endmatch %}
+</nav>
+{% endif %}
 {% endblock %}

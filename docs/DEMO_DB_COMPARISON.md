@@ -40,7 +40,7 @@ After both applications are running against equivalent demo data, use:
 
 ```bash
 OLD_BASE_URL=http://localhost:8081 \
-NEW_BASE_URL=http://localhost:8080 \
+NEW_BASE_URL=http://localhost:8181 \
 python3 compat/test_http_compat.py
 ```
 

@@ -53,7 +53,7 @@ devcontainer exec mvn verify
 devcontainer exec mvn -DskipTests package jetty:run-war
 ```
 
-Сервер доступен на хосте по адресу: **http://127.0.0.1:8080/**. Остановка через Ctrl-C.
+Сервер доступен на хосте по адресу: **http://127.0.0.1:8181/**. Остановка через Ctrl-C.
 
 В БД пароли всех пользователей установлены в `passwd`.
 

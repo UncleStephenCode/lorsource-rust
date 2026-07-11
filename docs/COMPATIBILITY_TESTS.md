@@ -28,7 +28,7 @@ docker compose up --build
 Then run:
 
 ```bash
-NEW_BASE_URL=http://localhost:8080 python3 compat/test_http_compat.py
+NEW_BASE_URL=http://localhost:8181 python3 compat/test_http_compat.py
 ```
 
 This verifies that known endpoints are not accidental 404s and that protected endpoints return expected auth/permission statuses. v4 no longer expects explicit 501 placeholder statuses.
@@ -39,7 +39,7 @@ Run the original Scala app on one port and the Rust port on another, then:
 
 ```bash
 OLD_BASE_URL=http://localhost:8081 \
-NEW_BASE_URL=http://localhost:8080 \
+NEW_BASE_URL=http://localhost:8181 \
 python3 compat/test_http_compat.py
 ```
 

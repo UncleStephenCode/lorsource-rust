@@ -3,15 +3,34 @@ use once_cell::sync::Lazy;
 use pulldown_cmark::{html, Options, Parser};
 use regex::Regex;
 
-static URL_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"https?://[^\s<]+" ).expect("url regex"));
+// Quotes and angle brackets are excluded from the URL match so a malicious
+// `"` in a posted URL (e.g. `http://x" onmouseover="...`) can't be captured
+// into the href attribute below and break out of it.
+static URL_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"https?://[^\s<>"']+"#).expect("url regex"));
 static USER_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"@([A-Za-z0-9_][A-Za-z0-9_.-]{1,79})" ).expect("user regex"));
 
 pub fn render_message(source: &str, bbcode: Option<bool>) -> String {
-    if bbcode.unwrap_or(true) {
+    let html = if bbcode.unwrap_or(true) {
         render_lor_markup(source)
     } else {
         render_markdown(source)
-    }
+    };
+    // Matches MessageTextService's universal Jsoup.clean(text, Safelist.relaxed())
+    // pass in the Java original: every rendering path - lorcode/BBCode,
+    // markdown, and (if ever wired up) raw HTML mode - goes through an
+    // allow-list HTML sanitizer as a final safety net, not just the ones
+    // that are "supposed to" already be safe. This is what actually stops
+    // pulldown-cmark's raw-HTML passthrough and closes any escaping bug in
+    // the hand-rolled autolinker above from becoming stored XSS.
+    sanitize_html(&html)
+}
+
+fn sanitize_html(html: &str) -> String {
+    ammonia::Builder::default()
+        .add_tag_attributes("a", &["rel"])
+        .link_rel(None)
+        .clean(html)
+        .to_string()
 }
 
 pub fn render_markdown(source: &str) -> String {
@@ -64,4 +83,24 @@ pub fn excerpt(source: &str, max_len: usize) -> String {
         out.push('…');
     }
     out
+}
+
+static TAG_STRIP_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"<[^>]+>").expect("tag strip regex"));
+
+/// Plain text suitable for a search index: render markup to HTML (through
+/// the same sanitizing pipeline as normal display) then strip tags, so the
+/// index holds readable text rather than raw BBCode/markdown source or
+/// unrendered HTML.
+pub fn plain_text_for_index(source: &str) -> String {
+    let html = render_message(source, Some(true));
+    let stripped = TAG_STRIP_RE.replace_all(&html, " ");
+    stripped
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }

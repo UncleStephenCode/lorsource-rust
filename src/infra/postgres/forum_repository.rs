@@ -1,0 +1,51 @@
+use async_trait::async_trait;
+use sqlx::PgPool;
+
+use crate::domain::forum::{model::StGroup, repository::TrForumRepository};
+use crate::error::Result;
+
+#[derive(Debug, Clone)]
+pub struct CForumPgRepository {
+    oPool: PgPool,
+}
+
+impl CForumPgRepository {
+    pub fn new(oPool: PgPool) -> Self {
+        Self { oPool }
+    }
+}
+
+#[async_trait]
+impl TrForumRepository for CForumPgRepository {
+    async fn vecListGroups(&self) -> Result<Vec<StGroup>> {
+        Ok(sqlx::query_as::<_, StGroup>(&(S_GROUP_SELECT_SQL.to_string() + " GROUP BY g.id,s.id ORDER BY s.id,g.title"))
+            .fetch_all(&self.oPool)
+            .await?)
+    }
+
+    async fn vecListGroupsBySection(&self, optSectionPrefix: Option<&str>) -> Result<Vec<StGroup>> {
+        Ok(sqlx::query_as::<_, StGroup>(
+            &(S_GROUP_SELECT_SQL.to_string()
+                + " WHERE ($1::text IS NULL OR CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END=$1) GROUP BY g.id,s.id ORDER BY g.title"),
+        )
+        .bind(optSectionPrefix)
+        .fetch_all(&self.oPool)
+        .await?)
+    }
+
+    async fn stFindGroupByUrlName(&self, sUrlName: &str) -> Result<StGroup> {
+        Ok(sqlx::query_as::<_, StGroup>(&(S_GROUP_SELECT_SQL.to_string() + " WHERE g.urlname=$1 GROUP BY g.id,s.id"))
+            .bind(sUrlName)
+            .fetch_one(&self.oPool)
+            .await?)
+    }
+}
+
+const S_GROUP_SELECT_SQL: &str = r#"
+SELECT g.id, g.title, g.urlname, g.section, s.name AS section_name,
+       CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END AS section_prefix,
+       g.info, g.longinfo, count(t.id) AS topics
+FROM groups g
+JOIN sections s ON s.id=g.section
+LEFT JOIN topics t ON t.groupid=g.id AND NOT t.deleted
+"#;

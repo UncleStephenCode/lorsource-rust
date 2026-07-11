@@ -1,0 +1,145 @@
+.claude/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.env
+*.local
+*.secret
+*.secrets
+secrets/
+private/
+
+# Rust build artifacts
+/target/
+**/target/
+Cargo.lock
+# Keep Cargo.lock for applications if you want reproducible builds.
+# Remove the previous line if this repository should commit Cargo.lock.
+
+# Rust tooling / local caches
+.cargo/.package-cache
+.cargo/registry/
+.cargo/git/
+rust-project.json
+*.profraw
+*.profdata
+
+# SQLx local/offline cache if generated locally
+.sqlx/
+sqlx-data.json
+
+# Docker / compose local overrides
+docker-compose.override.yml
+compose.override.yml
+.docker/
+docker-data/
+pgdata/
+postgres-data/
+opensearch-data/
+data/
+uploads/
+photos/
+tmp/
+temp/
+
+# Logs
+*.log
+logs/
+log/
+*.pid
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.venv/
+venv/
+env/
+ENV/
+pip-wheel-metadata/
+dist/
+build/
+*.egg-info/
+
+# Node / frontend artifacts
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.cache/
+.parcel-cache/
+.vite/
+.next/
+.nuxt/
+coverage/
+
+# IDE / editors
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.example.json
+.idea/
+*.iml
+*.ipr
+*.iws
+.project
+.classpath
+.settings/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Devcontainer local state
+.devcontainer/.env
+.devcontainer/.env.*
+.devcontainer/docker-compose.override.yml
+
+# Generated reports / temporary compatibility outputs
+docs/generated/*.tmp
+docs/generated/*.local.json
+compat/*.tmp
+compat/*.local.json
+*.patch.tmp
+
+# Archives / exported builds
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+
+# Database dumps and backups
+*.dump
+*.sql.gz
+*.backup
+*.bak
+*.sqlite
+*.sqlite3
+
+# Test snapshots / temporary HTTP replay outputs
+replay-results/
+compat-results/
+test-results/
+
+# OS files
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Desktop.ini

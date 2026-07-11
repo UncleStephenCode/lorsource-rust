@@ -2,10 +2,10 @@
 """HTTP compatibility smoke tests for old lorsource -> Rust port.
 
 Usage without old app:
-  NEW_BASE_URL=http://localhost:8080 python3 compat/test_http_compat.py
+  NEW_BASE_URL=http://localhost:8181 python3 compat/test_http_compat.py
 
 Usage with both apps:
-  OLD_BASE_URL=http://localhost:8081 NEW_BASE_URL=http://localhost:8080 \
+  OLD_BASE_URL=http://localhost:8081 NEW_BASE_URL=http://localhost:8181 \
     python3 compat/test_http_compat.py
 
 The test intentionally compares coarse behaviour first: status class, redirect
@@ -68,7 +68,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--matrix", type=Path, default=Path(__file__).with_name("endpoints.json"))
     parser.add_argument("--old", default=os.environ.get("OLD_BASE_URL"))
-    parser.add_argument("--new", default=os.environ.get("NEW_BASE_URL", "http://localhost:8080"))
+    parser.add_argument("--new", default=os.environ.get("NEW_BASE_URL", "http://localhost:8181"))
     args = parser.parse_args()
 
     matrix = json.loads(args.matrix.read_text(encoding="utf-8"))

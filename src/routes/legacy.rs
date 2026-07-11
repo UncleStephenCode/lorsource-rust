@@ -106,12 +106,27 @@ pub struct PreviewForm {
     pub markup: Option<String>,
 }
 
-pub async fn markup_preview(Form(form): Form<PreviewForm>) -> Json<serde_json::Value> {
+/// MarkupPreviewController.preview: validates the markup id against
+/// UserPermissionService.allowedFormats before rendering, and caps input at
+/// MaxTextLength - the previous handler accepted any `markup` string
+/// (including e.g. "html", which the site no longer allows anyone to pick,
+/// see profile.rs's FORMAT_MODES) with no permission check at all.
+pub async fn markup_preview(CurrentUser(user): CurrentUser, Form(form): Form<PreviewForm>) -> Json<serde_json::Value> {
     let text = form.text.or(form.msg).or(form.message).unwrap_or_default();
-    if text.len() > 65_536 {
+
+    let markup_id = form.markup.as_deref().unwrap_or(crate::profile::DEFAULT_FORMAT_MODE);
+    if !crate::profile::is_format_mode(markup_id) {
+        return Json(json!({"error": "Недопустимый режим разметки"}));
+    }
+    let _ = &user; // allowed_formats is identical for anon/registered in this port (see profile::FORMAT_MODES)
+
+    if text.is_empty() {
+        return Json(json!({"html": ""}));
+    }
+    if text.chars().count() > 65_536 {
         return Json(json!({"error": "Слишком длинный текст"}));
     }
-    let html = markup::render_message(&text, Some(form.markup.as_deref().unwrap_or("lorcode") != "plain"));
+    let html = markup::render_message(&text, Some(markup_id != "markdown"));
     Json(json!({"html": html}))
 }
 
@@ -134,19 +149,37 @@ pub async fn check_login(State(state): State<AppState>, Query(q): Query<CheckLog
     Ok(Json(json!(result)))
 }
 
-pub async fn yandex_tableau(State(state): State<AppState>) -> Json<serde_json::Value> {
-    Json(json!({
-        "version": 1,
-        "api_version": 1,
-        "layout": {"logo": format!("{}/static/app.css", state.config.public_url), "color": "#385e8e", "show_title": true},
-    }))
+/// Matches UserEventApiController.getYandexWidget: `{}` for anonymous,
+/// `{"notifications": N}` once authenticated - the previous implementation
+/// returned an unrelated widget-manifest shape that no real Yandex.Tableau
+/// integration understands.
+pub async fn yandex_tableau(State(state): State<AppState>, CurrentUser(user): CurrentUser) -> Result<Json<serde_json::Value>> {
+    let Some(user) = user else { return Ok(Json(json!({}))); };
+    let count: i32 = sqlx::query_scalar("SELECT unread_events FROM users WHERE id=$1")
+        .bind(user.id)
+        .fetch_one(&state.pool)
+        .await?;
+    Ok(Json(json!({"notifications": count})))
 }
 
-pub async fn help_page(Path(page): Path<String>) -> Result<Html<String>> {
-    let title = html_escape::encode_text(&page.replace('-', " "));
-    Ok(Html(format!(
-        "<h1>Справка: {title}</h1><p>Страница справки сохранена как legacy-compatible endpoint. Контент можно перенести из старых JSP/Markdown-ресурсов отдельной итерацией.</p>"
-    )))
+/// Matches HelpController.HelpPages exactly - only these 3 real pages
+/// exist; anything else 404s (the previous handler rendered a placeholder
+/// for any string, which never 404'd).
+fn help_page_title(page: &str) -> Option<&'static str> {
+    match page {
+        "lorcode.md" => Some("Разметка сообщений (LORCODE)"),
+        "markdown.md" => Some("Разметка сообщений (Markdown)"),
+        "rules.md" => Some("Правила форума"),
+        _ => None,
+    }
+}
+
+pub async fn help_page(State(state): State<AppState>, Path(page): Path<String>) -> Result<Html<String>> {
+    let Some(title) = help_page_title(&page) else { return Err(AppError::NotFound); };
+    let path = format!("{}/help/{page}", state.config.static_dir);
+    let source = tokio::fs::read_to_string(&path).await.map_err(|_| AppError::NotFound)?;
+    let html = markup::render_message(&source, Some(false));
+    Ok(Html(format!("<h1>{}</h1>{html}", html_escape::encode_text(title))))
 }
 
 pub async fn archive_section(State(state): State<AppState>, uri: Uri, Query(q): Query<PagerQuery>, CurrentUser(current_user): CurrentUser) -> Result<Html<String>> {
@@ -223,11 +256,19 @@ pub async fn topic_thread_redirect(uri: Uri, Path((group, id, thread_root)): Pat
     Redirect::to(&format!("/{section}/{group}/{id}#comment-{thread_root}"))
 }
 
-pub async fn topic_history(State(state): State<AppState>, uri: Uri, Path((_group, id)): Path<(String, i32)>) -> Result<Html<String>> {
+/// Java's EditHistoryController.canViewHistory requires an authenticated
+/// viewer in every branch (moderator, author, or "any logged-in user on a
+/// non-expired topic") - anonymous visitors are always rejected. Rust's
+/// "expired" (archived-topic) concept isn't modeled yet, so this collapses
+/// to "must be logged in", which closes the actual disclosure hole (history
+/// text, including deleted/edited content, was previously world-readable).
+pub async fn topic_history(State(state): State<AppState>, uri: Uri, Path((_group, id)): Path<(String, i32)>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+    if user.is_none() { return Err(AppError::Forbidden); }
     render_history(&state, section_from_uri(&uri).unwrap_or("forum"), id, None).await
 }
 
-pub async fn comment_history(State(state): State<AppState>, uri: Uri, Path((_group, _id, commentid)): Path<(String, i32, i32)>) -> Result<Html<String>> {
+pub async fn comment_history(State(state): State<AppState>, uri: Uri, Path((_group, _id, commentid)): Path<(String, i32, i32)>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+    if user.is_none() { return Err(AppError::Forbidden); }
     render_history(&state, section_from_uri(&uri).unwrap_or("forum"), commentid, Some(commentid)).await
 }
 
@@ -296,8 +337,77 @@ pub async fn view_deleted(State(state): State<AppState>, CurrentUser(user): Curr
     Ok(Html(html))
 }
 
-pub async fn notifications_click() -> Json<serde_json::Value> {
-    Json(json!({"ok": true}))
+#[derive(Deserialize)]
+pub struct NotificationsClickForm {
+    #[serde(rename = "firstId")]
+    pub first_id: i32,
+    #[serde(rename = "lastId")]
+    pub last_id: i32,
+}
+
+async fn topic_link(state: &AppState, topic_id: i32, comment_id: Option<i32>) -> Result<String> {
+    let prefix: Option<(String, String)> = sqlx::query_as(
+        r#"SELECT CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END,
+                  g.urlname
+           FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section WHERE t.id=$1"#,
+    )
+    .bind(topic_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((section, group)) = prefix else { return Ok("/notifications".to_string()); };
+    let anchor = comment_id.map(|id| format!("?cid={id}")).unwrap_or_default();
+    Ok(format!("/{section}/{group}/{topic_id}{anchor}"))
+}
+
+/// Simplified from UserEventController.processClickNotifications: verifies
+/// both events belong to the current user, marks the id range read, and
+/// returns the link to the first event's topic/comment. The FAVORITES/
+/// REACTION grouped-range validation (isValidClickRange) isn't replicated -
+/// out of scope for a first pass, tracked as a follow-up.
+async fn process_notifications_click(state: &AppState, user_id: i32, form: &NotificationsClickForm) -> Result<String> {
+    let first: Option<(i32,)> = sqlx::query_as("SELECT userid FROM user_events WHERE id=$1").bind(form.first_id).fetch_optional(&state.pool).await?;
+    let last: Option<(i32, bool, i32, Option<i32>)> = sqlx::query_as(
+        "SELECT userid, unread, message_id, comment_id FROM user_events WHERE id=$1",
+    )
+    .bind(form.last_id)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    let (Some((first_owner,)), Some((last_owner, last_unread, _, _))) = (first, last) else {
+        return Ok("/notifications".to_string());
+    };
+    if user_id != first_owner || user_id != last_owner {
+        return Err(AppError::Forbidden);
+    }
+
+    if last_unread {
+        let (lo, hi) = (form.first_id.min(form.last_id), form.first_id.max(form.last_id));
+        sqlx::query("UPDATE user_events SET unread=false WHERE userid=$1 AND unread AND id BETWEEN $2 AND $3")
+            .bind(user_id).bind(lo).bind(hi).execute(&state.pool).await?;
+        sqlx::query("UPDATE users SET unread_events=(SELECT count(*) FROM user_events e WHERE e.unread AND e.userid=users.id) WHERE id=$1")
+            .bind(user_id).execute(&state.pool).await?;
+    }
+
+    let first_target: Option<(i32, Option<i32>)> = sqlx::query_as("SELECT message_id, comment_id FROM user_events WHERE id=$1")
+        .bind(form.first_id)
+        .fetch_optional(&state.pool)
+        .await?;
+    match first_target {
+        Some((topic_id, comment_id)) => topic_link(state, topic_id, comment_id).await,
+        None => Ok("/notifications".to_string()),
+    }
+}
+
+pub async fn notifications_click(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<NotificationsClickForm>) -> Result<Redirect> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    let url = process_notifications_click(&state, user.id, &form).await?;
+    Ok(Redirect::to(&url))
+}
+
+pub async fn notifications_click_ajax(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<NotificationsClickForm>) -> Result<Json<serde_json::Value>> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    let url = process_notifications_click(&state, user.id, &form).await?;
+    Ok(Json(json!({"url": url})))
 }
 
 #[derive(Deserialize)]
@@ -487,9 +597,9 @@ pub struct DeregisterForm {
     pub acceptOneway: Option<String>,
 }
 
-pub async fn deregister_form(CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+pub async fn deregister_form(State(state): State<AppState>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
-    ensure_deregister_allowed(&user)?;
+    ensure_deregister_allowed(&state, &user).await?;
     Ok(Html(format!(r#"
 <h1>Удаление аккаунта {nick}</h1>
 <p>Операция соответствует исходной логике: аккаунт блокируется, профиль очищается, восстановление через эту форму не предусмотрено.</p>
@@ -504,7 +614,7 @@ pub async fn deregister_form(CurrentUser(user): CurrentUser) -> Result<Html<Stri
 
 pub async fn deregister_post(State(state): State<AppState>, jar: CookieJar, CurrentUser(user): CurrentUser, Form(form): Form<DeregisterForm>) -> Result<impl IntoResponse> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
-    ensure_deregister_allowed(&user)?;
+    ensure_deregister_allowed(&state, &user).await?;
     if form.accept_block.or(form.acceptBlock).is_none() {
         return Err(AppError::BadRequest("Вы не согласились с блокировкой аккаунта".into()));
     }
@@ -525,7 +635,7 @@ pub async fn deregister_post(State(state): State<AppState>, jar: CookieJar, Curr
     Ok((jar.remove(Cookie::from("lor_session")), Html("<h1>Удаление пользователя прошло успешно.</h1>".to_string())).into_response())
 }
 
-fn ensure_deregister_allowed(user: &crate::models::UserSummary) -> Result<()> {
+async fn ensure_deregister_allowed(state: &AppState, user: &crate::models::UserSummary) -> Result<()> {
     if user.max_score.unwrap_or(0) < 100 {
         return Err(AppError::Forbidden);
     }
@@ -533,6 +643,14 @@ fn ensure_deregister_allowed(user: &crate::models::UserSummary) -> Result<()> {
         return Err(AppError::Forbidden);
     }
     if user.blocked.unwrap_or(false) {
+        return Err(AppError::Forbidden);
+    }
+    let frozen_until: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar("SELECT frozen_until FROM users WHERE id=$1")
+        .bind(user.id)
+        .fetch_optional(&state.pool)
+        .await?
+        .flatten();
+    if frozen_until.map(|u| u > chrono::Utc::now()).unwrap_or(false) {
         return Err(AppError::Forbidden);
     }
     Ok(())
@@ -596,10 +714,14 @@ fn validate_year_month(year: i32, month: i32) -> Result<()> {
 }
 
 fn section_from_uri(uri: &Uri) -> Option<&'static str> {
-    uri.path().trim_start_matches('/').split('/').next().and_then(|s| match s {
-        "forum" | "news" | "articles" | "gallery" | "polls" => Some(s),
+    match uri.path().trim_start_matches('/').split('/').next()? {
+        "forum" => Some("forum"),
+        "news" => Some("news"),
+        "articles" => Some("articles"),
+        "gallery" => Some("gallery"),
+        "polls" => Some("polls"),
         _ => None,
-    })
+    }
 }
 
 #[derive(Deserialize)]
@@ -780,9 +902,29 @@ pub async fn delete_image_form(Query(q): Query<ImageForm>, CurrentUser(user): Cu
 
 pub async fn delete_image(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<ImageForm>) -> Result<Redirect> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
-    sqlx::query("UPDATE images SET deleted=true WHERE id=$1 AND (userid=$2 OR EXISTS (SELECT 1 FROM users WHERE id=$2 AND canmod))")
-        .bind(form.id).bind(user.id).execute(&state.pool).await?;
-    Ok(Redirect::to("/gallery/"))
+    let Some((topic_id, author_id, is_main, group_urlname)): Option<(i32, i32, bool, String)> = sqlx::query_as(
+        r#"SELECT i.topic, t.userid, (t.image = i.id), g.urlname
+           FROM images i JOIN topics t ON t.id=i.topic JOIN groups g ON g.id=t.groupid
+           WHERE i.id=$1"#,
+    )
+    .bind(form.id)
+    .fetch_optional(&state.pool)
+    .await?
+    else {
+        return Err(AppError::NotFound);
+    };
+    if !user.canmod && user.id != author_id {
+        return Err(AppError::Forbidden);
+    }
+    // Matches DeleteImageController.checkDelete: a gallery section's main
+    // image can't be deleted through this endpoint at all - the previous
+    // handler had no such guard.
+    if is_main {
+        return Err(AppError::Forbidden);
+    }
+    sqlx::query("UPDATE images SET deleted=true WHERE id=$1").bind(form.id).execute(&state.pool).await?;
+    sqlx::query("UPDATE topics SET lastmod=now() WHERE id=$1").bind(topic_id).execute(&state.pool).await?;
+    Ok(Redirect::to(&format!("/gallery/{}/{}", urlencoding::encode(&group_urlname), topic_id)))
 }
 
 #[derive(Deserialize)]
