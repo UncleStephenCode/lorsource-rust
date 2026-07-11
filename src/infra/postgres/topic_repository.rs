@@ -227,11 +227,15 @@ WHERE t.id=$1
 GROUP BY t.id,m.id,u.id,g.id,s.id
 "#;
 
+// `comments.topic_deleted` was dropped from the real schema years ago (see
+// db/migrations/0013) - a deleted topic's own visibility is gated
+// separately (render_topic_view checks topics.deleted), so comments are
+// listed here regardless of that flag, matching current Java behavior.
 const S_LIST_COMMENTS_SQL: &str = r#"
 SELECT c.id, c.topic, c.replyto, c.title, m.message, c.postdate, u.id AS author_id, u.nick AS author, c.deleted
 FROM comments c
 JOIN msgbase m ON m.id=c.id
 JOIN users u ON u.id=c.userid
-WHERE c.topic=$1 AND NOT c.topic_deleted
+WHERE c.topic=$1
 ORDER BY c.postdate ASC
 "#;

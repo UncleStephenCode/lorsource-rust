@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 /// Maps UserEventFilterEnum's `getName` (lowercase enum case) to its `dbType`.
-fn filter_db_type(filter: &str) -> Option<&'static str> {
+pub(crate) fn filter_db_type(filter: &str) -> Option<&'static str> {
     match filter {
         "answers" => Some("REPLY"),
         "favorites" => Some("WATCH"),
@@ -19,23 +19,55 @@ fn filter_db_type(filter: &str) -> Option<&'static str> {
 }
 
 #[derive(Debug, sqlx::FromRow)]
-struct NotificationEvent {
-    id: i32,
-    event_date: chrono::DateTime<chrono::Utc>,
-    subj: String,
-    msgid: i32,
-    cid: Option<i32>,
-    unread: bool,
-    event_type: String,
-    section_prefix: String,
-    group_urlname: String,
+pub(crate) struct NotificationEvent {
+    pub id: i32,
+    pub event_date: chrono::DateTime<chrono::Utc>,
+    pub subj: String,
+    pub msgid: i32,
+    pub cid: Option<i32>,
+    pub unread: bool,
+    pub event_type: String,
+    pub section_prefix: String,
+    pub group_urlname: String,
 }
 
 impl NotificationEvent {
-    fn link(&self) -> String {
+    pub(crate) fn link(&self) -> String {
         let anchor = self.cid.map(|id| format!("?cid={id}")).unwrap_or_default();
         format!("/{}/{}/{}{anchor}", self.section_prefix, self.group_urlname, self.msgid)
     }
+}
+
+/// Shared query behind /notifications and /show-replies.jsp's moderator
+/// view + RSS/Atom feed - matches UserEventDao.getRepliesForUser: when
+/// `show_private` is false (viewing someone else's feed), events flagged
+/// `private` are excluded.
+pub(crate) async fn fetch_events(
+    state: &AppState,
+    user_id: i32,
+    db_type: Option<&str>,
+    show_private: bool,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<NotificationEvent>> {
+    Ok(sqlx::query_as::<_, NotificationEvent>(
+        r#"SELECT e.id, e.event_date, t.title AS subj, t.id AS msgid, e.comment_id AS cid, e.unread, e.type::text AS event_type,
+                  CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END AS section_prefix,
+                  g.urlname AS group_urlname
+           FROM user_events e
+           JOIN topics t ON t.id=e.message_id
+           JOIN groups g ON g.id=t.groupid
+           JOIN sections s ON s.id=g.section
+           WHERE e.userid=$1 AND ($2::text IS NULL OR e.type::text=$2) AND ($3 OR NOT e.private)
+           ORDER BY e.id DESC LIMIT $4 OFFSET $5"#,
+    )
+    .bind(user_id)
+    .bind(db_type)
+    .bind(show_private)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.pool)
+    .await?)
 }
 
 #[derive(Deserialize)]
@@ -62,23 +94,7 @@ pub async fn notifications(State(state): State<AppState>, CurrentUser(user): Cur
     let offset = q.offset.unwrap_or(0).max(0);
     let limit = 20i64;
 
-    let events = sqlx::query_as::<_, NotificationEvent>(
-        r#"SELECT e.id, e.event_date, t.title AS subj, t.id AS msgid, e.comment_id AS cid, e.unread, e.type::text AS event_type,
-                  CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END AS section_prefix,
-                  g.urlname AS group_urlname
-           FROM user_events e
-           JOIN topics t ON t.id=e.message_id
-           JOIN groups g ON g.id=t.groupid
-           JOIN sections s ON s.id=g.section
-           WHERE e.userid=$1 AND ($2::text IS NULL OR e.type::text=$2)
-           ORDER BY e.id DESC LIMIT $3 OFFSET $4"#,
-    )
-    .bind(user.id)
-    .bind(db_type)
-    .bind(limit + 1)
-    .bind(offset)
-    .fetch_all(&state.pool)
-    .await?;
+    let events = fetch_events(&state, user.id, db_type, true, limit + 1, offset).await?;
 
     let has_more = events.len() as i64 > limit;
     let events: Vec<_> = events.into_iter().take(limit as usize).collect();

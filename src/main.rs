@@ -15,6 +15,7 @@ mod pagination;
 mod profile;
 mod routes;
 mod search_index;
+mod security_headers;
 mod state;
 mod theme_middleware;
 
@@ -59,6 +60,7 @@ async fn main() -> anyhow::Result<()> {
         .nest_service("/adv", ServeDir::new(format!("{}/adv", &config.static_dir)))
         .nest_service("/photos", ServeDir::new(format!("{}/photos", &config.upload_dir)))
         .fallback(routes::not_found)
+        .layer(axum::middleware::from_fn_with_state(state.clone(), security_headers::apply))
         .layer(axum::middleware::from_fn_with_state(state.clone(), theme_middleware::apply_theme))
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())

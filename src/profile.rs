@@ -201,3 +201,43 @@ fn parse_hstore_text(value: &str) -> HashMap<String, String> {
 fn clean_hstore_token(token: &str) -> String {
     token.trim().trim_matches('"').replace("\\\"", "\"")
 }
+
+/// `UserService.DisabledUserpic`: a 1x1 transparent placeholder used
+/// whenever the viewer disabled avatars (`avatarMode=="empty"`) or the
+/// target has no email to derive a Gravatar hash from.
+pub const DISABLED_USERPIC: &str = "/img/p.gif";
+
+fn gravatar_url(email: &str, avatar_mode: &str, size: u32) -> String {
+    use md5::{Digest, Md5};
+    let non_exist = if avatar_mode == "empty" { "blank" } else { avatar_mode };
+    let hash = format!("{:x}", Md5::digest(email.trim().to_lowercase().as_bytes()));
+    format!("https://secure.gravatar.com/avatar/{hash}?s={size}&r=g&d={non_exist}&f=y")
+}
+
+/// `UserService.getUserpic`: `avatar_mode` is the *viewer's* profile
+/// setting (`session.profile.avatarMode`), not the target user's - it
+/// governs the Gravatar fallback shown for people without a local photo.
+/// `mystery_man=true` additionally special-cases the anonymous user and
+/// switches the empty-fallback style to Gravatar's "mm" silhouette
+/// (used on the profile page and topic/comment author lines, but not in
+/// compact listings where `mystery_man=false`).
+pub fn userpic_url(viewer_avatar_mode: &str, mystery_man: bool, is_anonymous: bool, local_photo: Option<&str>, email: Option<&str>) -> Option<String> {
+    let avatar_mode = if mystery_man && viewer_avatar_mode == "empty" { "mm" } else { viewer_avatar_mode };
+
+    if is_anonymous && mystery_man {
+        return Some(gravatar_url("anonymous@linux.org.ru", avatar_mode, 150));
+    }
+    if let Some(photo) = local_photo.filter(|p| !p.is_empty()) {
+        return Some(if photo.starts_with('/') || photo.starts_with("http://") || photo.starts_with("https://") {
+            photo.to_string()
+        } else {
+            format!("/photos/{photo}")
+        });
+    }
+
+    let email = email.filter(|e| !e.is_empty());
+    if avatar_mode == "empty" {
+        return None;
+    }
+    email.map(|email| gravatar_url(email, avatar_mode, 150))
+}

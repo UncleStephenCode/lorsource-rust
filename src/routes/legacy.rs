@@ -10,7 +10,7 @@ use askama::Template;
 use axum::{
     extract::{Multipart, Path, Query, State},
     http::{StatusCode, Uri},
-    response::{Html, IntoResponse, Redirect},
+    response::{Html, IntoResponse, Redirect, Response},
     Form, Json,
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
@@ -251,11 +251,6 @@ async fn list_archive_topics(state: &AppState, section: Option<&str>, group: Opt
     .await?)
 }
 
-pub async fn topic_thread_redirect(uri: Uri, Path((group, id, thread_root)): Path<(String, i32, i32)>) -> Redirect {
-    let section = section_from_uri(&uri).unwrap_or("forum");
-    Redirect::to(&format!("/{section}/{group}/{id}#comment-{thread_root}"))
-}
-
 /// Java's EditHistoryController.canViewHistory requires an authenticated
 /// viewer in every branch (moderator, author, or "any logged-in user on a
 /// non-expired topic") - anonymous visitors are always rejected. Rust's
@@ -308,13 +303,117 @@ pub async fn show_comments_jsp(Query(q): Query<ShowCommentsQuery>) -> Redirect {
 }
 
 #[derive(Deserialize)]
-pub struct ShowRepliesQuery { pub nick: Option<String>, pub output: Option<String> }
+pub struct ShowRepliesQuery {
+    pub nick: Option<String>,
+    pub output: Option<String>,
+    pub filter: Option<String>,
+    pub offset: Option<i64>,
+}
 
-pub async fn show_replies_jsp(CurrentUser(user): CurrentUser, Query(q): Query<ShowRepliesQuery>) -> impl IntoResponse {
-    if q.output.is_some() {
-        return Json(json!({"items": [], "nick": q.nick.or_else(|| user.as_ref().map(|u| u.nick.clone()))})).into_response();
+/// UserEventController's three `/show-replies.jsp` branches (Spring
+/// disambiguates them via param presence - `!output`+`!nick`,
+/// `!output`+`nick`, `output`):
+/// 1. bare -> redirect to /notifications (must be logged in)
+/// 2. `?nick=X` (no output) -> moderator-only read view of X's notifications
+/// 3. `?output=rss|atom&nick=X` -> real XML feed of X's events
+pub async fn show_replies_jsp(State(state): State<AppState>, CurrentUser(user): CurrentUser, Query(q): Query<ShowRepliesQuery>) -> Result<Response> {
+    if let Some(output) = q.output.as_deref() {
+        let nick = q.nick.clone().unwrap_or_default();
+        if !valid_login_name_for_java(&nick) {
+            return Err(AppError::BadRequest("некорректное имя пользователя".into()));
+        }
+        let target: Option<(i32, String)> = sqlx::query_as("SELECT id, nick FROM users WHERE lower(nick)=lower($1)")
+            .bind(&nick)
+            .fetch_optional(&state.pool)
+            .await?;
+        let Some((target_id, target_nick)) = target else { return Err(AppError::NotFound); };
+        let view_by_owner = user.as_ref().map(|u| u.nick.eq_ignore_ascii_case(&target_nick)).unwrap_or(false);
+        let db_type = q.filter.as_deref().and_then(crate::routes::api::filter_db_type);
+        let events = crate::routes::api::fetch_events(&state, target_id, db_type, view_by_owner, 200, 0).await?;
+
+        let is_atom = output == "atom";
+        let body = render_replies_feed(&state, &target_nick, &events, is_atom);
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            (if is_atom { "application/atom+xml; charset=utf-8" } else { "application/rss+xml; charset=utf-8" }).parse().unwrap(),
+        );
+        // Java sets `Expires: now + 90s` on this feed endpoint.
+        let expires = (chrono::Utc::now() + chrono::Duration::seconds(90)).to_rfc2822();
+        headers.insert(axum::http::header::EXPIRES, expires.parse().unwrap());
+        return Ok((headers, body).into_response());
     }
-    Redirect::to("/notifications").into_response()
+
+    let Some(nick) = q.nick.clone() else {
+        if user.is_none() { return Err(AppError::Forbidden); }
+        return Ok(Redirect::to("/notifications").into_response());
+    };
+    if !valid_login_name_for_java(&nick) {
+        return Err(AppError::BadRequest("некорректное имя пользователя".into()));
+    }
+    let Some(current) = user else { return Err(AppError::Forbidden); };
+    if current.nick.eq_ignore_ascii_case(&nick) {
+        return Ok(Redirect::to("/notifications").into_response());
+    }
+    if !current.canmod {
+        return Err(AppError::Forbidden);
+    }
+
+    let target_id: Option<i32> = sqlx::query_scalar("SELECT id FROM users WHERE lower(nick)=lower($1)").bind(&nick).fetch_optional(&state.pool).await?;
+    let Some(target_id) = target_id else { return Err(AppError::NotFound); };
+    let db_type = q.filter.as_deref().and_then(crate::routes::api::filter_db_type);
+    let offset = q.offset.unwrap_or(0).max(0);
+    let events = crate::routes::api::fetch_events(&state, target_id, db_type, true, 20, offset).await?;
+
+    let mut html = format!("<h1>Уведомления {}</h1><p class=\"muted\">Просмотр от имени модератора {}.</p><ul class=\"notifications-list\">", html_escape::encode_text(&nick), html_escape::encode_text(&current.nick));
+    for e in &events {
+        html.push_str(&format!(
+            "<li{}><a href=\"{}\">{}</a> <small>{} · {}</small></li>",
+            if e.unread { " class=\"unread\"" } else { "" },
+            e.link(),
+            html_escape::encode_text(&e.subj),
+            e.event_date,
+            html_escape::encode_text(&e.event_type),
+        ));
+    }
+    if events.is_empty() {
+        html.push_str("<li class=\"muted\">Нет уведомлений</li>");
+    }
+    html.push_str("</ul>");
+    Ok(Html(html).into_response())
+}
+
+fn render_replies_feed(state: &AppState, nick: &str, events: &[crate::routes::api::NotificationEvent], atom: bool) -> String {
+    let title = format!("Ответы пользователю {nick}");
+    if atom {
+        let mut body = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"><title>{}</title><link href="{}/show-replies.jsp?nick={}&amp;output=atom" rel="self"/><id>{}/show-replies.jsp?nick={}</id>"#,
+            html_escape::encode_text(&title), state.config.public_url, urlencoding::encode(nick), state.config.public_url, urlencoding::encode(nick),
+        );
+        for e in events {
+            let link = format!("{}{}", state.config.public_url, e.link());
+            body.push_str(&format!(
+                "<entry><title>{}</title><link href=\"{link}\"/><id>{link}</id><updated>{}</updated></entry>",
+                html_escape::encode_text(&e.subj), e.event_date.to_rfc3339(),
+            ));
+        }
+        body.push_str("</feed>");
+        body
+    } else {
+        let mut body = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>{}</title><link>{}/show-replies.jsp?nick={}</link><description>{}</description>"#,
+            html_escape::encode_text(&title), state.config.public_url, urlencoding::encode(nick), html_escape::encode_text(&title),
+        );
+        for e in events {
+            let link = format!("{}{}", state.config.public_url, e.link());
+            body.push_str(&format!(
+                "<item><title>{}</title><link>{link}</link><guid>{link}</guid><pubDate>{}</pubDate></item>",
+                html_escape::encode_text(&e.subj), e.event_date.to_rfc2822(),
+            ));
+        }
+        body.push_str("</channel></rss>");
+        body
+    }
 }
 
 pub async fn view_deleted(State(state): State<AppState>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
@@ -695,16 +794,16 @@ pub async fn forum_page_or_archive(
     Path((group, id_or_year, page_or_month)): Path<(String, String, String)>,
     Query(q): Query<PagerQuery>,
     CurrentUser(current_user): CurrentUser,
-) -> Result<Html<String>> {
+) -> Result<axum::response::Response> {
     if let Some(page) = page_or_month.strip_prefix("page") {
-        let _page: i64 = page.parse().map_err(|_| AppError::NotFound)?;
+        let page: i64 = page.parse().map_err(|_| AppError::NotFound)?;
         let id: i32 = id_or_year.parse().map_err(|_| AppError::NotFound)?;
-        return crate::routes::topics::render_topic(state, id, current_user).await;
+        return crate::routes::topics::render_topic_page(state, "forum", group, id, page, current_user).await;
     }
 
     let year: i32 = id_or_year.parse().map_err(|_| AppError::NotFound)?;
     let month: i32 = page_or_month.parse().map_err(|_| AppError::NotFound)?;
-    forum_archive_month(State(state), Path((group, year, month)), Query(q), CurrentUser(current_user)).await
+    Ok(forum_archive_month(State(state), Path((group, year, month)), Query(q), CurrentUser(current_user)).await?.into_response())
 }
 
 fn validate_year_month(year: i32, month: i32) -> Result<()> {

@@ -26,12 +26,10 @@ fn require_moderator(user: &Option<crate::models::UserSummary>) -> Result<&crate
 }
 
 fn require_admin(user: &Option<crate::models::UserSummary>) -> Result<&crate::models::UserSummary> {
-    // In the original code AdministratorOnly is stricter than ModeratorOnly.
-    // The Rust compatibility schema does not expose every Spring role, so use
-    // `canmod && max_score >= 100` as the dev-port approximation and keep the
-    // gate explicit for later tightening.
-    let user = require_moderator(user)?;
-    if user.max_score.unwrap_or(0) >= 100 { Ok(user) } else { Err(AppError::Forbidden) }
+    // AdministratorOnly in Java gates on currentUser.administrator, which is
+    // the `candel` flag (a strict superset of `canmod`/ModeratorOnly).
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    if user.candel { Ok(user) } else { Err(AppError::Forbidden) }
 }
 
 #[derive(Deserialize)]
@@ -301,8 +299,44 @@ async fn same_ip(State(state): State<AppState>, CurrentUser(user): CurrentUser, 
 #[derive(Deserialize)]
 pub struct GroupModQuery { pub group: Option<i32> }
 
+fn render_groupmod_form(id: i32, title: &str, urlname: &str, info: &str, longinfo: &str, resolvable: bool, is_admin: bool, error: Option<&str>, preview: bool) -> String {
+    let error_html = error.map(|e| format!("<p class=\"error\">{}</p>", html_escape::encode_text(e))).unwrap_or_default();
+    let preview_html = if preview { "<p class=\"muted\">Предпросмотр (не сохранено)</p>" } else { "" };
+    // GroupModificationController: только администратор может менять
+    // title/urlName - модератору эти поля показываются как read-only.
+    let (title_field, url_field) = if is_admin {
+        (
+            format!(r#"<input name="title" value="{}">"#, html_escape::encode_double_quoted_attribute(title)),
+            format!(r#"<input name="urlName" value="{}">"#, html_escape::encode_double_quoted_attribute(urlname)),
+        )
+    } else {
+        (
+            format!(r#"<input value="{}" disabled><input type="hidden" name="title" value="{}">"#, html_escape::encode_double_quoted_attribute(title), html_escape::encode_double_quoted_attribute(title)),
+            format!(r#"<input value="{}" disabled><input type="hidden" name="urlName" value="{}">"#, html_escape::encode_double_quoted_attribute(urlname), html_escape::encode_double_quoted_attribute(urlname)),
+        )
+    };
+    format!(
+        r#"
+{error_html}{preview_html}
+<form method="post" action="/groupmod.jsp" class="form wide">
+<input type="hidden" name="group" value="{id}">
+<label>Название {title_field}</label>
+<label>URL {url_field}</label>
+<label>Описание <textarea name="info">{info}</textarea></label>
+<label>Подробно <textarea name="longinfo">{longinfo}</textarea></label>
+<label><input type="checkbox" name="resolvable" value="true"{checked}> Тема может быть помечена как решённая</label>
+<button type="submit" name="preview" value="1">Предпросмотр</button>
+<button type="submit">Сохранить</button>
+</form>
+"#,
+        info = html_escape::encode_text(info),
+        longinfo = html_escape::encode_text(longinfo),
+        checked = if resolvable { " checked" } else { "" },
+    )
+}
+
 async fn groupmod_form(State(state): State<AppState>, CurrentUser(user): CurrentUser, Query(q): Query<GroupModQuery>) -> Result<Html<String>> {
-    require_moderator(&user)?;
+    let moderator = require_moderator(&user)?;
     let groups = sqlx::query_as::<_, (i32, String, String)>("SELECT id,title,urlname FROM groups ORDER BY id")
         .fetch_all(&state.pool)
         .await?;
@@ -312,30 +346,76 @@ async fn groupmod_form(State(state): State<AppState>, CurrentUser(user): Current
     }
     html.push_str("</ul>");
     if let Some(id) = q.group {
-        if let Some((title, info, longinfo)) = sqlx::query_as::<_, (String, Option<String>, Option<String>)>("SELECT title,info,longinfo FROM groups WHERE id=$1")
-            .bind(id).fetch_optional(&state.pool).await? {
-            html.push_str(&format!(r#"
-<form method="post" action="/groupmod.jsp" class="form wide">
-<input type="hidden" name="id" value="{id}">
-<label>Название <input name="title" value="{title}"></label>
-<label>Описание <textarea name="info">{info}</textarea></label>
-<label>Подробно <textarea name="longinfo">{longinfo}</textarea></label>
-<button type="submit">Сохранить</button>
-</form>
-"#, title=html_escape::encode_double_quoted_attribute(&title), info=html_escape::encode_text(info.as_deref().unwrap_or("")), longinfo=html_escape::encode_text(longinfo.as_deref().unwrap_or(""))));
+        if let Some((title, urlname, info, longinfo, resolvable)) = sqlx::query_as::<_, (String, String, Option<String>, Option<String>, bool)>(
+            "SELECT title,urlname,info,longinfo,resolvable FROM groups WHERE id=$1",
+        )
+        .bind(id).fetch_optional(&state.pool).await? {
+            html.push_str(&render_groupmod_form(id, &title, &urlname, info.as_deref().unwrap_or(""), longinfo.as_deref().unwrap_or(""), resolvable, moderator.candel, None, false));
         }
     }
     Ok(Html(html))
 }
 
-#[derive(Deserialize)]
-pub struct GroupModForm { pub id: i32, pub title: Option<String>, pub info: Option<String>, pub longinfo: Option<String> }
+/// GroupModificationController.validateUrlName.
+fn validate_url_name(url_name: &str) -> Option<&'static str> {
+    if url_name.is_empty() {
+        return Some("Имя для URL не может быть пустым");
+    }
+    if url_name.contains('/') {
+        return Some("Имя для URL не может содержать символ '/'");
+    }
+    if !url_name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Some("Имя для URL может содержать только латинские буквы, цифры, дефис и подчёркивание");
+    }
+    None
+}
 
-async fn groupmod_save(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<GroupModForm>) -> Result<Redirect> {
-    require_moderator(&user)?;
-    sqlx::query("UPDATE groups SET title=COALESCE($2,title), info=$3, longinfo=$4 WHERE id=$1")
-        .bind(form.id).bind(form.title).bind(form.info).bind(form.longinfo).execute(&state.pool).await?;
-    Ok(Redirect::to(&format!("/groupmod.jsp?group={}", form.id)))
+#[derive(Deserialize)]
+pub struct GroupModForm {
+    pub group: i32,
+    pub title: String,
+    pub info: String,
+    #[serde(rename = "urlName")]
+    pub url_name: String,
+    pub longinfo: String,
+    pub preview: Option<String>,
+    pub resolvable: Option<String>,
+}
+
+async fn groupmod_save(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<GroupModForm>) -> Result<Html<String>> {
+    let moderator = require_moderator(&user)?;
+    let (existing_title, existing_urlname): (String, String) = sqlx::query_as("SELECT title,urlname FROM groups WHERE id=$1")
+        .bind(form.group)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    let is_admin = moderator.candel;
+    let effective_title = if is_admin { form.title.clone() } else { existing_title };
+    let effective_urlname = if is_admin { form.url_name.clone() } else { existing_urlname };
+    let info = form.info.clone();
+    let longinfo = form.longinfo.clone();
+    let resolvable = form.resolvable.is_some();
+
+    if form.preview.is_some() {
+        return Ok(Html(render_groupmod_form(form.group, &effective_title, &effective_urlname, &info, &longinfo, resolvable, is_admin, None, true)));
+    }
+
+    if let Some(error) = validate_url_name(&effective_urlname) {
+        return Ok(Html(render_groupmod_form(form.group, &effective_title, &effective_urlname, &info, &longinfo, resolvable, is_admin, Some(error), false)));
+    }
+
+    sqlx::query("UPDATE groups SET title=$2, urlname=$3, info=$4, longinfo=$5, resolvable=$6 WHERE id=$1")
+        .bind(form.group)
+        .bind(&effective_title)
+        .bind(&effective_urlname)
+        .bind(&info)
+        .bind(&longinfo)
+        .bind(resolvable)
+        .execute(&state.pool)
+        .await?;
+
+    Ok(Html("<h1>Параметры изменены</h1>".to_string()))
 }
 
 #[derive(Deserialize)]
@@ -375,10 +455,24 @@ fn freeze_duration(shift: &str) -> Option<chrono::Duration> {
     })
 }
 
+/// UserService.isBlockable: цель не анонимус, инициатор - модератор, и
+/// (цель не модератор ИЛИ инициатор - администратор).
+pub(crate) fn is_blockable(target_id: i32, target_canmod: bool, moderator: &crate::models::UserSummary) -> bool {
+    target_id != crate::routes::comments::ANONYMOUS_USER_ID && moderator.canmod && (!target_canmod || moderator.candel)
+}
+
 async fn usermod(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<UserModForm>) -> Result<Redirect> {
     let moderator = require_moderator(&user)?;
     match form.action.as_str() {
         "block" => {
+            let (target_canmod, target_blocked): (bool, bool) = sqlx::query_as("SELECT COALESCE(canmod,false), COALESCE(blocked,false) FROM users WHERE id=$1")
+                .bind(form.id).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
+            if !is_blockable(form.id, target_canmod, moderator) {
+                return Err(AppError::Forbidden);
+            }
+            if target_blocked {
+                return Err(AppError::BadRequest("Пользователь уже блокирован".into()));
+            }
             let reason = form.reason.clone().unwrap_or_else(|| "blocked by moderator".to_string());
             sqlx::query("UPDATE users SET blocked=true WHERE id=$1").bind(form.id).execute(&state.pool).await?;
             sqlx::query("INSERT INTO ban_info(userid,ban_by,reason,bandate) VALUES($1,$2,$3,now()) ON CONFLICT(userid) DO UPDATE SET ban_by=EXCLUDED.ban_by, reason=EXCLUDED.reason, bandate=now()")
@@ -386,35 +480,62 @@ async fn usermod(State(state): State<AppState>, CurrentUser(user): CurrentUser, 
             crate::audit::log_user_action(&state.pool, form.id, moderator.id, "block_user", &[("reason", reason.as_str())]).await?;
         }
         "unblock" => {
+            let target_canmod: bool = sqlx::query_scalar("SELECT COALESCE(canmod,false) FROM users WHERE id=$1")
+                .bind(form.id).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
+            if !is_blockable(form.id, target_canmod, moderator) {
+                return Err(AppError::Forbidden);
+            }
             sqlx::query("UPDATE users SET blocked=false WHERE id=$1").bind(form.id).execute(&state.pool).await?;
             sqlx::query("DELETE FROM ban_info WHERE userid=$1").bind(form.id).execute(&state.pool).await?;
             crate::audit::log_user_action(&state.pool, form.id, moderator.id, "unblock_user", &[]).await?;
         }
         "score50" => {
+            let (score, blocked): (i32, bool) = sqlx::query_as("SELECT COALESCE(score,0), COALESCE(blocked,false) FROM users WHERE id=$1")
+                .bind(form.id).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
+            if blocked || form.id == crate::routes::comments::ANONYMOUS_USER_ID || score > 50 {
+                return Err(AppError::Forbidden);
+            }
             sqlx::query("UPDATE users SET score=GREATEST(score,50), max_score=GREATEST(max_score,50) WHERE id=$1").bind(form.id).execute(&state.pool).await?;
             crate::audit::log_user_action(&state.pool, form.id, moderator.id, "score50", &[]).await?;
         }
         "toggle_corrector" => {
-            let was_corrector: bool = sqlx::query_scalar("SELECT corrector FROM users WHERE id=$1").bind(form.id).fetch_one(&state.pool).await?;
+            let (was_corrector, score): (bool, i32) = sqlx::query_as("SELECT COALESCE(corrector,false), COALESCE(score,0) FROM users WHERE id=$1")
+                .bind(form.id).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
+            const CORRECTOR_SCORE: i32 = 200;
+            if score < CORRECTOR_SCORE {
+                return Err(AppError::Forbidden);
+            }
             sqlx::query("UPDATE users SET corrector=NOT corrector WHERE id=$1").bind(form.id).execute(&state.pool).await?;
             let action = if was_corrector { "unset_corrector" } else { "set_corrector" };
             crate::audit::log_user_action(&state.pool, form.id, moderator.id, action, &[]).await?;
         }
         "reset-password" => {
+            if form.id == crate::routes::comments::ANONYMOUS_USER_ID {
+                return Err(AppError::Forbidden);
+            }
             let password = form.password.unwrap_or_else(|| "change-me".to_string());
             let hash = crate::security::password::hash(&password).map_err(|e| AppError::Anyhow(e.into()))?;
             sqlx::query("UPDATE users SET passwd=$2 WHERE id=$1").bind(form.id).bind(hash).execute(&state.pool).await?;
             crate::audit::log_user_action(&state.pool, form.id, moderator.id, "reset_password", &[]).await?;
         }
         "remove_userinfo" => {
+            if form.id == crate::routes::comments::ANONYMOUS_USER_ID {
+                return Err(AppError::Forbidden);
+            }
             sqlx::query("UPDATE users SET userinfo='' WHERE id=$1").bind(form.id).execute(&state.pool).await?;
             crate::audit::log_user_action(&state.pool, form.id, moderator.id, "reset_info", &[]).await?;
         }
         "remove_town" => {
+            if form.id == crate::routes::comments::ANONYMOUS_USER_ID {
+                return Err(AppError::Forbidden);
+            }
             sqlx::query("UPDATE users SET town='' WHERE id=$1").bind(form.id).execute(&state.pool).await?;
             crate::audit::log_user_action(&state.pool, form.id, moderator.id, "reset_town", &[]).await?;
         }
         "remove_url" => {
+            if form.id == crate::routes::comments::ANONYMOUS_USER_ID {
+                return Err(AppError::Forbidden);
+            }
             sqlx::query("UPDATE users SET url='' WHERE id=$1").bind(form.id).execute(&state.pool).await?;
             crate::audit::log_user_action(&state.pool, form.id, moderator.id, "reset_url", &[]).await?;
         }
@@ -443,9 +564,57 @@ async fn usermod(State(state): State<AppState>, CurrentUser(user): CurrentUser, 
             crate::audit::log_user_action(&state.pool, form.id, moderator.id, action, &[("reason", reason.as_str())]).await?;
         }
         "block-n-delete-comments" => {
+            let (target_canmod, target_blocked): (bool, bool) = sqlx::query_as("SELECT COALESCE(canmod,false), COALESCE(blocked,false) FROM users WHERE id=$1")
+                .bind(form.id).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
+            if !is_blockable(form.id, target_canmod, moderator) {
+                return Err(AppError::Forbidden);
+            }
+            if target_blocked {
+                return Err(AppError::BadRequest("Пользователь уже блокирован".into()));
+            }
+            let reason = form.reason.clone().unwrap_or_default();
             sqlx::query("UPDATE users SET blocked=true WHERE id=$1").bind(form.id).execute(&state.pool).await?;
-            sqlx::query("UPDATE comments SET deleted=true WHERE userid=$1").bind(form.id).execute(&state.pool).await?;
-            crate::audit::log_user_action(&state.pool, form.id, moderator.id, "block_user", &[("reason", "block-n-delete-comments")]).await?;
+            sqlx::query("INSERT INTO ban_info(userid,ban_by,reason,bandate) VALUES($1,$2,$3,now()) ON CONFLICT(userid) DO UPDATE SET ban_by=EXCLUDED.ban_by, reason=EXCLUDED.reason, bandate=now()")
+                .bind(form.id).bind(moderator.id).bind(&reason).execute(&state.pool).await?;
+
+            // DeleteService.massDelete (notifyUser=false для этого сценария):
+            // удаляем все не удалённые темы автора, затем комментарии-листья
+            // (без ответов); комментарии с ответами пропускаем.
+            let topic_ids: Vec<i32> = sqlx::query_scalar("SELECT id FROM topics WHERE userid=$1 AND NOT deleted").bind(form.id).fetch_all(&state.pool).await?;
+            for topic_id in &topic_ids {
+                sqlx::query("UPDATE topics SET deleted=true WHERE id=$1").bind(topic_id).execute(&state.pool).await?;
+                sqlx::query("INSERT INTO del_info(msgid,delby,reason,deldate,bonus) VALUES($1,$2,$3,now(),0) ON CONFLICT(msgid) DO UPDATE SET delby=EXCLUDED.delby, reason=EXCLUDED.reason, deldate=now(), bonus=0")
+                    .bind(topic_id).bind(moderator.id).bind("Блокировка пользователя с удалением сообщений").execute(&state.pool).await?;
+                crate::search_index::index_topic(&state, *topic_id, true).await;
+            }
+
+            let comment_rows: Vec<(i32, i32)> = sqlx::query_as(
+                "SELECT c.id, c.topic FROM comments c WHERE c.userid=$1 AND NOT c.deleted AND NOT EXISTS(SELECT 1 FROM comments r WHERE r.replyto=c.id)",
+            )
+            .bind(form.id)
+            .fetch_all(&state.pool)
+            .await?;
+            let mut deleted_comments = 0i32;
+            let skipped_comments: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM comments c WHERE c.userid=$1 AND NOT c.deleted AND EXISTS(SELECT 1 FROM comments r WHERE r.replyto=c.id)",
+            )
+            .bind(form.id)
+            .fetch_one(&state.pool)
+            .await?;
+            for (comment_id, topic_id) in &comment_rows {
+                sqlx::query("UPDATE comments SET deleted=true WHERE id=$1").bind(comment_id).execute(&state.pool).await?;
+                sqlx::query("INSERT INTO del_info(msgid,delby,reason,deldate,bonus) VALUES($1,$2,$3,now(),0) ON CONFLICT(msgid) DO UPDATE SET delby=EXCLUDED.delby, reason=EXCLUDED.reason, deldate=now(), bonus=0")
+                    .bind(comment_id).bind(moderator.id).bind("Блокировка пользователя с удалением сообщений").execute(&state.pool).await?;
+                sqlx::query("UPDATE topics SET stat1=stat1-1, lastmod=now() WHERE id=$1").bind(topic_id).execute(&state.pool).await?;
+                sqlx::query("UPDATE topics SET stat3=stat1 WHERE id=$1 AND stat3>stat1").bind(topic_id).execute(&state.pool).await?;
+                crate::search_index::index_comment(&state, *comment_id).await;
+                deleted_comments += 1;
+            }
+
+            crate::audit::log_user_action(
+                &state.pool, form.id, moderator.id, "block_user",
+                &[("reason", reason.as_str()), ("topics", &topic_ids.len().to_string()), ("comments", &deleted_comments.to_string()), ("skipped", &skipped_comments.to_string())],
+            ).await?;
         }
         other => return Err(AppError::BadRequest(format!("unknown usermod action: {other}"))),
     }

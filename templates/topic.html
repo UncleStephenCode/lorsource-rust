@@ -4,7 +4,7 @@
 <article class="topic-full">
   <h1>{{ topic.title }}</h1>
   <div class="meta">
-    <a href="/{{ topic.section_prefix }}/">{{ topic.section_name }}</a> / 
+    <a href="/{{ topic.section_prefix }}/">{{ topic.section_name }}</a> /
     <a href="/{{ topic.section_prefix }}/{{ topic.group_urlname }}">{{ topic.group_title }}</a> ·
     <a href="/people/{{ topic.author }}">{{ topic.author }}</a> · {{ topic.postdate }}
   </div>
@@ -15,15 +15,49 @@
   {% endif %}
 </article>
 
+{% match thread_root %}
+{% when Some with (root) %}
+<p class="meta"><a href="{{ topic.topic_url() }}">← вернуться ко всем комментариям</a> (режим ветки, корень #{{ root }})</p>
+{% when None %}{% endmatch %}
+{% if show_deleted %}
+<p class="meta">Просмотр удалённых комментариев. <a href="{{ topic.topic_url() }}">Скрыть удалённые</a></p>
+{% endif %}
+
 <section class="comments">
-  <h2>Комментарии: {{ comments.len() }}</h2>
+  <h2>Комментарии: {{ filtered_count }}</h2>
+  {% if unfiltered_count > filtered_count %}
+  <p class="muted">Скрыто {{ unfiltered_count - filtered_count }} (игнорируемые пользователи). <a href="?filter=show">Показать все</a></p>
+  {% endif %}
   {% for c in comments %}
   <article id="comment-{{ c.item.id }}" class="comment{% if c.item.deleted %} deleted{% endif %}">
-    <header><a href="/people/{{ c.item.author }}">{{ c.item.author }}</a> · {{ c.item.postdate }} · <a href="#comment-{{ c.item.id }}">#{{ c.item.id }}</a></header>
+    <header>
+      <a href="/people/{{ c.item.author }}">{{ c.item.author }}</a> · {{ c.item.postdate }} ·
+      <a href="#comment-{{ c.item.id }}">#{{ c.item.id }}</a>
+      {% if !thread_mode %} · <a href="/{{ topic.section_prefix }}/{{ topic.group_urlname }}/{{ topic.id }}/thread/{{ c.item.id }}">ветка</a>{% endif %}
+    </header>
+    {% if c.item.deleted %}
+    <div class="message muted">[комментарий удалён]</div>
+    {% else %}
     <div class="message">{{ c.html|safe }}</div>
+    {% endif %}
   </article>
   {% endfor %}
+  {% if comments.len() == 0 %}
+  <p class="muted">Комментариев нет.</p>
+  {% endif %}
 </section>
+
+{% if pages.len() > 1 %}
+<nav class="pager comment-pages">
+  {% for p in pages %}
+    {% if p.current %}<b>{{ p.page + 1 }}</b>{% else %}<a href="{% if p.page == 0 %}{{ topic.topic_url() }}{% else %}{{ topic.topic_url() }}/page{{ p.page }}{% endif %}">{{ p.page + 1 }}</a>{% endif %}
+  {% endfor %}
+</nav>
+{% endif %}
+
+{% if show_deleted_button %}
+<p><a href="?deleted=true">Показать удалённые комментарии</a></p>
+{% endif %}
 
 <form class="comment-form" method="post" action="/add_comment.jsp">
   <h3>Добавить комментарий</h3>

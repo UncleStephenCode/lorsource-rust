@@ -1,6 +1,6 @@
 use crate::{application::forum::CForumService, auth::CurrentUser, error::{AppError, Result}, infra::postgres::forum_repository::CForumPgRepository, models::{Group, TopicSummary}, pagination::Pager, state::AppState};
 use askama::Template;
-use axum::{extract::{Path, Query, State}, response::{Html, IntoResponse, Redirect, Response}};
+use axum::{extract::{Path, Query, State}, http::Method, response::{Html, IntoResponse, Redirect, Response}};
 use serde::Deserialize;
 
 #[derive(Template)]
@@ -44,11 +44,13 @@ pub struct ForumGroupQuery {
     pub tag: Option<String>,
     #[serde(rename = "showignored")]
     pub show_ignored: Option<bool>,
+    #[serde(rename = "showDeleted")]
+    pub show_deleted: Option<bool>,
 }
 
 const MAX_GROUP_OFFSET: i64 = 300;
 
-pub async fn group_page(State(state): State<AppState>, Path(group_urlname): Path<String>, Query(q): Query<ForumGroupQuery>, CurrentUser(user): CurrentUser) -> Result<Response> {
+pub async fn group_page(State(state): State<AppState>, method: Method, Path(group_urlname): Path<String>, Query(q): Query<ForumGroupQuery>, CurrentUser(user): CurrentUser) -> Result<Response> {
     let offset = q.offset.unwrap_or(0);
     if offset < 0 {
         return Err(AppError::BadRequest("offset не может быть отрицательным".into()));
@@ -56,6 +58,21 @@ pub async fn group_page(State(state): State<AppState>, Path(group_urlname): Path
     if offset > MAX_GROUP_OFFSET {
         return Ok(Redirect::to(&format!("/forum/{}/archive", urlencoding::encode(&group_urlname))).into_response());
     }
+
+    // GroupController.forum: showDeleted требует авторизации+модератора и
+    // применяется только на POST - обычный GET с этим флагом отбрасывается
+    // редиректом на страницу без него.
+    let show_deleted_requested = q.show_deleted.unwrap_or(false);
+    if show_deleted_requested {
+        let Some(ref u) = user else { return Err(AppError::Forbidden); };
+        if !u.canmod {
+            return Err(AppError::Forbidden);
+        }
+        if method != Method::POST {
+            return Ok(Redirect::to(&format!("/forum/{}", urlencoding::encode(&group_urlname))).into_response());
+        }
+    }
+    let show_deleted = show_deleted_requested;
 
     let Some(group_id): Option<i32> = sqlx::query_scalar("SELECT id FROM groups WHERE urlname=$1")
         .bind(&group_urlname)
@@ -74,6 +91,11 @@ pub async fn group_page(State(state): State<AppState>, Path(group_urlname): Path
     } else {
         None
     };
+
+    // GroupListDao.load: showIgnored=true (или анонимус) отключает
+    // фильтрацию по ignore_list текущего пользователя.
+    let show_ignored = q.show_ignored.unwrap_or(false);
+    let ignore_user_id: Option<i32> = if show_ignored { None } else { user.as_ref().map(|u| u.id) };
 
     let limit = state.config.page_size.max(1);
     let lastmod = q.lastmod.unwrap_or(false);
@@ -94,24 +116,21 @@ pub async fn group_page(State(state): State<AppState>, Path(group_urlname): Path
            JOIN sections s ON s.id=g.section
            LEFT JOIN tags tg ON tg.msgid=t.id
            LEFT JOIN tags_values tv ON tv.id=tg.tagid
-           WHERE t.groupid=$1 AND NOT t.sticky AND NOT t.deleted AND NOT t.draft AND NOT t.moderate AND {date_filter}
-             {tag_clause}
+           WHERE t.groupid=$1 AND NOT t.sticky AND (NOT t.deleted OR $5) AND NOT t.draft AND NOT t.moderate AND {date_filter}
+             AND ($4::int IS NULL OR t.id IN (SELECT msgid FROM tags WHERE tagid=$4))
+             AND ($6::int IS NULL OR NOT EXISTS (SELECT 1 FROM ignore_list il WHERE il.userid=$6 AND il.ignored=u.id))
            GROUP BY t.id,u.id,g.id,s.id
            ORDER BY {order_by}
            OFFSET $2 LIMIT $3"#,
         date_filter = date_filter,
         order_by = order_by,
-        tag_clause = if tag_id.is_some() { "AND t.id IN (SELECT msgid FROM tags WHERE tagid=$4)" } else { "" },
     );
-    let mut query = sqlx::query_as::<_, TopicSummary>(&sql).bind(group_id).bind(offset).bind(limit);
-    if let Some(tag_id) = tag_id {
-        query = query.bind(tag_id);
-    }
-    let mut topics = query.fetch_all(&state.pool).await?;
+    let mut topics = sqlx::query_as::<_, TopicSummary>(&sql)
+        .bind(group_id).bind(offset).bind(limit).bind(tag_id).bind(show_deleted).bind(ignore_user_id)
+        .fetch_all(&state.pool).await?;
 
     if offset == 0 && !lastmod {
-        let sticky_sql = format!(
-            r#"SELECT t.id, t.title, t.url, t.postdate, t.lastmod, u.id AS author_id, u.nick AS author,
+        let sticky_sql = r#"SELECT t.id, t.title, t.url, t.postdate, t.lastmod, u.id AS author_id, u.nick AS author,
                       g.id AS group_id, g.title AS group_title, g.urlname AS group_urlname,
                       s.id AS section_id, s.name AS section_name,
                       'forum' AS section_prefix,
@@ -124,17 +143,13 @@ pub async fn group_page(State(state): State<AppState>, Path(group_urlname): Path
                LEFT JOIN tags tg ON tg.msgid=t.id
                LEFT JOIN tags_values tv ON tv.id=tg.tagid
                WHERE t.groupid=$1 AND t.sticky AND NOT t.deleted AND NOT t.draft AND NOT t.moderate
-                 {tag_clause}
+                 AND ($2::int IS NULL OR t.id IN (SELECT msgid FROM tags WHERE tagid=$2))
                GROUP BY t.id,u.id,g.id,s.id
                ORDER BY t.postdate DESC
-               LIMIT 100"#,
-            tag_clause = if tag_id.is_some() { "AND t.id IN (SELECT msgid FROM tags WHERE tagid=$2)" } else { "" },
-        );
-        let mut sticky_query = sqlx::query_as::<_, TopicSummary>(&sticky_sql).bind(group_id);
-        if let Some(tag_id) = tag_id {
-            sticky_query = sticky_query.bind(tag_id);
-        }
-        let mut sticky = sticky_query.fetch_all(&state.pool).await?;
+               LIMIT 100"#;
+        let mut sticky = sqlx::query_as::<_, TopicSummary>(sticky_sql)
+            .bind(group_id).bind(tag_id)
+            .fetch_all(&state.pool).await?;
         sticky.extend(topics);
         topics = sticky;
     }
@@ -142,7 +157,6 @@ pub async fn group_page(State(state): State<AppState>, Path(group_urlname): Path
     let group_title: String = sqlx::query_scalar("SELECT title FROM groups WHERE id=$1").bind(group_id).fetch_one(&state.pool).await?;
     let pager = Pager::new(offset, limit);
     let title = format!("Форум / {group_title}");
-    let _ = q.show_ignored; // accepted for URL round-tripping; ignore-list filtering isn't modeled yet
 
     Ok(Html(GroupTopicsTemplate { title, topics, pager, current_user: user }.render()?).into_response())
 }

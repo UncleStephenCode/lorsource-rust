@@ -1,6 +1,6 @@
-use crate::{auth::CurrentUser, application::topic::CTopicService, domain::topic::repository::{StEditTopic, StNewTopic}, error::{AppError, Result}, infra::postgres::topic_repository::CTopicPgRepository, markup, models::{PagerQuery, TopicDetail, TopicSummary}, pagination::Pager, state::AppState};
+use crate::{auth::CurrentUser, application::topic::CTopicService, domain::topic::repository::{StEditTopic, StNewTopic}, error::{AppError, Result}, infra::postgres::topic_repository::CTopicPgRepository, markup, models::{CommentItem, PagerQuery, TopicDetail, TopicSummary, UserSummary}, pagination::Pager, state::AppState};
 use askama::Template;
-use axum::{extract::{Path, Query, State}, http::Uri, response::{Html, Redirect}, Form};
+use axum::{extract::{Path, Query, State}, http::Uri, response::{Html, IntoResponse, Redirect, Response}, Form};
 use serde::Deserialize;
 
 #[derive(Template)]
@@ -12,18 +12,39 @@ struct IndexTemplate {
     current_user: Option<crate::models::UserSummary>,
 }
 
+#[derive(Debug, Clone)]
+struct CommentPageLink {
+    page: i64,
+    current: bool,
+}
+
 #[derive(Template)]
 #[template(path = "topic.html")]
 struct TopicTemplate {
     topic: TopicDetail,
     topic_html: String,
     comments: Vec<CommentView>,
-    current_user: Option<crate::models::UserSummary>,
+    current_user: Option<UserSummary>,
+    /// Non-empty only outside thread/deleted mode, when there's more than
+    /// one page of comments (TopicController.buildPages).
+    pages: Vec<CommentPageLink>,
+    thread_mode: bool,
+    thread_root: Option<i32>,
+    show_deleted: bool,
+    /// Java's `showDeletedButton`: only a moderator viewing the live
+    /// (non-deleted-mode) page gets offered the toggle.
+    show_deleted_button: bool,
+    /// Comments hidden by the viewer's ignore list in the current filtered
+    /// view (TopicController's hideSet) - `unfiltered_count` is Java's
+    /// `unfilteredCount`, used to render "N скрыто, показать".
+    filtered_count: usize,
+    unfiltered_count: usize,
+    filter_show: bool,
 }
 
 #[derive(Debug, Clone)]
 struct CommentView {
-    item: crate::models::CommentItem,
+    item: CommentItem,
     html: String,
 }
 
@@ -87,30 +108,223 @@ pub async fn legacy_view_message(Query(q): Query<ViewMessageQuery>) -> Redirect 
     Redirect::to(&format!("/jump-message.jsp?msgid={}", q.msgid))
 }
 
-pub async fn topic_page(State(state): State<AppState>, Path((_group, id)): Path<(String, i32)>, CurrentUser(current_user): CurrentUser) -> Result<Html<String>> {
-    render_topic(state, id, current_user).await
+#[derive(Deserialize, Default)]
+pub struct TopicViewQuery {
+    pub cid: Option<i32>,
+    /// Presence-based, like Java's `deleted != null` - any non-empty
+    /// query string (`?deleted` or `?deleted=true`) requests the
+    /// moderator-only deleted-comments view.
+    pub deleted: Option<String>,
+    /// "show" disables ignore-list-based comment hiding for this request.
+    pub filter: Option<String>,
 }
 
-pub async fn topic_page_with_page(State(state): State<AppState>, Path((_group, id, page_marker)): Path<(String, i32, String)>, CurrentUser(current_user): CurrentUser) -> Result<Html<String>> {
+pub async fn topic_page(State(state): State<AppState>, uri: Uri, Path((group, id)): Path<(String, i32)>, Query(q): Query<TopicViewQuery>, CurrentUser(current_user): CurrentUser) -> Result<Response> {
+    let section = section_from_uri(&uri).unwrap_or("forum");
+    render_topic_view(state, section, group, id, 0, None, q, current_user).await
+}
+
+pub async fn topic_page_with_page(State(state): State<AppState>, uri: Uri, Path((group, id, page_marker)): Path<(String, i32, String)>, CurrentUser(current_user): CurrentUser) -> Result<Response> {
     let Some(page) = page_marker.strip_prefix("page") else { return Err(AppError::NotFound); };
-    let _page: i64 = page.parse().map_err(|_| AppError::NotFound)?;
-    render_topic(state, id, current_user).await
+    let page: i64 = page.parse().map_err(|_| AppError::NotFound)?;
+    let section = section_from_uri(&uri).unwrap_or("forum");
+    // Java's getMessagePage doesn't accept `cid`/`deleted`/`filter` at all -
+    // only the base (page-less) route does.
+    render_topic_view(state, section, group, id, page, None, TopicViewQuery::default(), current_user).await
 }
 
-pub async fn render_topic(state: AppState, id: i32, current_user: Option<crate::models::UserSummary>) -> Result<Html<String>> {
+pub async fn topic_thread(State(state): State<AppState>, uri: Uri, Path((group, id, thread_root)): Path<(String, i32, i32)>, CurrentUser(current_user): CurrentUser) -> Result<Response> {
+    let section = section_from_uri(&uri).unwrap_or("forum");
+    render_topic_view(state, section, group, id, 0, Some(thread_root), TopicViewQuery::default(), current_user).await
+}
+
+/// Called from legacy.rs's combined `/forum/{group}/{id_or_year}/{page_or_month}`
+/// route once it's determined the third segment is `pageN`, not a year/month.
+pub async fn render_topic_page(state: AppState, section: &'static str, group: String, id: i32, page: i64, current_user: Option<UserSummary>) -> Result<Response> {
+    render_topic_view(state, section, group, id, page, None, TopicViewQuery::default(), current_user).await
+}
+
+async fn messages_per_page(state: &AppState, user: &Option<UserSummary>) -> i64 {
+    match user {
+        Some(u) => {
+            let settings_text: Option<String> = sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
+                .bind(u.id)
+                .fetch_optional(&state.pool)
+                .await
+                .ok()
+                .flatten();
+            crate::profile::ProfileSettings::from_hstore_text(settings_text).messages as i64
+        }
+        None => crate::profile::DEFAULT_MESSAGES as i64,
+    }
+}
+
+/// TopicController.getMessageMain/getMessagePage/getMessageThread, merged
+/// into one function parameterized by page/thread_root/query - mirrors
+/// Java's shared private `getMessage` helper.
+async fn render_topic_view(
+    state: AppState,
+    section: &'static str,
+    group: String,
+    id: i32,
+    page: i64,
+    thread_root: Option<i32>,
+    query: TopicViewQuery,
+    current_user: Option<UserSummary>,
+) -> Result<Response> {
     let topic = get_topic(&state, id).await?;
+    let is_moderator = current_user.as_ref().map(|u| u.canmod).unwrap_or(false);
+
     // GroupPermissionService.checkView / drafts: a draft or not-yet-committed
-    // premoderated topic is only visible to its author or a moderator.
-    if topic.draft || topic.moderate {
+    // premoderated topic is only visible to its author or a moderator. A
+    // deleted topic is likewise author/moderator-only - the previous
+    // implementation never checked `topic.deleted` at all here, so a
+    // deleted topic stayed fully visible to everyone.
+    if topic.draft || topic.moderate || topic.deleted {
         let allowed = current_user.as_ref().map(|u| u.canmod || u.id == topic.author_id).unwrap_or(false);
         if !allowed {
             return Err(AppError::NotFound);
         }
     }
+
+    // TopicController.getMessageMain: canonical redirect if the URL's
+    // group/section don't match the topic's real ones.
+    if topic.group_urlname != group || topic.section_prefix != section {
+        return Ok(Redirect::to(&topic.topic_url()).into_response());
+    }
+
+    let want_deleted = query.deleted.is_some();
+    if want_deleted && !is_moderator {
+        return Ok(Redirect::to(&topic.topic_url()).into_response());
+    }
+
+    // `?cid=` jumps straight to the comment (resolving its page), bypassing
+    // the rest of rendering entirely - matches Java's inline jumpMessage
+    // short-circuit in getMessageMain. Only the base (page-less, non-thread)
+    // route wires this in.
+    if let Some(cid) = query.cid {
+        if thread_root.is_none() && page == 0 {
+            return resolve_comment_jump(&state, &topic, cid, is_moderator, &current_user).await;
+        }
+    }
+
     let topic_html = markup::render_message(&topic.message, topic.bbcode);
-    let items = topic_service(&state).vecListComments(id).await?;
-    let comments = items.into_iter().map(|item| CommentView { html: markup::render_message(&item.message, Some(true)), item }).collect();
-    Ok(Html(TopicTemplate { topic, topic_html, comments, current_user }.render()?))
+
+    let all_comments: Vec<CommentItem> = if want_deleted {
+        topic_service(&state).vecListComments(id).await?
+    } else {
+        topic_service(&state).vecListComments(id).await?.into_iter().filter(|c| !c.deleted).collect()
+    };
+
+    // TopicController's hideSet: comments from ignored authors are dropped
+    // from the rendered list (not just visually) unless `?filter=show`.
+    let filter_show = query.filter.as_deref() == Some("show");
+    let ignored_ids: Vec<i32> = match (&current_user, filter_show) {
+        (Some(u), false) => sqlx::query_scalar("SELECT ignored FROM ignore_list WHERE userid=$1").bind(u.id).fetch_all(&state.pool).await.unwrap_or_default(),
+        _ => vec![],
+    };
+    let unfiltered_count = all_comments.len();
+    let visible_comments: Vec<CommentItem> = if ignored_ids.is_empty() {
+        all_comments
+    } else {
+        all_comments.into_iter().filter(|c| !ignored_ids.contains(&c.author_id)).collect()
+    };
+    let filtered_count = visible_comments.len();
+
+    let (page_comments, pages, thread_mode): (Vec<CommentItem>, Vec<CommentPageLink>, bool) = if let Some(root) = thread_root {
+        let subtree = comment_subtree(&visible_comments, root);
+        (subtree, vec![], true)
+    } else if want_deleted {
+        // Java's showDeleted path uses page=-1: render every comment on one
+        // page, no pagination controls.
+        (visible_comments, vec![], false)
+    } else {
+        let per_page = messages_per_page(&state, &current_user).await.max(1);
+        let total_pages = (unfiltered_count as i64 + per_page - 1) / per_page.max(1);
+        if page > 0 && page >= total_pages {
+            let target_page = (total_pages - 1).max(0);
+            let url = if target_page > 0 { format!("{}/page{target_page}", topic.topic_url()) } else { topic.topic_url() };
+            return Ok(Redirect::to(&url).into_response());
+        }
+        let start = (page * per_page) as usize;
+        let end = (start + per_page as usize).min(visible_comments.len());
+        let slice = if start < visible_comments.len() { visible_comments[start..end].to_vec() } else { vec![] };
+        let pages = if total_pages > 1 {
+            (0..total_pages).map(|p| CommentPageLink { page: p, current: p == page }).collect()
+        } else {
+            vec![]
+        };
+        (slice, pages, false)
+    };
+
+    let comments: Vec<CommentView> = page_comments.into_iter().map(|item| CommentView { html: markup::render_message(&item.message, Some(true)), item }).collect();
+
+    Ok(Html(TopicTemplate {
+        topic,
+        topic_html,
+        comments,
+        current_user,
+        pages,
+        thread_mode,
+        thread_root,
+        show_deleted: want_deleted,
+        show_deleted_button: is_moderator && !want_deleted,
+        filtered_count,
+        unfiltered_count,
+        filter_show,
+    }.render()?).into_response())
+}
+
+/// Filters `comments` down to the subtree rooted at `root` (root itself
+/// plus all descendants reachable through `replyto`), sorted by id -
+/// matches CommentReadService.getCommentsSubtree.
+fn comment_subtree(comments: &[CommentItem], root: i32) -> Vec<CommentItem> {
+    let mut ids = std::collections::HashSet::new();
+    ids.insert(root);
+    // `comments` is ordered by postdate ASC, so a parent always appears
+    // before its replies; a couple of passes is enough to reach a fixed
+    // point without needing a real graph structure.
+    loop {
+        let before = ids.len();
+        for c in comments {
+            if let Some(parent) = c.replyto {
+                if ids.contains(&parent) {
+                    ids.insert(c.id);
+                }
+            }
+        }
+        if ids.len() == before {
+            break;
+        }
+    }
+    let mut subtree: Vec<CommentItem> = comments.iter().filter(|c| ids.contains(&c.id)).cloned().collect();
+    subtree.sort_by_key(|c| c.id);
+    subtree
+}
+
+/// TopicController's inline `jumpMessage(msgid, cid, skipDeleted)`: resolves
+/// which page a comment lives on (among non-deleted comments) and redirects
+/// there with a `#comment-N` anchor; falls back to the deleted-comments view
+/// for a moderator if the comment isn't found live.
+async fn resolve_comment_jump(state: &AppState, topic: &TopicDetail, cid: i32, is_moderator: bool, current_user: &Option<UserSummary>) -> Result<Response> {
+    let live_comments: Vec<CommentItem> = topic_service(state).vecListComments(topic.id).await?.into_iter().filter(|c| !c.deleted).collect();
+    if let Some(pos) = live_comments.iter().position(|c| c.id == cid) {
+        let per_page = messages_per_page(state, current_user).await.max(1);
+        let page = pos as i64 / per_page;
+        let url = if page > 0 { format!("{}/page{page}#comment-{cid}", topic.topic_url()) } else { format!("{}#comment-{cid}", topic.topic_url()) };
+        return Ok(Redirect::to(&url).into_response());
+    }
+    if is_moderator {
+        let exists_deleted: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM comments WHERE id=$1 AND topic=$2 AND deleted)")
+            .bind(cid)
+            .bind(topic.id)
+            .fetch_one(&state.pool)
+            .await?;
+        if exists_deleted {
+            return Ok(Redirect::to(&format!("{}?deleted=true#comment-{cid}", topic.topic_url())).into_response());
+        }
+    }
+    Err(AppError::NotFound)
 }
 
 pub async fn new_topic_form(State(state): State<AppState>) -> Result<Html<String>> {
@@ -153,6 +367,7 @@ pub async fn create_topic(State(state): State<AppState>, CurrentUser(user): Curr
     }).await?;
     service.vReplaceTags(&mut tx, id, form.tags.as_deref()).await?;
     tx.commit().await?;
+    notify_topic_created(&state, id, user.id, &form.msg).await?;
     crate::search_index::index_topic(&state, id, false).await;
     // The topic-view gate (render_topic) lets the author through even while
     // draft/pending, so redirecting straight to the topic works for both
@@ -276,6 +491,7 @@ pub async fn delete_topic(State(state): State<AppState>, CurrentUser(user): Curr
     if bonus != 0 {
         sqlx::query("UPDATE users SET score=GREATEST(score-$2,0) WHERE id=$1").bind(meta.author_id).bind(bonus).execute(&state.pool).await?;
     }
+    crate::routes::comments::notify_deleted(&state, meta.author_id, user.id, Some(form.msgid), None, &reason).await?;
     crate::search_index::index_topic(&state, form.msgid, true).await;
     Ok(Redirect::to("/"))
 }
@@ -333,6 +549,66 @@ pub async fn get_topic(state: &AppState, id: i32) -> Result<TopicDetail> {
 
 fn topic_service(state: &AppState) -> CTopicService<CTopicPgRepository> {
     CTopicService::new(CTopicPgRepository::new(state.pool.clone()))
+}
+
+/// TopicService.sendEvents: on topic creation, notify (a) users mentioned
+/// via @nick in the body (REF), and (b) users who favorited one of the
+/// topic's tags (TAG) - excluding anyone already notified via (a), matching
+/// Java's `tagUsers.filterNot(userRefIds.contains)`. Java also records
+/// `topic_users_notified` to suppress duplicate notifications across a
+/// later edit; this port doesn't re-run sendEvents on edit at all, so that
+/// bookkeeping table is skipped as unnecessary for now.
+async fn notify_topic_created(state: &AppState, topic_id: i32, author_id: i32, message: &str) -> Result<()> {
+    let mentioned_nicks = markup::extract_mentions(message);
+    let mut notified: Vec<i32> = if mentioned_nicks.is_empty() {
+        vec![]
+    } else {
+        sqlx::query_scalar(
+            r#"SELECT u.id FROM users u
+               WHERE lower(u.nick) = ANY($1) AND u.id <> $2
+                 AND NOT EXISTS (SELECT 1 FROM ignore_list il WHERE il.userid=u.id AND il.ignored=$2)"#,
+        )
+        .bind(mentioned_nicks.iter().map(|n| n.to_lowercase()).collect::<Vec<_>>())
+        .bind(author_id)
+        .fetch_all(&state.pool)
+        .await?
+    };
+    for &mentioned_id in &notified {
+        sqlx::query("INSERT INTO user_events(userid,type,private,message_id) VALUES($1,'REF',false,$2)")
+            .bind(mentioned_id)
+            .bind(topic_id)
+            .execute(&state.pool)
+            .await?;
+    }
+
+    let tag_favoriters: Vec<i32> = sqlx::query_scalar(
+        r#"SELECT DISTINCT ut.userid FROM user_tags ut
+           JOIN tags tg ON tg.tagid=ut.tag_id
+           WHERE tg.msgid=$1 AND ut.is_favorite AND ut.userid<>$2 AND NOT ut.userid=ANY($3)"#,
+    )
+    .bind(topic_id)
+    .bind(author_id)
+    .bind(&notified)
+    .fetch_all(&state.pool)
+    .await?;
+    for &tag_userid in &tag_favoriters {
+        sqlx::query("INSERT INTO user_events(userid,type,private,message_id) VALUES($1,'TAG',false,$2)")
+            .bind(tag_userid)
+            .bind(topic_id)
+            .execute(&state.pool)
+            .await?;
+    }
+    notified.extend(tag_favoriters);
+
+    if !notified.is_empty() {
+        notified.sort_unstable();
+        notified.dedup();
+        sqlx::query("UPDATE users SET unread_events=(SELECT count(*) FROM user_events e WHERE e.unread AND e.userid=users.id) WHERE id=ANY($1)")
+            .bind(&notified)
+            .execute(&state.pool)
+            .await?;
+    }
+    Ok(())
 }
 
 fn section_from_uri(uri: &Uri) -> Option<&'static str> {

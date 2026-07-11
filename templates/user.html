@@ -13,7 +13,7 @@
 {% endif %}
 
 <div id="whois_userpic" class="userpic-box">
-  {% match profile.photo_url() %}{% when Some with (photo_url) %}<img src="{{ photo_url }}" alt="{{ profile.nick }}" class="userpic">{% when None %}<div class="userpic userpic-placeholder">?</div>{% endmatch %}
+  <img src="{{ userpic_url }}" alt="{{ profile.nick }}" class="userpic">
   {% if is_owner %}<a class="btn btn-small btn-default" href="/addphoto.jsp">Изменить</a>{% endif %}
 </div>
 
@@ -50,6 +50,11 @@
 <p><b>Другие аккаунты с тем же email:</b>
 {% for nick in other_accounts %}<a href="/people/{{ nick }}/profile">{{ nick }}</a>{% if loop.last %}{% else %}, {% endif %}{% endfor %}</p>
 {% endif %}
+{% endif %}
+
+{% if invited_users.len() > 0 %}
+<p><b>Приглашённые пользователи:</b>
+{% for nick in invited_users %}<a href="/people/{{ nick }}/profile">{{ nick }}</a>{% if loop.last %}{% else %}, {% endif %}{% endfor %}</p>
 {% endif %}
 
 {% if favorite_tags.len() > 0 %}

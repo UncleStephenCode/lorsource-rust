@@ -43,13 +43,6 @@ impl UserProfileData {
         else { "новый пользователь" }
     }
 
-    fn photo_url(&self) -> Option<String> {
-        self.photo.as_ref().map(|p| if p.starts_with('/') || p.starts_with("http://") || p.starts_with("https://") {
-            p.clone()
-        } else {
-            format!("/photos/{p}")
-        })
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -98,6 +91,12 @@ struct UserTemplate {
     freezable: bool,
     other_accounts: Vec<String>,
     user_log: Vec<UserLogEntry>,
+    invited_users: Vec<String>,
+    /// `UserService.getUserpic(user, viewer.avatarMode, misteryMan=true)` -
+    /// always renders as an `<img>`, falling back to a 1x1 transparent gif
+    /// (`DisabledUserpic`) rather than a "no photo" box when the viewer has
+    /// avatars disabled or the target has neither a local photo nor email.
+    userpic_url: String,
 }
 
 #[derive(Template)]
@@ -218,8 +217,11 @@ async fn render_profile(state: AppState, nick: String, q: PagerQuery, current: C
     let is_frozen = frozen_until.map(|u| u > chrono::Utc::now()).unwrap_or(false);
     let frozen_until_text = is_frozen.then(|| frozen_until.unwrap().to_string());
 
-    let blockable = current.0.as_ref().map(|u| u.canmod && !profile.canmod).unwrap_or(false);
-    let freezable = blockable;
+    // UserService.isBlockable/isFreezable: reuse the exact same rules
+    // enforced server-side in usermod.jsp so the profile page never shows
+    // a button that would then 403.
+    let blockable = current.0.as_ref().map(|u| crate::routes::admin::is_blockable(profile.id, profile.canmod, u)).unwrap_or(false);
+    let freezable = current.0.as_ref().map(|u| u.canmod && !profile.canmod).unwrap_or(false);
 
     let other_accounts = if is_moderator {
         match profile.email.as_deref().filter(|e| !e.is_empty()) {
@@ -248,9 +250,38 @@ async fn render_profile(state: AppState, nick: String, q: PagerQuery, current: C
         vec![]
     };
 
+    // UserService.getUserpic: avatar fallback style is the *viewer's*
+    // profile setting, not the target's.
+    let viewer_avatar_mode = match &current.0 {
+        Some(viewer) => {
+            let settings_text: Option<String> = sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
+                .bind(viewer.id).fetch_optional(&state.pool).await?;
+            crate::profile::ProfileSettings::from_hstore_text(settings_text).avatar
+        }
+        None => crate::profile::DEFAULT_AVATAR.to_string(),
+    };
+    let userpic_url = crate::profile::userpic_url(
+        &viewer_avatar_mode,
+        true,
+        profile.id == crate::routes::comments::ANONYMOUS_USER_ID,
+        profile.photo.as_deref(),
+        profile.email.as_deref(),
+    ).unwrap_or_else(|| crate::profile::DISABLED_USERPIC.to_string());
+
+    // UserService.getAllInvitedUsers / WhoisController "invitedUsers":
+    // shown to everyone, not gated to owner/moderator, matching the original.
+    let invited_users: Vec<String> = sqlx::query_scalar(
+        r#"SELECT u.nick FROM user_invites i JOIN users u ON u.id=i.invited_user
+           WHERE i.owner=$1 AND i.invited_user IS NOT NULL ORDER BY i.issue_date"#,
+    )
+    .bind(profile.id)
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+
     Ok(Html(UserTemplate {
         profile, stats, topics, favorite_tags, ignore_tags, drafts_count, is_owner, can_view_private, userinfo_html,
-        ban_info, frozen_until_text, is_frozen, blockable, freezable, other_accounts, user_log,
+        ban_info, frozen_until_text, is_frozen, blockable, freezable, other_accounts, user_log, invited_users, userpic_url,
     }.render()?))
 }
 
@@ -304,7 +335,7 @@ pub async fn remarks(State(state): State<AppState>, Path(nick): Path<String>, cu
 
 pub async fn get_user(state: &AppState, nick: &str) -> Result<UserSummary> {
     sqlx::query_as::<_, UserSummary>(
-        "SELECT id,nick,name,score,max_score,photo,town,regdate,canmod,blocked,userinfo FROM users WHERE lower(nick)=lower($1)",
+        "SELECT id,nick,name,score,max_score,photo,town,regdate,canmod,COALESCE(candel,false) AS candel,blocked,userinfo FROM users WHERE lower(nick)=lower($1)",
     )
     .bind(nick)
     .fetch_optional(&state.pool)
@@ -672,7 +703,7 @@ pub async fn save_remark(State(state): State<AppState>, Path(nick): Path<String>
 pub async fn profile_wipe(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser) -> Result<Html<String>> {
     let moderator = current.0.as_ref().filter(|u| u.canmod).ok_or(AppError::Forbidden)?;
     let user = get_user(&state, &nick).await?;
-    if !is_blockable(&user, moderator) {
+    if !crate::routes::admin::is_blockable(user.id, user.canmod, moderator) {
         return Err(AppError::Forbidden);
     }
     if user.blocked.unwrap_or(false) {
@@ -692,14 +723,6 @@ pub async fn profile_wipe(State(state): State<AppState>, Path(nick): Path<String
   <button type="submit">Заблокировать и удалить</button>
 </form>
 "#, nick = html_escape::encode_text(&user.nick), id = user.id)))
-}
-
-fn is_blockable(target: &UserSummary, moderator: &UserSummary) -> bool {
-    // Approximates Java's UserService.isBlockable (!user.anonymous && by.isModerator
-    // && (!user.isModerator || by.isAdministrator)). Rust's role model has no separate
-    // administrator tier, so moderator-on-moderator wipe is disallowed outright rather
-    // than risking a moderator wiping another moderator.
-    !target.canmod
 }
 
 fn ensure_self_or_moderator(current: &Option<UserSummary>, target: &UserSummary) -> Result<()> {

@@ -207,8 +207,42 @@ pub async fn delete_comment(State(state): State<AppState>, CurrentUser(user): Cu
     if bonus != 0 {
         sqlx::query("UPDATE users SET score=GREATEST(score-$2,0) WHERE id=$1").bind(author_id).bind(bonus).execute(&state.pool).await?;
     }
+    // CommentDao.deleteComment: unlike an insert, deletion has no DB
+    // trigger - Java decrements topics.stat1 in app code and clamps stat3
+    // so it never exceeds the (now smaller) live comment count.
+    sqlx::query("UPDATE topics SET stat1=stat1-1, lastmod=now() WHERE id=$1").bind(topic_id).execute(&state.pool).await?;
+    sqlx::query("UPDATE topics SET stat3=stat1 WHERE id=$1 AND stat3>stat1").bind(topic_id).execute(&state.pool).await?;
+    notify_deleted(&state, author_id, user.id, Some(topic_id), Some(form.msgid), &reason).await?;
     crate::search_index::index_comment(&state, form.msgid).await;
     Ok(Redirect::to(&comment_link(&state, form.msgid).await?))
+}
+
+/// UserEventService.insertTopicDeleteNotification/insertCommentDeleteNotification:
+/// privately tell the author their content was deleted (with the reason),
+/// unless they deleted it themselves, are the anonymous user (id=2), or are
+/// currently frozen.
+pub(crate) const ANONYMOUS_USER_ID: i32 = 2;
+
+pub(crate) async fn notify_deleted(state: &AppState, author_id: i32, deleted_by: i32, topic_id: Option<i32>, comment_id: Option<i32>, reason: &str) -> Result<()> {
+    if author_id == deleted_by || author_id == ANONYMOUS_USER_ID {
+        return Ok(());
+    }
+    let frozen_until: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar("SELECT frozen_until FROM users WHERE id=$1").bind(author_id).fetch_optional(&state.pool).await?.flatten();
+    if frozen_until.map(|u| u > chrono::Utc::now()).unwrap_or(false) {
+        return Ok(());
+    }
+    sqlx::query("INSERT INTO user_events(userid,type,private,message_id,comment_id,message) VALUES($1,'DEL',true,$2,$3,$4)")
+        .bind(author_id)
+        .bind(topic_id)
+        .bind(comment_id)
+        .bind(reason)
+        .execute(&state.pool)
+        .await?;
+    sqlx::query("UPDATE users SET unread_events=(SELECT count(*) FROM user_events e WHERE e.unread AND e.userid=users.id) WHERE id=$1")
+        .bind(author_id)
+        .execute(&state.pool)
+        .await?;
+    Ok(())
 }
 
 pub async fn undelete_comment(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<CommentAction>) -> Result<Redirect> {
@@ -258,7 +292,10 @@ async fn insert_comment(state: &AppState, user_id: i32, form: CommentForm) -> Re
     .bind(form.replyto)
     .execute(&mut *tx)
     .await?;
-    sqlx::query("UPDATE topics SET stat1=stat1+1,lastmod=now() WHERE id=$1").bind(form.topic).execute(&mut *tx).await?;
+    // topics.stat1/stat3 and groups.stat3 are now kept in sync by the
+    // comins() trigger (see db/migrations/0013) - matches Java's DB-side
+    // bookkeeping exactly, instead of a partial manual update here that
+    // would double-count once the trigger exists.
 
     // Matches CommentCreateService.notifyReply / UserEventDao.insertCommentWatchNotification:
     // notify the parent comment's author (REPLY) and topic watchers (WATCH),
@@ -310,6 +347,31 @@ async fn insert_comment(state: &AppState, user_id: i32, form: CommentForm) -> Re
             .execute(&mut *tx)
             .await?;
         notified.push(*watcher);
+    }
+
+    // CommentCreateService.notifyMentions: notify each @nick referenced in
+    // the raw comment text, skipping the commenter and anyone mentioned who
+    // has the commenter on their ignore list.
+    let mentioned_nicks = markup::extract_mentions(&form.msg);
+    if !mentioned_nicks.is_empty() {
+        let mentioned_ids: Vec<i32> = sqlx::query_scalar(
+            r#"SELECT u.id FROM users u
+               WHERE lower(u.nick) = ANY($1) AND u.id <> $2
+                 AND NOT EXISTS (SELECT 1 FROM ignore_list il WHERE il.userid=u.id AND il.ignored=$2)"#,
+        )
+        .bind(mentioned_nicks.iter().map(|n| n.to_lowercase()).collect::<Vec<_>>())
+        .bind(user_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        for mentioned_id in &mentioned_ids {
+            sqlx::query("INSERT INTO user_events(userid,type,private,message_id,comment_id) VALUES($1,'REF',false,$2,$3)")
+                .bind(mentioned_id)
+                .bind(form.topic)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            notified.push(*mentioned_id);
+        }
     }
 
     if !notified.is_empty() {
