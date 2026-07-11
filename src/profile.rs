@@ -60,15 +60,22 @@ pub const THEMES: &[(&str, &str, bool)] = &[
     ("zomg_ponies", "zomg_ponies", true),
 ];
 pub const AVATARS: &[&str] = &["empty", "identicon", "monsterid", "wavatar", "retro", "robohash"];
+/// Matches TrackerFilterEnum.canBeDefault=true (ALL, MAIN) - Java doesn't
+/// let a user save NOTALKS/TECH as their default tracker mode, only use
+/// them as a one-off `?filter=` query param.
 pub const TRACKER_MODES: &[(&str, &str)] = &[
-    ("main", "Основной"),
-    ("all", "Все сообщения"),
-    ("topics", "Только темы"),
+    ("all", "все"),
+    ("main", "основные"),
 ];
+/// Matches UserPermissionService.allowedFormats for a logged-in user
+/// (Lorcode, LorcodeUlb, Markdown). Java deliberately removed raw HTML mode
+/// as a selectable format (see MarkupType/markup-related history upstream)
+/// since it has no sanitizing pass of its own - keeping it selectable here
+/// would silently re-open the raw-HTML-passthrough issue that was closed in
+/// markup.rs's ammonia sanitizer pass.
 pub const FORMAT_MODES: &[(&str, &str)] = &[
     ("markdown", "Markdown"),
     ("lorcode", "LORCODE"),
-    ("html", "HTML"),
 ];
 
 impl Default for StProfileSettings {
@@ -138,8 +145,16 @@ impl StProfileSettings {
         )
     }
 
-    pub fn theme_options(&self) -> Vec<StThemeOption> {
-        THEMES.iter().map(|(id, label, deprecated)| StThemeOption { id, label, deprecated: *deprecated, selected: self.style == *id }).collect()
+    /// Matches EditSettingsController.showForm: users below
+    /// UserPermissionService.DeprecatedFeaturesScore only see deprecated
+    /// themes in the list if they're already using one (so the dropdown
+    /// doesn't silently drop their current selection).
+    pub fn theme_options(&self, score: i32) -> Vec<StThemeOption> {
+        const DEPRECATED_FEATURES_SCORE: i32 = 500;
+        THEMES.iter()
+            .filter(|(id, _, deprecated)| !*deprecated || score >= DEPRECATED_FEATURES_SCORE || self.style == *id)
+            .map(|(id, label, deprecated)| StThemeOption { id, label, deprecated: *deprecated, selected: self.style == *id })
+            .collect()
     }
 
     pub fn topic_options(&self) -> Vec<StNumberOption> {

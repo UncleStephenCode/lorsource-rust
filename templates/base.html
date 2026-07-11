@@ -77,5 +77,15 @@
 <footer class="wrap footer">
   <p>Linux.org.ru Rust port. Legacy URL, theme assets and profile surface are kept for migration compatibility.</p>
 </footer>
+<script src="/js/highlight.min.js"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    if (window.hljs) {
+      document.querySelectorAll('pre code').forEach(function(block) {
+        hljs.highlightElement(block);
+      });
+    }
+  });
+</script>
 </body>
 </html>

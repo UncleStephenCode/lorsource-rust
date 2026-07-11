@@ -1,6 +1,7 @@
 use crate::{
     auth::CurrentUser,
     error::{AppError, Result},
+    markup,
     models::{PagerQuery, TopicSummary, UserSummary},
     pagination::Pager,
     profile::{ChoiceOption, NumberOption, ProfileSettings, ThemeOption},
@@ -31,6 +32,7 @@ struct UserProfileData {
     activated: bool,
     regdate_text: Option<String>,
     lastlogin_text: Option<String>,
+    userinfo_markup: Option<String>,
 }
 
 impl UserProfileData {
@@ -71,6 +73,10 @@ struct UserTemplate {
     drafts_count: i64,
     is_owner: bool,
     can_view_private: bool,
+    /// Pre-rendered, sanitized HTML for `profile.userinfo` - see
+    /// `render_profile`. Never render `profile.userinfo` directly with
+    /// `|safe`; it's raw user input.
+    userinfo_html: Option<String>,
 }
 
 #[derive(Template)]
@@ -119,8 +125,15 @@ async fn render_profile(state: AppState, nick: String, q: PagerQuery, current: C
     let is_owner = current.0.as_ref().map(|u| u.id == profile.id).unwrap_or(false);
     let is_moderator = current.0.as_ref().map(|u| u.canmod).unwrap_or(false);
     let can_view_private = is_owner || is_moderator;
+    // Was rendered with Askama's `|safe` straight from the raw DB column -
+    // stored XSS via the "about me" field (POST /people/{nick}/edit). Route
+    // it through the same sanitizing markup pipeline as comments/topics.
+    let is_markdown = profile.userinfo_markup.as_deref().map(|m| m.to_uppercase().contains("MARKDOWN")).unwrap_or(false);
+    let userinfo_html = profile.userinfo.as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .map(|text| markup::render_message(text, Some(!is_markdown)));
 
-    Ok(Html(UserTemplate { profile, stats, topics, favorite_tags, ignore_tags, drafts_count, is_owner, can_view_private }.render()?))
+    Ok(Html(UserTemplate { profile, stats, topics, favorite_tags, ignore_tags, drafts_count, is_owner, can_view_private, userinfo_html }.render()?))
 }
 
 #[derive(Deserialize)]
@@ -193,7 +206,8 @@ async fn get_user_profile(state: &AppState, nick: &str) -> Result<UserProfileDat
                   COALESCE(blocked,false) AS blocked,
                   COALESCE(activated,true) AS activated,
                   to_char(regdate, 'YYYY-MM-DD HH24:MI') AS regdate_text,
-                  to_char(lastlogin, 'YYYY-MM-DD HH24:MI') AS lastlogin_text
+                  to_char(lastlogin, 'YYYY-MM-DD HH24:MI') AS lastlogin_text,
+                  userinfo_markup::text AS userinfo_markup
            FROM users WHERE lower(nick)=lower($1)"#,
     )
     .bind(nick)
@@ -456,14 +470,15 @@ pub async fn edit_profile(State(state): State<AppState>, Path(nick): Path<String
 
 pub async fn settings(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser) -> Result<Html<String>> {
     let user = get_user(&state, &nick).await?;
-    ensure_self_or_moderator(&current.0, &user)?;
+    // Java's EditSettingsController is strictly self-service, no moderator override.
+    ensure_self(&current.0, &user)?;
     let settings_text: Option<String> = sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
         .bind(user.id)
         .fetch_optional(&state.pool)
         .await?;
     let settings = ProfileSettings::from_hstore_text(settings_text);
     Ok(Html(SettingsTemplate {
-        themes: settings.theme_options(),
+        themes: settings.theme_options(user.score.unwrap_or(0)),
         avatars: settings.avatar_options(),
         tracker_modes: settings.tracker_options(),
         format_modes: settings.format_options(),
@@ -476,7 +491,7 @@ pub async fn settings(State(state): State<AppState>, Path(nick): Path<String>, c
 
 pub async fn save_settings(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser, Form(form): axum::Form<HashMap<String, String>>) -> Result<Redirect> {
     let user = get_user(&state, &nick).await?;
-    ensure_self_or_moderator(&current.0, &user)?;
+    ensure_self(&current.0, &user)?;
     let settings = ProfileSettings::from_form(&form);
     let (keys, values) = settings.to_hstore_arrays();
     sqlx::query(

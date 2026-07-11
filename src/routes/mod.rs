@@ -118,7 +118,7 @@ pub fn router() -> Router<AppState> {
         .route("/notifications-click/ajax", post(legacy::notifications_click_ajax))
         .route("/polls/archive", get(legacy::archive_section))
         .route("/reactions", get(api::reactions_get).post(api::reactions_post))
-        .route("/reactions/ajax", post(api::reactions_post))
+        .route("/reactions/ajax", post(api::reactions_post_ajax))
         .route("/remove-userpic.jsp", post(legacy::remove_userpic))
         .route("/reset-password", get(legacy::reset_password_form).post(auth::reset_password_with_code))
         .route("/setpostscore.jsp", get(legacy::set_post_score_form).post(legacy::set_post_score))

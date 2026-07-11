@@ -147,12 +147,24 @@ pub async fn yandex_tableau(State(state): State<AppState>, CurrentUser(user): Cu
     Ok(Json(json!({"notifications": count})))
 }
 
-pub async fn help_page(Path(page): Path<String>) -> Result<Html<String>> {
-    let sTitleSource = page.replace('-', " ");
-    let title = html_escape::encode_text(&sTitleSource);
-    Ok(Html(format!(
-        "<h1>Справка: {title}</h1><p>Страница справки сохранена как legacy-compatible endpoint. Контент можно перенести из старых JSP/Markdown-ресурсов отдельной итерацией.</p>"
-    )))
+/// Matches HelpController.HelpPages exactly - only these 3 real pages
+/// exist; anything else 404s (the previous handler rendered a placeholder
+/// for any string, which never 404'd).
+fn help_page_title(page: &str) -> Option<&'static str> {
+    match page {
+        "lorcode.md" => Some("Разметка сообщений (LORCODE)"),
+        "markdown.md" => Some("Разметка сообщений (Markdown)"),
+        "rules.md" => Some("Правила форума"),
+        _ => None,
+    }
+}
+
+pub async fn help_page(State(state): State<AppState>, Path(page): Path<String>) -> Result<Html<String>> {
+    let Some(title) = help_page_title(&page) else { return Err(AppError::NotFound); };
+    let path = format!("{}/help/{page}", state.config.static_dir);
+    let source = tokio::fs::read_to_string(&path).await.map_err(|_| AppError::NotFound)?;
+    let html = markup::render_message(&source, Some(false));
+    Ok(Html(format!("<h1>{}</h1>{html}", html_escape::encode_text(title))))
 }
 
 pub async fn archive_section(State(state): State<AppState>, uri: Uri, Query(q): Query<PagerQuery>, CurrentUser(current_user): CurrentUser) -> Result<Html<String>> {

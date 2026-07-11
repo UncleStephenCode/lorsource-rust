@@ -30,7 +30,7 @@
   {% match profile.email %}{% when Some with (email) %}{% if can_view_private %}<b>Email:</b> <a href="mailto:{{ email }}">{{ email }}</a> (виден только вам и модераторам)<br>{% endif %}{% when None %}{% endmatch %}
 </div>
 
-{% match profile.userinfo %}{% when Some with (info) %}<div class="infoblock userinfo">{{ info|safe }}</div>{% when None %}{% endmatch %}
+{% match userinfo_html %}{% when Some with (info) %}<div class="infoblock userinfo">{{ info|safe }}</div>{% when None %}{% endmatch %}
 
 {% if favorite_tags.len() > 0 %}
 <p><b>Избранные теги:</b>

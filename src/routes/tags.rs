@@ -1,6 +1,9 @@
-use crate::{error::Result, models::{PagerQuery, TagItem, TopicSummary}, pagination::Pager, state::AppState};
+use crate::{auth::CurrentUser, error::{AppError, Result}, models::{PagerQuery, TagItem, TopicSummary}, pagination::Pager, state::AppState};
 use askama::Template;
-use axum::{extract::{Path, Query, State}, response::Html};
+use axum::{extract::{Path, Query, State}, response::{Html, Redirect}, Form};
+use once_cell::sync::Lazy;
+use regex::Regex;
+use serde::Deserialize;
 
 #[derive(Template)]
 #[template(path = "tags.html")]
@@ -56,52 +59,190 @@ pub async fn tag_page(State(state): State<AppState>, Path(tag): Path<String>, Qu
     Ok(Html(TagTopicsTemplate { title: format!("Метка: {tag}"), topics, pager, current_user: current_user.0 }.render()?))
 }
 
-#[derive(serde::Deserialize)]
-pub struct TagRenameForm { pub old: String, pub new: String }
+/// TagName.isGoodTag: unicode letters/digits/hyphen, optionally with
+/// interior dots/spaces/plus, 1-32 chars.
+static TAG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)^[\p{L}\d-](?:[.\p{L}\d \+-]*[\p{L}\d\+-])?$").expect("tag regex"));
 
-pub async fn change_form(crate::auth::CurrentUser(user): crate::auth::CurrentUser) -> crate::error::Result<Html<String>> {
-    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(crate::error::AppError::Forbidden); }
-    Ok(Html(r#"
+fn is_good_tag(tag: &str) -> bool {
+    let len = tag.chars().count();
+    (1..=32).contains(&len) && TAG_RE.is_match(tag)
+}
+
+fn first_letter_of(tag: &str) -> String {
+    tag.chars().next().map(|c| c.to_lowercase().to_string()).unwrap_or_default()
+}
+
+async fn get_tag_id(pool: &sqlx::PgPool, name: &str) -> Result<Option<i32>> {
+    Ok(sqlx::query_scalar("SELECT id FROM tags_values WHERE lower(value)=lower($1)").bind(name).fetch_optional(pool).await?)
+}
+
+#[derive(Deserialize)]
+pub struct TagChangeQuery {
+    #[serde(rename = "firstLetter")]
+    pub first_letter: Option<String>,
+    #[serde(rename = "tagName")]
+    pub tag_name: String,
+}
+
+pub async fn change_form(CurrentUser(user): CurrentUser, Query(q): Query<TagChangeQuery>) -> Result<Html<String>> {
+    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
+    Ok(Html(format!(r#"
 <h1>Переименовать метку</h1>
 <form method="post" action="/tags/change" class="form">
-<label>Старая <input name="old" required></label>
-<label>Новая <input name="new" required></label>
+<input type="hidden" name="firstLetter" value="{fl}">
+<label>Старая <input name="oldTagName" value="{old}" required readonly></label>
+<label>Новая <input name="tagName" value="{old}" required></label>
 <button type="submit">Переименовать</button>
 </form>
-"#.to_string()))
+"#,
+        fl = html_escape::encode_double_quoted_attribute(q.first_letter.as_deref().unwrap_or("")),
+        old = html_escape::encode_double_quoted_attribute(&q.tag_name),
+    )))
 }
 
-pub async fn change_tag(State(state): State<AppState>, crate::auth::CurrentUser(user): crate::auth::CurrentUser, axum::Form(form): axum::Form<TagRenameForm>) -> crate::error::Result<axum::response::Redirect> {
-    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(crate::error::AppError::Forbidden); }
-    sqlx::query("UPDATE tags_values SET value=$2 WHERE lower(value)=lower($1)")
-        .bind(form.old.trim())
-        .bind(form.new.trim())
-        .execute(&state.pool)
+#[derive(Deserialize)]
+pub struct TagChangeForm {
+    #[serde(rename = "oldTagName")]
+    pub old_tag_name: String,
+    #[serde(rename = "tagName")]
+    pub tag_name: String,
+    #[serde(rename = "firstLetter")]
+    pub first_letter: Option<String>,
+}
+
+pub async fn change_tag(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<TagChangeForm>) -> Result<Redirect> {
+    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
+    let old_tag_name = form.old_tag_name.trim();
+    let tag_name = form.tag_name.trim();
+
+    let Some(old_tag_id) = get_tag_id(&state.pool, old_tag_name).await? else {
+        return Err(AppError::BadRequest("Тега с таким именем не существует!".into()));
+    };
+    if !is_good_tag(tag_name) {
+        return Err(AppError::BadRequest(format!("Некорректный тег: '{tag_name}'")));
+    }
+    if get_tag_id(&state.pool, tag_name).await?.is_some() {
+        return Err(AppError::BadRequest("Тег с таким именем уже существует!".into()));
+    }
+
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("DELETE FROM tags_synonyms WHERE value=$1").bind(tag_name).execute(&mut *tx).await?;
+    sqlx::query("UPDATE tags_values SET value=$2 WHERE id=$1").bind(old_tag_id).bind(tag_name).execute(&mut *tx).await?;
+    tx.commit().await?;
+
+    Ok(Redirect::to(&format!("/tags/{}", urlencoding::encode(&first_letter_of(tag_name)))))
+}
+
+#[derive(Deserialize)]
+pub struct TagDeleteQuery {
+    #[serde(rename = "firstLetter")]
+    pub first_letter: Option<String>,
+    #[serde(rename = "tagName")]
+    pub tag_name: String,
+}
+
+pub async fn delete_form(State(state): State<AppState>, CurrentUser(user): CurrentUser, Query(q): Query<TagDeleteQuery>) -> Result<Html<String>> {
+    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
+    let is_synonym: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM tags_synonyms WHERE value=$1)")
+        .bind(q.tag_name.trim())
+        .fetch_one(&state.pool)
         .await?;
-    Ok(axum::response::Redirect::to(&format!("/tag/{}", urlencoding::encode(form.new.trim()))))
-}
-
-#[derive(serde::Deserialize)]
-pub struct TagDeleteForm { pub tag: String }
-
-pub async fn delete_form(crate::auth::CurrentUser(user): crate::auth::CurrentUser) -> crate::error::Result<Html<String>> {
-    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(crate::error::AppError::Forbidden); }
-    Ok(Html(r#"
+    let synonym_note = if is_synonym {
+        "<p class=\"muted\">Это синоним - будет удалена только сама ссылка-синоним.</p>"
+    } else {
+        ""
+    };
+    Ok(Html(format!(r#"
 <h1>Удалить метку</h1>
+{synonym_note}
 <form method="post" action="/tags/delete" class="form">
-<label>Метка <input name="tag" required></label>
+<input type="hidden" name="firstLetter" value="{fl}">
+<input type="hidden" name="oldTagName" value="{old}">
+<p>Удаляемая метка: <b>{old}</b></p>
+<label>Заменить на (оставьте пустым, чтобы просто удалить) <input name="tagName"></label>
+<label><input type="checkbox" name="createSynonym" value="true"> Оставить синоним на новую метку</label>
 <button type="submit">Удалить</button>
 </form>
-"#.to_string()))
+"#,
+        fl = html_escape::encode_double_quoted_attribute(q.first_letter.as_deref().unwrap_or("")),
+        old = html_escape::encode_text(&q.tag_name),
+        synonym_note = synonym_note,
+    )))
 }
 
-pub async fn delete_tag(State(state): State<AppState>, crate::auth::CurrentUser(user): crate::auth::CurrentUser, axum::Form(form): axum::Form<TagDeleteForm>) -> crate::error::Result<axum::response::Redirect> {
-    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(crate::error::AppError::Forbidden); }
-    let tag_id: Option<i32> = sqlx::query_scalar("SELECT id FROM tags_values WHERE lower(value)=lower($1)")
-        .bind(form.tag.trim()).fetch_optional(&state.pool).await?;
-    if let Some(tag_id) = tag_id {
-        sqlx::query("DELETE FROM tags WHERE tagid=$1").bind(tag_id).execute(&state.pool).await?;
-        sqlx::query("DELETE FROM tags_values WHERE id=$1").bind(tag_id).execute(&state.pool).await?;
+#[derive(Deserialize)]
+pub struct TagDeleteForm {
+    #[serde(rename = "oldTagName")]
+    pub old_tag_name: String,
+    #[serde(rename = "tagName")]
+    pub tag_name: Option<String>,
+    #[serde(rename = "createSynonym")]
+    pub create_synonym: Option<String>,
+}
+
+pub async fn delete_tag(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<TagDeleteForm>) -> Result<Redirect> {
+    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
+    let old_tag_name = form.old_tag_name.trim();
+
+    // A synonym entry isn't a real tag - deleting it just drops the redirect.
+    let synonym_target: Option<i32> = sqlx::query_scalar("SELECT tagid FROM tags_synonyms WHERE value=$1").bind(old_tag_name).fetch_optional(&state.pool).await?;
+    if synonym_target.is_some() {
+        sqlx::query("DELETE FROM tags_synonyms WHERE value=$1").bind(old_tag_name).execute(&state.pool).await?;
+        return Ok(Redirect::to(&format!("/tags/{}", urlencoding::encode(&first_letter_of(old_tag_name)))));
     }
-    Ok(axum::response::Redirect::to("/tags"))
+
+    let Some(old_tag_id) = get_tag_id(&state.pool, old_tag_name).await? else {
+        return Err(AppError::BadRequest("Тега с таким именем не существует!".into()));
+    };
+    let tag_name = form.tag_name.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let create_synonym = form.create_synonym.is_some();
+
+    let Some(tag_name) = tag_name else {
+        if create_synonym {
+            return Err(AppError::BadRequest("Не указан тег для создания синонима!".into()));
+        }
+        let mut tx = state.pool.begin().await?;
+        sqlx::query("DELETE FROM user_tags WHERE tag_id=$1").bind(old_tag_id).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM tags WHERE tagid=$1").bind(old_tag_id).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM tags_synonyms WHERE tagid=$1").bind(old_tag_id).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM tags_values WHERE id=$1").bind(old_tag_id).execute(&mut *tx).await?;
+        tx.commit().await?;
+        return Ok(Redirect::to(&format!("/tags/{}", urlencoding::encode(&first_letter_of(old_tag_name)))));
+    };
+
+    if !is_good_tag(tag_name) {
+        return Err(AppError::BadRequest(format!("Некорректный тег: '{tag_name}'")));
+    }
+    if old_tag_name.eq_ignore_ascii_case(tag_name) {
+        return Err(AppError::BadRequest("Заменяемый тег не должен быть равен удаляемому!".into()));
+    }
+
+    let mut tx = state.pool.begin().await?;
+    let new_tag_id: i32 = sqlx::query_scalar(
+        "INSERT INTO tags_values(value,counter) VALUES($1,0) ON CONFLICT(value) DO UPDATE SET value=EXCLUDED.value RETURNING id",
+    )
+    .bind(tag_name)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    sqlx::query("INSERT INTO tags(msgid,tagid) SELECT msgid,$2 FROM tags WHERE tagid=$1 ON CONFLICT DO NOTHING")
+        .bind(old_tag_id).bind(new_tag_id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM tags WHERE tagid=$1").bind(old_tag_id).execute(&mut *tx).await?;
+
+    sqlx::query("INSERT INTO user_tags(userid,tag_id,is_favorite) SELECT userid,$2,is_favorite FROM user_tags WHERE tag_id=$1 ON CONFLICT DO NOTHING")
+        .bind(old_tag_id).bind(new_tag_id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM user_tags WHERE tag_id=$1").bind(old_tag_id).execute(&mut *tx).await?;
+
+    sqlx::query("UPDATE tags_values SET counter=(SELECT count(*) FROM tags WHERE tagid=$1) WHERE id=$1").bind(new_tag_id).execute(&mut *tx).await?;
+
+    // Any synonym that pointed at the tag being removed now follows the merge target.
+    sqlx::query("UPDATE tags_synonyms SET tagid=$2 WHERE tagid=$1").bind(old_tag_id).bind(new_tag_id).execute(&mut *tx).await?;
+    if create_synonym {
+        sqlx::query("INSERT INTO tags_synonyms(value,tagid) VALUES($1,$2) ON CONFLICT(value) DO UPDATE SET tagid=EXCLUDED.tagid")
+            .bind(old_tag_name).bind(new_tag_id).execute(&mut *tx).await?;
+    }
+    sqlx::query("DELETE FROM tags_values WHERE id=$1").bind(old_tag_id).execute(&mut *tx).await?;
+    tx.commit().await?;
+
+    Ok(Redirect::to(&format!("/tags/{}", urlencoding::encode(&first_letter_of(tag_name)))))
 }
