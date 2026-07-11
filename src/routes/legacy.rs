@@ -106,12 +106,27 @@ pub struct PreviewForm {
     pub markup: Option<String>,
 }
 
-pub async fn markup_preview(Form(form): Form<PreviewForm>) -> Json<serde_json::Value> {
+/// MarkupPreviewController.preview: validates the markup id against
+/// UserPermissionService.allowedFormats before rendering, and caps input at
+/// MaxTextLength - the previous handler accepted any `markup` string
+/// (including e.g. "html", which the site no longer allows anyone to pick,
+/// see profile.rs's FORMAT_MODES) with no permission check at all.
+pub async fn markup_preview(CurrentUser(user): CurrentUser, Form(form): Form<PreviewForm>) -> Json<serde_json::Value> {
     let text = form.text.or(form.msg).or(form.message).unwrap_or_default();
-    if text.len() > 65_536 {
+
+    let markup_id = form.markup.as_deref().unwrap_or(crate::profile::DEFAULT_FORMAT_MODE);
+    if !crate::profile::is_format_mode(markup_id) {
+        return Json(json!({"error": "Недопустимый режим разметки"}));
+    }
+    let _ = &user; // allowed_formats is identical for anon/registered in this port (see profile::FORMAT_MODES)
+
+    if text.is_empty() {
+        return Json(json!({"html": ""}));
+    }
+    if text.chars().count() > 65_536 {
         return Json(json!({"error": "Слишком длинный текст"}));
     }
-    let html = markup::render_message(&text, Some(form.markup.as_deref().unwrap_or("lorcode") != "plain"));
+    let html = markup::render_message(&text, Some(markup_id != "markdown"));
     Json(json!({"html": html}))
 }
 
@@ -582,9 +597,9 @@ pub struct DeregisterForm {
     pub acceptOneway: Option<String>,
 }
 
-pub async fn deregister_form(CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+pub async fn deregister_form(State(state): State<AppState>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
-    ensure_deregister_allowed(&user)?;
+    ensure_deregister_allowed(&state, &user).await?;
     Ok(Html(format!(r#"
 <h1>Удаление аккаунта {nick}</h1>
 <p>Операция соответствует исходной логике: аккаунт блокируется, профиль очищается, восстановление через эту форму не предусмотрено.</p>
@@ -599,7 +614,7 @@ pub async fn deregister_form(CurrentUser(user): CurrentUser) -> Result<Html<Stri
 
 pub async fn deregister_post(State(state): State<AppState>, jar: CookieJar, CurrentUser(user): CurrentUser, Form(form): Form<DeregisterForm>) -> Result<impl IntoResponse> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
-    ensure_deregister_allowed(&user)?;
+    ensure_deregister_allowed(&state, &user).await?;
     if form.accept_block.or(form.acceptBlock).is_none() {
         return Err(AppError::BadRequest("Вы не согласились с блокировкой аккаунта".into()));
     }
@@ -620,7 +635,7 @@ pub async fn deregister_post(State(state): State<AppState>, jar: CookieJar, Curr
     Ok((jar.remove(Cookie::from("lor_session")), Html("<h1>Удаление пользователя прошло успешно.</h1>".to_string())).into_response())
 }
 
-fn ensure_deregister_allowed(user: &crate::models::UserSummary) -> Result<()> {
+async fn ensure_deregister_allowed(state: &AppState, user: &crate::models::UserSummary) -> Result<()> {
     if user.max_score.unwrap_or(0) < 100 {
         return Err(AppError::Forbidden);
     }
@@ -628,6 +643,14 @@ fn ensure_deregister_allowed(user: &crate::models::UserSummary) -> Result<()> {
         return Err(AppError::Forbidden);
     }
     if user.blocked.unwrap_or(false) {
+        return Err(AppError::Forbidden);
+    }
+    let frozen_until: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar("SELECT frozen_until FROM users WHERE id=$1")
+        .bind(user.id)
+        .fetch_optional(&state.pool)
+        .await?
+        .flatten();
+    if frozen_until.map(|u| u > chrono::Utc::now()).unwrap_or(false) {
         return Err(AppError::Forbidden);
     }
     Ok(())
@@ -879,9 +902,29 @@ pub async fn delete_image_form(Query(q): Query<ImageForm>, CurrentUser(user): Cu
 
 pub async fn delete_image(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<ImageForm>) -> Result<Redirect> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
-    sqlx::query("UPDATE images SET deleted=true WHERE id=$1 AND (userid=$2 OR EXISTS (SELECT 1 FROM users WHERE id=$2 AND canmod))")
-        .bind(form.id).bind(user.id).execute(&state.pool).await?;
-    Ok(Redirect::to("/gallery/"))
+    let Some((topic_id, author_id, is_main, group_urlname)): Option<(i32, i32, bool, String)> = sqlx::query_as(
+        r#"SELECT i.topic, t.userid, (t.image = i.id), g.urlname
+           FROM images i JOIN topics t ON t.id=i.topic JOIN groups g ON g.id=t.groupid
+           WHERE i.id=$1"#,
+    )
+    .bind(form.id)
+    .fetch_optional(&state.pool)
+    .await?
+    else {
+        return Err(AppError::NotFound);
+    };
+    if !user.canmod && user.id != author_id {
+        return Err(AppError::Forbidden);
+    }
+    // Matches DeleteImageController.checkDelete: a gallery section's main
+    // image can't be deleted through this endpoint at all - the previous
+    // handler had no such guard.
+    if is_main {
+        return Err(AppError::Forbidden);
+    }
+    sqlx::query("UPDATE images SET deleted=true WHERE id=$1").bind(form.id).execute(&state.pool).await?;
+    sqlx::query("UPDATE topics SET lastmod=now() WHERE id=$1").bind(topic_id).execute(&state.pool).await?;
+    Ok(Redirect::to(&format!("/gallery/{}/{}", urlencoding::encode(&group_urlname), topic_id)))
 }
 
 #[derive(Deserialize)]

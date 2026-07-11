@@ -62,6 +62,20 @@ struct UserStats {
     last_comment: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct BanInfo {
+    bandate_text: String,
+    reason: String,
+    moderator_nick: String,
+}
+
+#[derive(Debug, Clone)]
+struct UserLogEntry {
+    action: String,
+    date_text: String,
+    actor_nick: String,
+}
+
 #[derive(Template)]
 #[template(path = "user.html")]
 struct UserTemplate {
@@ -77,6 +91,13 @@ struct UserTemplate {
     /// `render_profile`. Never render `profile.userinfo` directly with
     /// `|safe`; it's raw user input.
     userinfo_html: Option<String>,
+    ban_info: Option<BanInfo>,
+    frozen_until_text: Option<String>,
+    is_frozen: bool,
+    blockable: bool,
+    freezable: bool,
+    other_accounts: Vec<String>,
+    user_log: Vec<UserLogEntry>,
 }
 
 #[derive(Template)]
@@ -176,7 +197,61 @@ async fn render_profile(state: AppState, nick: String, q: PagerQuery, current: C
         .filter(|s| !s.trim().is_empty())
         .map(|text| markup::render_message(text, Some(!is_markdown)));
 
-    Ok(Html(UserTemplate { profile, stats, topics, favorite_tags, ignore_tags, drafts_count, is_owner, can_view_private, userinfo_html }.render()?))
+    // Moderation info: matches WhoisController's banInfo/isFrozen/
+    // blockable/freezable/otherUsers/userlog fields, which the previous
+    // implementation didn't surface at all - a moderator had no way to see
+    // ban/freeze history or other accounts sharing an email from the
+    // profile page itself.
+    let ban_info = if profile.blocked {
+        sqlx::query_as::<_, (chrono::NaiveDateTime, String, String)>(
+            r#"SELECT b.bandate, b.reason, u.nick FROM ban_info b JOIN users u ON u.id=b.ban_by WHERE b.userid=$1"#,
+        )
+        .bind(profile.id)
+        .fetch_optional(&state.pool)
+        .await?
+        .map(|(bandate, reason, moderator_nick)| BanInfo { bandate_text: bandate.to_string(), reason, moderator_nick })
+    } else {
+        None
+    };
+
+    let frozen_until: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar("SELECT frozen_until FROM users WHERE id=$1").bind(profile.id).fetch_optional(&state.pool).await?.flatten();
+    let is_frozen = frozen_until.map(|u| u > chrono::Utc::now()).unwrap_or(false);
+    let frozen_until_text = is_frozen.then(|| frozen_until.unwrap().to_string());
+
+    let blockable = current.0.as_ref().map(|u| u.canmod && !profile.canmod).unwrap_or(false);
+    let freezable = blockable;
+
+    let other_accounts = if is_moderator {
+        match profile.email.as_deref().filter(|e| !e.is_empty()) {
+            Some(email) => sqlx::query_scalar("SELECT nick FROM users WHERE lower(email)=lower($1) AND id<>$2 ORDER BY nick")
+                .bind(email).bind(profile.id).fetch_all(&state.pool).await.unwrap_or_default(),
+            None => vec![],
+        }
+    } else {
+        vec![]
+    };
+
+    let user_log = if is_owner || is_moderator {
+        sqlx::query_as::<_, (String, chrono::DateTime<chrono::Utc>, String)>(
+            r#"SELECT l.action::text, l.action_date, u.nick
+               FROM user_log l JOIN users u ON u.id=l.action_userid
+               WHERE l.userid=$1 ORDER BY l.action_date DESC LIMIT 20"#,
+        )
+        .bind(profile.id)
+        .fetch_all(&state.pool)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(action, date, actor_nick)| UserLogEntry { action, date_text: date.to_string(), actor_nick })
+        .collect()
+    } else {
+        vec![]
+    };
+
+    Ok(Html(UserTemplate {
+        profile, stats, topics, favorite_tags, ignore_tags, drafts_count, is_owner, can_view_private, userinfo_html,
+        ban_info, frozen_until_text, is_frozen, blockable, freezable, other_accounts, user_log,
+    }.render()?))
 }
 
 #[derive(Deserialize)]

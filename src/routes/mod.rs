@@ -77,7 +77,10 @@ pub fn router() -> Router<AppState> {
         .route("/whois.jsp", get(users::legacy_whois))
         .route("/login.jsp", get(auth::login_form))
         .route("/login_process", post(auth::login))
-        .route("/logout", get(auth::logout).post(auth::logout))
+        // Java's LoginController only maps POST for the actual clearing
+        // action (a bare `<a href>` GET would be a CSRF-able logout) - the
+        // base.html top-nav link now submits a POST form to match.
+        .route("/logout", post(auth::logout))
         .route("/register.jsp", get(auth::register_form).post(auth::register))
         .route("/lostpwd.jsp", get(auth::lost_password_form).post(auth::lost_password))
         .route("/notifications", get(api::notifications).post(api::notifications_mark_read))
@@ -108,7 +111,7 @@ pub fn router() -> Router<AppState> {
         .route("/group-lastmod.jsp", get(legacy::group_lastmod_jsp))
         .route("/group.jsp", get(legacy::group_jsp))
         .route("/help/:page", get(legacy::help_page))
-        .route("/logout_all_sessions", get(auth::logout).post(auth::logout))
+        .route("/logout_all_sessions", post(auth::logout))
         .route("/markup/preview", post(legacy::markup_preview))
         .route("/memories.jsp", post(legacy::memories))
         .route("/mt.jsp", get(topics::move_topic_form).post(topics::move_topic))
@@ -174,10 +177,20 @@ pub fn router() -> Router<AppState> {
 #[template(path = "about.html")]
 struct AboutTemplate<'a> {
     version: &'a str,
+    moderators: Vec<String>,
+    correctors: Vec<String>,
 }
 
-async fn about() -> Result<Html<String>, AppError> {
-    Ok(Html(AboutTemplate { version: env!("CARGO_PKG_VERSION") }.render()?))
+/// ServerInfoController populates moderators/correctors from UserService -
+/// the previous AboutTemplate only had a version string.
+async fn about(axum::extract::State(state): axum::extract::State<AppState>) -> Result<Html<String>, AppError> {
+    let moderators: Vec<String> = sqlx::query_scalar("SELECT nick FROM users WHERE canmod AND NOT COALESCE(blocked,false) ORDER BY nick")
+        .fetch_all(&state.pool)
+        .await?;
+    let correctors: Vec<String> = sqlx::query_scalar("SELECT nick FROM users WHERE corrector AND NOT COALESCE(blocked,false) ORDER BY nick")
+        .fetch_all(&state.pool)
+        .await?;
+    Ok(Html(AboutTemplate { version: env!("CARGO_PKG_VERSION"), moderators, correctors }.render()?))
 }
 
 pub async fn healthz() -> impl IntoResponse {

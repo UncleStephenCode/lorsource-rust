@@ -32,6 +32,26 @@
 
 {% match userinfo_html %}{% when Some with (info) %}<div class="infoblock userinfo">{{ info|safe }}</div>{% when None %}{% endmatch %}
 
+{% if can_view_private %}
+{% match ban_info %}
+{% when Some with (b) %}
+<div class="infoblock ban-info"><b>Заблокирован</b> {{ b.bandate_text }} модератором {{ b.moderator_nick }} · причина: {{ b.reason }}</div>
+{% when None %}{% endmatch %}
+{% match frozen_until_text %}
+{% when Some with (until) %}<div class="infoblock freeze-info"><b>Заморожен до:</b> {{ until }}</div>
+{% when None %}{% endmatch %}
+{% if can_view_private && (blockable || freezable) %}
+<nav class="profile-nav">
+  {% if blockable %}<a href="/usermod.jsp?id={{ profile.id }}&amp;action=block" class="btn btn-danger">Заблокировать</a>{% endif %}
+  {% if freezable %}<a href="/usermod.jsp?id={{ profile.id }}&amp;action=freeze" class="btn btn-default">Заморозить</a>{% endif %}
+</nav>
+{% endif %}
+{% if other_accounts.len() > 0 %}
+<p><b>Другие аккаунты с тем же email:</b>
+{% for nick in other_accounts %}<a href="/people/{{ nick }}/profile">{{ nick }}</a>{% if loop.last %}{% else %}, {% endif %}{% endfor %}</p>
+{% endif %}
+{% endif %}
+
 {% if favorite_tags.len() > 0 %}
 <p><b>Избранные теги:</b>
 {% for tag in favorite_tags %}<a class="tag" href="/tag/{{ tag }}">{{ tag }}</a>{% if loop.last %}{% else %}, {% endif %}{% endfor %}
@@ -41,6 +61,13 @@
 {% if can_view_private && ignore_tags.len() > 0 %}
 <p><b>Игнорированные теги:</b>
 {% for tag in ignore_tags %}<a class="tag" href="/tag/{{ tag }}">{{ tag }}</a>{% if loop.last %}{% else %}, {% endif %}{% endfor %}</p>
+{% endif %}
+
+{% if can_view_private && user_log.len() > 0 %}
+<h2>Журнал действий</h2>
+<ul class="userlog">
+{% for entry in user_log %}<li>{{ entry.date_text }} · {{ entry.action }} · {{ entry.actor_nick }}</li>{% endfor %}
+</ul>
 {% endif %}
 
 {% if is_owner %}
