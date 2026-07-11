@@ -393,9 +393,33 @@ pub async fn reactions_get(State(state): State<AppState>, CurrentUser(user): Cur
     let (topic_id, comment_id) = resolve_reaction_target(&state.pool, q.topic, q.comment, q.msgid).await?;
     let link = reaction_target_link(&state.pool, topic_id, comment_id).await?;
 
-    let Some(_user) = user else {
+    if user.is_none() {
         return Ok(Redirect::to(&link).into_response());
-    };
+    }
+
+    // ReactionController.commentReaction/topicReaction: a deleted
+    // topic/comment (or a topic with comments hidden) isn't viewable even
+    // by an authorized user; a plain topic view additionally runs the full
+    // checkView gate (deleted/draft/expired/open-warnings visibility).
+    if let Some(comment_id) = comment_id {
+        let (comment_deleted, topic_deleted, topic_postscore): (bool, bool, i32) = sqlx::query_as(
+            "SELECT c.deleted, t.deleted, t.postscore FROM comments c JOIN topics t ON t.id=c.topic WHERE c.id=$1",
+        )
+        .bind(comment_id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
+        const POSTSCORE_HIDE_COMMENTS: i32 = 10002;
+        if comment_deleted || topic_deleted || topic_postscore == POSTSCORE_HIDE_COMMENTS {
+            return Err(AppError::Forbidden);
+        }
+    } else {
+        crate::routes::topics::check_topic_viewable(&state, topic_id, &user).await?;
+        let topic_deleted: bool = sqlx::query_scalar("SELECT deleted FROM topics WHERE id=$1").bind(topic_id).fetch_one(&state.pool).await?;
+        if topic_deleted {
+            return Err(AppError::Forbidden);
+        }
+    }
 
     let rows = sqlx::query_as::<_, (i32, String, String, chrono::DateTime<chrono::Utc>)>(
         r#"SELECT rl.origin_user, u.nick, rl.reaction, rl.set_date
@@ -443,12 +467,13 @@ async fn check_reaction_allowed(pool: &sqlx::PgPool, user_id: i32, topic_id: i32
         }
     }
 
-    let (author_id, topic_deleted, topic_expired, comment_deleted): (i32, bool, bool, Option<bool>) = if let Some(comment_id) = comment_id {
-        sqlx::query_as(
+    let (author_id, topic_deleted, topic_expired, comment_deleted, topic_postscore): (i32, bool, bool, Option<bool>, i32) = if let Some(comment_id) = comment_id {
+        let row: (i32, bool, bool, bool, i32) = sqlx::query_as(
             r#"SELECT c.userid,
                       t.deleted,
-                      (t.postdate + s.expire < now()) AS expired,
-                      c.deleted
+                      NOT t.sticky AND COALESCE(t.commitdate,t.postdate) < now() - s.expire AS expired,
+                      c.deleted,
+                      t.postscore
                FROM comments c
                JOIN topics t ON t.id=c.topic
                JOIN groups g ON g.id=t.groupid
@@ -459,22 +484,34 @@ async fn check_reaction_allowed(pool: &sqlx::PgPool, user_id: i32, topic_id: i32
         .bind(topic_id)
         .fetch_optional(pool)
         .await?
-        .ok_or(crate::error::AppError::NotFound)?
+        .ok_or(crate::error::AppError::NotFound)?;
+        (row.0, row.1, row.2, Some(row.3), row.4)
     } else {
-        let (author_id, deleted, expired): (i32, bool, bool) = sqlx::query_as(
-            r#"SELECT t.userid, t.deleted, (t.postdate + s.expire < now()) AS expired
+        let (author_id, deleted, expired, postscore): (i32, bool, bool, i32) = sqlx::query_as(
+            r#"SELECT t.userid, t.deleted, NOT t.sticky AND COALESCE(t.commitdate,t.postdate) < now() - s.expire AS expired, t.postscore
                FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section WHERE t.id=$1"#,
         )
         .bind(topic_id)
         .fetch_optional(pool)
         .await?
         .ok_or(crate::error::AppError::NotFound)?;
-        (author_id, deleted, expired, None)
+        (author_id, deleted, expired, None, postscore)
     };
 
-    if user_id == author_id || topic_deleted || topic_expired || comment_deleted.unwrap_or(false) {
+    // ReactionService.allowInteract: comment reactions are additionally
+    // blocked once the topic's comments are hidden (POSTSCORE_HIDE_COMMENTS).
+    const POSTSCORE_HIDE_COMMENTS: i32 = 10002;
+    let comments_hidden = comment_id.is_some() && topic_postscore == POSTSCORE_HIDE_COMMENTS;
+
+    if user_id == author_id || topic_deleted || topic_expired || comment_deleted.unwrap_or(false) || comments_hidden {
         return Err(crate::error::AppError::Forbidden);
     }
+
+    let frozen_until: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar("SELECT frozen_until FROM users WHERE id=$1").bind(user_id).fetch_optional(pool).await?.flatten();
+    if frozen_until.map(|u| u > chrono::Utc::now()).unwrap_or(false) {
+        return Err(crate::error::AppError::Forbidden);
+    }
+
     Ok(())
 }
 
@@ -566,7 +603,7 @@ pub async fn vote(State(state): State<AppState>, CurrentUser(user): CurrentUser,
         r#"SELECT p.topic, p.multiselect,
                   CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END AS section_prefix,
                   g.urlname,
-                  (t.postdate + s.expire < now()) AS expired
+                  NOT t.sticky AND COALESCE(t.commitdate,t.postdate) < now() - s.expire AS expired
            FROM polls p
            JOIN topics t ON t.id=p.topic
            JOIN groups g ON g.id=t.groupid

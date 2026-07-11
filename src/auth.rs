@@ -22,7 +22,7 @@ where
         let Some(cookie) = jar.get("lor_session") else { return Ok(CurrentUser(None)); };
         let Some(user_id) = verify_session(cookie.value(), &app.config.cookie_secret) else { return Ok(CurrentUser(None)); };
         let user = sqlx::query_as::<_, UserSummary>(
-            r#"SELECT id, nick, name, score, max_score, photo, town, regdate, canmod, COALESCE(candel,false) AS candel, blocked, userinfo
+            r#"SELECT id, nick, name, score, max_score, photo, town, regdate, canmod, COALESCE(candel,false) AS candel, COALESCE(corrector,false) AS corrector, blocked, userinfo
                FROM users WHERE id=$1 AND activated AND NOT COALESCE(blocked,false)"#,
         )
         .bind(user_id)

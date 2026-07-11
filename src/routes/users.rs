@@ -338,7 +338,7 @@ pub async fn remarks(State(state): State<AppState>, Path(nick): Path<String>, cu
 
 pub async fn get_user(state: &AppState, nick: &str) -> Result<UserSummary> {
     sqlx::query_as::<_, UserSummary>(
-        "SELECT id,nick,name,score,max_score,photo,town,regdate,canmod,COALESCE(candel,false) AS candel,blocked,userinfo FROM users WHERE lower(nick)=lower($1)",
+        "SELECT id,nick,name,score,max_score,photo,town,regdate,canmod,COALESCE(candel,false) AS candel,COALESCE(corrector,false) AS corrector,blocked,userinfo FROM users WHERE lower(nick)=lower($1)",
     )
     .bind(nick)
     .fetch_optional(&state.pool)

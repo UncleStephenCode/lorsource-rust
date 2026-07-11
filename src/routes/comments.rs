@@ -59,15 +59,137 @@ async fn comment_link(state: &AppState, comment_id: i32) -> Result<String> {
 
 pub async fn add_comment(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<CommentForm>) -> Result<Redirect> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
+    check_comment_posting_allowed(&state, &user, form.topic).await?;
     let id = insert_comment(&state, user.id, form).await?;
     Ok(Redirect::to(&comment_link(&state, id).await?))
 }
 
 pub async fn add_comment_ajax(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<CommentForm>) -> Result<axum::Json<serde_json::Value>> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
+    check_comment_posting_allowed(&state, &user, form.topic).await?;
     let id = insert_comment(&state, user.id, form).await?;
     let url = comment_link(&state, id).await?;
     Ok(axum::Json(serde_json::json!({"id": id, "ok": true, "url": url})))
+}
+
+/// Section.getCommentPostscore: Forum/News are unrestricted by section;
+/// Articles/Gallery/Polls/anything else default to a registered-with-score
+/// floor. Section ids per db/migrations/0002_seed.sql (1=Новости, 2=Форум,
+/// 3=Галерея, 4=Статьи, 5=Опросы).
+fn section_comment_postscore(section_id: i32) -> i32 {
+    match section_id {
+        1 | 2 => -9999,
+        _ => 45,
+    }
+}
+
+const TOPIC_MAX_WARNINGS: i32 = 2;
+
+/// TopicPermissionService.isCommentsAllowedByUser + checkCommentsAllowed:
+/// combines topic state (deleted/expired/draft), user state
+/// (blocked/frozen), and a postscore computed as the *max* across six
+/// independent restriction sources - matches Java's `getPostscore` exactly
+/// except `getAllowAnonymousPostscore` (no anonymous-posting model here,
+/// so that source is always POSTSCORE_UNRESTRICTED).
+async fn check_comment_posting_allowed(state: &AppState, user: &crate::models::UserSummary, topic_id: i32) -> Result<()> {
+    let row: Option<(bool, bool, bool, chrono::DateTime<chrono::Utc>, Option<chrono::NaiveDateTime>, bool, i32, i32, i32, i32, i32)> = sqlx::query_as(
+        r#"SELECT t.deleted, t.draft,
+                  NOT t.sticky AND COALESCE(t.commitdate,t.postdate) < now() - s.expire AS expired,
+                  t.postdate, t.commitdate, t.sticky, t.postscore, g.restrict_comments, s.id AS section_id,
+                  t.stat1 AS comment_count, t.open_warnings
+           FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section
+           WHERE t.id=$1"#,
+    )
+    .bind(topic_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((deleted, draft, expired, _postdate, _commitdate, sticky, topic_postscore, restrict_comments, section_id, comment_count, open_warnings)) = row else {
+        return Err(AppError::NotFound);
+    };
+    if deleted {
+        return Err(AppError::BadRequest("Нельзя добавлять комментарии к удаленному сообщению".into()));
+    }
+    if draft {
+        return Err(AppError::BadRequest("Нельзя добавлять комментарии к черновику".into()));
+    }
+    if expired {
+        return Err(AppError::BadRequest("Сообщение уже устарело".into()));
+    }
+
+    let frozen_until: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar("SELECT frozen_until FROM users WHERE id=$1").bind(user.id).fetch_optional(&state.pool).await?.flatten();
+    let is_frozen = frozen_until.map(|u| u > chrono::Utc::now()).unwrap_or(false);
+    if user.blocked.unwrap_or(false) || is_frozen {
+        return Err(AppError::Forbidden);
+    }
+
+    let comment_count_restriction = if !sticky {
+        if comment_count > 3000 { 200 } else if comment_count > 2000 { 100 } else if comment_count > 1000 { 50 } else { -9999 }
+    } else {
+        -9999
+    };
+    // DeleteInfoDao.scoreLoss sums `-bonus` because Java stores the penalty
+    // as a non-positive score *delta*; this port's `del_info.bonus` is the
+    // opposite sign (a positive "points removed" count, see every INSERT
+    // INTO del_info in topics.rs/comments.rs/admin.rs), so summing `bonus`
+    // directly gives the same positive "loss" total.
+    let score_loss: i32 = sqlx::query_scalar(
+        r#"SELECT COALESCE((SELECT sum(bonus) FROM del_info JOIN comments ON comments.id=del_info.msgid
+             WHERE bonus IS NOT NULL AND bonus<>0 AND comments.userid<>2 AND comments.deleted AND topic=$1), 0)::int"#,
+    )
+    .bind(topic_id)
+    .fetch_one(&state.pool)
+    .await?;
+    let score_loss_postscore = if !sticky && !expired {
+        if score_loss >= 150 { 100 } else if score_loss >= 100 { 50 } else { -9999 }
+    } else {
+        -9999
+    };
+    let open_warnings_postscore = if open_warnings > TOPIC_MAX_WARNINGS { 100 } else { -9999 };
+
+    let postscore = [
+        topic_postscore,
+        restrict_comments,
+        section_comment_postscore(section_id),
+        comment_count_restriction,
+        score_loss_postscore,
+        open_warnings_postscore,
+    ]
+    .into_iter()
+    .max()
+    .unwrap_or(-9999);
+
+    const POSTSCORE_UNRESTRICTED: i32 = -9999;
+    const POSTSCORE_MOD_AUTHOR: i32 = 9999;
+    const POSTSCORE_MODERATORS_ONLY: i32 = 10000;
+    const POSTSCORE_NO_COMMENTS: i32 = 10001;
+    const POSTSCORE_HIDE_COMMENTS: i32 = 10002;
+    const POSTSCORE_REGISTERED_ONLY: i32 = -50;
+
+    if postscore == POSTSCORE_NO_COMMENTS || postscore == POSTSCORE_HIDE_COMMENTS {
+        return Err(AppError::Forbidden);
+    }
+    if postscore == POSTSCORE_UNRESTRICTED {
+        return Ok(());
+    }
+    if user.canmod {
+        return Ok(());
+    }
+    if postscore == POSTSCORE_REGISTERED_ONLY {
+        return Ok(());
+    }
+    if postscore == POSTSCORE_MODERATORS_ONLY {
+        return Err(AppError::Forbidden);
+    }
+    let author_id: i32 = sqlx::query_scalar("SELECT userid FROM topics WHERE id=$1").bind(topic_id).fetch_one(&state.pool).await?;
+    let view_by_author = user.id == author_id;
+    if postscore == POSTSCORE_MOD_AUTHOR {
+        return if view_by_author { Ok(()) } else { Err(AppError::Forbidden) };
+    }
+    if view_by_author || user.score.unwrap_or(0) >= postscore {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden)
+    }
 }
 
 pub async fn comment_message(Query(q): Query<JumpQuery>) -> Redirect {
@@ -89,11 +211,25 @@ pub struct EditCommentForm { pub msgid: i32, pub msg: String, pub title: Option<
 const COMMENT_EDIT_WINDOW_MINUTES: i64 = 30;
 const COMMENT_EDIT_MIN_SCORE: i32 = 45;
 
+/// TopicDao's `expired` column: `!sticky && COALESCE(commitdate,postdate) <
+/// now()-sections.expire`. Shared by comment edit/delete/undelete, which
+/// all gate on the topic's own expiry, not just the comment's age.
+pub(crate) async fn is_topic_expired(state: &AppState, topic_id: i32) -> Result<bool> {
+    Ok(sqlx::query_scalar(
+        r#"SELECT NOT t.sticky AND COALESCE(t.commitdate,t.postdate) < now() - s.expire
+           FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section
+           WHERE t.id=$1"#,
+    )
+    .bind(topic_id)
+    .fetch_one(&state.pool)
+    .await?)
+}
+
 pub async fn edit_comment(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<EditCommentForm>) -> Result<Redirect> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
     let row: (i32, i32, bool, chrono::DateTime<chrono::Utc>, bool) = sqlx::query_as(
         r#"SELECT c.topic, c.userid, c.deleted, c.postdate,
-                  EXISTS(SELECT 1 FROM comments r WHERE r.replyto=c.id) AS has_replies
+                  EXISTS(SELECT 1 FROM comments r WHERE r.replyto=c.id AND NOT r.deleted) AS has_replies
            FROM comments c WHERE c.id=$1"#,
     )
     .bind(form.msgid)
@@ -105,6 +241,12 @@ pub async fn edit_comment(State(state): State<AppState>, CurrentUser(user): Curr
 
     if deleted || topic_deleted {
         return Err(AppError::BadRequest("тема или комментарий удалены".into()));
+    }
+    // TopicPermissionService.checkCommentsAllowed, also enforced for edits
+    // via isCommentEditableNow: an expired topic can't be commented on OR
+    // have its comments edited, by anyone (moderators included).
+    if is_topic_expired(&state, topic_id).await? {
+        return Err(AppError::BadRequest("сообщение уже устарело".into()));
     }
     if user.id != author_id {
         return Err(AppError::Forbidden);
@@ -129,7 +271,7 @@ pub async fn edit_comment(State(state): State<AppState>, CurrentUser(user): Curr
 
 
 pub async fn delete_comment_form(State(state): State<AppState>, Query(q): Query<JumpQuery>, CurrentUser(user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
-    if user.is_none() { return Err(AppError::Forbidden); }
+    let Some(user) = user else { return Err(AppError::Forbidden); };
     let row: (i32, String, String) = sqlx::query_as(
         "SELECT c.topic, c.title, u.nick FROM comments c JOIN users u ON u.id=c.userid WHERE c.id=$1",
     )
@@ -137,12 +279,22 @@ pub async fn delete_comment_form(State(state): State<AppState>, Query(q): Query<
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
+    // DeleteCommentController.deleteComments: only a moderator may set
+    // `bonus`/`delete_replys` - a plain author sees just the reason field.
+    let mod_fields = if user.canmod {
+        r#"<label>Штраф (0-20) <input type="number" name="bonus" min="0" max="20" value="0"></label>
+  <label><input type="checkbox" name="delete_replys" value="true"> Удалить с ответами</label>"#
+    } else {
+        ""
+    };
     Ok(Html(format!(r#"
 <h1>Удалить комментарий #{}</h1>
 <p>Тема #{} · {} · автор {}</p>
 <form method="post" action="/delete_comment.jsp">
   <input type="hidden" name="csrf" value="{csrf_token}">
   <input type="hidden" name="msgid" value="{}">
+  <label>Причина <input name="reason"></label>
+  {mod_fields}
   <button type="submit">Удалить</button>
 </form>
 "#, q.msgid, row.0, html_escape::encode_text(&row.1), html_escape::encode_text(&row.2), q.msgid)))
@@ -165,6 +317,32 @@ pub struct CommentAction {
     pub msgid: i32,
     pub reason: Option<String>,
     pub bonus: Option<i32>,
+    pub delete_replys: Option<String>,
+}
+
+/// DeleteReasons.replyBonusAndReason: when the root comment's penalty was
+/// more than a token amount (>2 points), decay the same penalty down the
+/// reply tree - direct children lose 2, grandchildren 1, anything deeper 0.
+/// Returned as a positive "points removed" count, matching this port's
+/// `del_info.bonus` sign convention (Java stores the negative score delta
+/// instead - see the `score_loss` query above for the same flip).
+fn reply_bonus_and_reason(drop_score: bool, depth: i32) -> (i32, &'static str) {
+    if !drop_score {
+        return (0, "7.1 Ответ на некорректное сообщение (авто)");
+    }
+    match depth {
+        0 => (2, "7.1 Ответ на некорректное сообщение (авто, уровень 0)"),
+        1 => (1, "7.1 Ответ на некорректное сообщение (авто, уровень 1)"),
+        _ => (0, "7.1 Ответ на некорректное сообщение (авто, уровень >1)"),
+    }
+}
+
+async fn effective_delete_bonus(state: &AppState, author_id: i32, requested_bonus: i32) -> Result<i32> {
+    if requested_bonus == 0 || author_id == ANONYMOUS_USER_ID {
+        return Ok(requested_bonus);
+    }
+    let frozen_until: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar("SELECT frozen_until FROM users WHERE id=$1").bind(author_id).fetch_optional(&state.pool).await?.flatten();
+    Ok(if frozen_until.map(|u| u > chrono::Utc::now()).unwrap_or(false) { 0 } else { requested_bonus })
 }
 
 /// Matches TopicPermissionService.DeletePeriod: authors may delete their own
@@ -176,7 +354,7 @@ pub async fn delete_comment(State(state): State<AppState>, CurrentUser(user): Cu
     let Some(user) = user else { return Err(AppError::Forbidden); };
     let row: (i32, i32, bool, chrono::DateTime<chrono::Utc>, bool) = sqlx::query_as(
         r#"SELECT c.topic, c.userid, c.deleted, c.postdate,
-                  EXISTS(SELECT 1 FROM comments r WHERE r.replyto=c.id) AS has_replies
+                  EXISTS(SELECT 1 FROM comments r WHERE r.replyto=c.id AND NOT r.deleted) AS has_replies
            FROM comments c WHERE c.id=$1"#,
     )
     .bind(form.msgid)
@@ -189,20 +367,61 @@ pub async fn delete_comment(State(state): State<AppState>, CurrentUser(user): Cu
     }
     let topic_deleted: bool = sqlx::query_scalar("SELECT deleted FROM topics WHERE id=$1").bind(topic_id).fetch_one(&state.pool).await?;
 
+    // isCommentDeletableNow: moderators bypass the expired check entirely;
+    // an author may only delete their own comment while the topic is
+    // still "live".
     let deletable = user.canmod || {
         let within_window = chrono::Utc::now() <= postdate + chrono::Duration::hours(COMMENT_DELETE_WINDOW_HOURS);
-        user.id == author_id && !has_replies && !topic_deleted && within_window
+        let topic_expired = is_topic_expired(&state, topic_id).await?;
+        user.id == author_id && !has_replies && !topic_deleted && !topic_expired && within_window
     };
     if !deletable {
         return Err(AppError::Forbidden);
     }
 
-    let bonus = if user.canmod && user.id != author_id {
+    let requested_bonus = if user.canmod && user.id != author_id {
         form.bonus.unwrap_or(0).clamp(0, 20)
     } else {
         0
     };
+    let bonus = effective_delete_bonus(&state, author_id, requested_bonus).await?;
     let reason = form.reason.clone().unwrap_or_default();
+
+    // DeleteService.deleteCommentWithReplys: moderator-only cascade that
+    // walks the still-live reply subtree, decaying the same penalty by
+    // depth (see reply_bonus_and_reason), and skips reply notifications
+    // when the topic has expired (matching notifyReplys = !topic.expired).
+    let mut deleted_count = 1;
+    if user.canmod && form.delete_replys.is_some() {
+        let drop_score = bonus > 2;
+        let topic_expired = is_topic_expired(&state, topic_id).await?;
+        let replies: Vec<(i32, i32, i32)> = sqlx::query_as(
+            r#"WITH RECURSIVE subtree AS (
+                 SELECT id, userid, 0 AS depth FROM comments WHERE replyto=$1 AND NOT deleted
+                 UNION ALL
+                 SELECT c.id, c.userid, s.depth+1 FROM comments c JOIN subtree s ON c.replyto=s.id WHERE NOT c.deleted
+               )
+               SELECT id, userid, depth FROM subtree"#,
+        )
+        .bind(form.msgid)
+        .fetch_all(&state.pool)
+        .await?;
+        for (reply_id, reply_author, depth) in &replies {
+            let (reply_bonus, reply_reason) = reply_bonus_and_reason(drop_score, *depth);
+            let reply_bonus = effective_delete_bonus(&state, *reply_author, reply_bonus).await?;
+            sqlx::query("UPDATE comments SET deleted=true WHERE id=$1").bind(reply_id).execute(&state.pool).await?;
+            sqlx::query("INSERT INTO del_info(msgid,delby,reason,deldate,bonus) VALUES($1,$2,$3,now(),$4) ON CONFLICT(msgid) DO UPDATE SET delby=EXCLUDED.delby, reason=EXCLUDED.reason, deldate=now(), bonus=EXCLUDED.bonus")
+                .bind(reply_id).bind(user.id).bind(reply_reason).bind(reply_bonus).execute(&state.pool).await?;
+            if reply_bonus != 0 {
+                sqlx::query("UPDATE users SET score=GREATEST(score-$2,0) WHERE id=$1").bind(reply_author).bind(reply_bonus).execute(&state.pool).await?;
+            }
+            if !topic_expired {
+                notify_deleted(&state, *reply_author, user.id, Some(topic_id), Some(*reply_id), reply_reason).await?;
+            }
+            crate::search_index::index_comment(&state, *reply_id).await;
+        }
+        deleted_count += replies.len() as i32;
+    }
 
     sqlx::query("UPDATE comments SET deleted=true WHERE id=$1").bind(form.msgid).execute(&state.pool).await?;
     sqlx::query("INSERT INTO del_info(msgid,delby,reason,deldate,bonus) VALUES($1,$2,$3,now(),$4) ON CONFLICT(msgid) DO UPDATE SET delby=EXCLUDED.delby, reason=EXCLUDED.reason, deldate=now(), bonus=EXCLUDED.bonus")
@@ -213,7 +432,7 @@ pub async fn delete_comment(State(state): State<AppState>, CurrentUser(user): Cu
     // CommentDao.deleteComment: unlike an insert, deletion has no DB
     // trigger - Java decrements topics.stat1 in app code and clamps stat3
     // so it never exceeds the (now smaller) live comment count.
-    sqlx::query("UPDATE topics SET stat1=stat1-1, lastmod=now() WHERE id=$1").bind(topic_id).execute(&state.pool).await?;
+    sqlx::query("UPDATE topics SET stat1=stat1-$2, lastmod=now() WHERE id=$1").bind(topic_id).bind(deleted_count).execute(&state.pool).await?;
     sqlx::query("UPDATE topics SET stat3=stat1 WHERE id=$1 AND stat3>stat1").bind(topic_id).execute(&state.pool).await?;
     notify_deleted(&state, author_id, user.id, Some(topic_id), Some(form.msgid), &reason).await?;
     crate::search_index::index_comment(&state, form.msgid).await;
@@ -266,6 +485,11 @@ pub async fn undelete_comment(State(state): State<AppState>, CurrentUser(user): 
     if topic_deleted {
         return Err(AppError::Forbidden);
     }
+    // isUndeletable: unlike delete, the expired check here applies even to
+    // moderators - once a topic has expired, its comments are frozen.
+    if is_topic_expired(&state, topic_id).await? {
+        return Err(AppError::Forbidden);
+    }
     // Mirrors TopicPermissionService.isUndeletable: a comment cannot be
     // undeleted if its own author is the one who deleted it (self-moderation
     // is respected, only another moderator's deletion can be reversed).
@@ -281,7 +505,33 @@ pub async fn undelete_comment(State(state): State<AppState>, CurrentUser(user): 
     Ok(Redirect::to(&comment_link(&state, form.msgid).await?))
 }
 
+/// CommentCreateService.getCommentBody: 4096 chars for anonymous, 8192 for
+/// registered users - this port has no anonymous-posting model, so only
+/// the higher registered-user cap applies.
+const COMMENT_MAX_LENGTH: usize = 8192;
+
 async fn insert_comment(state: &AppState, user_id: i32, form: CommentForm) -> Result<i32> {
+    if form.msg.trim().is_empty() {
+        return Err(AppError::BadRequest("комментарий не может быть пустым".into()));
+    }
+    if form.msg.chars().count() > COMMENT_MAX_LENGTH {
+        return Err(AppError::BadRequest("Слишком большое сообщение".into()));
+    }
+    // FloodProtector.AddComment: minimum interval since the user's last
+    // comment, not a count-per-window - Java keys this by IP with a
+    // slow-mode-restricted tier this port doesn't model (no
+    // SlowModeChecker), so only the score>=100 "trusted" vs. default
+    // tiers apply, keyed by user instead of IP (no anonymous posting here
+    // to guard against).
+    let score: i32 = sqlx::query_scalar("SELECT COALESCE(score,0) FROM users WHERE id=$1").bind(user_id).fetch_one(&state.pool).await?;
+    let threshold = if score >= 100 { chrono::Duration::seconds(3) } else { chrono::Duration::seconds(30) };
+    let last_comment: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar("SELECT max(postdate) FROM comments WHERE userid=$1").bind(user_id).fetch_one(&state.pool).await?;
+    if let Some(last) = last_comment {
+        if chrono::Utc::now() < last + threshold {
+            return Err(AppError::BadRequest(format!("Следующее сообщение может быть записано не менее чем через {} секунд после предыдущего", threshold.num_seconds())));
+        }
+    }
+
     let mut tx = state.pool.begin().await?;
     let id: i32 = sqlx::query_scalar("SELECT nextval('s_msgid')::int").fetch_one(&mut *tx).await?;
     sqlx::query("INSERT INTO msgbase(id, message, bbcode) VALUES($1,$2,true)").bind(id).bind(&form.msg).execute(&mut *tx).await?;

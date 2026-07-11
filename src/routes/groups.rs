@@ -59,13 +59,17 @@ pub async fn group_page(State(state): State<AppState>, method: Method, Path(grou
         return Ok(Redirect::to(&format!("/forum/{}/archive", urlencoding::encode(&group_urlname))).into_response());
     }
 
-    // GroupController.forum: showDeleted требует авторизации+модератора и
-    // применяется только на POST - обычный GET с этим флагом отбрасывается
-    // редиректом на страницу без него.
+    // GroupController.forum: showDeleted требует авторизации +
+    // canViewAllDeletedTopics (score>=50, не заморожен - без отдельной
+    // льготы для модераторов, ровно как в оригинале) и применяется только
+    // на POST - обычный GET с этим флагом отбрасывается редиректом на
+    // страницу без него.
     let show_deleted_requested = q.show_deleted.unwrap_or(false);
     if show_deleted_requested {
-        let Some(ref u) = user else { return Err(AppError::Forbidden); };
-        if !u.canmod {
+        if user.is_none() {
+            return Err(AppError::Forbidden);
+        }
+        if !crate::routes::topics::can_view_all_deleted_topics(&state, &user).await? {
             return Err(AppError::Forbidden);
         }
         if method != Method::POST {

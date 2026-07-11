@@ -197,7 +197,8 @@ async fn render_topic_view(
     }
 
     let want_deleted = query.deleted.is_some();
-    if want_deleted && !is_moderator {
+    let can_view_deleted_comments = allow_view_all_deleted_comments(&state, topic.id, &current_user).await?;
+    if want_deleted && !can_view_deleted_comments {
         return Ok(Redirect::to(&topic.topic_url()).into_response());
     }
 
@@ -271,7 +272,7 @@ async fn render_topic_view(
         thread_mode,
         thread_root,
         show_deleted: want_deleted,
-        show_deleted_button: is_moderator && !want_deleted,
+        show_deleted_button: can_view_deleted_comments && !want_deleted,
         filtered_count,
         unfiltered_count,
         filter_show,
@@ -403,8 +404,20 @@ pub async fn edit_topic(State(state): State<AppState>, CurrentUser(user): Curren
     if meta.deleted {
         return Err(AppError::BadRequest("нельзя править удаленные топики".into()));
     }
+    // EditTopicChecker.checkEditByAuthor: a draft is always editable by its
+    // author; a committed, premoderated (non-Articles) topic is
+    // *permanently* locked for the author, regardless of any deadline;
+    // otherwise the 14-day window applies, measured from `commitDate` for
+    // a committed Articles topic and from `postdate` everywhere else.
+    const ARTICLES_SECTION_ID: i32 = 4;
+    let permanently_locked = meta.commited && meta.premoderated && meta.section_id != ARTICLES_SECTION_ID;
+    let deadline_base = if meta.commited && meta.section_id == ARTICLES_SECTION_ID {
+        meta.commitdate.map(|d| d.and_utc()).unwrap_or(meta.postdate)
+    } else {
+        meta.postdate
+    };
     let editable_by_author = meta.author_id == user.id
-        && (meta.draft || chrono::Utc::now() <= meta.postdate + chrono::Duration::days(TOPIC_EDIT_WINDOW_DAYS));
+        && (meta.draft || (!permanently_locked && chrono::Utc::now() <= deadline_base + chrono::Duration::days(TOPIC_EDIT_WINDOW_DAYS)));
     if !user.canmod && !editable_by_author {
         return Err(AppError::Forbidden);
     }
@@ -428,24 +441,162 @@ pub async fn edit_topic(State(state): State<AppState>, CurrentUser(user): Curren
 pub struct TopicActionForm { pub msgid: i32, pub resolve: Option<String>, pub reason: Option<String>, pub bonus: Option<i32> }
 
 /// Matches GroupPermissionService.DeletePeriod: an author may delete their
-/// own (non-draft, non-premoderated-and-committed) topic for 3 hours after
+/// own (non-draft, non-premoderated-and-committed) topic for 3 days after
 /// posting, and only while it has no comments. Moderators bypass this.
-const TOPIC_DELETE_WINDOW_HOURS: i64 = 3;
+const TOPIC_DELETE_WINDOW_HOURS: i64 = 72;
 
 struct TopicDeleteMeta {
     author_id: i32,
     deleted: bool,
     postdate: chrono::DateTime<chrono::Utc>,
+    commitdate: Option<chrono::NaiveDateTime>,
     draft: bool,
     premoderated: bool,
     commited: bool,
     comment_count: i64,
+    section_id: i32,
+}
+
+/// GroupPermissionService.canViewAllDeletedTopics: a listing-level "show me
+/// deleted topics too" gate, distinct from (and much looser than) the
+/// per-topic `ViewDeletedScore=200` in `check_topic_viewable` - any
+/// authorized, non-frozen user with score>=50 qualifies, not just
+/// moderators. No `SlowModeChecker` equivalent exists in this port, so
+/// that extra restriction is not modeled.
+pub(crate) async fn can_view_all_deleted_topics(state: &AppState, user: &Option<UserSummary>) -> Result<bool> {
+    const CAN_VIEW_ALL_DELETED_SCORE: i32 = 50;
+    let Some(user) = user else { return Ok(false); };
+    // Java's canViewAllDeletedTopics has no isModerator special-case at
+    // all - the score+frozen check applies uniformly, moderators included.
+    if user.score.unwrap_or(0) < CAN_VIEW_ALL_DELETED_SCORE {
+        return Ok(false);
+    }
+    let frozen_until: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar("SELECT frozen_until FROM users WHERE id=$1").bind(user.id).fetch_optional(&state.pool).await?.flatten();
+    Ok(!frozen_until.map(|u| u > chrono::Utc::now()).unwrap_or(false))
+}
+
+/// TopicPermissionService.allowViewAllDeletedComments: the `?deleted=`
+/// gate on a topic's own page - narrower than `can_view_all_deleted_topics`
+/// (score>=200, not 50) but *does* bypass for moderators, unlike that one.
+/// No `SlowModeChecker` equivalent exists in this port.
+pub(crate) async fn allow_view_all_deleted_comments(state: &AppState, topic_id: i32, user: &Option<UserSummary>) -> Result<bool> {
+    if user.as_ref().map(|u| u.canmod).unwrap_or(false) {
+        return Ok(true);
+    }
+    const POSTSCORE_MODERATORS_ONLY: i32 = 10000;
+    const POSTSCORE_NO_COMMENTS: i32 = 10001;
+    const POSTSCORE_HIDE_COMMENTS: i32 = 10002;
+    let Some((expired, draft, postscore)): Option<(bool, bool, i32)> = sqlx::query_as(
+        r#"SELECT NOT t.sticky AND COALESCE(t.commitdate,t.postdate) < now() - s.expire, COALESCE(t.draft,false), t.postscore
+           FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section WHERE t.id=$1"#,
+    )
+    .bind(topic_id)
+    .fetch_optional(&state.pool)
+    .await?
+    else {
+        return Ok(false);
+    };
+    let topic_forbidden = expired || draft || matches!(postscore, POSTSCORE_MODERATORS_ONLY | POSTSCORE_NO_COMMENTS | POSTSCORE_HIDE_COMMENTS);
+    if topic_forbidden {
+        return Ok(false);
+    }
+    let Some(user) = user else { return Ok(false); };
+    if user.score.unwrap_or(0) < VIEW_DELETED_SCORE {
+        return Ok(false);
+    }
+    let frozen_until: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar("SELECT frozen_until FROM users WHERE id=$1").bind(user.id).fetch_optional(&state.pool).await?.flatten();
+    if frozen_until.map(|u| u > chrono::Utc::now()).unwrap_or(false) {
+        return Ok(false);
+    }
+    let score_loss: i32 = sqlx::query_scalar(
+        r#"SELECT COALESCE((SELECT sum(bonus) FROM del_info JOIN comments ON comments.id=del_info.msgid
+             WHERE bonus IS NOT NULL AND bonus<>0 AND comments.userid<>2 AND comments.deleted AND topic=$1), 0)::int"#,
+    )
+    .bind(topic_id)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(score_loss < 150)
+}
+
+/// TopicPermissionService.ViewDeletedScore/ViewAfterDeleteDays/TopicMaxWarnings.
+const VIEW_DELETED_SCORE: i32 = 200;
+const VIEW_AFTER_DELETE_DAYS: i64 = 14;
+const TOPIC_MAX_WARNINGS: i32 = 2;
+
+/// TopicPermissionService.checkView: whether `user` may view this specific
+/// topic given its deleted/draft/expired/open-warnings state. Moderators
+/// always pass (mirrors `!session.moderator` guarding the whole body in
+/// Java). Used both for the standalone topic view and, transitively, for
+/// anything that needs the same "can view a deleted topic" rule (reactions
+/// viewer, forum/group `showDeleted` gate).
+pub(crate) async fn check_topic_viewable(state: &AppState, topic_id: i32, user: &Option<UserSummary>) -> Result<()> {
+    if user.as_ref().map(|u| u.canmod).unwrap_or(false) {
+        return Ok(());
+    }
+    let row: Option<(bool, bool, bool, i32, i32, bool)> = sqlx::query_as(
+        r#"SELECT t.deleted, COALESCE(t.draft,false),
+                  NOT t.sticky AND COALESCE(t.commitdate,t.postdate) < now() - s.expire AS expired,
+                  t.userid, t.open_warnings, u.canmod
+           FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section
+           JOIN users u ON u.id=t.userid
+           WHERE t.id=$1"#,
+    )
+    .bind(topic_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((deleted, draft, expired, author_id, open_warnings, author_is_moderator)) = row else {
+        return Err(AppError::NotFound);
+    };
+
+    let view_by_author = user.as_ref().map(|u| u.id == author_id).unwrap_or(false);
+
+    if deleted {
+        if expired {
+            return Err(AppError::NotFound);
+        }
+        if user.is_none() {
+            return Err(AppError::NotFound);
+        }
+        if !view_by_author {
+            let current = user.as_ref().unwrap();
+            let deldate: Option<chrono::NaiveDateTime> = sqlx::query_scalar("SELECT deldate FROM del_info WHERE msgid=$1").bind(topic_id).fetch_optional(&state.pool).await?.flatten();
+            let delete_expired = deldate.map(|d| d.and_utc() < chrono::Utc::now() - chrono::Duration::days(VIEW_AFTER_DELETE_DAYS)).unwrap_or(true);
+            if delete_expired {
+                return Err(AppError::NotFound);
+            }
+            let frozen_until: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar("SELECT frozen_until FROM users WHERE id=$1").bind(current.id).fetch_optional(&state.pool).await?.flatten();
+            if frozen_until.map(|u| u > chrono::Utc::now()).unwrap_or(false) {
+                return Err(AppError::Forbidden);
+            }
+            if current.score.unwrap_or(0) < VIEW_DELETED_SCORE {
+                return Err(AppError::NotFound);
+            }
+            if author_is_moderator {
+                return Err(AppError::NotFound);
+            }
+        }
+    }
+
+    if draft {
+        if expired {
+            return Err(AppError::NotFound);
+        }
+        if !view_by_author {
+            return Err(AppError::NotFound);
+        }
+    }
+
+    if user.is_none() && open_warnings > TOPIC_MAX_WARNINGS {
+        return Err(AppError::NotFound);
+    }
+
+    Ok(())
 }
 
 async fn load_topic_delete_meta(state: &AppState, msgid: i32) -> Result<TopicDeleteMeta> {
-    let row: (i32, bool, chrono::DateTime<chrono::Utc>, bool, bool, bool, i64) = sqlx::query_as(
-        r#"SELECT t.userid, t.deleted, t.postdate, COALESCE(t.draft,false), s.moderate,
-                  (t.commitdate IS NOT NULL), t.stat1::bigint
+    let row: (i32, bool, chrono::DateTime<chrono::Utc>, Option<chrono::NaiveDateTime>, bool, bool, bool, i64, i32) = sqlx::query_as(
+        r#"SELECT t.userid, t.deleted, t.postdate, t.commitdate, COALESCE(t.draft,false), s.moderate,
+                  (t.commitdate IS NOT NULL), t.stat1::bigint, s.id
            FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section
            WHERE t.id=$1"#,
     )
@@ -457,10 +608,12 @@ async fn load_topic_delete_meta(state: &AppState, msgid: i32) -> Result<TopicDel
         author_id: row.0,
         deleted: row.1,
         postdate: row.2,
-        draft: row.3,
-        premoderated: row.4,
-        commited: row.5,
-        comment_count: row.6,
+        commitdate: row.3,
+        draft: row.4,
+        premoderated: row.5,
+        commited: row.6,
+        comment_count: row.7,
+        section_id: row.8,
     })
 }
 
@@ -478,7 +631,23 @@ pub async fn delete_topic(State(state): State<AppState>, CurrentUser(user): Curr
                 && chrono::Utc::now() <= meta.postdate + chrono::Duration::hours(TOPIC_DELETE_WINDOW_HOURS)
         )
     );
-    if !user.canmod && !deletable_by_author {
+    // GroupPermissionService.isDeletable: an administrator always passes;
+    // otherwise try the author path first, and only fall back to
+    // isDeletableByModerator (which itself refuses a committed
+    // premoderated topic more than a month old, admin-only past that
+    // point) when the author path fails and the actor is a moderator.
+    let deletable = if user.candel {
+        true
+    } else if deletable_by_author {
+        true
+    } else if user.canmod {
+        !meta.premoderated
+            || !meta.commited
+            || chrono::Utc::now() <= meta.postdate + chrono::Duration::days(30)
+    } else {
+        false
+    };
+    if !deletable {
         return Err(AppError::Forbidden);
     }
 
@@ -508,6 +677,19 @@ pub async fn undelete_topic(State(state): State<AppState>, CurrentUser(user): Cu
     let meta = load_topic_delete_meta(&state, form.msgid).await?;
     if !meta.deleted {
         return Err(AppError::BadRequest("сообщение не удалено".into()));
+    }
+    // GroupPermissionService.isUndeletable: an administrator can always
+    // undelete; a plain moderator only while the topic isn't expired, or -
+    // if it is - within 14 days of the deletion itself.
+    if !user.candel {
+        let expired = crate::routes::comments::is_topic_expired(&state, form.msgid).await?;
+        if expired {
+            let deldate: Option<chrono::NaiveDateTime> = sqlx::query_scalar("SELECT deldate FROM del_info WHERE msgid=$1").bind(form.msgid).fetch_optional(&state.pool).await?.flatten();
+            let recently_deleted = deldate.map(|d| d.and_utc() > chrono::Utc::now() - chrono::Duration::days(14)).unwrap_or(false);
+            if !recently_deleted {
+                return Err(AppError::Forbidden);
+            }
+        }
     }
     topic_service(&state).vSetDeleted(form.msgid, false).await?;
     sqlx::query("DELETE FROM del_info WHERE msgid=$1").bind(form.msgid).execute(&state.pool).await?;
@@ -661,8 +843,23 @@ pub async fn undelete_topic_form(Query(q): Query<ViewMessageQuery>, CurrentUser(
 "#, q.msgid, q.msgid)))
 }
 
-pub async fn commit_topic_form(Query(q): Query<ViewMessageQuery>, CurrentUser(user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
-    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
+/// EditTopicChecker.checkCommit: moderators or correctors may commit a
+/// news topic, but a corrector may not commit their own - moderators have
+/// no such restriction.
+fn check_commit_allowed(user: &UserSummary, topic_author_id: i32) -> Result<()> {
+    if !user.canmod && !user.corrector {
+        return Err(AppError::Forbidden);
+    }
+    if user.corrector && !user.canmod && user.id == topic_author_id {
+        return Err(AppError::Forbidden);
+    }
+    Ok(())
+}
+
+pub async fn commit_topic_form(State(state): State<AppState>, Query(q): Query<ViewMessageQuery>, CurrentUser(user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    let author_id: i32 = sqlx::query_scalar("SELECT userid FROM topics WHERE id=$1").bind(q.msgid).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
+    check_commit_allowed(&user, author_id)?;
     Ok(Html(format!(r#"
 <h1>Подтвердить тему #{}</h1>
 <form method="post" action="/commit.jsp">
@@ -675,7 +872,8 @@ pub async fn commit_topic_form(Query(q): Query<ViewMessageQuery>, CurrentUser(us
 
 pub async fn commit_topic(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<TopicActionForm>) -> Result<Redirect> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
-    if !user.canmod { return Err(AppError::Forbidden); }
+    let author_id: i32 = sqlx::query_scalar("SELECT userid FROM topics WHERE id=$1").bind(form.msgid).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
+    check_commit_allowed(&user, author_id)?;
     topic_service(&state).vCommitTopic(form.msgid, user.id).await?;
     crate::search_index::index_topic(&state, form.msgid, true).await;
     Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.msgid)))
