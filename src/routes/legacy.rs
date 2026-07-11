@@ -516,8 +516,8 @@ pub struct ActivationQuery {
     pub error: Option<String>,
 }
 
-pub async fn activate_form(Query(q): Query<ActivationQuery>) -> Html<String> {
-    render_activation_form(q.nick.as_deref().unwrap_or(""), q.activation.as_deref().unwrap_or(""), q.error.as_deref())
+pub async fn activate_form(Query(q): Query<ActivationQuery>, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Html<String> {
+    render_activation_form(q.nick.as_deref().unwrap_or(""), q.activation.as_deref().unwrap_or(""), q.error.as_deref(), &csrf_token)
 }
 
 #[derive(Deserialize)]
@@ -530,8 +530,10 @@ pub struct ActivationForm {
 
 pub async fn activate_post(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     jar: CookieJar,
     CurrentUser(current_user): CurrentUser,
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
     Form(form): Form<ActivationForm>,
 ) -> Result<impl IntoResponse> {
     if form.action.is_some() {
@@ -543,7 +545,7 @@ pub async fn activate_post(
         .bind(nick)
         .fetch_optional(&state.pool)
         .await? else {
-            return Ok(render_activation_form(nick, &form.activation, Some("Пользователь не найден")).into_response());
+            return Ok(render_activation_form(nick, &form.activation, Some("Пользователь не найден"), &csrf_token).into_response());
         };
 
         if activated {
@@ -557,12 +559,12 @@ pub async fn activate_post(
                 .fetch_one(&state.pool)
                 .await?;
             if !encoded.as_deref().map(|hash| crate::security::password::verify(password, hash)).unwrap_or(false) {
-                return Ok(render_activation_form(nick, &form.activation, Some("Неправильный логин или пароль")).into_response());
+                return Ok(render_activation_form(nick, &form.activation, Some("Неправильный логин или пароль"), &csrf_token).into_response());
             }
         }
 
         if !verify_activation_code(&state, &db_nick, email.as_deref().unwrap_or(""), regdate, &form.activation) {
-            return Ok(render_activation_form(nick, &form.activation, Some("Неправильный код активации")).into_response());
+            return Ok(render_activation_form(nick, &form.activation, Some("Неправильный код активации"), &csrf_token).into_response());
         }
 
         sqlx::query("UPDATE users SET activated=true,lastlogin=now() WHERE id=$1")
@@ -573,6 +575,7 @@ pub async fn activate_post(
         let cookie = Cookie::build(("lor_session", crate::auth::make_session(id, &state.config.cookie_secret)))
             .path("/")
             .http_only(true)
+            .secure(crate::security::is_secure_request(&headers))
             .same_site(SameSite::Lax)
             .build();
         return Ok((jar.add(cookie), Redirect::to("/")).into_response());
@@ -588,7 +591,7 @@ pub async fn activate_post(
     let Some(new_email) = email else { return Err(AppError::BadRequest("new_email == null".into())); };
 
     if !verify_activation_code(&state, &user.nick, &new_email, regdate, &form.activation) {
-        return Ok(render_activation_form(&user.nick, &form.activation, Some("Неправильный код активации")).into_response());
+        return Ok(render_activation_form(&user.nick, &form.activation, Some("Неправильный код активации"), &csrf_token).into_response());
     }
     sqlx::query("UPDATE users SET email=new_email,new_email=NULL WHERE id=$1")
         .bind(user.id)
@@ -598,12 +601,13 @@ pub async fn activate_post(
     Ok(Redirect::to(&format!("/people/{}/profile", urlencoding::encode(&user.nick))).into_response())
 }
 
-fn render_activation_form(nick: &str, activation: &str, error: Option<&str>) -> Html<String> {
+fn render_activation_form(nick: &str, activation: &str, error: Option<&str>, csrf_token: &str) -> Html<String> {
     let error_html = error.map(|e| format!("<p class=\"error\">{}</p>", html_escape::encode_text(e))).unwrap_or_default();
     Html(format!(r#"
 <h1>Активация аккаунта</h1>
 {error_html}
 <form method="post" action="/activate" class="form">
+  <input type="hidden" name="csrf" value="{csrf_token}">
   <input type="hidden" name="action" value="activate">
   <label>Ник <input name="nick" value="{nick}" required></label>
   <label>Пароль <input name="passwd" type="password" required></label>
@@ -696,13 +700,14 @@ pub struct DeregisterForm {
     pub acceptOneway: Option<String>,
 }
 
-pub async fn deregister_form(State(state): State<AppState>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+pub async fn deregister_form(State(state): State<AppState>, CurrentUser(user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
     ensure_deregister_allowed(&state, &user).await?;
     Ok(Html(format!(r#"
 <h1>Удаление аккаунта {nick}</h1>
 <p>Операция соответствует исходной логике: аккаунт блокируется, профиль очищается, восстановление через эту форму не предусмотрено.</p>
 <form method="post" action="/deregister.jsp" class="form">
+  <input type="hidden" name="csrf" value="{csrf_token}">
   <label>Пароль <input name="password" type="password" required></label>
   <label><input type="checkbox" name="acceptBlock" value="true" required> Я согласен с блокировкой аккаунта</label>
   <label><input type="checkbox" name="acceptOneway" value="true" required> Я понимаю, что действие необратимо</label>
@@ -794,11 +799,12 @@ pub async fn forum_page_or_archive(
     Path((group, id_or_year, page_or_month)): Path<(String, String, String)>,
     Query(q): Query<PagerQuery>,
     CurrentUser(current_user): CurrentUser,
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
 ) -> Result<axum::response::Response> {
     if let Some(page) = page_or_month.strip_prefix("page") {
         let page: i64 = page.parse().map_err(|_| AppError::NotFound)?;
         let id: i32 = id_or_year.parse().map_err(|_| AppError::NotFound)?;
-        return crate::routes::topics::render_topic_page(state, "forum", group, id, page, current_user).await;
+        return crate::routes::topics::render_topic_page(state, "forum", group, id, page, current_user, csrf_token).await;
     }
 
     let year: i32 = id_or_year.parse().map_err(|_| AppError::NotFound)?;
@@ -969,11 +975,12 @@ pub struct LegacyMsgIdQuery { pub msgid: i32 }
 #[derive(Deserialize)]
 pub struct ScoreForm { pub msgid: i32, pub score: Option<i32>, pub postscore: Option<i32> }
 
-pub async fn set_post_score_form(Query(q): Query<LegacyMsgIdQuery>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+pub async fn set_post_score_form(Query(q): Query<LegacyMsgIdQuery>, CurrentUser(user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
     Ok(Html(format!(r#"
 <h1>Изменить score темы #{}</h1>
 <form method="post" action="/setpostscore.jsp">
+<input type="hidden" name="csrf" value="{csrf_token}">
 <input type="hidden" name="msgid" value="{}">
 <input name="score" type="number" value="0">
 <button type="submit">Сохранить</button>
@@ -991,11 +998,11 @@ pub async fn set_post_score(State(state): State<AppState>, CurrentUser(user): Cu
 #[derive(Deserialize)]
 pub struct ImageForm { pub id: i32 }
 
-pub async fn delete_image_form(Query(q): Query<ImageForm>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+pub async fn delete_image_form(Query(q): Query<ImageForm>, CurrentUser(user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     if user.is_none() { return Err(AppError::Forbidden); }
     Ok(Html(format!(r#"
 <h1>Удалить изображение #{}</h1>
-<form method="post" action="/delete_image"><input type="hidden" name="id" value="{}"><button type="submit">Удалить</button></form>
+<form method="post" action="/delete_image"><input type="hidden" name="csrf" value="{csrf_token}"><input type="hidden" name="id" value="{}"><button type="submit">Удалить</button></form>
 "#, q.id, q.id)))
 }
 
@@ -1045,15 +1052,16 @@ pub async fn remove_userpic(State(state): State<AppState>, CurrentUser(user): Cu
     Ok(Redirect::to(&format!("/people/{}/profile", urlencoding::encode(&target_nick))))
 }
 
-pub async fn reset_password_form() -> Result<Html<String>> {
-    Ok(Html(r#"
+pub async fn reset_password_form(crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
+    Ok(Html(format!(r#"
 <h1>Сбросить пароль</h1>
 <form method="post" action="/reset-password" class="form">
+<input type="hidden" name="csrf" value="{csrf_token}">
 <label>Ник <input name="nick" required></label>
 <label>Код из письма <input name="code" required></label>
 <button type="submit">Сбросить пароль</button>
 </form>
-"#.to_string()))
+"#)))
 }
 
 #[derive(Deserialize)]

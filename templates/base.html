@@ -28,10 +28,11 @@
         if (!top) return;
         if (nick) {
           var encodedNick = encodeURIComponent(nick);
+          var csrf = (cookie('CSRF_TOKEN') || '').replace(/[&<>"']/g, function(c) { return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","\'":"&#39;"}[c]; });
           top.innerHTML = '<a href="/people/' + encodedNick + '/profile">' + nick.replace(/[&<>"']/g, function(c) { return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","\'":"&#39;"}[c]; }) + '</a>' +
             ' · <a href="/tracker">Трекер</a>' +
             ' · <a href="/people/' + encodedNick + '/settings">Настройки</a>' +
-            ' · <form action="/logout" method="post" class="inline-form"><button type="submit" class="link-button">Выход</button></form>';
+            ' · <form action="/logout" method="post" class="inline-form"><input type="hidden" name="csrf" value="' + csrf + '"><button type="submit" class="link-button">Выход</button></form>';
         } else {
           var loginLink = document.getElementById('loginLink');
           if (loginLink) {

@@ -4,6 +4,7 @@ mod config;
 mod db;
 mod bootstrap;
 mod application;
+mod csrf;
 mod infra;
 mod domain;
 mod error;
@@ -62,6 +63,7 @@ async fn main() -> anyhow::Result<()> {
         .fallback(routes::not_found)
         .layer(axum::middleware::from_fn_with_state(state.clone(), security_headers::apply))
         .layer(axum::middleware::from_fn_with_state(state.clone(), theme_middleware::apply_theme))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), csrf::apply))
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .with_state(state);

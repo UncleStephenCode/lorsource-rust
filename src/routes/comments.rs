@@ -23,13 +23,14 @@ pub struct CommentForm {
 }
 
 
-pub async fn add_comment_form(State(state): State<AppState>, Query(q): Query<CommentFormQuery>) -> Result<Html<String>> {
+pub async fn add_comment_form(State(state): State<AppState>, Query(q): Query<CommentFormQuery>, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     let topic = crate::routes::topics::get_topic(&state, q.topic).await?;
     let reply_input = q.replyto.map(|id| format!(r#"<input type="hidden" name="replyto" value="{id}">"#)).unwrap_or_default();
     Ok(Html(format!(r#"
 <h1>Добавить комментарий</h1>
 <p><a href="{url}">{title}</a></p>
 <form method="post" action="/add_comment.jsp" class="form wide">
+  <input type="hidden" name="csrf" value="{csrf_token}">
   <input type="hidden" name="topic" value="{topic_id}">
   {reply_input}
   <label>Заголовок <input name="title" value="Комментарий"></label>
@@ -127,7 +128,7 @@ pub async fn edit_comment(State(state): State<AppState>, CurrentUser(user): Curr
 }
 
 
-pub async fn delete_comment_form(State(state): State<AppState>, Query(q): Query<JumpQuery>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+pub async fn delete_comment_form(State(state): State<AppState>, Query(q): Query<JumpQuery>, CurrentUser(user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     if user.is_none() { return Err(AppError::Forbidden); }
     let row: (i32, String, String) = sqlx::query_as(
         "SELECT c.topic, c.title, u.nick FROM comments c JOIN users u ON u.id=c.userid WHERE c.id=$1",
@@ -140,17 +141,19 @@ pub async fn delete_comment_form(State(state): State<AppState>, Query(q): Query<
 <h1>Удалить комментарий #{}</h1>
 <p>Тема #{} · {} · автор {}</p>
 <form method="post" action="/delete_comment.jsp">
+  <input type="hidden" name="csrf" value="{csrf_token}">
   <input type="hidden" name="msgid" value="{}">
   <button type="submit">Удалить</button>
 </form>
 "#, q.msgid, row.0, html_escape::encode_text(&row.1), html_escape::encode_text(&row.2), q.msgid)))
 }
 
-pub async fn undelete_comment_form(Query(q): Query<JumpQuery>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+pub async fn undelete_comment_form(Query(q): Query<JumpQuery>, CurrentUser(user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
     Ok(Html(format!(r#"
 <h1>Восстановить комментарий #{}</h1>
 <form method="post" action="/undelete_comment">
+  <input type="hidden" name="csrf" value="{csrf_token}">
   <input type="hidden" name="msgid" value="{}">
   <button type="submit">Восстановить</button>
 </form>

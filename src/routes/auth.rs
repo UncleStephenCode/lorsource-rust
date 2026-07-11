@@ -7,7 +7,7 @@ use serde::Deserialize;
 
 #[derive(Template)]
 #[template(path = "login.html")]
-struct LoginTemplate<'a> { title: &'a str, error: Option<String>, redirect_url: String }
+struct LoginTemplate<'a> { title: &'a str, error: Option<String>, redirect_url: String, csrf_token: String }
 
 /// Mirrors LoginController.safeRedirectUrl from the Java/Scala implementation:
 /// only same-site relative redirects are accepted; everything else goes to `/`.
@@ -24,7 +24,7 @@ fn safe_redirect_url(from: &str) -> String {
 
 #[derive(Template)]
 #[template(path = "register.html")]
-struct RegisterTemplate<'a> { title: &'a str, error: Option<String>, permit: String }
+struct RegisterTemplate<'a> { title: &'a str, error: Option<String>, permit: String, csrf_token: String }
 
 #[derive(Deserialize)]
 pub struct LoginQuery { pub from: Option<String> }
@@ -32,23 +32,25 @@ pub struct LoginQuery { pub from: Option<String> }
 #[derive(Deserialize)]
 pub struct LoginForm { pub nick: String, pub passwd: String, #[serde(rename = "redirectUrl", alias = "redirect_url")] pub redirect_url: Option<String> }
 
-pub async fn login_form(Query(query): Query<LoginQuery>, CurrentUser(current_user): CurrentUser) -> Result<impl IntoResponse> {
+pub async fn login_form(Query(query): Query<LoginQuery>, CurrentUser(current_user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<impl IntoResponse> {
     let redirect_url = safe_redirect_url(query.from.as_deref().unwrap_or(""));
     if current_user.is_some() {
         return Ok(Redirect::to(&redirect_url).into_response());
     }
-    Ok(Html(LoginTemplate { title: "Вход", error: None, redirect_url }.render()?).into_response())
+    Ok(Html(LoginTemplate { title: "Вход", error: None, redirect_url, csrf_token }.render()?).into_response())
 }
 
-pub async fn login(State(state): State<AppState>, jar: CookieJar, Form(form): Form<LoginForm>) -> Result<(CookieJar, Redirect)> {
+pub async fn login(State(state): State<AppState>, headers: axum::http::HeaderMap, jar: CookieJar, Form(form): Form<LoginForm>) -> Result<(CookieJar, Redirect)> {
     let redirect_url = safe_redirect_url(form.redirect_url.as_deref().unwrap_or(""));
     let Some(identity) = auth::verify_login(&state.pool, &form.nick, &form.passwd).await? else {
         return Err(AppError::Forbidden);
     };
+    let is_secure = crate::security::is_secure_request(&headers);
     let token = auth::make_session(identity.id, &state.config.cookie_secret);
     let session_cookie = Cookie::build(("lor_session", token))
         .path("/")
         .http_only(true)
+        .secure(is_secure)
         .same_site(SameSite::Lax)
         .build();
     // UI compatibility cookie: original LOR immediately changes the top profile
@@ -56,11 +58,12 @@ pub async fn login(State(state): State<AppState>, jar: CookieJar, Form(form): Fo
     // this cookie is only a display hint for the static base template.
     let ui_cookie = Cookie::build(("lor_user", identity.nick.clone()))
         .path("/")
+        .secure(is_secure)
         .same_site(SameSite::Lax)
         .build();
     let mut jar = jar.add(session_cookie).add(ui_cookie);
     if let Some(style) = identity.style.as_deref().filter(|style| !style.is_empty()) {
-        jar = jar.add(Cookie::build(("lor_theme", style.to_string())).path("/").same_site(SameSite::Lax).build());
+        jar = jar.add(Cookie::build(("lor_theme", style.to_string())).path("/").secure(is_secure).same_site(SameSite::Lax).build());
     }
     Ok((jar, Redirect::to(&redirect_url)))
 }
@@ -72,8 +75,8 @@ pub async fn logout(jar: CookieJar) -> (CookieJar, Redirect) {
     (jar, Redirect::to("/"))
 }
 
-pub async fn register_form(State(state): State<AppState>) -> Result<Html<String>> {
-    Ok(Html(RegisterTemplate { title: "Регистрация", error: None, permit: make_register_permit(&state) }.render()?))
+pub async fn register_form(State(state): State<AppState>, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
+    Ok(Html(RegisterTemplate { title: "Регистрация", error: None, permit: make_register_permit(&state), csrf_token }.render()?))
 }
 
 #[derive(Deserialize)]
@@ -221,14 +224,15 @@ async fn email_in_use_for_active_or_recently_blocked_user(state: &AppState, emai
     Ok(found.is_some())
 }
 
-pub async fn lost_password_form() -> Result<Html<String>> {
-    Ok(Html(r#"
+pub async fn lost_password_form(crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
+    Ok(Html(format!(r#"
 <h1>Восстановление пароля</h1>
 <form method="post" action="/lostpwd.jsp" class="form">
+  <input type="hidden" name="csrf" value="{csrf_token}">
   <label>Email <input name="email" type="email" required></label>
   <button type="submit">Отправить инструкцию</button>
 </form>
-"#.to_string()))
+"#)))
 }
 
 #[derive(Deserialize)]

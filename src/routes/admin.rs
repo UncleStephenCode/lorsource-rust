@@ -44,12 +44,12 @@ async fn geoip(CurrentUser(user): CurrentUser, Query(q): Query<GeoIpQuery>) -> R
 #[derive(Deserialize)]
 pub struct ReindexForm { pub action: Option<String> }
 
-async fn search_reindex_form(CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+async fn search_reindex_form(CurrentUser(user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     require_admin(&user)?;
-    Ok(Html(r#"
+    Ok(Html(format!(r#"
 <h1>Переиндексация поиска</h1>
-<form method="post" action="/admin/search-reindex"><button name="action" value="current">Текущий месяц</button><button name="action" value="all">Всё</button></form>
-"#.to_string()))
+<form method="post" action="/admin/search-reindex"><input type="hidden" name="csrf" value="{csrf_token}"><button name="action" value="current">Текущий месяц</button><button name="action" value="all">Всё</button></form>
+"#)))
 }
 
 async fn search_reindex(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<ReindexForm>) -> Result<Html<String>> {
@@ -299,7 +299,7 @@ async fn same_ip(State(state): State<AppState>, CurrentUser(user): CurrentUser, 
 #[derive(Deserialize)]
 pub struct GroupModQuery { pub group: Option<i32> }
 
-fn render_groupmod_form(id: i32, title: &str, urlname: &str, info: &str, longinfo: &str, resolvable: bool, is_admin: bool, error: Option<&str>, preview: bool) -> String {
+fn render_groupmod_form(id: i32, title: &str, urlname: &str, info: &str, longinfo: &str, resolvable: bool, is_admin: bool, error: Option<&str>, preview: bool, csrf_token: &str) -> String {
     let error_html = error.map(|e| format!("<p class=\"error\">{}</p>", html_escape::encode_text(e))).unwrap_or_default();
     let preview_html = if preview { "<p class=\"muted\">Предпросмотр (не сохранено)</p>" } else { "" };
     // GroupModificationController: только администратор может менять
@@ -319,6 +319,7 @@ fn render_groupmod_form(id: i32, title: &str, urlname: &str, info: &str, longinf
         r#"
 {error_html}{preview_html}
 <form method="post" action="/groupmod.jsp" class="form wide">
+<input type="hidden" name="csrf" value="{csrf_token}">
 <input type="hidden" name="group" value="{id}">
 <label>Название {title_field}</label>
 <label>URL {url_field}</label>
@@ -335,7 +336,7 @@ fn render_groupmod_form(id: i32, title: &str, urlname: &str, info: &str, longinf
     )
 }
 
-async fn groupmod_form(State(state): State<AppState>, CurrentUser(user): CurrentUser, Query(q): Query<GroupModQuery>) -> Result<Html<String>> {
+async fn groupmod_form(State(state): State<AppState>, CurrentUser(user): CurrentUser, Query(q): Query<GroupModQuery>, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     let moderator = require_moderator(&user)?;
     let groups = sqlx::query_as::<_, (i32, String, String)>("SELECT id,title,urlname FROM groups ORDER BY id")
         .fetch_all(&state.pool)
@@ -350,7 +351,7 @@ async fn groupmod_form(State(state): State<AppState>, CurrentUser(user): Current
             "SELECT title,urlname,info,longinfo,resolvable FROM groups WHERE id=$1",
         )
         .bind(id).fetch_optional(&state.pool).await? {
-            html.push_str(&render_groupmod_form(id, &title, &urlname, info.as_deref().unwrap_or(""), longinfo.as_deref().unwrap_or(""), resolvable, moderator.candel, None, false));
+            html.push_str(&render_groupmod_form(id, &title, &urlname, info.as_deref().unwrap_or(""), longinfo.as_deref().unwrap_or(""), resolvable, moderator.candel, None, false, &csrf_token));
         }
     }
     Ok(Html(html))
@@ -382,7 +383,7 @@ pub struct GroupModForm {
     pub resolvable: Option<String>,
 }
 
-async fn groupmod_save(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<GroupModForm>) -> Result<Html<String>> {
+async fn groupmod_save(State(state): State<AppState>, CurrentUser(user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken, Form(form): Form<GroupModForm>) -> Result<Html<String>> {
     let moderator = require_moderator(&user)?;
     let (existing_title, existing_urlname): (String, String) = sqlx::query_as("SELECT title,urlname FROM groups WHERE id=$1")
         .bind(form.group)
@@ -398,11 +399,11 @@ async fn groupmod_save(State(state): State<AppState>, CurrentUser(user): Current
     let resolvable = form.resolvable.is_some();
 
     if form.preview.is_some() {
-        return Ok(Html(render_groupmod_form(form.group, &effective_title, &effective_urlname, &info, &longinfo, resolvable, is_admin, None, true)));
+        return Ok(Html(render_groupmod_form(form.group, &effective_title, &effective_urlname, &info, &longinfo, resolvable, is_admin, None, true, &csrf_token)));
     }
 
     if let Some(error) = validate_url_name(&effective_urlname) {
-        return Ok(Html(render_groupmod_form(form.group, &effective_title, &effective_urlname, &info, &longinfo, resolvable, is_admin, Some(error), false)));
+        return Ok(Html(render_groupmod_form(form.group, &effective_title, &effective_urlname, &info, &longinfo, resolvable, is_admin, Some(error), false, &csrf_token)));
     }
 
     sqlx::query("UPDATE groups SET title=$2, urlname=$3, info=$4, longinfo=$5, resolvable=$6 WHERE id=$1")
@@ -625,11 +626,12 @@ async fn usermod(State(state): State<AppState>, CurrentUser(user): CurrentUser, 
 #[derive(Deserialize)]
 pub struct WarningQuery { pub topic: Option<i32>, pub comment: Option<i32>, pub user: Option<i32> }
 
-async fn post_warning_form(CurrentUser(user): CurrentUser, Query(q): Query<WarningQuery>) -> Result<Html<String>> {
+async fn post_warning_form(CurrentUser(user): CurrentUser, Query(q): Query<WarningQuery>, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     require_moderator(&user)?;
     Ok(Html(format!(r#"
 <h1>Предупреждение</h1>
 <form method="post" action="/post-warning" class="form">
+  <input type="hidden" name="csrf" value="{csrf_token}">
   <input type="hidden" name="topic" value="{}">
   <input type="hidden" name="comment" value="{}">
   <input type="hidden" name="user" value="{}">

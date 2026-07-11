@@ -127,6 +127,19 @@ pub fn verify_hash(expected: &str, supplied: &str) -> bool {
     expected.as_bytes().iter().zip(supplied.as_bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
 }
 
+/// TLS terminates at a reverse proxy in front of this app, so "is this
+/// request actually HTTPS" has to be read off `X-Forwarded-Proto` rather
+/// than the connection axum sees directly. Used to decide whether to set
+/// the `Secure` cookie flag (see `security_headers::apply` for the
+/// equivalent HSTS-header check).
+pub fn is_secure_request(headers: &axum::http::HeaderMap) -> bool {
+    headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.eq_ignore_ascii_case("https"))
+        .unwrap_or(false)
+}
+
 pub fn sign_payload(payload: &str, secret: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(secret.as_bytes());
@@ -157,14 +170,6 @@ pub fn verify_timed_session(value: &str, secret: &str, max_age_seconds: i64) -> 
         return None;
     }
     Some(user_id)
-}
-
-pub fn csrf_token(session_cookie: &str, secret: &str) -> String {
-    sign_payload(session_cookie, secret)
-}
-
-pub fn verify_csrf(session_cookie: &str, token: &str, secret: &str) -> bool {
-    csrf_token(session_cookie, secret) == token
 }
 
 /// Token helpers compatible with the current Java `SecretTokenService`.

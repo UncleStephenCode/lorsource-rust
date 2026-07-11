@@ -3,6 +3,7 @@
 {% block content %}
 <h1>{{ title }}</h1>
 <form method="post" action="{{ action }}" class="form wide">
+  <input type="hidden" name="csrf" value="{{ csrf_token }}">
   {% match topic %}{% when Some with (t) %}<input type="hidden" name="id" value="{{ t.id }}">{% when None %}{% endmatch %}
   <label>Раздел
     <select name="group">

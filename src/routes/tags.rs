@@ -33,6 +33,7 @@ struct TagPageTemplate {
     show_unignore_button: bool,
     show_delete: bool,
     current_user: Option<crate::models::UserSummary>,
+    csrf_token: String,
 }
 
 pub async fn all_tags(State(state): State<AppState>) -> Result<Html<String>> {
@@ -73,7 +74,7 @@ const TAG_SECTION_ORDER: &[(&str, &str)] = &[
 /// has no direct topics, lists sibling synonyms, and surfaces
 /// favorite/ignore-tag button state - none of which the previous flat
 /// listing did.
-pub async fn tag_page(State(state): State<AppState>, Path(tag): Path<String>, CurrentUser(user): CurrentUser) -> Result<axum::response::Response> {
+pub async fn tag_page(State(state): State<AppState>, Path(tag): Path<String>, CurrentUser(user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<axum::response::Response> {
     use axum::response::IntoResponse;
 
     if !is_good_tag(&tag) {
@@ -165,6 +166,7 @@ pub async fn tag_page(State(state): State<AppState>, Path(tag): Path<String>, Cu
         show_unignore_button,
         show_delete: is_moderator,
         current_user: user,
+        csrf_token,
     }.render()?).into_response())
 }
 
@@ -201,11 +203,12 @@ pub struct TagChangeQuery {
     pub tag_name: String,
 }
 
-pub async fn change_form(CurrentUser(user): CurrentUser, Query(q): Query<TagChangeQuery>) -> Result<Html<String>> {
+pub async fn change_form(CurrentUser(user): CurrentUser, Query(q): Query<TagChangeQuery>, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
     Ok(Html(format!(r#"
 <h1>Переименовать метку</h1>
 <form method="post" action="/tags/change" class="form">
+<input type="hidden" name="csrf" value="{csrf_token}">
 <input type="hidden" name="firstLetter" value="{fl}">
 <label>Старая <input name="oldTagName" value="{old}" required readonly></label>
 <label>Новая <input name="tagName" value="{old}" required></label>
@@ -258,7 +261,7 @@ pub struct TagDeleteQuery {
     pub tag_name: String,
 }
 
-pub async fn delete_form(State(state): State<AppState>, CurrentUser(user): CurrentUser, Query(q): Query<TagDeleteQuery>) -> Result<Html<String>> {
+pub async fn delete_form(State(state): State<AppState>, CurrentUser(user): CurrentUser, Query(q): Query<TagDeleteQuery>, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
     let is_synonym: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM tags_synonyms WHERE value=$1)")
         .bind(q.tag_name.trim())
@@ -273,6 +276,7 @@ pub async fn delete_form(State(state): State<AppState>, CurrentUser(user): Curre
 <h1>Удалить метку</h1>
 {synonym_note}
 <form method="post" action="/tags/delete" class="form">
+<input type="hidden" name="csrf" value="{csrf_token}">
 <input type="hidden" name="firstLetter" value="{fl}">
 <input type="hidden" name="oldTagName" value="{old}">
 <p>Удаляемая метка: <b>{old}</b></p>

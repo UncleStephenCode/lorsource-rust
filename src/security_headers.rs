@@ -34,12 +34,7 @@ const CSP: &str = concat!(
 );
 
 pub async fn apply(State(state): State<AppState>, req: Request, next: Next) -> Response {
-    let is_secure = req
-        .headers()
-        .get("x-forwarded-proto")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.eq_ignore_ascii_case("https"))
-        .unwrap_or(false);
+    let is_secure = crate::security::is_secure_request(req.headers());
 
     let mut response = next.run(req).await;
     let headers = response.headers_mut();

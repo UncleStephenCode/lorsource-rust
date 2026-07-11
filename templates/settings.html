@@ -9,6 +9,7 @@
 </nav>
 
 <form method="post" id="profileForm" action="/people/{{ user.nick }}/settings" class="settings-form">
+<input type="hidden" name="csrf" value="{{ csrf_token }}">
 <table>
 <tr><td><label for="photos">Показывать фотографии</label></td><td><input type="checkbox" id="photos" name="photos" {% if settings.photos %}checked{% endif %}></td></tr>
 <tr><td><label for="hideAdsense">Показывать меньше рекламы</label></td><td><input type="checkbox" id="hideAdsense" name="hideAdsense" {% if settings.hide_adsense %}checked{% endif %}></td></tr>

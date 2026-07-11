@@ -40,6 +40,7 @@ struct TopicTemplate {
     filtered_count: usize,
     unfiltered_count: usize,
     filter_show: bool,
+    csrf_token: String,
 }
 
 #[derive(Debug, Clone)]
@@ -55,6 +56,7 @@ struct TopicFormTemplate {
     action: String,
     topic: Option<TopicDetail>,
     groups: Vec<crate::models::Group>,
+    csrf_token: String,
 }
 
 #[derive(Deserialize)]
@@ -119,29 +121,29 @@ pub struct TopicViewQuery {
     pub filter: Option<String>,
 }
 
-pub async fn topic_page(State(state): State<AppState>, uri: Uri, Path((group, id)): Path<(String, i32)>, Query(q): Query<TopicViewQuery>, CurrentUser(current_user): CurrentUser) -> Result<Response> {
+pub async fn topic_page(State(state): State<AppState>, uri: Uri, Path((group, id)): Path<(String, i32)>, Query(q): Query<TopicViewQuery>, CurrentUser(current_user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Response> {
     let section = section_from_uri(&uri).unwrap_or("forum");
-    render_topic_view(state, section, group, id, 0, None, q, current_user).await
+    render_topic_view(state, section, group, id, 0, None, q, current_user, csrf_token).await
 }
 
-pub async fn topic_page_with_page(State(state): State<AppState>, uri: Uri, Path((group, id, page_marker)): Path<(String, i32, String)>, CurrentUser(current_user): CurrentUser) -> Result<Response> {
+pub async fn topic_page_with_page(State(state): State<AppState>, uri: Uri, Path((group, id, page_marker)): Path<(String, i32, String)>, CurrentUser(current_user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Response> {
     let Some(page) = page_marker.strip_prefix("page") else { return Err(AppError::NotFound); };
     let page: i64 = page.parse().map_err(|_| AppError::NotFound)?;
     let section = section_from_uri(&uri).unwrap_or("forum");
     // Java's getMessagePage doesn't accept `cid`/`deleted`/`filter` at all -
     // only the base (page-less) route does.
-    render_topic_view(state, section, group, id, page, None, TopicViewQuery::default(), current_user).await
+    render_topic_view(state, section, group, id, page, None, TopicViewQuery::default(), current_user, csrf_token).await
 }
 
-pub async fn topic_thread(State(state): State<AppState>, uri: Uri, Path((group, id, thread_root)): Path<(String, i32, i32)>, CurrentUser(current_user): CurrentUser) -> Result<Response> {
+pub async fn topic_thread(State(state): State<AppState>, uri: Uri, Path((group, id, thread_root)): Path<(String, i32, i32)>, CurrentUser(current_user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Response> {
     let section = section_from_uri(&uri).unwrap_or("forum");
-    render_topic_view(state, section, group, id, 0, Some(thread_root), TopicViewQuery::default(), current_user).await
+    render_topic_view(state, section, group, id, 0, Some(thread_root), TopicViewQuery::default(), current_user, csrf_token).await
 }
 
 /// Called from legacy.rs's combined `/forum/{group}/{id_or_year}/{page_or_month}`
 /// route once it's determined the third segment is `pageN`, not a year/month.
-pub async fn render_topic_page(state: AppState, section: &'static str, group: String, id: i32, page: i64, current_user: Option<UserSummary>) -> Result<Response> {
-    render_topic_view(state, section, group, id, page, None, TopicViewQuery::default(), current_user).await
+pub async fn render_topic_page(state: AppState, section: &'static str, group: String, id: i32, page: i64, current_user: Option<UserSummary>, csrf_token: String) -> Result<Response> {
+    render_topic_view(state, section, group, id, page, None, TopicViewQuery::default(), current_user, csrf_token).await
 }
 
 async fn messages_per_page(state: &AppState, user: &Option<UserSummary>) -> i64 {
@@ -171,6 +173,7 @@ async fn render_topic_view(
     thread_root: Option<i32>,
     query: TopicViewQuery,
     current_user: Option<UserSummary>,
+    csrf_token: String,
 ) -> Result<Response> {
     let topic = get_topic(&state, id).await?;
     let is_moderator = current_user.as_ref().map(|u| u.canmod).unwrap_or(false);
@@ -272,6 +275,7 @@ async fn render_topic_view(
         filtered_count,
         unfiltered_count,
         filter_show,
+        csrf_token,
     }.render()?).into_response())
 }
 
@@ -327,9 +331,9 @@ async fn resolve_comment_jump(state: &AppState, topic: &TopicDetail, cid: i32, i
     Err(AppError::NotFound)
 }
 
-pub async fn new_topic_form(State(state): State<AppState>) -> Result<Html<String>> {
+pub async fn new_topic_form(State(state): State<AppState>, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     let groups = crate::routes::groups::list_groups(&state).await?;
-    Ok(Html(TopicFormTemplate { title: "Новая тема".into(), action: "/add.jsp".into(), topic: None, groups }.render()?))
+    Ok(Html(TopicFormTemplate { title: "Новая тема".into(), action: "/add.jsp".into(), topic: None, groups, csrf_token }.render()?))
 }
 
 /// AddTopicController.MaxMessageLength (anonymous posting isn't supported by
@@ -377,10 +381,10 @@ pub async fn create_topic(State(state): State<AppState>, CurrentUser(user): Curr
     Ok(Redirect::to(&topic.topic_url()))
 }
 
-pub async fn edit_topic_form(State(state): State<AppState>, Query(q): Query<ViewMessageQuery>) -> Result<Html<String>> {
+pub async fn edit_topic_form(State(state): State<AppState>, Query(q): Query<ViewMessageQuery>, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     let topic = get_topic(&state, q.msgid).await?;
     let groups = crate::routes::groups::list_groups(&state).await?;
-    Ok(Html(TopicFormTemplate { title: "Редактировать тему".into(), action: "/edit.jsp".into(), topic: Some(topic), groups }.render()?))
+    Ok(Html(TopicFormTemplate { title: "Редактировать тему".into(), action: "/edit.jsp".into(), topic: Some(topic), groups, csrf_token }.render()?))
 }
 
 /// Simplified from EditTopicChecker.checkContentEdit/checkEditByAuthor:
@@ -633,33 +637,36 @@ fn section_title(section: &str) -> &'static str {
     }
 }
 
-pub async fn delete_topic_form(Query(q): Query<ViewMessageQuery>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+pub async fn delete_topic_form(Query(q): Query<ViewMessageQuery>, CurrentUser(user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     if user.is_none() { return Err(AppError::Forbidden); }
     Ok(Html(format!(r#"
 <h1>Удалить тему #{}</h1>
 <form method="post" action="/delete.jsp">
+  <input type="hidden" name="csrf" value="{csrf_token}">
   <input type="hidden" name="msgid" value="{}">
   <button type="submit">Удалить</button>
 </form>
 "#, q.msgid, q.msgid)))
 }
 
-pub async fn undelete_topic_form(Query(q): Query<ViewMessageQuery>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+pub async fn undelete_topic_form(Query(q): Query<ViewMessageQuery>, CurrentUser(user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
     Ok(Html(format!(r#"
 <h1>Восстановить тему #{}</h1>
 <form method="post" action="/undelete">
+  <input type="hidden" name="csrf" value="{csrf_token}">
   <input type="hidden" name="msgid" value="{}">
   <button type="submit">Восстановить</button>
 </form>
 "#, q.msgid, q.msgid)))
 }
 
-pub async fn commit_topic_form(Query(q): Query<ViewMessageQuery>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+pub async fn commit_topic_form(Query(q): Query<ViewMessageQuery>, CurrentUser(user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
     Ok(Html(format!(r#"
 <h1>Подтвердить тему #{}</h1>
 <form method="post" action="/commit.jsp">
+  <input type="hidden" name="csrf" value="{csrf_token}">
   <input type="hidden" name="msgid" value="{}">
   <button type="submit">Подтвердить</button>
 </form>
@@ -674,11 +681,12 @@ pub async fn commit_topic(State(state): State<AppState>, CurrentUser(user): Curr
     Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.msgid)))
 }
 
-pub async fn uncommit_form(Query(q): Query<ViewMessageQuery>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+pub async fn uncommit_form(Query(q): Query<ViewMessageQuery>, CurrentUser(user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
     Ok(Html(format!(r#"
 <h1>Отменить подтверждение темы #{}</h1>
 <form method="post" action="/uncommit.jsp">
+  <input type="hidden" name="csrf" value="{csrf_token}">
   <input type="hidden" name="msgid" value="{}">
   <button type="submit">Отменить подтверждение</button>
 </form>
@@ -695,7 +703,7 @@ pub async fn uncommit(State(state): State<AppState>, CurrentUser(user): CurrentU
 #[derive(Deserialize)]
 pub struct MoveTopicForm { pub msgid: i32, pub moveto: i32 }
 
-pub async fn move_topic_form(State(state): State<AppState>, Query(q): Query<ViewMessageQuery>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+pub async fn move_topic_form(State(state): State<AppState>, Query(q): Query<ViewMessageQuery>, CurrentUser(user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
     let topic = get_topic(&state, q.msgid).await?;
     let groups = crate::routes::groups::list_groups(&state).await?;
@@ -707,6 +715,7 @@ pub async fn move_topic_form(State(state): State<AppState>, Query(q): Query<View
     Ok(Html(format!(r#"
 <h1>Переместить тему #{}</h1>
 <form method="post" action="/mt.jsp">
+  <input type="hidden" name="csrf" value="{csrf_token}">
   <input type="hidden" name="msgid" value="{}">
   <select name="moveto">{}</select>
   <button type="submit">Переместить</button>
@@ -720,6 +729,6 @@ pub async fn move_topic(State(state): State<AppState>, CurrentUser(user): Curren
     Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.msgid)))
 }
 
-pub async fn premoderated_move_form(State(state): State<AppState>, Query(q): Query<ViewMessageQuery>, user: CurrentUser) -> Result<Html<String>> {
-    move_topic_form(State(state), Query(q), user).await
+pub async fn premoderated_move_form(State(state): State<AppState>, Query(q): Query<ViewMessageQuery>, user: CurrentUser, csrf: crate::csrf::CsrfToken) -> Result<Html<String>> {
+    move_topic_form(State(state), Query(q), user, csrf).await
 }

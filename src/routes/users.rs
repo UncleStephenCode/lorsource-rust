@@ -97,6 +97,7 @@ struct UserTemplate {
     /// (`DisabledUserpic`) rather than a "no photo" box when the viewer has
     /// avatars disabled or the target has neither a local photo nor email.
     userpic_url: String,
+    csrf_token: String,
 }
 
 #[derive(Template)]
@@ -110,6 +111,7 @@ struct SettingsTemplate {
     format_modes: Vec<ChoiceOption>,
     topic_values: Vec<NumberOption>,
     message_values: Vec<NumberOption>,
+    csrf_token: String,
 }
 
 #[derive(Template)]
@@ -117,6 +119,7 @@ struct SettingsTemplate {
 struct EditProfileTemplate {
     user: UserSummary,
     profile: UserProfileData,
+    csrf_token: String,
 }
 
 #[derive(Deserialize)]
@@ -166,11 +169,11 @@ pub async fn topic_feed(State(state): State<AppState>, Path(nick): Path<String>,
     Ok(Html(simple_topic_list(&format!("Сообщения {}", user.nick), &topics)))
 }
 
-pub async fn profile_full(State(state): State<AppState>, Path(nick): Path<String>, Query(q): Query<PagerQuery>, current: CurrentUser) -> Result<Html<String>> {
-    render_profile(state, nick, q, current).await
+pub async fn profile_full(State(state): State<AppState>, Path(nick): Path<String>, Query(q): Query<PagerQuery>, current: CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
+    render_profile(state, nick, q, current, csrf_token).await
 }
 
-async fn render_profile(state: AppState, nick: String, q: PagerQuery, current: CurrentUser) -> Result<Html<String>> {
+async fn render_profile(state: AppState, nick: String, q: PagerQuery, current: CurrentUser, csrf_token: String) -> Result<Html<String>> {
     let profile = get_user_profile(&state, &nick).await?;
     if profile.blocked && current.0.is_none() {
         return Err(AppError::Forbidden);
@@ -281,7 +284,7 @@ async fn render_profile(state: AppState, nick: String, q: PagerQuery, current: C
 
     Ok(Html(UserTemplate {
         profile, stats, topics, favorite_tags, ignore_tags, drafts_count, is_owner, can_view_private, userinfo_html,
-        ban_info, frozen_until_text, is_frozen, blockable, freezable, other_accounts, user_log, invited_users, userpic_url,
+        ban_info, frozen_until_text, is_frozen, blockable, freezable, other_accounts, user_log, invited_users, userpic_url, csrf_token,
     }.render()?))
 }
 
@@ -537,11 +540,11 @@ pub struct ProfileForm {
     pub oldpass: Option<String>,
 }
 
-pub async fn edit_profile_form(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser) -> Result<Html<String>> {
+pub async fn edit_profile_form(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     let user = get_user(&state, &nick).await?;
     let profile = get_user_profile(&state, &nick).await?;
     ensure_self(&current.0, &user)?;
-    Ok(Html(EditProfileTemplate { user, profile }.render()?))
+    Ok(Html(EditProfileTemplate { user, profile, csrf_token }.render()?))
 }
 
 pub async fn edit_profile(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser, Form(form): axum::Form<ProfileForm>) -> Result<impl axum::response::IntoResponse> {
@@ -617,7 +620,7 @@ pub async fn edit_profile(State(state): State<AppState>, Path(nick): Path<String
     }
 }
 
-pub async fn settings(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser) -> Result<Html<String>> {
+pub async fn settings(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     let user = get_user(&state, &nick).await?;
     // Java's EditSettingsController is strictly self-service, no moderator override.
     ensure_self(&current.0, &user)?;
@@ -635,6 +638,7 @@ pub async fn settings(State(state): State<AppState>, Path(nick): Path<String>, c
         message_values: settings.message_options(),
         user,
         settings,
+        csrf_token,
     }.render()?))
 }
 
@@ -657,7 +661,7 @@ pub async fn save_settings(State(state): State<AppState>, Path(nick): Path<Strin
 #[derive(Deserialize)]
 pub struct RemarkForm { pub remark: String }
 
-pub async fn remark_form(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser) -> Result<Html<String>> {
+pub async fn remark_form(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     let target = get_user(&state, &nick).await?;
     let Some(me) = current.0 else { return Err(AppError::Forbidden); };
     if me.id == target.id {
@@ -668,6 +672,7 @@ pub async fn remark_form(State(state): State<AppState>, Path(nick): Path<String>
     Ok(Html(format!(r#"
 <h1>Заметка о {}</h1>
 <form method="post" action="/people/{}/remark">
+<input type="hidden" name="csrf" value="{csrf_token}">
 <textarea name="remark" rows="8">{}</textarea>
 <button type="submit">Сохранить</button>
 </form>
@@ -700,7 +705,7 @@ pub async fn save_remark(State(state): State<AppState>, Path(nick): Path<String>
 /// collapsed both into one plain GET that any logged-in user (self included)
 /// could trigger with no confirmation step - fixed to match: moderator-only,
 /// no side effects, renders a form that posts to the real action endpoint.
-pub async fn profile_wipe(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser) -> Result<Html<String>> {
+pub async fn profile_wipe(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     let moderator = current.0.as_ref().filter(|u| u.canmod).ok_or(AppError::Forbidden)?;
     let user = get_user(&state, &nick).await?;
     if !crate::routes::admin::is_blockable(user.id, user.canmod, moderator) {
@@ -717,6 +722,7 @@ pub async fn profile_wipe(State(state): State<AppState>, Path(nick): Path<String
 <h1>Заблокировать и удалить сообщения {nick}</h1>
 <p>Комментариев будет удалено: {comment_count}</p>
 <form method="post" action="/usermod.jsp">
+  <input type="hidden" name="csrf" value="{csrf_token}">
   <input type="hidden" name="action" value="block-n-delete-comments">
   <input type="hidden" name="id" value="{id}">
   <label>Причина <input name="reason"></label>
