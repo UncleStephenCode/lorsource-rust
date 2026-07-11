@@ -224,11 +224,19 @@ pub async fn topic_thread_redirect(uri: Uri, Path((group, id, thread_root)): Pat
     Redirect::to(&format!("/{section}/{group}/{id}#comment-{thread_root}"))
 }
 
-pub async fn topic_history(State(state): State<AppState>, uri: Uri, Path((_group, id)): Path<(String, i32)>) -> Result<Html<String>> {
+/// Java's EditHistoryController.canViewHistory requires an authenticated
+/// viewer in every branch (moderator, author, or "any logged-in user on a
+/// non-expired topic") - anonymous visitors are always rejected. Rust's
+/// "expired" (archived-topic) concept isn't modeled yet, so this collapses
+/// to "must be logged in", which closes the actual disclosure hole (history
+/// text, including deleted/edited content, was previously world-readable).
+pub async fn topic_history(State(state): State<AppState>, uri: Uri, Path((_group, id)): Path<(String, i32)>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+    if user.is_none() { return Err(AppError::Forbidden); }
     render_history(&state, section_from_uri(&uri).unwrap_or("forum"), id, None).await
 }
 
-pub async fn comment_history(State(state): State<AppState>, uri: Uri, Path((_group, _id, commentid)): Path<(String, i32, i32)>) -> Result<Html<String>> {
+pub async fn comment_history(State(state): State<AppState>, uri: Uri, Path((_group, _id, commentid)): Path<(String, i32, i32)>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+    if user.is_none() { return Err(AppError::Forbidden); }
     render_history(&state, section_from_uri(&uri).unwrap_or("forum"), commentid, Some(commentid)).await
 }
 

@@ -134,8 +134,28 @@ pub async fn edit_topic_form(State(state): State<AppState>, Query(q): Query<View
     Ok(Html(TopicFormTemplate { title: "Редактировать тему".into(), action: "/edit.jsp".into(), topic: Some(topic), groups }.render()?))
 }
 
-pub async fn edit_topic(State(state): State<AppState>, Form(form): Form<TopicForm>) -> Result<Redirect> {
+/// Simplified from EditTopicChecker.checkContentEdit/checkEditByAuthor:
+/// author (or moderator, unconditional bypass) may edit within a 14-day
+/// window from posting, or at any time while still a draft. The corrector
+/// role, premoderated-section/articles commitDate nuances, and the
+/// postscore==NO_COMMENTS lock aren't modeled by Rust's session yet - this
+/// intentionally errs toward Java's baseline author/moderator gate rather
+/// than leaving the endpoint wide open.
+const TOPIC_EDIT_WINDOW_DAYS: i64 = 14;
+
+pub async fn edit_topic(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<TopicForm>) -> Result<Redirect> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
     let id = form.id.ok_or_else(|| AppError::BadRequest("missing topic id".into()))?;
+    let meta = load_topic_delete_meta(&state, id).await?;
+    if meta.deleted {
+        return Err(AppError::BadRequest("нельзя править удаленные топики".into()));
+    }
+    let editable_by_author = meta.author_id == user.id
+        && (meta.draft || chrono::Utc::now() <= meta.postdate + chrono::Duration::days(TOPIC_EDIT_WINDOW_DAYS));
+    if !user.canmod && !editable_by_author {
+        return Err(AppError::Forbidden);
+    }
+
     let mut tx = state.pool.begin().await?;
     let service = topic_service(&state);
     service.vUpdateTopicMessage(&mut tx, id, &form.msg).await?;
@@ -151,15 +171,90 @@ pub async fn edit_topic(State(state): State<AppState>, Form(form): Form<TopicFor
 }
 
 #[derive(Deserialize)]
-pub struct TopicActionForm { pub msgid: i32, pub resolve: Option<String> }
+pub struct TopicActionForm { pub msgid: i32, pub resolve: Option<String>, pub reason: Option<String>, pub bonus: Option<i32> }
 
-pub async fn delete_topic(State(state): State<AppState>, Form(form): Form<TopicActionForm>) -> Result<Redirect> {
+/// Matches GroupPermissionService.DeletePeriod: an author may delete their
+/// own (non-draft, non-premoderated-and-committed) topic for 3 hours after
+/// posting, and only while it has no comments. Moderators bypass this.
+const TOPIC_DELETE_WINDOW_HOURS: i64 = 3;
+
+struct TopicDeleteMeta {
+    author_id: i32,
+    deleted: bool,
+    postdate: chrono::DateTime<chrono::Utc>,
+    draft: bool,
+    premoderated: bool,
+    commited: bool,
+    comment_count: i64,
+}
+
+async fn load_topic_delete_meta(state: &AppState, msgid: i32) -> Result<TopicDeleteMeta> {
+    let row: (i32, bool, chrono::DateTime<chrono::Utc>, bool, bool, bool, i64) = sqlx::query_as(
+        r#"SELECT t.userid, t.deleted, t.postdate, COALESCE(t.draft,false), s.moderate,
+                  (t.commitdate IS NOT NULL), t.stat1::bigint
+           FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section
+           WHERE t.id=$1"#,
+    )
+    .bind(msgid)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    Ok(TopicDeleteMeta {
+        author_id: row.0,
+        deleted: row.1,
+        postdate: row.2,
+        draft: row.3,
+        premoderated: row.4,
+        commited: row.5,
+        comment_count: row.6,
+    })
+}
+
+pub async fn delete_topic(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<TopicActionForm>) -> Result<Redirect> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    let meta = load_topic_delete_meta(&state, form.msgid).await?;
+    if meta.deleted {
+        return Err(AppError::BadRequest("сообщение уже удалено".into()));
+    }
+
+    let deletable_by_author = meta.author_id == user.id && (
+        meta.draft || (
+            !(meta.premoderated && meta.commited)
+                && meta.comment_count == 0
+                && chrono::Utc::now() <= meta.postdate + chrono::Duration::hours(TOPIC_DELETE_WINDOW_HOURS)
+        )
+    );
+    if !user.canmod && !deletable_by_author {
+        return Err(AppError::Forbidden);
+    }
+
+    let bonus = if user.canmod && user.id != meta.author_id && !meta.draft {
+        form.bonus.unwrap_or(0).clamp(0, 20)
+    } else {
+        0
+    };
+    let reason = form.reason.clone().unwrap_or_default();
+
     topic_service(&state).vSetDeleted(form.msgid, true).await?;
+    sqlx::query("INSERT INTO del_info(msgid,delby,reason,deldate,bonus) VALUES($1,$2,$3,now(),$4) ON CONFLICT(msgid) DO UPDATE SET delby=EXCLUDED.delby, reason=EXCLUDED.reason, deldate=now(), bonus=EXCLUDED.bonus")
+        .bind(form.msgid).bind(user.id).bind(&reason).bind(bonus).execute(&state.pool).await?;
+    if bonus != 0 {
+        sqlx::query("UPDATE users SET score=GREATEST(score-$2,0) WHERE id=$1").bind(meta.author_id).bind(bonus).execute(&state.pool).await?;
+    }
     Ok(Redirect::to("/"))
 }
 
-pub async fn undelete_topic(State(state): State<AppState>, Form(form): Form<TopicActionForm>) -> Result<Redirect> {
+pub async fn undelete_topic(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<TopicActionForm>) -> Result<Redirect> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    if !user.canmod {
+        return Err(AppError::Forbidden);
+    }
+    let meta = load_topic_delete_meta(&state, form.msgid).await?;
+    if !meta.deleted {
+        return Err(AppError::BadRequest("сообщение не удалено".into()));
+    }
     topic_service(&state).vSetDeleted(form.msgid, false).await?;
+    sqlx::query("DELETE FROM del_info WHERE msgid=$1").bind(form.msgid).execute(&state.pool).await?;
     Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.msgid)))
 }
 

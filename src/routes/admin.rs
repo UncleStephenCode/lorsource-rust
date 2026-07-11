@@ -71,11 +71,93 @@ async fn ban_ip(State(state): State<AppState>, CurrentUser(user): CurrentUser, F
     Ok(Redirect::to("/sameip.jsp"))
 }
 
-async fn del_ip(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<BanIpForm>) -> Result<Redirect> {
-    require_moderator(&user)?;
+#[derive(Deserialize)]
+pub struct DelIpForm {
+    pub reason: String,
+    pub ip: String,
+    /// Deletion look-back window: hour/day/3day/5day.
+    pub time: String,
+    /// Optional ban duration: hour/day/month/3month/6month/unlim/remove.
+    pub ban_time: Option<String>,
+    /// Optional ban mode: anonymous_and_captcha/anonymous_only/(anything else = full block).
+    pub ban_mode: Option<String>,
+}
+
+/// Java's `/delip.jsp` (DelIPController.delIp) mass-deletes topics/comments
+/// posted from an IP within a time window and optionally bans the IP - it is
+/// NOT an unban endpoint. The previous Rust handler reused this exact
+/// URL/method to delete a `b_ips` row (i.e. unban), which is the opposite
+/// action: a moderator UI built against the real shape would silently unban
+/// instead of cleaning up abuse.
+async fn del_ip(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<DelIpForm>) -> Result<Html<String>> {
+    let moderator = require_moderator(&user)?;
     let ip: std::net::IpAddr = form.ip.parse().map_err(|_| AppError::BadRequest("Некорректный IP".into()))?;
-    sqlx::query("DELETE FROM b_ips WHERE ip=$1::inet").bind(ip.to_string()).execute(&state.pool).await?;
-    Ok(Redirect::to("/sameip.jsp"))
+    let ip = ip.to_string();
+
+    let lookback = match form.time.as_str() {
+        "hour" => chrono::Duration::hours(1),
+        "day" => chrono::Duration::days(1),
+        "3day" => chrono::Duration::days(3),
+        "5day" => chrono::Duration::days(5),
+        _ => return Err(AppError::BadRequest("Invalid count".into())),
+    };
+    let cutoff = chrono::Utc::now() - lookback;
+
+    if let Some(ban_time) = form.ban_time.as_deref().filter(|s| !s.is_empty()) {
+        let ban_to: Option<chrono::DateTime<chrono::Utc>> = match ban_time {
+            "hour" => Some(chrono::Utc::now() + chrono::Duration::hours(1)),
+            "day" => Some(chrono::Utc::now() + chrono::Duration::days(1)),
+            "month" => Some(chrono::Utc::now() + chrono::Duration::days(30)),
+            "3month" => Some(chrono::Utc::now() + chrono::Duration::days(90)),
+            "6month" => Some(chrono::Utc::now() + chrono::Duration::days(180)),
+            "unlim" => None,
+            "remove" => Some(chrono::Utc::now()),
+            _ => return Err(AppError::BadRequest("Invalid count".into())),
+        };
+        let (allow_posting, captcha_required) = match form.ban_mode.as_deref() {
+            Some("anonymous_and_captcha") => (true, true),
+            Some("anonymous_only") => (true, false),
+            _ => (false, false),
+        };
+        sqlx::query(
+            r#"INSERT INTO b_ips(ip,mod_id,date,reason,ban_date,allow_posting,captcha_required)
+               VALUES($1::inet,$2,now(),$3,$4,$5,$6)
+               ON CONFLICT(ip) DO UPDATE SET
+                 mod_id=EXCLUDED.mod_id, date=now(), reason=EXCLUDED.reason,
+                 ban_date=EXCLUDED.ban_date, allow_posting=EXCLUDED.allow_posting, captcha_required=EXCLUDED.captcha_required"#,
+        )
+        .bind(&ip).bind(moderator.id).bind(&form.reason).bind(ban_to).bind(allow_posting).bind(captcha_required)
+        .execute(&state.pool)
+        .await?;
+    }
+
+    let topic_ids: Vec<i32> = sqlx::query_scalar(
+        "SELECT id FROM topics WHERE postip=$1::inet AND postdate>=$2 AND NOT deleted",
+    )
+    .bind(&ip).bind(cutoff).fetch_all(&state.pool).await?;
+    for id in &topic_ids {
+        sqlx::query("UPDATE topics SET deleted=true WHERE id=$1").bind(id).execute(&state.pool).await?;
+        sqlx::query("INSERT INTO del_info(msgid,delby,reason,deldate) VALUES($1,$2,$3,now()) ON CONFLICT(msgid) DO UPDATE SET delby=EXCLUDED.delby, reason=EXCLUDED.reason, deldate=now()")
+            .bind(id).bind(moderator.id).bind(&form.reason).execute(&state.pool).await?;
+    }
+
+    let comment_ids: Vec<i32> = sqlx::query_scalar(
+        "SELECT id FROM comments WHERE postip=$1::inet AND postdate>=$2 AND NOT deleted",
+    )
+    .bind(&ip).bind(cutoff).fetch_all(&state.pool).await?;
+    for id in &comment_ids {
+        sqlx::query("UPDATE comments SET deleted=true WHERE id=$1").bind(id).execute(&state.pool).await?;
+        sqlx::query("INSERT INTO del_info(msgid,delby,reason,deldate) VALUES($1,$2,$3,now()) ON CONFLICT(msgid) DO UPDATE SET delby=EXCLUDED.delby, reason=EXCLUDED.reason, deldate=now()")
+            .bind(id).bind(moderator.id).bind(&form.reason).execute(&state.pool).await?;
+    }
+
+    Ok(Html(format!(
+        "<h1>Удаление по IP</h1><p>Удаляем темы и сообщения после {cutoff} с IP {ip_escaped}</p><p>Удалено тем: {topics}, комментариев: {comments}</p>",
+        cutoff = cutoff,
+        ip_escaped = html_escape::encode_text(&ip),
+        topics = topic_ids.len(),
+        comments = comment_ids.len(),
+    )))
 }
 
 #[derive(Deserialize)]

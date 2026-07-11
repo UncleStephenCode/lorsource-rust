@@ -68,8 +68,45 @@ pub async fn edit_comment_form() -> Result<&'static str> {
 #[derive(Deserialize)]
 pub struct EditCommentForm { pub msgid: i32, pub msg: String, pub title: Option<String> }
 
-pub async fn edit_comment(State(state): State<AppState>, Form(form): Form<EditCommentForm>) -> Result<Redirect> {
-    sqlx::query("UPDATE msgbase SET message=$2 WHERE id=$1").bind(form.msgid).bind(form.msg).execute(&state.pool).await?;
+/// Default upstream config (config.properties.dist): comments are editable
+/// only by their author, within 30 minutes of posting, only if they have no
+/// replies yet, and only once the author has score >= 45.
+/// comment.isModeratorAllowedToEdit defaults to false, so moderators do not
+/// get a bypass here in the default configuration.
+const COMMENT_EDIT_WINDOW_MINUTES: i64 = 30;
+const COMMENT_EDIT_MIN_SCORE: i32 = 45;
+
+pub async fn edit_comment(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<EditCommentForm>) -> Result<Redirect> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    let row: (i32, i32, bool, chrono::DateTime<chrono::Utc>, bool) = sqlx::query_as(
+        r#"SELECT c.topic, c.userid, c.deleted, c.postdate,
+                  EXISTS(SELECT 1 FROM comments r WHERE r.replyto=c.id) AS has_replies
+           FROM comments c WHERE c.id=$1"#,
+    )
+    .bind(form.msgid)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    let (topic_id, author_id, deleted, postdate, has_replies) = row;
+    let topic_deleted: bool = sqlx::query_scalar("SELECT deleted FROM topics WHERE id=$1").bind(topic_id).fetch_one(&state.pool).await?;
+
+    if deleted || topic_deleted {
+        return Err(AppError::BadRequest("тема или комментарий удалены".into()));
+    }
+    if user.id != author_id {
+        return Err(AppError::Forbidden);
+    }
+    if has_replies {
+        return Err(AppError::BadRequest("редактирование комментариев с ответами запрещено".into()));
+    }
+    if user.score.unwrap_or(0) < COMMENT_EDIT_MIN_SCORE {
+        return Err(AppError::Forbidden);
+    }
+    if chrono::Utc::now() > postdate + chrono::Duration::minutes(COMMENT_EDIT_WINDOW_MINUTES) {
+        return Err(AppError::BadRequest("истек срок редактирования".into()));
+    }
+
+    sqlx::query("UPDATE msgbase SET message=$2 WHERE id=$1").bind(form.msgid).bind(&form.msg).execute(&state.pool).await?;
     if let Some(title) = form.title {
         sqlx::query("UPDATE comments SET title=$2 WHERE id=$1").bind(form.msgid).bind(title).execute(&state.pool).await?;
     }
@@ -108,15 +145,87 @@ pub async fn undelete_comment_form(Query(q): Query<JumpQuery>, CurrentUser(user)
 }
 
 #[derive(Deserialize)]
-pub struct CommentAction { pub msgid: i32 }
+pub struct CommentAction {
+    pub msgid: i32,
+    pub reason: Option<String>,
+    pub bonus: Option<i32>,
+}
 
-pub async fn delete_comment(State(state): State<AppState>, Form(form): Form<CommentAction>) -> Result<Redirect> {
+/// Matches TopicPermissionService.DeletePeriod: authors may delete their own
+/// comment for 3 hours after posting (and only if nobody has replied yet).
+/// Moderators bypass this window entirely.
+const COMMENT_DELETE_WINDOW_HOURS: i64 = 3;
+
+pub async fn delete_comment(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<CommentAction>) -> Result<Redirect> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    let row: (i32, i32, bool, chrono::DateTime<chrono::Utc>, bool) = sqlx::query_as(
+        r#"SELECT c.topic, c.userid, c.deleted, c.postdate,
+                  EXISTS(SELECT 1 FROM comments r WHERE r.replyto=c.id) AS has_replies
+           FROM comments c WHERE c.id=$1"#,
+    )
+    .bind(form.msgid)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    let (topic_id, author_id, deleted, postdate, has_replies) = row;
+    if deleted {
+        return Err(AppError::BadRequest("комментарий уже удален".into()));
+    }
+    let topic_deleted: bool = sqlx::query_scalar("SELECT deleted FROM topics WHERE id=$1").bind(topic_id).fetch_one(&state.pool).await?;
+
+    let deletable = user.canmod || {
+        let within_window = chrono::Utc::now() <= postdate + chrono::Duration::hours(COMMENT_DELETE_WINDOW_HOURS);
+        user.id == author_id && !has_replies && !topic_deleted && within_window
+    };
+    if !deletable {
+        return Err(AppError::Forbidden);
+    }
+
+    let bonus = if user.canmod && user.id != author_id {
+        form.bonus.unwrap_or(0).clamp(0, 20)
+    } else {
+        0
+    };
+    let reason = form.reason.clone().unwrap_or_default();
+
     sqlx::query("UPDATE comments SET deleted=true WHERE id=$1").bind(form.msgid).execute(&state.pool).await?;
+    sqlx::query("INSERT INTO del_info(msgid,delby,reason,deldate,bonus) VALUES($1,$2,$3,now(),$4) ON CONFLICT(msgid) DO UPDATE SET delby=EXCLUDED.delby, reason=EXCLUDED.reason, deldate=now(), bonus=EXCLUDED.bonus")
+        .bind(form.msgid).bind(user.id).bind(&reason).bind(bonus).execute(&state.pool).await?;
+    if bonus != 0 {
+        sqlx::query("UPDATE users SET score=GREATEST(score-$2,0) WHERE id=$1").bind(author_id).bind(bonus).execute(&state.pool).await?;
+    }
     Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.msgid)))
 }
 
-pub async fn undelete_comment(State(state): State<AppState>, Form(form): Form<CommentAction>) -> Result<Redirect> {
+pub async fn undelete_comment(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<CommentAction>) -> Result<Redirect> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    if !user.canmod {
+        return Err(AppError::Forbidden);
+    }
+    let row: (i32, bool) = sqlx::query_as("SELECT topic, deleted FROM comments WHERE id=$1")
+        .bind(form.msgid)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let (topic_id, deleted) = row;
+    if !deleted {
+        return Err(AppError::BadRequest("комментарий не удален".into()));
+    }
+    let topic_deleted: bool = sqlx::query_scalar("SELECT deleted FROM topics WHERE id=$1").bind(topic_id).fetch_one(&state.pool).await?;
+    if topic_deleted {
+        return Err(AppError::Forbidden);
+    }
+    // Mirrors TopicPermissionService.isUndeletable: a comment cannot be
+    // undeleted if its own author is the one who deleted it (self-moderation
+    // is respected, only another moderator's deletion can be reversed).
+    let author_id: i32 = sqlx::query_scalar("SELECT userid FROM comments WHERE id=$1").bind(form.msgid).fetch_one(&state.pool).await?;
+    let delby: Option<i32> = sqlx::query_scalar("SELECT delby FROM del_info WHERE msgid=$1").bind(form.msgid).fetch_optional(&state.pool).await?;
+    if delby == Some(author_id) {
+        return Err(AppError::Forbidden);
+    }
+
     sqlx::query("UPDATE comments SET deleted=false WHERE id=$1").bind(form.msgid).execute(&state.pool).await?;
+    sqlx::query("DELETE FROM del_info WHERE msgid=$1").bind(form.msgid).execute(&state.pool).await?;
     Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.msgid)))
 }
 
@@ -135,6 +244,68 @@ async fn insert_comment(state: &AppState, user_id: i32, form: CommentForm) -> Re
     .execute(&mut *tx)
     .await?;
     sqlx::query("UPDATE topics SET stat1=stat1+1,lastmod=now() WHERE id=$1").bind(form.topic).execute(&mut *tx).await?;
+
+    // Matches CommentCreateService.notifyReply / UserEventDao.insertCommentWatchNotification:
+    // notify the parent comment's author (REPLY) and topic watchers (WATCH),
+    // skipping the commenter themselves and anyone who has the commenter ignored.
+    let mut notified: Vec<i32> = Vec::new();
+
+    let mut parent_author: Option<i32> = None;
+    if let Some(replyto) = form.replyto {
+        if let Some(parent_userid) = sqlx::query_scalar::<_, i32>("SELECT userid FROM comments WHERE id=$1")
+            .bind(replyto)
+            .fetch_optional(&mut *tx)
+            .await?
+        {
+            parent_author = Some(parent_userid);
+            if parent_userid != user_id {
+                let ignored: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ignore_list WHERE userid=$1 AND ignored=$2)")
+                    .bind(parent_userid)
+                    .bind(user_id)
+                    .fetch_one(&mut *tx)
+                    .await?;
+                if !ignored {
+                    sqlx::query("INSERT INTO user_events(userid,type,private,message_id,comment_id) VALUES($1,'REPLY',false,$2,$3)")
+                        .bind(parent_userid)
+                        .bind(form.topic)
+                        .bind(id)
+                        .execute(&mut *tx)
+                        .await?;
+                    notified.push(parent_userid);
+                }
+            }
+        }
+    }
+
+    let watchers: Vec<i32> = sqlx::query_scalar(
+        r#"SELECT m.userid FROM memories m
+           WHERE m.topic=$1 AND m.watch AND m.userid<>$2 AND m.userid<>COALESCE($3,0)
+             AND NOT EXISTS (SELECT 1 FROM ignore_list il WHERE il.userid=m.userid AND il.ignored=$2)"#,
+    )
+    .bind(form.topic)
+    .bind(user_id)
+    .bind(parent_author)
+    .fetch_all(&mut *tx)
+    .await?;
+    for watcher in &watchers {
+        sqlx::query("INSERT INTO user_events(userid,type,private,message_id,comment_id) VALUES($1,'WATCH',false,$2,$3)")
+            .bind(watcher)
+            .bind(form.topic)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        notified.push(*watcher);
+    }
+
+    if !notified.is_empty() {
+        notified.sort_unstable();
+        notified.dedup();
+        sqlx::query("UPDATE users SET unread_events=(SELECT count(*) FROM user_events e WHERE e.unread AND e.userid=users.id) WHERE id=ANY($1)")
+            .bind(&notified)
+            .execute(&mut *tx)
+            .await?;
+    }
+
     tx.commit().await?;
     Ok(id)
 }

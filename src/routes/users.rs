@@ -8,7 +8,7 @@ use crate::{
     state::AppState,
 };
 use askama::Template;
-use axum::{extract::{Path, Query, State}, response::{Html, Redirect}, Form};
+use axum::{extract::{Path, Query, State}, response::{Html, IntoResponse, Redirect}, Form};
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -130,8 +130,9 @@ pub async fn legacy_whois(Query(q): Query<WhoisQuery>) -> Redirect {
     Redirect::to(&format!("/people/{}/profile", urlencoding::encode(&q.nick)))
 }
 
-pub async fn reactions(State(state): State<AppState>, Path(nick): Path<String>) -> Result<Html<String>> {
+pub async fn reactions(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser) -> Result<Html<String>> {
     let user = get_user(&state, &nick).await?;
+    ensure_self_or_moderator(&current.0, &user)?;
     let rows = sqlx::query_as::<_, (i32, Option<i32>, chrono::DateTime<chrono::Utc>, String)>(
         "SELECT topic_id, comment_id, set_date, reaction FROM reactions_log WHERE origin_user=$1 ORDER BY set_date DESC LIMIT 100",
     )
@@ -147,17 +148,24 @@ pub async fn reactions(State(state): State<AppState>, Path(nick): Path<String>) 
     Ok(Html(html))
 }
 
-pub async fn remarks(State(state): State<AppState>, Path(nick): Path<String>) -> Result<Html<String>> {
-    let user = get_user(&state, &nick).await?;
+pub async fn remarks(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser) -> Result<Html<String>> {
+    // Java's ShowRemarkController only ever shows the logged-in user's OWN
+    // remarks about other people (keyed by user_id = viewer), never other
+    // people's remarks about the profile being viewed - it is a private
+    // notebook, not a public annotation feed. `nick` must equal the viewer.
+    let Some(me) = current.0 else { return Err(AppError::Forbidden); };
+    if !me.nick.eq_ignore_ascii_case(&nick) {
+        return Err(AppError::Forbidden);
+    }
     let rows = sqlx::query_as::<_, (String, String)>(
-        "SELECT u.nick, r.remark FROM user_remarks r JOIN users u ON u.id=r.userid WHERE r.who=$1 ORDER BY lower(u.nick)",
+        "SELECT u.nick, r.remark_text FROM user_remarks r JOIN users u ON u.id=r.ref_user_id WHERE r.user_id=$1 ORDER BY lower(u.nick)",
     )
-    .bind(user.id)
+    .bind(me.id)
     .fetch_all(&state.pool)
     .await?;
-    let mut html = format!("<h1>Заметки о {}</h1><ul>", html_escape::encode_text(&user.nick));
-    for (author, remark) in rows {
-        html.push_str(&format!("<li><b>{}</b>: {}</li>", html_escape::encode_text(&author), html_escape::encode_text(&remark)));
+    let mut html = format!("<h1>Заметки {}</h1><ul>", html_escape::encode_text(&me.nick));
+    for (target, remark) in rows {
+        html.push_str(&format!("<li><b>{}</b>: {}</li>", html_escape::encode_text(&target), html_escape::encode_text(&remark)));
     }
     html.push_str("</ul>");
     Ok(Html(html))
@@ -363,28 +371,38 @@ pub struct ProfileForm {
     pub userinfo: Option<String>,
     pub password: Option<String>,
     pub password2: Option<String>,
+    pub oldpass: Option<String>,
 }
 
 pub async fn edit_profile_form(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser) -> Result<Html<String>> {
     let user = get_user(&state, &nick).await?;
     let profile = get_user_profile(&state, &nick).await?;
-    ensure_self_or_moderator(&current.0, &user)?;
+    ensure_self(&current.0, &user)?;
     Ok(Html(EditProfileTemplate { user, profile }.render()?))
 }
 
-pub async fn edit_profile(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser, Form(form): axum::Form<ProfileForm>) -> Result<Redirect> {
+pub async fn edit_profile(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser, Form(form): axum::Form<ProfileForm>) -> Result<impl axum::response::IntoResponse> {
     let user = get_user(&state, &nick).await?;
-    ensure_self_or_moderator(&current.0, &user)?;
-    sqlx::query("UPDATE users SET name=$2,town=$3,url=$4,userinfo=$5,email=$6 WHERE id=$1")
+    // Java's EditProfileController is strictly self-service (no moderator
+    // override) and requires the current password before touching anything.
+    ensure_self(&current.0, &user)?;
+
+    let oldpass = form.oldpass.as_deref().unwrap_or("");
+    if oldpass.is_empty() {
+        return Err(AppError::BadRequest("Для изменения регистрации нужен ваш пароль".into()));
+    }
+    let current_hash: Option<String> = sqlx::query_scalar("SELECT passwd FROM users WHERE id=$1")
         .bind(user.id)
-        .bind(form.name)
-        .bind(form.town)
-        .bind(form.url)
-        .bind(form.userinfo)
-        .bind(form.email)
-        .execute(&state.pool)
+        .fetch_optional(&state.pool)
         .await?;
+    if !current_hash.as_deref().map(|hash| security::password::verify(oldpass, hash)).unwrap_or(false) {
+        return Err(AppError::BadRequest("Неверный пароль".into()));
+    }
+
     if let Some(password) = form.password.as_deref().filter(|s| !s.is_empty()) {
+        if password.eq_ignore_ascii_case(&user.nick) {
+            return Err(AppError::BadRequest("пароль не может совпадать с логином".to_string()));
+        }
         if form.password2.as_deref() != Some(password) {
             return Err(AppError::BadRequest("пароли не совпадают".to_string()));
         }
@@ -394,7 +412,46 @@ pub async fn edit_profile(State(state): State<AppState>, Path(nick): Path<String
         let hash = security::password::hash(password).map_err(|e| AppError::BadRequest(format!("password hash error: {e}")))?;
         sqlx::query("UPDATE users SET passwd=$2 WHERE id=$1").bind(user.id).bind(hash).execute(&state.pool).await?;
     }
-    Ok(Redirect::to(&format!("/people/{}/profile", urlencoding::encode(&user.nick))))
+
+    // Email changes are staged into new_email and only take effect once the
+    // user follows the activation-code link (see legacy::activate_post),
+    // matching Java's UserDao.setNewEmail / acceptNewEmail split - the
+    // previous handler wrote straight to `email` with no confirmation at all.
+    let current_email: Option<String> = sqlx::query_scalar("SELECT email FROM users WHERE id=$1")
+        .bind(user.id)
+        .fetch_optional(&state.pool)
+        .await?;
+    let requested_email = form.email.as_deref().map(|e| e.trim().to_lowercase()).filter(|e| !e.is_empty());
+    let pending_email = requested_email.filter(|e| Some(e.as_str()) != current_email.as_deref());
+
+    if let Some(ref new_email) = pending_email {
+        let taken: Option<i32> = sqlx::query_scalar("SELECT id FROM users WHERE lower(email)=$1 AND id<>$2")
+            .bind(new_email)
+            .bind(user.id)
+            .fetch_optional(&state.pool)
+            .await?;
+        if taken.is_some() {
+            return Err(AppError::BadRequest("такой email уже используется".into()));
+        }
+    }
+
+    sqlx::query("UPDATE users SET name=$2,town=$3,url=$4,userinfo=$5,new_email=COALESCE($6,new_email) WHERE id=$1")
+        .bind(user.id)
+        .bind(form.name)
+        .bind(form.town)
+        .bind(form.url)
+        .bind(form.userinfo)
+        .bind(&pending_email)
+        .execute(&state.pool)
+        .await?;
+
+    if pending_email.is_some() {
+        Ok(Html(
+            "<h1>Обновление регистрации прошло успешно</h1><p>Ожидайте письма с кодом активации смены email.</p>".to_string(),
+        ).into_response())
+    } else {
+        Ok(Redirect::to(&format!("/people/{}/profile", urlencoding::encode(&user.nick))).into_response())
+    }
 }
 
 pub async fn settings(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser) -> Result<Html<String>> {
@@ -439,7 +496,10 @@ pub struct RemarkForm { pub remark: String }
 pub async fn remark_form(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser) -> Result<Html<String>> {
     let target = get_user(&state, &nick).await?;
     let Some(me) = current.0 else { return Err(AppError::Forbidden); };
-    let remark: Option<String> = sqlx::query_scalar("SELECT remark FROM user_remarks WHERE userid=$1 AND who=$2")
+    if me.id == target.id {
+        return Err(AppError::BadRequest("Нельзя оставить заметку самому себе".into()));
+    }
+    let remark: Option<String> = sqlx::query_scalar("SELECT remark_text FROM user_remarks WHERE user_id=$1 AND ref_user_id=$2")
         .bind(me.id).bind(target.id).fetch_optional(&state.pool).await?;
     Ok(Html(format!(r#"
 <h1>Заметка о {}</h1>
@@ -453,19 +513,71 @@ pub async fn remark_form(State(state): State<AppState>, Path(nick): Path<String>
 pub async fn save_remark(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser, Form(form): axum::Form<RemarkForm>) -> Result<Redirect> {
     let target = get_user(&state, &nick).await?;
     let Some(me) = current.0 else { return Err(AppError::Forbidden); };
-    sqlx::query("INSERT INTO user_remarks(userid,who,remark) VALUES($1,$2,$3) ON CONFLICT(userid,who) DO UPDATE SET remark=EXCLUDED.remark")
-        .bind(me.id).bind(target.id).bind(form.remark).execute(&state.pool).await?;
-    Ok(Redirect::to(&format!("/people/{}/remarks", urlencoding::encode(&target.nick))))
+    if me.id == target.id {
+        return Err(AppError::BadRequest("Нельзя оставить заметку самому себе".into()));
+    }
+    let text: String = form.remark.chars().take(255).collect();
+    if text.trim().is_empty() {
+        sqlx::query("DELETE FROM user_remarks WHERE user_id=$1 AND ref_user_id=$2")
+            .bind(me.id).bind(target.id).execute(&state.pool).await?;
+    } else {
+        sqlx::query(
+            "INSERT INTO user_remarks(user_id,ref_user_id,remark_text) VALUES($1,$2,$3) ON CONFLICT(user_id,ref_user_id) DO UPDATE SET remark_text=EXCLUDED.remark_text",
+        )
+        .bind(me.id).bind(target.id).bind(text).execute(&state.pool).await?;
+    }
+    Ok(Redirect::to(&format!("/people/{}/remarks", urlencoding::encode(&me.nick))))
 }
 
-pub async fn profile_wipe(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser) -> Result<Redirect> {
+/// Java's `/people/{nick}/profile/wipe` is GET/HEAD-only and purely a
+/// moderator confirmation view (`UserModificationController.wipe`) - the
+/// actual destructive action lives behind a separate POST to
+/// `/usermod.jsp?action=block-n-delete-comments`. The previous Rust handler
+/// collapsed both into one plain GET that any logged-in user (self included)
+/// could trigger with no confirmation step - fixed to match: moderator-only,
+/// no side effects, renders a form that posts to the real action endpoint.
+pub async fn profile_wipe(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser) -> Result<Html<String>> {
+    let moderator = current.0.as_ref().filter(|u| u.canmod).ok_or(AppError::Forbidden)?;
     let user = get_user(&state, &nick).await?;
-    ensure_self_or_moderator(&current.0, &user)?;
-    sqlx::query("UPDATE users SET userinfo=NULL, photo=NULL, town=NULL, url=NULL WHERE id=$1").bind(user.id).execute(&state.pool).await?;
-    Ok(Redirect::to(&format!("/people/{}/profile", urlencoding::encode(&user.nick))))
+    if !is_blockable(&user, moderator) {
+        return Err(AppError::Forbidden);
+    }
+    if user.blocked.unwrap_or(false) {
+        return Err(AppError::BadRequest("Пользователь уже блокирован".into()));
+    }
+    let comment_count: i64 = sqlx::query_scalar("SELECT count(*)::bigint FROM comments WHERE userid=$1")
+        .bind(user.id)
+        .fetch_one(&state.pool)
+        .await?;
+    Ok(Html(format!(r#"
+<h1>Заблокировать и удалить сообщения {nick}</h1>
+<p>Комментариев будет удалено: {comment_count}</p>
+<form method="post" action="/usermod.jsp">
+  <input type="hidden" name="action" value="block-n-delete-comments">
+  <input type="hidden" name="id" value="{id}">
+  <label>Причина <input name="reason"></label>
+  <button type="submit">Заблокировать и удалить</button>
+</form>
+"#, nick = html_escape::encode_text(&user.nick), id = user.id)))
+}
+
+fn is_blockable(target: &UserSummary, moderator: &UserSummary) -> bool {
+    // Approximates Java's UserService.isBlockable (!user.anonymous && by.isModerator
+    // && (!user.isModerator || by.isAdministrator)). Rust's role model has no separate
+    // administrator tier, so moderator-on-moderator wipe is disallowed outright rather
+    // than risking a moderator wiping another moderator.
+    !target.canmod
 }
 
 fn ensure_self_or_moderator(current: &Option<UserSummary>, target: &UserSummary) -> Result<()> {
     let Some(current) = current else { return Err(AppError::Forbidden); };
     if current.id == target.id || current.canmod { Ok(()) } else { Err(AppError::Forbidden) }
+}
+
+/// Strictly self-service, no moderator override - matches Java controllers
+/// (e.g. EditProfileController) that reject even moderators editing someone
+/// else's registration through this path.
+fn ensure_self(current: &Option<UserSummary>, target: &UserSummary) -> Result<()> {
+    let Some(current) = current else { return Err(AppError::Forbidden); };
+    if current.id == target.id { Ok(()) } else { Err(AppError::Forbidden) }
 }
