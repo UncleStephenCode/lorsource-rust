@@ -12,7 +12,7 @@ pub mod users;
 
 use crate::{error::AppError, state::AppState};
 use askama::Template;
-use axum::{http::StatusCode, response::{Html, IntoResponse}, routing::{get, post}, Router};
+use axum::{http::StatusCode, response::{Html, IntoResponse, Redirect, Response}, routing::{get, post}, Router};
 use serde_json::json;
 
 pub fn router() -> Router<AppState> {
@@ -21,6 +21,7 @@ pub fn router() -> Router<AppState> {
         .route("/index.jsp", get(topics::index))
         .route("/about", get(about))
         .route("/forum", get(groups::forum_index))
+        .route("/forum/", get(groups::forum_index))
         .route("/forum/lenta", get(topics::lenta))
         .route("/forum/{group}", get(groups::group_page))
         .route("/forum/{group}/archive", get(groups::group_archive))
@@ -66,7 +67,9 @@ pub fn router() -> Router<AppState> {
         .route("/tags.jsp", get(tags::all_tags))
         .route("/tags/{first_letter}", get(tags::tags_by_letter))
         .route("/tag/{tag}", get(tags::tag_page))
-        .route("/people/{nick}", get(users::profile))
+        // Put exact people sub-pages before the short /people/{nick} route.
+        // This keeps the surface compatible with Spring MVC and avoids accidental
+        // 404s on /people/<nick>/profile and /people/<nick>/settings in Axum.
         .route("/people/{nick}/profile", get(users::profile_full))
         .route("/people/{nick}/profile/", get(users::profile_full))
         .route("/people/{nick}/reactions", get(users::reactions))
@@ -144,6 +147,7 @@ pub fn router() -> Router<AppState> {
         .route("/people/{nick}/settings", get(users::settings).post(users::save_settings))
         .route("/people/{nick}/settings/", get(users::settings).post(users::save_settings))
         .route("/people/{nick}/tracked", get(users::tracked))
+        .route("/people/{nick}", get(users::profile))
         .route("/forum/{group}/{id}/history", get(legacy::topic_history))
         .route("/forum/{group}/{id}/{commentid}/history", get(legacy::comment_history))
         .route("/news/{group}/{id}/history", get(legacy::topic_history))
@@ -180,6 +184,21 @@ pub async fn healthz() -> impl IntoResponse {
     (StatusCode::OK, axum::Json(json!({"status":"ok"})))
 }
 
-pub async fn not_found() -> AppError {
-    AppError::NotFound
+pub async fn not_found(uri: axum::http::Uri) -> Response {
+    let path = uri.path();
+
+    // Spring MVC / the historic LOR instance are tolerant to a trailing slash
+    // on many legacy URLs. Axum is exact: /forum and /forum/ are different
+    // routes. Normalize unknown trailing-slash paths to their canonical form
+    // instead of returning a misleading 404.
+    if path.len() > 1 && path.ends_with('/') {
+        let mut target = path.trim_end_matches('/').to_string();
+        if let Some(query) = uri.query() {
+            target.push('?');
+            target.push_str(query);
+        }
+        return Redirect::temporary(&target).into_response();
+    }
+
+    AppError::NotFound.into_response()
 }
