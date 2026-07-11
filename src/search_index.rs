@@ -83,12 +83,21 @@ struct TopicRow {
     deleted: bool,
     draft: bool,
     moderate: bool,
+    /// TopicPermissionService.isTopicSearchable's remaining conditions:
+    /// comments-hidden topics and anonymous-authored, not-yet-committed
+    /// topics in a premoderated section are excluded from the index too.
+    comments_hidden: bool,
+    premoderated_anonymous_uncommitted: bool,
 }
 
+const POSTSCORE_HIDE_COMMENTS: i32 = 10002;
+/// UserConstants.ANONYMOUS_ID.
+const ANONYMOUS_USER_ID: i32 = 2;
+
 async fn load_topic_row(state: &AppState, topic_id: i32) -> Option<TopicRow> {
-    let row: Option<(String, String, String, String, String, chrono::DateTime<chrono::Utc>, bool, bool, bool)> = sqlx::query_as(
+    let row: Option<(String, String, String, i32, String, String, chrono::DateTime<chrono::Utc>, bool, bool, bool, i32, bool)> = sqlx::query_as(
         r#"SELECT CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END,
-                  g.urlname, u.nick, t.title, m.message, t.postdate, t.deleted, COALESCE(t.draft,false), t.moderate
+                  g.urlname, u.nick, u.id, t.title, m.message, t.postdate, t.deleted, COALESCE(t.draft,false), t.moderate, t.postscore, s.moderate
            FROM topics t
            JOIN msgbase m ON m.id=t.id
            JOIN users u ON u.id=t.userid
@@ -101,13 +110,16 @@ async fn load_topic_row(state: &AppState, topic_id: i32) -> Option<TopicRow> {
     .await
     .ok()
     .flatten();
-    let (section, group, author, title, message, postdate, deleted, draft, moderate) = row?;
+    let (section, group, author, author_id, title, message, postdate, deleted, draft, moderate, postscore, section_premoderated) = row?;
     let tags: Vec<String> = sqlx::query_scalar("SELECT tv.value FROM tags tg JOIN tags_values tv ON tv.id=tg.tagid WHERE tg.msgid=$1")
         .bind(topic_id)
         .fetch_all(&state.pool)
         .await
         .unwrap_or_default();
-    Some(TopicRow { section, group, author, title, message, postdate, tags, deleted, draft, moderate })
+    let comments_hidden = postscore == POSTSCORE_HIDE_COMMENTS;
+    // moderate==true means "awaiting commit" in this port's convention.
+    let premoderated_anonymous_uncommitted = section_premoderated && moderate && author_id == ANONYMOUS_USER_ID;
+    Some(TopicRow { section, group, author, title, message, postdate, tags, deleted, draft, moderate, comments_hidden, premoderated_anonymous_uncommitted })
 }
 
 /// Reindex (or, if no longer searchable, remove) a topic and optionally its comments.
@@ -115,7 +127,7 @@ pub async fn index_topic(state: &AppState, topic_id: i32, with_comments: bool) {
     let Some(base) = base_url(state) else { return };
     let Some(row) = load_topic_row(state, topic_id).await else { return };
 
-    if row.deleted || row.draft {
+    if row.deleted || row.draft || row.comments_hidden || row.premoderated_anonymous_uncommitted {
         let _ = state.http.delete(format!("{base}/{INDEX}/_doc/{topic_id}")).send().await;
     } else {
         let doc = MessageIndexDocument {
@@ -159,7 +171,7 @@ pub async fn index_comment(state: &AppState, comment_id: i32) {
         return;
     };
 
-    if comment_deleted || topic.deleted || topic.draft {
+    if comment_deleted || topic.deleted || topic.draft || topic.comments_hidden || topic.premoderated_anonymous_uncommitted {
         let _ = state.http.delete(format!("{base}/{INDEX}/_doc/{comment_id}")).send().await;
         return;
     }
@@ -301,24 +313,31 @@ pub struct SearchResult {
 pub async fn search(state: &AppState, p: &SearchParams) -> Result<SearchResult, String> {
     let Some(base) = base_url(state) else { return Err("Поиск временно недоступен: не сконфигурирован OPENSEARCH_URL".into()) };
 
-    let mut filters: Vec<Value> = Vec::new();
-    if let Some(section) = p.section.as_deref().filter(|s| !s.is_empty()) {
-        filters.push(json!({"term": {"section": section}}));
-    }
-    if let Some(group) = p.group.as_deref().filter(|s| !s.is_empty()) {
-        filters.push(json!({"term": {"group": group}}));
-    }
+    // SearchService.performSearch: only section/group go into postFilter
+    // (applied after aggregations are computed, so switching sections
+    // doesn't zero out every other section's facet count) - range/
+    // interval/user narrow the query (and therefore the aggregations)
+    // itself, same as the free-text query.
+    let mut query_filters: Vec<Value> = Vec::new();
     match p.range {
-        SearchRange::Topics => filters.push(json!({"term": {"is_comment": false}})),
-        SearchRange::Comments => filters.push(json!({"term": {"is_comment": true}})),
+        SearchRange::Topics => query_filters.push(json!({"term": {"is_comment": false}})),
+        SearchRange::Comments => query_filters.push(json!({"term": {"is_comment": true}})),
         SearchRange::All => {}
     }
     if let Some(user) = p.user.as_deref() {
         let field = if p.usertopic { "topic_author" } else { "author" };
-        filters.push(json!({"term": {field: user}}));
+        query_filters.push(json!({"term": {field: user}}));
     }
     if let Some(gte) = p.interval.gte_expr() {
-        filters.push(json!({"range": {"postdate": {"gte": gte}}}));
+        query_filters.push(json!({"range": {"postdate": {"gte": gte}}}));
+    }
+
+    let mut post_filters: Vec<Value> = Vec::new();
+    if let Some(section) = p.section.as_deref().filter(|s| !s.is_empty()) {
+        post_filters.push(json!({"term": {"section": section}}));
+    }
+    if let Some(group) = p.group.as_deref().filter(|s| !s.is_empty()) {
+        post_filters.push(json!({"term": {"group": group}}));
     }
 
     let text_query = if p.q.trim().is_empty() {
@@ -343,8 +362,8 @@ pub async fn search(state: &AppState, p: &SearchParams) -> Result<SearchResult, 
         SearchSort::DateOldToNew => json!([{"postdate": {"order": "asc"}}]),
     };
 
-    let body = json!({
-        "query": {"bool": {"must": text_query, "filter": filters}},
+    let mut body = json!({
+        "query": {"bool": {"must": text_query, "filter": query_filters}},
         "sort": sort,
         "from": p.offset,
         "size": SEARCH_ROWS,
@@ -356,6 +375,9 @@ pub async fn search(state: &AppState, p: &SearchParams) -> Result<SearchResult, 
         },
         "track_total_hits": true
     });
+    if !post_filters.is_empty() {
+        body["post_filter"] = json!({"bool": {"filter": post_filters}});
+    }
 
     let resp = state.http.post(format!("{base}/{INDEX}/_search")).json(&body).send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {

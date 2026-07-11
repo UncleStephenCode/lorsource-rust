@@ -356,6 +356,14 @@ pub async fn create_topic(State(state): State<AppState>, CurrentUser(user): Curr
         .await?
         .unwrap_or(false);
 
+    // AddTopicRequestValidator.validateTags/AddTopicController: every
+    // topic needs 1-5 valid tags, and creating a brand-new tag (one that
+    // doesn't already exist as a value or synonym) needs either a
+    // premoderated section or score>=200 (GroupPermissionService.canCreateTag).
+    let tags = crate::routes::tags::parse_and_validate_tags(form.tags.as_deref().unwrap_or(""))
+        .map_err(AppError::BadRequest)?;
+    crate::routes::tags::check_can_create_new_tags(&state, &tags, &user, premoderated).await?;
+
     let mut tx = state.pool.begin().await?;
     let service = topic_service(&state);
     let id = service.iNextMessageId(&mut tx).await?;
@@ -421,6 +429,11 @@ pub async fn edit_topic(State(state): State<AppState>, CurrentUser(user): Curren
     if !user.canmod && !editable_by_author {
         return Err(AppError::Forbidden);
     }
+
+    // EditTopicRequestValidator.validateTags: same rule as topic creation.
+    let tags = crate::routes::tags::parse_and_validate_tags(form.tags.as_deref().unwrap_or(""))
+        .map_err(AppError::BadRequest)?;
+    crate::routes::tags::check_can_create_new_tags(&state, &tags, &user, meta.premoderated).await?;
 
     let mut tx = state.pool.begin().await?;
     let service = topic_service(&state);

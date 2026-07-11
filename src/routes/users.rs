@@ -451,7 +451,7 @@ pub async fn favs(State(state): State<AppState>, Path(nick): Path<String>, Query
            JOIN sections s ON s.id=g.section
            LEFT JOIN tags tg ON tg.msgid=t.id
            LEFT JOIN tags_values tv ON tv.id=tg.tagid
-           WHERE mem.userid=$1 AND NOT t.deleted
+           WHERE mem.userid=$1 AND NOT mem.watch AND NOT t.deleted
            GROUP BY t.id,au.id,g.id,s.id,mem.add_date
            ORDER BY mem.add_date DESC OFFSET $2 LIMIT $3"#,
     )
@@ -633,7 +633,7 @@ pub async fn settings(State(state): State<AppState>, Path(nick): Path<String>, c
         themes: settings.theme_options(user.score.unwrap_or(0)),
         avatars: settings.avatar_options(),
         tracker_modes: settings.tracker_options(),
-        format_modes: settings.format_options(),
+        format_modes: settings.format_options(user.score.unwrap_or(0)),
         topic_values: settings.topic_options(),
         message_values: settings.message_options(),
         user,
@@ -645,7 +645,12 @@ pub async fn settings(State(state): State<AppState>, Path(nick): Path<String>, c
 pub async fn save_settings(State(state): State<AppState>, Path(nick): Path<String>, current: CurrentUser, Form(form): axum::Form<HashMap<String, String>>) -> Result<Redirect> {
     let user = get_user(&state, &nick).await?;
     ensure_self(&current.0, &user)?;
-    let settings = ProfileSettings::from_form(&form);
+    let settings_text: Option<String> = sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
+        .bind(user.id)
+        .fetch_optional(&state.pool)
+        .await?;
+    let current_settings = ProfileSettings::from_hstore_text(settings_text);
+    let settings = current_settings.apply_form(&form).map_err(AppError::BadRequest)?;
     let (keys, values) = settings.to_hstore_arrays();
     sqlx::query(
         "INSERT INTO user_settings(id,settings) VALUES($1,hstore($2::text[],$3::text[])) ON CONFLICT(id) DO UPDATE SET settings=EXCLUDED.settings",

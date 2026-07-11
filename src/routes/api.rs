@@ -241,7 +241,17 @@ pub async fn tracker(State(state): State<AppState>, CurrentUser(user): CurrentUs
         return Err(AppError::BadRequest("Некорректное значение offset".into()));
     }
     let offset = q.offset.unwrap_or(0).clamp(0, 300);
-    let limit = state.config.page_size.max(1);
+    // GroupListDao.getTrackerTopics uses session.profile.topics, not a
+    // global page size - each user's own "topics per page" setting.
+    let limit: i64 = if let Some(u) = &user {
+        let settings_text: Option<String> = sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
+            .bind(u.id)
+            .fetch_optional(&state.pool)
+            .await?;
+        crate::profile::ProfileSettings::from_hstore_text(settings_text).topics as i64
+    } else {
+        crate::profile::DEFAULT_TOPICS as i64
+    };
 
     let default_filter: String = if let Some(u) = &user {
         sqlx::query_scalar::<_, Option<String>>("SELECT settings->'trackerMode' FROM user_settings WHERE id=$1")
@@ -256,8 +266,11 @@ pub async fn tracker(State(state): State<AppState>, CurrentUser(user): CurrentUs
     };
     let filter = q.filter.filter(|f| ["all", "main", "notalks", "tech"].contains(&f.as_str())).unwrap_or_else(|| default_filter.clone());
 
+    // GroupListDao.getTrackerTopics: showUncommited = filter==ALL ||
+    // session.moderator || session.corrector.
     let is_moderator = user.as_ref().map(|u| u.canmod).unwrap_or(false);
-    let show_uncommitted = filter == "all" || is_moderator;
+    let is_corrector = user.as_ref().map(|u| u.corrector).unwrap_or(false);
+    let show_uncommitted = filter == "all" || is_moderator || is_corrector;
 
     let sql = format!(
         r#"SELECT t.id, t.title, t.url, t.postdate, t.lastmod, u.id AS author_id, u.nick AS author,
@@ -275,11 +288,16 @@ pub async fn tracker(State(state): State<AppState>, CurrentUser(user): CurrentUs
            WHERE NOT t.draft AND NOT t.deleted
              AND COALESCE(t.lastmod, t.postdate) > now() - interval '7 days'
              {uncommitted}
+             {open_warnings}
              {group_clause}
            GROUP BY t.id,u.id,g.id,s.id
            ORDER BY COALESCE(t.lastmod, t.postdate) DESC
            OFFSET $1 LIMIT $2"#,
         uncommitted = if show_uncommitted { "" } else { "AND NOT t.moderate" },
+        // TopicPermissionService's noHidden clause: only applied to
+        // unauthorized (anonymous) viewers - an authorized user of any
+        // score can see warned topics in the tracker.
+        open_warnings = if user.is_none() { "AND t.open_warnings <= 2" } else { "" },
         group_clause = tracker_filter_group_clause(&filter),
     );
     let topics = sqlx::query_as::<_, TopicSummary>(&sql)

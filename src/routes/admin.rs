@@ -68,18 +68,57 @@ async fn search_reindex(State(state): State<AppState>, CurrentUser(user): Curren
 }
 
 #[derive(Deserialize)]
-pub struct BanIpForm { pub ip: String, pub reason: Option<String> }
+pub struct BanIpForm {
+    pub ip: String,
+    pub reason: String,
+    /// hour/day/month/3month/6month/custom/unlim/remove.
+    pub time: String,
+    pub ban_days: Option<i64>,
+    #[serde(default)]
+    pub allow_posting: bool,
+    #[serde(default)]
+    pub captcha_required: bool,
+}
 
+/// BanIPController.banIP: standalone ban endpoint (distinct from
+/// /delip.jsp's mass-delete-then-optionally-ban flow) - was missing
+/// `time`/`allow_posting`/`captcha_required` entirely and always banned
+/// unconditionally-and-permanently with no duration control.
 async fn ban_ip(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<BanIpForm>) -> Result<Redirect> {
     let moderator = require_moderator(&user)?;
     let ip: std::net::IpAddr = form.ip.parse().map_err(|_| AppError::BadRequest("Некорректный IP".into()))?;
-    sqlx::query("INSERT INTO b_ips(ip,mod_id,reason,date) VALUES($1::inet,$2,$3,now()) ON CONFLICT(ip) DO UPDATE SET mod_id=EXCLUDED.mod_id, reason=EXCLUDED.reason, date=now()")
+    let ban_to: Option<chrono::DateTime<chrono::Utc>> = match form.time.as_str() {
+        "hour" => Some(chrono::Utc::now() + chrono::Duration::hours(1)),
+        "day" => Some(chrono::Utc::now() + chrono::Duration::days(1)),
+        "month" => Some(chrono::Utc::now() + chrono::Duration::days(30)),
+        "3month" => Some(chrono::Utc::now() + chrono::Duration::days(90)),
+        "6month" => Some(chrono::Utc::now() + chrono::Duration::days(180)),
+        "custom" => {
+            let days = form.ban_days.ok_or_else(|| AppError::BadRequest("Invalid days count".into()))?;
+            if days <= 0 || days > 180 {
+                return Err(AppError::BadRequest("Invalid days count".into()));
+            }
+            Some(chrono::Utc::now() + chrono::Duration::days(days))
+        }
+        "unlim" => None,
+        "remove" => Some(chrono::Utc::now()),
+        _ => return Err(AppError::BadRequest("Invalid count".into())),
+    };
+    sqlx::query(
+        r#"INSERT INTO b_ips(ip,mod_id,date,reason,ban_date,allow_posting,captcha_required)
+           VALUES($1::inet,$2,now(),$3,$4,$5,$6)
+           ON CONFLICT(ip) DO UPDATE SET mod_id=EXCLUDED.mod_id, date=now(), reason=EXCLUDED.reason,
+             ban_date=EXCLUDED.ban_date, allow_posting=EXCLUDED.allow_posting, captcha_required=EXCLUDED.captcha_required"#,
+    )
         .bind(ip.to_string())
         .bind(moderator.id)
-        .bind(form.reason.unwrap_or_default())
+        .bind(&form.reason)
+        .bind(ban_to)
+        .bind(form.allow_posting)
+        .bind(form.captcha_required)
         .execute(&state.pool)
         .await?;
-    Ok(Redirect::to("/sameip.jsp"))
+    Ok(Redirect::to(&format!("/sameip.jsp?ip={}", urlencoding::encode(&form.ip))))
 }
 
 #[derive(Deserialize)]
@@ -425,8 +464,20 @@ pub struct UserModForm {
     pub action: String,
     pub reason: Option<String>,
     pub delta: Option<i32>,
-    pub password: Option<String>,
     pub shift: Option<String>,
+}
+
+/// StringUtil.generatePassword: 12 random printable-ASCII characters
+/// (codepoints 33-125). The moderator never supplies or sees this - Java's
+/// UserService.resetPassword(user, moderator) always randomizes, leaving
+/// the account locked out until the owner goes through the email
+/// reset-code flow. A client-suppliable `password` field here would let
+/// anyone who knows the form shape set a known password on someone else's
+/// account, so it's deliberately not accepted from the request at all.
+fn generate_random_password() -> String {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    (0..12).map(|_| (33u8 + rng.gen_range(0..93u8)) as char).collect()
 }
 
 /// UserModificationController's FreezeDurations/LongFreezeDurations/Unfreeze
@@ -514,7 +565,7 @@ async fn usermod(State(state): State<AppState>, CurrentUser(user): CurrentUser, 
             if form.id == crate::routes::comments::ANONYMOUS_USER_ID {
                 return Err(AppError::Forbidden);
             }
-            let password = form.password.unwrap_or_else(|| "change-me".to_string());
+            let password = generate_random_password();
             let hash = crate::security::password::hash(&password).map_err(|e| AppError::Anyhow(e.into()))?;
             sqlx::query("UPDATE users SET passwd=$2 WHERE id=$1").bind(form.id).bind(hash).execute(&state.pool).await?;
             crate::audit::log_user_action(&state.pool, form.id, moderator.id, "reset_password", &[]).await?;
@@ -678,8 +729,40 @@ async fn post_warning(State(state): State<AppState>, CurrentUser(user): CurrentU
     let warning_id: i32 = sqlx::query_scalar(
         "INSERT INTO message_warnings(topic,comment,author,message,warning_type) VALUES($1,$2,$3,$4,$5::warning_type) RETURNING id",
     )
-        .bind(topic_id).bind(form.comment).bind(moderator.id).bind(message).bind(warning_type).fetch_one(&state.pool).await?;
-    let _ = warning_id;
+        .bind(topic_id).bind(form.comment).bind(moderator.id).bind(&message).bind(&warning_type).fetch_one(&state.pool).await?;
+
+    // WarningService.postWarning/UserEventService.addWarningEvent: notify
+    // moderators always, plus correctors too for tag/spelling warnings
+    // (those are the two types correctors are expected to police).
+    let notify_correctors_too = matches!(warning_type.as_str(), "tag" | "spelling");
+    let recipients: Vec<i32> = sqlx::query_scalar(
+        "SELECT id FROM users WHERE canmod OR ($1 AND corrector)",
+    )
+    .bind(notify_correctors_too)
+    .fetch_all(&state.pool)
+    .await?;
+    let event_message = format!("[{warning_type}] {message}");
+    for recipient in &recipients {
+        sqlx::query(
+            r#"INSERT INTO user_events(userid,type,private,message_id,comment_id,message,origin_user,warning_id)
+               VALUES($1,'WARNING',true,$2,$3,$4,$5,$6)"#,
+        )
+        .bind(recipient)
+        .bind(topic_id)
+        .bind(form.comment)
+        .bind(&event_message)
+        .bind(moderator.id)
+        .bind(warning_id)
+        .execute(&state.pool)
+        .await?;
+    }
+    if !recipients.is_empty() {
+        sqlx::query("UPDATE users SET unread_events=(SELECT count(*) FROM user_events e WHERE e.unread AND e.userid=users.id) WHERE id=ANY($1)")
+            .bind(&recipients)
+            .execute(&state.pool)
+            .await?;
+    }
+
     if form.comment.is_none() {
         sqlx::query(
             r#"UPDATE topics SET open_warnings=(

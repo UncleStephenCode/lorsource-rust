@@ -68,14 +68,21 @@ pub const TRACKER_MODES: &[(&str, &str)] = &[
     ("main", "основные"),
 ];
 /// Matches UserPermissionService.allowedFormats for a logged-in user
-/// (Lorcode, LorcodeUlb, Markdown). Java deliberately removed raw HTML mode
-/// as a selectable format (see MarkupType/markup-related history upstream)
-/// since it has no sanitizing pass of its own - keeping it selectable here
-/// would silently re-open the raw-HTML-passthrough issue that was closed in
-/// markup.rs's ammonia sanitizer pass.
-pub const FORMAT_MODES: &[(&str, &str)] = &[
-    ("markdown", "Markdown"),
-    ("lorcode", "LORCODE"),
+/// (Lorcode, LorcodeUlb, Markdown) - stored/form values are MarkupType's
+/// `formId` ("markdown"/"lorcode"/"ntobr"). Java deliberately removed raw
+/// HTML mode as a selectable format (MarkupType.Html) since it has no
+/// sanitizing pass of its own - keeping it selectable here would silently
+/// re-open the raw-HTML-passthrough issue that was closed in markup.rs's
+/// ammonia sanitizer pass. LorcodeUlb is `deprecated=true`, gated by score
+/// the same way deprecated THEMES are (see `format_options` below) -
+/// unlike THEMES, this port renders it identically to plain Lorcode
+/// (a real but narrow simplification: Java's "User line break" mode also
+/// auto-converts single newlines to `<br>`, which this port's lorcode
+/// renderer doesn't distinguish from the non-Ulb path).
+pub const FORMAT_MODES: &[(&str, &str, bool)] = &[
+    ("markdown", "Markdown", false),
+    ("lorcode", "LORCODE", false),
+    ("ntobr", "LORCODE (User line break)", true),
 ];
 
 impl Default for StProfileSettings {
@@ -102,8 +109,13 @@ impl StProfileSettings {
         let map = opt_text.as_deref().map(parse_hstore_text).unwrap_or_default();
         if let Some(style) = map.get("style").filter(|s| is_style(s)) { settings.style = style.clone(); }
         if let Some(mode) = map.get("format.mode").filter(|s| is_format_mode(s)) { settings.format_mode = mode.clone(); }
-        if let Some(topics) = map.get("topics").and_then(|s| s.parse::<i32>().ok()).filter(|v| TOPICS_VALUES.contains(v)) { settings.topics = topics; }
-        if let Some(messages) = map.get("messages").and_then(|s| s.parse::<i32>().ok()).filter(|v| MESSAGES_VALUES.contains(v)) { settings.messages = messages; }
+        // Not filtered against TOPICS_VALUES/MESSAGES_VALUES: a value
+        // already in storage was valid (or an intentionally-preserved
+        // legacy value, see `apply_form`) at the time it was saved -
+        // re-validating on every read would silently discard exactly the
+        // legacy values `apply_form`'s grace period exists to keep.
+        if let Some(topics) = map.get("topics").and_then(|s| s.parse::<i32>().ok()) { settings.topics = topics; }
+        if let Some(messages) = map.get("messages").and_then(|s| s.parse::<i32>().ok()) { settings.messages = messages; }
         if let Some(value) = map.get("photos") { settings.photos = parse_bool(value); }
         if let Some(value) = map.get("hideAdsense") { settings.hide_adsense = parse_bool(value); }
         if let Some(value) = map.get("mainGallery") { settings.main_gallery = parse_bool(value); }
@@ -114,20 +126,60 @@ impl StProfileSettings {
         settings
     }
 
-    pub fn from_form(form: &HashMap<String, String>) -> Self {
-        let mut settings = Self::default();
-        if let Some(style) = form.get("style").filter(|s| is_style(s)) { settings.style = style.clone(); }
-        if let Some(mode) = form.get("format_mode").filter(|s| is_format_mode(s)) { settings.format_mode = mode.clone(); }
-        if let Some(topics) = form.get("topics").and_then(|s| s.parse::<i32>().ok()).filter(|v| TOPICS_VALUES.contains(v)) { settings.topics = topics; }
-        if let Some(messages) = form.get("messages").and_then(|s| s.parse::<i32>().ok()).filter(|v| MESSAGES_VALUES.contains(v)) { settings.messages = messages; }
+    /// EditSettingsController.updateSettings: starts from the *current*
+    /// saved profile (so anything not touched below - or rejected below -
+    /// keeps its old value, never silently resets to a hardcoded default)
+    /// and hard-errors (`BadInputException`) on an invalid style/format/
+    /// avatar. `topics`/`messages` get a legacy-value grace: an
+    /// out-of-list value is accepted if it equals the value already
+    /// saved (so old custom values submitted unchanged by a stale form
+    /// don't get rejected), but a *new* out-of-list value is still an
+    /// error. `trackerMode` alone silently falls back to the default on
+    /// an invalid value, matching `TrackerFilterEnum.getByValue(..).getOrElse(default)`.
+    pub fn apply_form(&self, form: &HashMap<String, String>) -> std::result::Result<Self, String> {
+        let mut settings = self.clone();
+
+        let topics = form.get("topics").and_then(|s| s.parse::<i32>().ok()).ok_or("некорректное число тем")?;
+        if !TOPICS_VALUES.contains(&topics) && topics != self.topics {
+            return Err("некорректное число тем".to_string());
+        }
+        settings.topics = topics;
+
+        let messages = form.get("messages").and_then(|s| s.parse::<i32>().ok()).ok_or("некорректное число комментариев")?;
+        if !MESSAGES_VALUES.contains(&messages) && messages != self.messages {
+            return Err("некорректное число комментариев".to_string());
+        }
+        settings.messages = messages;
+
+        let style = form.get("style").ok_or("неправльное название темы")?;
+        if !is_style(style) {
+            return Err("неправльное название темы".to_string());
+        }
+        settings.style = style.clone();
+
+        let format_mode = form.get("format_mode").ok_or("некорректный режим форматирования")?;
+        if !is_format_mode(format_mode) {
+            return Err("некорректный режим форматирования".to_string());
+        }
+        settings.format_mode = format_mode.clone();
+
+        let avatar = form.get("avatar").ok_or("invalid avatar value")?;
+        if !AVATARS.contains(&avatar.as_str()) {
+            return Err("invalid avatar value".to_string());
+        }
+        settings.avatar = avatar.clone();
+
         settings.photos = form.contains_key("photos");
         settings.hide_adsense = form.contains_key("hideAdsense");
         settings.main_gallery = form.contains_key("mainGallery");
-        if let Some(avatar) = form.get("avatar").filter(|s| AVATARS.contains(&s.as_str())) { settings.avatar = avatar.clone(); }
-        if let Some(mode) = form.get("trackerMode").filter(|s| TRACKER_MODES.iter().any(|(v, _)| v == s)) { settings.tracker_mode = mode.clone(); }
         settings.old_tracker = form.contains_key("oldTracker");
         settings.reaction_notification = form.contains_key("reactionNotification");
-        settings
+        settings.tracker_mode = form.get("trackerMode")
+            .filter(|s| TRACKER_MODES.iter().any(|(v, _)| v == s))
+            .cloned()
+            .unwrap_or_else(|| DEFAULT_TRACKER_MODE.to_string());
+
+        Ok(settings)
     }
 
     pub fn to_hstore_arrays(&self) -> (Vec<String>, Vec<String>) {
@@ -173,13 +225,18 @@ impl StProfileSettings {
         TRACKER_MODES.iter().map(|(value, label)| StChoiceOption { value, label, selected: self.tracker_mode == *value }).collect()
     }
 
-    pub fn format_options(&self) -> Vec<StChoiceOption> {
-        FORMAT_MODES.iter().map(|(value, label)| StChoiceOption { value, label, selected: self.format_mode == *value }).collect()
+    /// EditSettingsController.showForm: deprecated format modes (LorcodeUlb)
+    /// are only offered if score>=DeprecatedFeaturesScore or already selected.
+    pub fn format_options(&self, score: i32) -> Vec<StChoiceOption> {
+        const DEPRECATED_FEATURES_SCORE: i32 = 500;
+        FORMAT_MODES.iter()
+            .filter(|(value, _, deprecated)| !*deprecated || score >= DEPRECATED_FEATURES_SCORE || self.format_mode == *value)
+            .map(|(value, label, _)| StChoiceOption { value, label, selected: self.format_mode == *value }).collect()
     }
 }
 
 pub fn is_style(value: &str) -> bool { THEMES.iter().any(|(id, _, _)| *id == value) }
-pub fn is_format_mode(value: &str) -> bool { FORMAT_MODES.iter().any(|(id, _)| *id == value) }
+pub fn is_format_mode(value: &str) -> bool { FORMAT_MODES.iter().any(|(id, _, _)| *id == value) }
 
 fn parse_bool(value: &str) -> bool {
     matches!(value, "true" | "t" | "yes" | "on" | "1")

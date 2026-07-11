@@ -552,7 +552,7 @@ pub async fn activate_post(
             return Ok(Redirect::to("/").into_response());
         }
 
-        if crate::auth::verify_login(&state.pool, nick, password).await?.is_none() {
+        if matches!(crate::auth::verify_login(&state.pool, nick, password).await?, crate::auth::LoginOutcome::Failed) {
             // verify_login deliberately refuses inactive users, so do a direct password check here.
             let encoded: Option<String> = sqlx::query_scalar("SELECT passwd FROM users WHERE id=$1")
                 .bind(id)
@@ -618,7 +618,7 @@ fn render_activation_form(nick: &str, activation: &str, error: Option<&str>, csr
 }
 
 fn verify_activation_code(state: &AppState, nick: &str, email: &str, regdate: Option<chrono::NaiveDateTime>, supplied: &str) -> bool {
-    if supplied == "dev-activate" {
+    if state.config.enable_dev_bypasses && supplied == "dev-activate" {
         return true;
     }
     let Some(regdate) = regdate else { return false; };
@@ -725,7 +725,7 @@ pub async fn deregister_post(State(state): State<AppState>, jar: CookieJar, Curr
     if form.accept_oneway.or(form.acceptOneway).is_none() {
         return Err(AppError::BadRequest("Вы не согласились с невозможностью восстановления аккаунта".into()));
     }
-    let ok = crate::auth::verify_login(&state.pool, &user.nick, &form.password).await?.is_some();
+    let ok = matches!(crate::auth::verify_login(&state.pool, &user.nick, &form.password).await?, crate::auth::LoginOutcome::Success(_));
     if !ok {
         return Err(AppError::BadRequest("Неверный пароль".into()));
     }
@@ -831,23 +831,50 @@ fn section_from_uri(uri: &Uri) -> Option<&'static str> {
 
 #[derive(Deserialize)]
 pub struct MemoryForm {
-    pub topic: i32,
+    pub msgid: Option<i32>,
     pub watch: Option<bool>,
-    pub notify: Option<bool>,
-    pub action: Option<String>,
+    pub id: Option<i32>,
+    pub add: Option<String>,
+    pub remove: Option<String>,
 }
 
-pub async fn memories(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<MemoryForm>) -> Result<Redirect> {
+/// MemoriesController.add/remove: "favorite" (watch=false) and "watch"
+/// (watch=true) are independent rows per topic - `add` upserts the row for
+/// the requested `watch` value only, `remove` deletes one specific row by
+/// its own id (never the whole userid+topic pair), matching the frontend
+/// contract in `static/js/lor/memories.js` (`{msgid,watch}` to add,
+/// `{id}` to remove, JSON `{id,count}`/bare count responses).
+pub async fn memories(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<MemoryForm>) -> Result<Json<serde_json::Value>> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
-    if form.action.as_deref() == Some("delete") {
-        sqlx::query("DELETE FROM memories WHERE userid=$1 AND topic=$2").bind(user.id).bind(form.topic).execute(&state.pool).await?;
-    } else {
-        sqlx::query(
-            "INSERT INTO memories(userid,topic,watch,notify) VALUES($1,$2,$3,$4) ON CONFLICT(userid,topic) DO UPDATE SET watch=EXCLUDED.watch, notify=EXCLUDED.notify",
-        )
-        .bind(user.id).bind(form.topic).bind(form.watch.unwrap_or(false)).bind(form.notify.unwrap_or(false)).execute(&state.pool).await?;
+
+    if form.remove.is_some() {
+        let Some(id) = form.id else { return Err(AppError::BadRequest("missing id".into())); };
+        let row: Option<(i32, i32, bool)> = sqlx::query_as("SELECT userid, topic, watch FROM memories WHERE id=$1").bind(id).fetch_optional(&state.pool).await?;
+        let Some((owner_id, topic_id, watch)) = row else {
+            return Ok(Json(serde_json::json!(-1)));
+        };
+        if owner_id != user.id {
+            return Err(AppError::Forbidden);
+        }
+        sqlx::query("DELETE FROM memories WHERE id=$1").bind(id).execute(&state.pool).await?;
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM memories WHERE topic=$1 AND watch=$2").bind(topic_id).bind(watch).fetch_one(&state.pool).await?;
+        return Ok(Json(serde_json::json!(count)));
     }
-    Ok(Redirect::to(&format!("/jump-message.jsp?msgid={}", form.topic)))
+
+    let msgid = form.msgid.ok_or_else(|| AppError::BadRequest("missing msgid".into()))?;
+    let watch = form.watch.unwrap_or(false);
+    let deleted: bool = sqlx::query_scalar("SELECT deleted FROM topics WHERE id=$1").bind(msgid).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
+    if deleted {
+        return Err(AppError::BadRequest("Тема удалена".into()));
+    }
+    let id: i32 = sqlx::query_scalar(
+        "INSERT INTO memories(userid,topic,watch) VALUES($1,$2,$3) ON CONFLICT(userid,topic,watch) DO UPDATE SET topic=EXCLUDED.topic RETURNING id",
+    )
+    .bind(user.id).bind(msgid).bind(watch)
+    .fetch_one(&state.pool)
+    .await?;
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM memories WHERE topic=$1 AND watch=$2").bind(msgid).bind(watch).fetch_one(&state.pool).await?;
+    Ok(Json(serde_json::json!({"id": id, "count": count})))
 }
 
 pub async fn user_filter(State(state): State<AppState>, CurrentUser(user): CurrentUser) -> Result<Json<serde_json::Value>> {
@@ -937,9 +964,10 @@ pub struct IgnoreUserForm {
 
 pub async fn ignore_user(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<IgnoreUserForm>) -> Result<Json<serde_json::Value>> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
-    if user.canmod {
-        return Err(AppError::Forbidden);
-    }
+    // UserFilterController.listAdd/listDel: the personal user-ignore list
+    // has no moderator restriction at all - only ignore-*tags* is
+    // moderator-restricted (moderators must see every tag), see
+    // ignore_tag below.
     let ignored_id: i32 = if let Some(id) = form.id {
         id
     } else {
@@ -1064,16 +1092,3 @@ pub async fn reset_password_form(crate::csrf::CsrfToken(csrf_token): crate::csrf
 "#)))
 }
 
-#[derive(Deserialize)]
-pub struct ResetPasswordForm { pub nick: String, pub passwd: String }
-
-pub async fn reset_password(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<ResetPasswordForm>) -> Result<Redirect> {
-    let Some(current) = user else { return Err(AppError::Forbidden); };
-    let target: (i32, String) = sqlx::query_as("SELECT id,nick FROM users WHERE lower(nick)=lower($1)")
-        .bind(form.nick.trim()).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
-    if current.id != target.0 && !current.canmod { return Err(AppError::Forbidden); }
-    let hash = crate::security::password::hash(&form.passwd).map_err(|e| AppError::Anyhow(e.into()))?;
-    sqlx::query("UPDATE users SET passwd=$2 WHERE id=$1").bind(target.0).bind(hash).execute(&state.pool).await?;
-    crate::audit::log_user_action(&state.pool, target.0, current.id, "set_password", &[]).await?;
-    Ok(Redirect::to(&format!("/people/{}/profile", urlencoding::encode(&target.1))))
-}

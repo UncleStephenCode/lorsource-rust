@@ -1,6 +1,6 @@
 use crate::{auth::CurrentUser, error::{AppError, Result}, models::{PagerQuery, TagItem, TopicSummary}, pagination::Pager, state::AppState};
 use askama::Template;
-use axum::{extract::{Path, Query, State}, response::{Html, Redirect}, Form};
+use axum::{extract::{Path, Query, State}, response::{Html, IntoResponse, Redirect}, Form, Json};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::Deserialize;
@@ -36,10 +36,44 @@ struct TagPageTemplate {
     csrf_token: String,
 }
 
-pub async fn all_tags(State(state): State<AppState>) -> Result<Html<String>> {
+#[derive(Deserialize)]
+pub struct AllTagsQuery { pub term: Option<String> }
+
+/// TagController's `/tags` path is shared with `showTagListHandlerJSON`,
+/// disambiguated in Java by `params = Array("term")`; axum has no
+/// path+query-based dispatch, so branch on `term`'s presence here instead.
+pub async fn all_tags(State(state): State<AppState>, Query(q): Query<AllTagsQuery>) -> Result<axum::response::Response> {
+    if let Some(term) = q.term.filter(|t| !t.is_empty()) {
+        return Ok(Json(tag_autocomplete(&state, &term).await?).into_response());
+    }
     let tags = sqlx::query_as::<_, TagItem>("SELECT value,counter FROM tags_values ORDER BY lower(value) LIMIT 1000")
         .fetch_all(&state.pool).await?;
-    Ok(Html(TagsTemplate { title: "Метки".into(), tags }.render()?))
+    Ok(Html(TagsTemplate { title: "Метки".into(), tags }.render()?).into_response())
+}
+
+/// TagService.suggestTagsByPrefix/TagDao.getTopTagsByPrefix: union of real
+/// tag values and synonyms matching `prefix%` with counter>=2, top 10 by
+/// counter, alphabetically sorted, then filtered by `isGoodTag` in the
+/// controller.
+async fn tag_autocomplete(state: &AppState, term: &str) -> Result<Vec<String>> {
+    let escaped = term.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    let pattern = format!("{escaped}%");
+    let mut tags: Vec<String> = sqlx::query_scalar(
+        r#"SELECT value FROM (
+             SELECT s.value, v.counter FROM tags_synonyms s JOIN tags_values v ON s.tagid=v.id WHERE s.value LIKE $1
+             UNION ALL
+             SELECT value, counter FROM tags_values WHERE value LIKE $1
+           ) j
+           WHERE counter>=2
+           ORDER BY counter DESC
+           LIMIT 10"#,
+    )
+    .bind(&pattern)
+    .fetch_all(&state.pool)
+    .await?;
+    tags.retain(|t| is_good_tag(t));
+    tags.sort();
+    Ok(tags)
 }
 
 pub async fn tags_by_letter(State(state): State<AppState>, Path(first_letter): Path<String>) -> Result<Html<String>> {
@@ -187,6 +221,72 @@ fn is_good_tag(tag: &str) -> bool {
     (1..=32).contains(&len) && TAG_RE.is_match(tag)
 }
 
+/// TagName.MaxTagsPerTopic.
+pub(crate) const MAX_TAGS_PER_TOPIC: usize = 5;
+/// GroupPermissionService.CreateTagScore.
+const CREATE_TAG_SCORE: i32 = 200;
+
+/// TagName.parseTags: split on `,`/`|`, trim, lowercase, dedupe.
+pub(crate) fn parse_tags(raw: &str) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for part in raw.replace('|', ",").split(',') {
+        let tag = part.trim().to_lowercase();
+        if !tag.is_empty() && seen.insert(tag.clone()) {
+            out.push(tag);
+        }
+    }
+    out
+}
+
+/// TagName.parseAndValidateTags: partitions into good/bad tags, requires at
+/// least one good tag and no more than `MAX_TAGS_PER_TOPIC`. Bad tags are
+/// silently dropped from the *sanitized* result Java saves
+/// (`parseAndSanitizeTags`), but their presence alone doesn't error - only
+/// count-of-good-tags and "no good tags at all" do.
+pub(crate) fn parse_and_validate_tags(raw: &str) -> std::result::Result<Vec<String>, String> {
+    let all = parse_tags(raw);
+    let good: Vec<String> = all.into_iter().filter(|t| is_good_tag(t)).collect();
+    if good.len() > MAX_TAGS_PER_TOPIC {
+        return Err(format!("Слишком много тегов (максимум {MAX_TAGS_PER_TOPIC})"));
+    }
+    if good.is_empty() {
+        return Err("Установите теги".to_string());
+    }
+    Ok(good)
+}
+
+/// GroupPermissionService.canCreateTag: outside a premoderated section, a
+/// user needs score>=200 to mint a brand-new tag; inside one, any
+/// authenticated (non-anonymous) user may. Checked only against tags that
+/// don't already exist (TagService.getNewTags) - applying an existing tag
+/// never requires this.
+pub(crate) async fn check_can_create_new_tags(state: &AppState, tags: &[String], user: &crate::models::UserSummary, section_premoderated: bool) -> Result<()> {
+    if section_premoderated {
+        return Ok(());
+    }
+    if user.score.unwrap_or(0) >= CREATE_TAG_SCORE {
+        return Ok(());
+    }
+    let mut new_tags = Vec::new();
+    for tag in tags {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM tags_values WHERE lower(value)=lower($1)) OR EXISTS(SELECT 1 FROM tags_synonyms WHERE lower(value)=lower($1))",
+        )
+        .bind(tag)
+        .fetch_one(&state.pool)
+        .await?;
+        if !exists {
+            new_tags.push(tag.clone());
+        }
+    }
+    if new_tags.is_empty() {
+        Ok(())
+    } else {
+        Err(AppError::BadRequest(format!("Вы не можете создавать новые теги ({})", new_tags.join(", "))))
+    }
+}
+
 fn first_letter_of(tag: &str) -> String {
     tag.chars().next().map(|c| c.to_lowercase().to_string()).unwrap_or_default()
 }
@@ -250,7 +350,23 @@ pub async fn change_tag(State(state): State<AppState>, CurrentUser(user): Curren
     sqlx::query("UPDATE tags_values SET value=$2 WHERE id=$1").bind(old_tag_id).bind(tag_name).execute(&mut *tx).await?;
     tx.commit().await?;
 
+    // TagModificationService.change calls searchQueueSender.updateMessage
+    // for every topic carrying this tag - the indexed tag value would
+    // otherwise stay stale under the old name forever.
+    reindex_topics_with_tag(&state, old_tag_id).await;
+
     Ok(Redirect::to(&format!("/tags/{}", urlencoding::encode(&first_letter_of(tag_name)))))
+}
+
+async fn reindex_topics_with_tag(state: &AppState, tag_id: i32) {
+    let topic_ids: Vec<i32> = sqlx::query_scalar("SELECT msgid FROM tags WHERE tagid=$1")
+        .bind(tag_id)
+        .fetch_all(&state.pool)
+        .await
+        .unwrap_or_default();
+    for id in topic_ids {
+        crate::search_index::index_topic(state, id, true).await;
+    }
 }
 
 #[derive(Deserialize)]
@@ -322,12 +438,17 @@ pub async fn delete_tag(State(state): State<AppState>, CurrentUser(user): Curren
         if create_synonym {
             return Err(AppError::BadRequest("Не указан тег для создания синонима!".into()));
         }
+        let affected_topics: Vec<i32> = sqlx::query_scalar("SELECT msgid FROM tags WHERE tagid=$1").bind(old_tag_id).fetch_all(&state.pool).await?;
         let mut tx = state.pool.begin().await?;
         sqlx::query("DELETE FROM user_tags WHERE tag_id=$1").bind(old_tag_id).execute(&mut *tx).await?;
         sqlx::query("DELETE FROM tags WHERE tagid=$1").bind(old_tag_id).execute(&mut *tx).await?;
         sqlx::query("DELETE FROM tags_synonyms WHERE tagid=$1").bind(old_tag_id).execute(&mut *tx).await?;
         sqlx::query("DELETE FROM tags_values WHERE id=$1").bind(old_tag_id).execute(&mut *tx).await?;
         tx.commit().await?;
+        // TagModificationService.delete: reindex every topic that lost the tag.
+        for id in affected_topics {
+            crate::search_index::index_topic(&state, id, true).await;
+        }
         return Ok(Redirect::to(&format!("/tags/{}", urlencoding::encode(&first_letter_of(old_tag_name)))));
     };
 
@@ -364,6 +485,9 @@ pub async fn delete_tag(State(state): State<AppState>, CurrentUser(user): Curren
     }
     sqlx::query("DELETE FROM tags_values WHERE id=$1").bind(old_tag_id).execute(&mut *tx).await?;
     tx.commit().await?;
+
+    // TagModificationService.merge: reindex every topic now carrying the merge target's tag.
+    reindex_topics_with_tag(&state, new_tag_id).await;
 
     Ok(Redirect::to(&format!("/tags/{}", urlencoding::encode(&first_letter_of(tag_name)))))
 }

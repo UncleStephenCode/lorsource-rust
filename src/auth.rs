@@ -57,13 +57,22 @@ pub struct StLoginIdentity {
 
 pub type LoginIdentity = StLoginIdentity;
 
-pub async fn verify_login(pool: &sqlx::PgPool, login: &str, password: &str) -> Result<Option<LoginIdentity>, sqlx::Error> {
-    let row: Option<(i32, String, Option<String>, Option<String>)> = sqlx::query_as(
-        r#"SELECT u.id, u.nick, u.passwd, COALESCE((us.settings -> 'style'), NULL) AS style
+/// LoginController.loginProcess's exception branches: a frozen account
+/// (Spring's `LockedException`) is silently redirected to the profile with
+/// no error message and, crucially, does *not* count as a failed attempt -
+/// unlike bad credentials or an unactivated account.
+pub enum LoginOutcome {
+    Success(LoginIdentity),
+    Frozen(String),
+    Failed,
+}
+
+pub async fn verify_login(pool: &sqlx::PgPool, login: &str, password: &str) -> Result<LoginOutcome, sqlx::Error> {
+    let row: Option<(i32, String, Option<String>, Option<String>, bool, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
+        r#"SELECT u.id, u.nick, u.passwd, COALESCE((us.settings -> 'style'), NULL) AS style, u.activated, u.frozen_until
            FROM users u
            LEFT JOIN user_settings us ON us.id = u.id
            WHERE (lower(u.nick)=lower($1) OR lower(COALESCE(u.email,''))=lower($1))
-             AND u.activated
              AND NOT COALESCE(u.blocked,false)
            LIMIT 1"#,
     )
@@ -71,11 +80,16 @@ pub async fn verify_login(pool: &sqlx::PgPool, login: &str, password: &str) -> R
     .fetch_optional(pool)
     .await?;
 
-    let Some((id, nick, encoded_password, style)) = row else { return Ok(None); };
-    let Some(encoded_password) = encoded_password else { return Ok(None); };
-    if security::password::verify(password, &encoded_password) {
-        Ok(Some(LoginIdentity { id, nick, style }))
-    } else {
-        Ok(None)
+    let Some((id, nick, encoded_password, style, activated, frozen_until)) = row else { return Ok(LoginOutcome::Failed); };
+    let Some(encoded_password) = encoded_password else { return Ok(LoginOutcome::Failed); };
+    if !security::password::verify(password, &encoded_password) {
+        return Ok(LoginOutcome::Failed);
     }
+    if !activated {
+        return Ok(LoginOutcome::Failed);
+    }
+    if frozen_until.map(|u| u > chrono::Utc::now()).unwrap_or(false) {
+        return Ok(LoginOutcome::Frozen(nick));
+    }
+    Ok(LoginOutcome::Success(LoginIdentity { id, nick, style }))
 }

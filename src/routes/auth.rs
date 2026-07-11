@@ -40,10 +40,29 @@ pub async fn login_form(Query(query): Query<LoginQuery>, CurrentUser(current_use
     Ok(Html(LoginTemplate { title: "Вход", error: None, redirect_url, csrf_token }.render()?).into_response())
 }
 
+/// LoginController.delayResponse: every response (success or failure) is
+/// delayed by a random 1-3 seconds, which blunts both brute-force
+/// throughput and timing-based username enumeration (a real account
+/// lookup + bcrypt verify vs. an instant "not found" would otherwise be
+/// distinguishable). Applied uniformly instead of only-on-success/failure
+/// so the delay itself never becomes an extra timing signal.
+async fn delay_response() {
+    let millis = rand::thread_rng().gen_range(1000..3000);
+    tokio::time::sleep(std::time::Duration::from_millis(millis)).await;
+}
+
 pub async fn login(State(state): State<AppState>, headers: axum::http::HeaderMap, jar: CookieJar, Form(form): Form<LoginForm>) -> Result<(CookieJar, Redirect)> {
     let redirect_url = safe_redirect_url(form.redirect_url.as_deref().unwrap_or(""));
-    let Some(identity) = auth::verify_login(&state.pool, &form.nick, &form.passwd).await? else {
-        return Err(AppError::Forbidden);
+    let outcome = auth::verify_login(&state.pool, &form.nick, &form.passwd).await?;
+    delay_response().await;
+    let identity = match outcome {
+        auth::LoginOutcome::Success(identity) => identity,
+        // LockedException (frozen account): silently back to their own
+        // profile, no error message, no failed-attempt penalty.
+        auth::LoginOutcome::Frozen(nick) => {
+            return Ok((jar, Redirect::to(&format!("/people/{}/profile", urlencoding::encode(&nick)))));
+        }
+        auth::LoginOutcome::Failed => return Err(AppError::Forbidden),
     };
     let is_secure = crate::security::is_secure_request(&headers);
     let token = auth::make_session(identity.id, &state.config.cookie_secret);
@@ -158,8 +177,11 @@ fn make_register_permit(state: &AppState) -> String {
 
 fn check_register_permit(state: &AppState, permit: Option<&str>) -> bool {
     let Some(permit) = permit else { return false; };
-    // Development compatibility fallback for local tests where the form was created by older MVP archives.
-    if permit == "dev-permit" {
+    // Dev-only fallback (see ENABLE_DEV_BYPASSES) for local tests where the
+    // form was created by older MVP archives - never reachable unless
+    // explicitly opted into, since it would otherwise let anyone skip the
+    // anti-bot registration-permit token entirely.
+    if state.config.enable_dev_bypasses && permit == "dev-permit" {
         return true;
     }
     crate::security::secret_tokens::check_register_permit(
