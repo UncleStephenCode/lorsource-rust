@@ -19,13 +19,22 @@
 </div>
 
 {% for group in sections %}
-<section>
-  <h2><a href="/{{ group.section_prefix }}/">{{ group.section_name }}</a></h2>
+<section{% if group.section_prefix == "gallery" %} class="infoblock"{% endif %}>
+  {% for t in group.full_news %}
+  <article class="news" id="topic-{{ t.topic.id }}"><header><div class="group"><a href="/{{ t.topic.section_prefix }}/">{{ t.topic.section_name }}</a> — <a href="/{{ t.topic.section_prefix }}/{{ t.topic.group_urlname }}">{{ t.topic.group_title }}</a></div><h1>{% if t.topic.resolved.unwrap_or(false) %}<i class="icon-check" title="решено"></i>{% endif %}<a href="{{ t.topic.topic_url() }}">{{ t.topic.title }}</a></h1>{% if t.topic.tags_vec().len() > 0 %}<div class="tags">{% for tag in t.topic.tags_vec() %}<a class="tag" href="/tag/{{ tag }}">{{ tag }}</a>{% endfor %}</div>{% endif %}</header>{{ t.images_html|safe }}{% match t.group_image_url %}{% when Some with (image) %}<div class="entry-userpic"><a href="/{{ t.topic.section_prefix }}/{{ t.topic.group_urlname }}"><img class="groupimg" src="{{ image }}" alt="Группа {{ t.topic.group_title }}"></a></div>{% when None %}{% endmatch %}<div class="entry-body"><div class="msg">{{ t.topic_html|safe }}{% match t.topic.url %}{% when Some with (url) %}<p>&gt;&gt;&gt; <a href="{{ url }}">{{ t.linktext }}</a></p>{% when None %}{% endmatch %}</div><div class="sign"><a href="/people/{{ t.topic.author }}/profile">{{ t.topic.author }}</a> ({{ t.topic.postdate }})</div><div class="nav">{% if t.topic.comments == 0 %}<a href="/comment-message.jsp?topic={{ t.topic.id }}">Добавить&nbsp;комментарий</a>{% else %}<a href="{{ t.topic.topic_url() }}#comments">{{ t.topic.comments }} комментариев</a>{% endif %}</div></div></article>
+  {% endfor %}
+  <h2><a href="/{{ group.section_prefix }}/">{% if group.full_news.len() > 0 %}Еще новости{% else %}{{ group.section_name }}{% endif %}</a></h2>
+  {% if group.gallery.len() > 0 %}
+  <div id="tag-page-gallery">
+    {% for item in group.gallery %}<article><a href="{{ item.topic.topic_url() }}"><img src="{{ item.medium_url }}" srcset="{{ item.srcset }}" sizes="(min-width: 40em) 32vw, 100vw" alt="Скриншот: {{ item.topic.title }}"></a><br><a href="{{ item.topic.topic_url() }}">{{ item.topic.title }}</a><br>{{ item.topic.author }}, {{ item.topic.postdate }}<br>({{ item.topic.comments }} комментариев)</article>{% endfor %}
+  </div>
+  {% else %}
   <div {% if group.section_prefix == "forum" %}id="tag-page-forum"{% else if group.section_prefix == "news" %}id="tag-page-news"{% else if group.section_prefix == "polls" %}id="tag-page-polls"{% else if group.section_prefix == "articles" %}id="tag-page-articles"{% endif %}>
     <section><h3>{{ group.section_name }}</h3><ul>
     {% for t in group.topics %}<li><span class="group-label">{{ t.group_title }}</span> <a href="{{ t.topic_url() }}">{{ t.title }}</a>{% if t.comments > 0 %} ({{ t.comments }}){% endif %}</li>{% endfor %}
     </ul></section>
   </div>
+  {% endif %}
   <div class="tag-page-buttons"><div>
     {% match group.add_url %}{% when Some with (url) %}<a href="{{ url }}" class="btn btn-primary">{{ group.add_label }}</a>{% when None %}<a class="btn btn-primary disabled" title="{{ group.add_reason }}"><i class="icon-lock"></i> {{ group.add_label }}</a>{% endmatch %}
   </div></div>

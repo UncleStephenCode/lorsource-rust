@@ -34,6 +34,7 @@ pub async fn exception_resolver() -> impl IntoResponse {
 struct LegacyIndexTemplate {
     title: String,
     topics: Vec<TopicSummary>,
+    news: Vec<crate::routes::topics::NewsTopicView>,
     pager: Pager,
     current_user: Option<crate::models::UserSummary>,
     main_page: bool,
@@ -270,13 +271,14 @@ async fn render_archive(
 ) -> Result<Html<String>> {
     let pager = Pager::new(q.offset.unwrap_or(0), state.config.page_size);
     let topics = list_archive_topics(&state, section, group.as_deref(), year, month, pager.offset, pager.limit).await?;
+    let news = crate::routes::topics::prepare_news_topics(&state, topics.clone(), group.is_none()).await?;
     let title = match (section, group.as_deref(), year, month) {
         (Some(sec), Some(group), Some(y), Some(m)) => format!("Архив: {sec}/{group}, {y:04}-{m:02}"),
         (Some(sec), _, Some(y), Some(m)) => format!("Архив: {sec}, {y:04}-{m:02}"),
         (Some(sec), _, _, _) => format!("Архив: {sec}"),
         _ => "Архив".to_string(),
     };
-    Ok(Html(LegacyIndexTemplate { title, topics, pager, current_user, main_page: false, tracker_layout: false, navigation: None }.render()?))
+    Ok(Html(LegacyIndexTemplate { title, topics, news, pager, current_user, main_page: false, tracker_layout: false, navigation: None }.render()?))
 }
 
 async fn list_archive_topics(state: &AppState, section: Option<&str>, group: Option<&str>, year: Option<i32>, month: Option<i32>, offset: i64, limit: i64) -> Result<Vec<TopicSummary>> {

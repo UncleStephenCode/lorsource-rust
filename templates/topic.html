@@ -9,7 +9,7 @@
   </header>
   <div class="msg-container">
     <div class="msg_body">
-      {% match image %}{% when Some with (img) %}<a class="topic-image" href="{{ img.original_url }}"><img class="photo" src="{{ img.medium_url }}" width="{{ img.width }}" height="{{ img.height }}" alt="{{ topic.title }}"></a>{% when None %}{% endmatch %}
+      {{ images_html|safe }}
       <div class="msg-text">
         {{ topic_html|safe }}
         {% match topic.url %}{% when Some with (url) %}<p>&gt;&gt;&gt; <a rel="nofollow" href="{{ url }}">{% match topic.linktext %}{% when Some with (lt) %}{{ lt }}{% when None %}Подробности{% endmatch %}</a></p>{% when None %}{% endmatch %}

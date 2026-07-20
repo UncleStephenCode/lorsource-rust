@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
-<h1>Форум «{{ group.title }}»</h1>
+<h1>{{ group.section_name }} «{{ group.title }}»</h1>
 
 <nav>
   <a class="btn {% if !lastmod %}btn-selected{% else %}btn-default{% endif %}" href="{{ new_url }}">Новые</a>
@@ -35,5 +35,5 @@
 {% if topics.len() == 0 %}<p>Тем пока нет.</p>{% endif %}
 
 <div class="nav"><div style="float: left">{% match prev_url %}{% when Some with (url) %}<a rel="prev" href="{{ url }}">← предыдущие</a>{% when None %}{% endmatch %}</div><div style="float: right">{% match next_url %}{% when Some with (url) %}<a rel="next" href="{{ url }}">следующие →</a>{% when None %}<a href="{{ archive_url }}">архив</a>{% endmatch %}</div></div>
-<p><i class="icon-rss"></i> <a href="/section-rss.jsp?section=2&amp;group={{ group.id }}">RSS подписка на новые темы</a></p>
+<p><i class="icon-rss"></i> <a href="/section-rss.jsp?section={{ group.section }}&amp;group={{ group.id }}">RSS подписка на новые темы</a></p>
 {% endblock %}

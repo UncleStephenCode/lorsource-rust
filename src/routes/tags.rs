@@ -17,9 +17,18 @@ struct TagSectionGroup {
     section_prefix: String,
     section_name: String,
     topics: Vec<TopicSummary>,
+    full_news: Vec<crate::routes::topics::NewsTopicView>,
+    gallery: Vec<TagGalleryItem>,
     add_url: Option<String>,
     add_reason: String,
     add_label: String,
+}
+
+#[derive(Debug, Clone)]
+struct TagGalleryItem {
+    topic: TopicSummary,
+    medium_url: String,
+    srcset: String,
 }
 
 #[derive(Template)]
@@ -176,6 +185,26 @@ pub async fn tag_page(State(state): State<AppState>, Path(tag): Path<String>, Cu
         .fetch_all(&state.pool)
         .await?;
         if !topics.is_empty() {
+            let recent_news = *prefix == "news"
+                && topics.first().is_some_and(|topic| topic.postdate > chrono::Utc::now() - chrono::Duration::days(365));
+            let full_news = if recent_news {
+                crate::routes::topics::prepare_news_topics(&state, vec![topics[0].clone()], true).await?
+            } else {
+                Vec::new()
+            };
+            let mut gallery = Vec::new();
+            if *prefix == "gallery" {
+                for topic in &topics {
+                    if let Some(image) = crate::routes::topics::load_topic_images(&state, topic.id).await?.into_iter().next() {
+                        gallery.push(TagGalleryItem {
+                            topic: topic.clone(),
+                            medium_url: image.medium_url.clone(),
+                            srcset: crate::routes::topics::topic_image_srcset(&image),
+                        });
+                    }
+                }
+            }
+            let topics = if recent_news { topics.into_iter().skip(1).collect() } else { topics };
             let add_reason = crate::routes::topics::posting_reason_for_port(&state, restriction, &user).await?;
             let add_url = add_reason.is_none().then(|| format!("/add-section.jsp?section={section_id}&tag={}", urlencoding::encode(&tag)));
             let add_label = match *prefix {
@@ -184,7 +213,7 @@ pub async fn tag_page(State(state): State<AppState>, Path(tag): Path<String>, Cu
                 "polls" => "Добавить опрос",
                 _ => "Добавить топик",
             }.to_string();
-            sections.push(TagSectionGroup { section_prefix: prefix.to_string(), section_name: name.to_string(), topics, add_url, add_reason: add_reason.unwrap_or_default(), add_label });
+            sections.push(TagSectionGroup { section_prefix: prefix.to_string(), section_name: name.to_string(), topics, full_news, gallery, add_url, add_reason: add_reason.unwrap_or_default(), add_label });
         }
     }
 

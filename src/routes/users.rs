@@ -134,7 +134,7 @@ struct UserSectionLink {
 struct UserTopicsTemplate {
     title: String,
     nick: String,
-    topics: Vec<TopicSummary>,
+    topics: Vec<crate::routes::topics::NewsTopicView>,
     sections: Vec<UserSectionLink>,
     all_selected: bool,
     prev_link: Option<String>,
@@ -198,6 +198,7 @@ pub async fn topic_feed(State(state): State<AppState>, Path(nick): Path<String>,
     };
     let prev_link = (pager.offset > 0).then(|| page_url((pager.offset - pager.limit).max(0)));
     let next_link = (topics.len() as i64 == pager.limit && pager.offset < 200).then(|| page_url(pager.offset + pager.limit));
+    let topics = crate::routes::topics::prepare_news_topics(&state, topics, q.section.is_none()).await?;
     Ok(Html(UserTopicsTemplate {
         title: format!("Сообщения {}", user.nick),
         nick: user.nick,
