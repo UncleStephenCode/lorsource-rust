@@ -1,14 +1,13 @@
 {% extends "base.html" %}
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
-<h1>{{ title }}</h1>
-<div class="group-grid">
+<h1>Технический форум</h1>
+<ul>
 {% for g in groups %}
-  <article class="group-card">
-    <h2><a href="/{{ g.section_prefix }}/{{ g.urlname }}">{{ g.title }}</a></h2>
-    <p class="meta">{{ g.section_name }} · {{ g.topics }} тем</p>
-    {% match g.info %}{% when Some with (info) %}<p>{{ info }}</p>{% when None %}{% endmatch %}
-  </article>
+  <li><a class="navLink" href="/forum/{{ g.urlname }}">{{ g.title }}</a> ({{ g.topics }} тем){% match g.info %}{% when Some with (info) %} — <em>{{ info }}</em>{% when None %}{% endmatch %}</li>
 {% endfor %}
-</div>
+</ul>
+<h1>Лента форума</h1>
+<ul><li><a href="/forum/lenta">Полная лента форума</a></li><li><a href="/forum/lenta?filter=tech">Лента технического форума</a></li><li><a href="/forum/lenta?filter=notalks">Лента форума без Talks</a></li></ul>
+<h1>RSS подписки</h1><p><i class="icon-rss"></i><a href="/section-rss.jsp?section=2">RSS-подписка на весь форум</a></p>
 {% endblock %}

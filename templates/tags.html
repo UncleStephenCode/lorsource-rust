@@ -2,9 +2,9 @@
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
 <h1>{{ title }}</h1>
-<div class="tag-cloud">
-{% for tag in tags %}
-  <a href="/tag/{{ tag.value }}">{{ tag.value }} <small>{% match tag.counter %}{% when Some with (c) %}{{ c }}{% when None %}0{% endmatch %}</small></a>
-{% endfor %}
-</div>
+{% if tags.len() > 0 %}
+<ul>
+{% for tag in tags %}<li><a href="/tag/{{ tag.value }}">{{ tag.value }}</a> ({% match tag.counter %}{% when Some with (c) %}{{ c }}{% when None %}0{% endmatch %})</li>{% endfor %}
+</ul>
+{% endif %}
 {% endblock %}

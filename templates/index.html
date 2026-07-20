@@ -1,29 +1,30 @@
 {% extends "base.html" %}
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
-<h1>{{ title }}</h1>
-{% if topics.len() == 0 %}
-  <p class="muted">Тем пока нет.</p>
-{% endif %}
-<div class="topic-list">
+{% if main_page %}<div id="mainpage"><div id="news">{% else %}<h1>{{ title }}</h1>{% endif %}
+
+{% if tracker_layout %}
+<div class="tracker">
 {% for t in topics %}
-  <article class="topic-card{% if t.sticky %} sticky{% endif %}">
-    <h2><a href="{{ t.topic_url() }}">{{ t.title }}</a></h2>
-    <div class="meta">
-      <a href="/{{ t.section_prefix }}/">{{ t.section_name }}</a> / 
-      <a href="/{{ t.section_prefix }}/{{ t.group_urlname }}">{{ t.group_title }}</a> ·
-      <a href="/people/{{ t.author }}">{{ t.author }}</a> · {{ t.postdate }} · {{ t.comments }} комм.
-    </div>
-    {% if t.tags_vec().len() > 0 %}
-    <div class="tags">
-      {% for tag in t.tags_vec() %}<a href="/tag/{{ tag }}">#{{ tag }}</a>{% endfor %}
-    </div>
-    {% endif %}
-  </article>
+  <a href="{{ t.topic_url() }}" class="group-item">
+    <div class="tracker-count"><p>{% if t.comments == 0 %}-{% else %}<i class="icon-comment"></i> {{ t.comments }}{% endif %}</p></div>
+    <div class="tracker-title"><p>{% if t.sticky %}<i class="icon-pin icon-pin-color"></i>{% endif %}{% if t.resolved.unwrap_or(false) %}<i class="icon-check"></i>{% endif %}{{ t.title }} <span class="group-author">({{ t.author }})</span></p></div>
+    <div class="tracker-tags"><p>{% for tag in t.tags_vec() %}<span class="tag">{{ tag }}</span> {% endfor %}</p></div>
+    <div class="tracker-last"><p>{{ t.author }}, {{ t.postdate }}</p></div>
+  </a>
 {% endfor %}
 </div>
-<nav class="pager">
-  {% match pager.prev_offset %}{% when Some with (prev) %}<a href="?offset={{ prev }}">← новее</a>{% when None %}{% endmatch %}
-  <a href="?offset={{ pager.next_offset }}">старее →</a>
-</nav>
+{% else %}
+{% for t in topics %}
+<article class="news" id="topic-{{ t.id }}">
+  <header><div class="group"><a href="/{{ t.section_prefix }}/">{{ t.section_name }}</a> — <a href="/{{ t.section_prefix }}/{{ t.group_urlname }}">{{ t.group_title }}</a></div><h1>{% if t.resolved.unwrap_or(false) %}<i class="icon-check"></i>{% endif %}<a href="{{ t.topic_url() }}">{{ t.title }}</a></h1>{% if t.tags_vec().len() > 0 %}<div class="tags">{% for tag in t.tags_vec() %}<a class="tag" href="/tag/{{ tag }}">{{ tag }}</a>{% endfor %}</div>{% endif %}</header>
+  <div class="entry-body"><div class="msg"><div class="sign"><a href="/people/{{ t.author }}/profile">{{ t.author }}</a> ({{ t.postdate }})</div><div class="nav">{% if t.comments == 0 %}<a href="/comment-message.jsp?topic={{ t.id }}">Добавить&nbsp;комментарий</a>{% else %}<a href="{{ t.topic_url() }}#comments">{{ t.comments }} комментариев</a>{% endif %}</div></div></div>
+</article>
+{% endfor %}
+{% endif %}
+
+{% if topics.len() == 0 %}<p>Тем пока нет.</p>{% endif %}
+<div class="nav"><table class="nav"><tr>{% match pager.prev_offset %}{% when Some with (prev) %}<td width="35%" align="left"><a href="?offset={{ prev }}">← предыдущие</a></td>{% when None %}<td></td>{% endmatch %}<td width="35%" align="right"><a href="?offset={{ pager.next_offset }}">следующие →</a></td></tr></table></div>
+
+{% if main_page %}</div><div id="boxlets"><div class="boxlet"><h2>Навигация</h2><div class="boxlet_content"><ul><li><a href="/forum/">Форум</a></li><li><a href="/tracker/">Трекер</a></li><li><a href="/tags">Облако меток</a></li></ul></div></div></div></div>{% endif %}
 {% endblock %}

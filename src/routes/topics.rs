@@ -10,6 +10,8 @@ struct IndexTemplate {
     topics: Vec<TopicSummary>,
     pager: Pager,
     current_user: Option<crate::models::UserSummary>,
+    main_page: bool,
+    tracker_layout: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -272,33 +274,33 @@ fn parse_topic_form(pairs: &[(String, String)]) -> Result<TopicForm> {
 pub async fn index(State(state): State<AppState>, Query(q): Query<PagerQuery>, CurrentUser(current_user): CurrentUser) -> Result<Html<String>> {
     let pager = Pager::new(q.offset.unwrap_or(0), state.config.page_size);
     let topics = list_topics(&state, None, None, pager.offset, pager.limit).await?;
-    Ok(Html(IndexTemplate { title: "Последние темы".into(), topics, pager, current_user }.render()?))
+    Ok(Html(IndexTemplate { title: "Последние темы".into(), topics, pager, current_user, main_page: true, tracker_layout: false }.render()?))
 }
 
 pub async fn lenta(State(state): State<AppState>, Query(q): Query<PagerQuery>, CurrentUser(current_user): CurrentUser) -> Result<Html<String>> {
     let pager = Pager::new(q.offset.unwrap_or(0), state.config.page_size);
     let topics = list_topics(&state, Some("forum"), None, pager.offset, pager.limit).await?;
-    Ok(Html(IndexTemplate { title: "Форум / лента".into(), topics, pager, current_user }.render()?))
+    Ok(Html(IndexTemplate { title: "Форум / лента".into(), topics, pager, current_user, main_page: false, tracker_layout: false }.render()?))
 }
 
 pub async fn section_topics(State(state): State<AppState>, uri: Uri, Query(q): Query<PagerQuery>, CurrentUser(current_user): CurrentUser) -> Result<Html<String>> {
     let section = section_from_uri(&uri).unwrap_or("news");
     let pager = Pager::new(q.offset.unwrap_or(0), state.config.page_size);
     let topics = list_topics(&state, Some(section), None, pager.offset, pager.limit).await?;
-    Ok(Html(IndexTemplate { title: section_title(section).to_string(), topics, pager, current_user }.render()?))
+    Ok(Html(IndexTemplate { title: section_title(section).to_string(), topics, pager, current_user, main_page: false, tracker_layout: false }.render()?))
 }
 
 pub async fn section_group_topics(State(state): State<AppState>, uri: Uri, Path(group): Path<String>, Query(q): Query<PagerQuery>, CurrentUser(current_user): CurrentUser) -> Result<Html<String>> {
     let section = section_from_uri(&uri).unwrap_or("news");
     let pager = Pager::new(q.offset.unwrap_or(0), state.config.page_size);
     let topics = list_topics(&state, Some(section), Some(&group), pager.offset, pager.limit).await?;
-    Ok(Html(IndexTemplate { title: format!("{} / {}", section_title(section), group), topics, pager, current_user }.render()?))
+    Ok(Html(IndexTemplate { title: format!("{} / {}", section_title(section), group), topics, pager, current_user, main_page: false, tracker_layout: false }.render()?))
 }
 
 pub async fn legacy_show_topics(State(state): State<AppState>, Query(q): Query<PagerQuery>, CurrentUser(current_user): CurrentUser) -> Result<Html<String>> {
     let pager = Pager::new(q.offset.unwrap_or(0), state.config.page_size);
     let topics = list_topics(&state, None, None, pager.offset, pager.limit).await?;
-    Ok(Html(IndexTemplate { title: "show-topics.jsp".into(), topics, pager, current_user }.render()?))
+    Ok(Html(IndexTemplate { title: "show-topics.jsp".into(), topics, pager, current_user, main_page: false, tracker_layout: false }.render()?))
 }
 
 const VIEW_ALL_SECTION_PREFIX_CASE: &str = "CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END";

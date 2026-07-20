@@ -36,6 +36,8 @@ struct LegacyIndexTemplate {
     topics: Vec<TopicSummary>,
     pager: Pager,
     current_user: Option<crate::models::UserSummary>,
+    main_page: bool,
+    tracker_layout: bool,
 }
 
 #[derive(Deserialize)]
@@ -273,7 +275,7 @@ async fn render_archive(
         (Some(sec), _, _, _) => format!("Архив: {sec}"),
         _ => "Архив".to_string(),
     };
-    Ok(Html(LegacyIndexTemplate { title, topics, pager, current_user }.render()?))
+    Ok(Html(LegacyIndexTemplate { title, topics, pager, current_user, main_page: false, tracker_layout: false }.render()?))
 }
 
 async fn list_archive_topics(state: &AppState, section: Option<&str>, group: Option<&str>, year: Option<i32>, month: Option<i32>, offset: i64, limit: i64) -> Result<Vec<TopicSummary>> {
@@ -1306,4 +1308,3 @@ pub async fn reset_password_form(crate::csrf::CsrfToken(csrf_token): crate::csrf
 </form>
 "#)))
 }
-

@@ -1,34 +1,18 @@
-/*
- * Copyright 1998-2026 Linux.org.ru
- *    Licensed under the Apache License, Version 2.0 (the "License");
- *    you may not use this file except in compliance with the License.
- *    You may obtain a copy of the License at
- *
- *        http://www.apache.org/licenses/LICENSE-2.0
- *
- *    Unless required by applicable law or agreed to in writing, software
- *    distributed under the License is distributed on an "AS IS" BASIS,
- *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *    See the License for the specific language governing permissions and
- *    limitations under the License.
- */
-
-$(document).ready(function () {
+/* Tango-only dark/light/auto switcher, matching the original LOR contract. */
+(function () {
   function initThemeSwitcher() {
-    const themes = ['dark', 'light', 'auto'];
-
-    $('#theme-indicator').on('click', function() {
-      const html = document.documentElement;
-      const current = html.getAttribute('data-theme');
-      const idx = themes.indexOf(current);
-      if (idx === -1) return;
-
-      const next = themes[(idx + 1) % themes.length];
-
+    var indicator = document.getElementById('theme-indicator');
+    if (!indicator || !document.documentElement.dataset.style.startsWith('tango')) return;
+    var themes = ['dark', 'light', 'auto'];
+    indicator.addEventListener('click', function () {
+      var html = document.documentElement;
+      var index = themes.indexOf(html.getAttribute('data-theme'));
+      if (index === -1) return;
+      var next = themes[(index + 1) % themes.length];
       html.setAttribute('data-theme', next);
       localStorage.setItem('lor-theme', next);
     });
   }
-
-  initThemeSwitcher();
-});
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initThemeSwitcher);
+  else initThemeSwitcher();
+})();

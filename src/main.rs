@@ -26,7 +26,7 @@ use axum::{routing::get, Router};
 use config::Config;
 use state::AppState;
 use std::net::SocketAddr;
-use tower_http::{compression::CompressionLayer, services::ServeDir, trace::TraceLayer};
+use tower_http::{compression::CompressionLayer, services::{ServeDir, ServeFile}, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -52,6 +52,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .merge(routes::router())
         .route("/healthz", get(routes::healthz))
+        .route_service("/favicon.ico", ServeFile::new(format!("{}/favicon.ico", &config.static_dir)))
         .nest_service("/static", ServeDir::new(&config.static_dir))
         .nest_service("/img", ServeDir::new(format!("{}/img", &config.static_dir)))
         .nest_service("/font", ServeDir::new(format!("{}/font", &config.static_dir)))

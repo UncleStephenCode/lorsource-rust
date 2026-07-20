@@ -1,16 +1,17 @@
 {% extends "base.html" %}
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
-<h1>{{ title }}</h1>
-{% match error %}{% when Some with (e) %}<p class="error">{{ e }}</p>{% when None %}{% endmatch %}
-<form method="post" action="/register.jsp" class="form">
+<h1>Регистрация</h1>
+<p>Если вы уже регистрировались на нашем сайте и забыли пароль - вам <a href="/lostpwd.jsp">сюда</a>.</p>
+{% match error %}{% when Some with (e) %}<div class="error">{{ e }}</div>{% when None %}{% endmatch %}
+<form method="post" action="/register.jsp" id="registerForm">
   <input type="hidden" name="csrf" value="{{ csrf_token }}">
   <input type="hidden" name="permit" value="{{ permit }}">
-  <label>Ник <input name="nick" required maxlength="19" pattern="[a-z][a-z0-9_-]*"></label>
-  <label>Email <input name="email" type="email" required></label>
-  <label>Пароль <input name="password" type="password" required minlength="10"></label>
-  <label>Повтор пароля <input name="password2" type="password" required minlength="10"></label>
-  <label><input type="checkbox" name="rules" value="okay" required> Я согласен с правилами</label>
-  <button type="submit">Зарегистрироваться</button>
+  <div class="control-group"><label for="nick">Login</label><input id="nick" name="nick" required size="40" maxlength="19" pattern="[a-zA-Z][a-zA-Z0-9_-]*" autocapitalize="off" autofocus><div class="help-block">мы сохраняем регистр, в котором введён логин</div></div>
+  <div class="control-group"><label for="email">E-mail</label><input id="email" name="email" type="email" class="email" size="40" required><div class="help-block">позже этот e-mail пригодится для восстановления<br>учётной записи, если вы потеряете к ней доступ</div></div>
+  <div class="control-group"><label for="password">Пароль</label><input id="password" name="password" type="password" size="40" required minlength="10"></div>
+  <div class="control-group"><label for="password2">Подтвердите пароль</label><input id="password2" name="password2" type="password" size="40" required minlength="10"></div>
+  <div class="control-group"><label for="rules">С <a href="/help/rules.md" target="_blank" title="правила откроются в новом окне">правилами</a> ознакомился: <input id="rules" type="checkbox" name="rules" value="okay" required></label></div>
+  <div class="form-actions"><button type="submit" class="btn btn-primary">Зарегистрироваться</button></div>
 </form>
 {% endblock %}

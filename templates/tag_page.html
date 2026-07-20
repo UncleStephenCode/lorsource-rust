@@ -1,40 +1,28 @@
 {% extends "base.html" %}
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
-<h1>{{ title }} <small class="muted">({{ counter }})</small></h1>
-
-<nav class="tag-actions">
-  {% if show_favorite_button %}<form method="post" action="/user-filter/favorite-tag" class="inline-form"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="tagName" value="{{ tag }}"><input type="hidden" name="add" value="1"><button type="submit" class="btn btn-default">В избранное</button></form>{% endif %}
-  {% if show_unfavorite_button %}<form method="post" action="/user-filter/favorite-tag" class="inline-form"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="tagName" value="{{ tag }}"><input type="hidden" name="del" value="1"><button type="submit" class="btn btn-default">Убрать из избранного</button></form>{% endif %}
-  {% if show_ignore_button %}<form method="post" action="/user-filter/ignore-tag" class="inline-form"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="tagName" value="{{ tag }}"><input type="hidden" name="add" value="1"><button type="submit" class="btn btn-default">Игнорировать</button></form>{% endif %}
-  {% if show_unignore_button %}<form method="post" action="/user-filter/ignore-tag" class="inline-form"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="tagName" value="{{ tag }}"><input type="hidden" name="del" value="1"><button type="submit" class="btn btn-default">Не игнорировать</button></form>{% endif %}
-  {% if show_delete %}
-    <a href="/tags/change?tagName={{ tag }}" class="btn btn-default">Переименовать</a>
-    <a href="/tags/delete?tagName={{ tag }}" class="btn btn-danger">Удалить</a>
-  {% endif %}
-</nav>
-
-{% if synonyms.len() > 0 %}
-<p class="muted">Синонимы: {% for s in synonyms %}{{ s }}{% if loop.last %}{% else %}, {% endif %}{% endfor %}</p>
-{% endif %}
+<h1><i class="icon-tag"></i> {{ title }}</h1>
+<div class="infoblock" style="font-size: medium">
+  <div class="fav-buttons">
+    {% if show_favorite_button %}<form method="post" action="/user-filter/favorite-tag"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="tagName" value="{{ tag }}"><input type="hidden" name="add" value="1"><button id="tagFavAdd" title="В избранное"><i class="icon-bell"></i></button></form>{% endif %}
+    {% if show_unfavorite_button %}<form method="post" action="/user-filter/favorite-tag"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="tagName" value="{{ tag }}"><input type="hidden" name="del" value="1"><button id="tagFavAdd" class="selected" title="Удалить из избранного"><i class="icon-bell"></i></button></form>{% endif %}
+    <br>
+    {% if show_ignore_button %}<form method="post" action="/user-filter/ignore-tag"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="tagName" value="{{ tag }}"><input type="hidden" name="add" value="1"><button id="tagIgnore" title="Игнорировать"><i class="icon-eye-with-line"></i></button></form>{% endif %}
+    {% if show_unignore_button %}<form method="post" action="/user-filter/ignore-tag"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="tagName" value="{{ tag }}"><input type="hidden" name="del" value="1"><button id="tagIgnore" class="selected" title="Перестать игнорировать"><i class="icon-eye-with-line"></i></button></form>{% endif %}
+  </div>
+  <p>Всего сообщений: {{ counter }}</p>
+  {% if synonyms.len() > 0 %}Синонимы: <span class="tags">{% for s in synonyms %}<a class="tag" href="/tag/{{ s }}">{{ s }}</a>{% if !loop.last %}, {% endif %}{% endfor %}</span>{% endif %}
+  {% if show_delete %}[<a href="/tags/change?tagName={{ tag }}">Переименовать тег</a>] [<a href="/tags/delete?tagName={{ tag }}">Удалить тег</a>]{% endif %}
+</div>
 
 {% for group in sections %}
-<h2><a href="/{{ group.section_prefix }}/">{{ group.section_name }}</a></h2>
-<div class="topic-list">
-{% for t in group.topics %}
-  <article class="topic-card{% if t.sticky %} sticky{% endif %}">
-    <h3><a href="{{ t.topic_url() }}">{{ t.title }}</a></h3>
-    <div class="meta">
-      <a href="/{{ group.section_prefix }}/{{ t.group_urlname }}">{{ t.group_title }}</a> ·
-      <a href="/people/{{ t.author }}/profile">{{ t.author }}</a> ·
-      {{ t.postdate }} · {{ t.comments }} комм.
-    </div>
-  </article>
+<section>
+  <h2><a href="/{{ group.section_prefix }}/">{{ group.section_name }}</a></h2>
+  <div {% if group.section_prefix == "forum" %}id="tag-page-forum"{% else if group.section_prefix == "news" %}id="tag-page-news"{% else if group.section_prefix == "polls" %}id="tag-page-polls"{% else if group.section_prefix == "articles" %}id="tag-page-articles"{% endif %}>
+    <section><h3>{{ group.section_name }}</h3><ul>
+    {% for t in group.topics %}<li><span class="group-label">{{ t.group_title }}</span> <a href="{{ t.topic_url() }}">{{ t.title }}</a>{% if t.comments > 0 %} ({{ t.comments }}){% endif %}</li>{% endfor %}
+    </ul></section>
+  </div>
+</section>
 {% endfor %}
-</div>
-{% endfor %}
-
-{% if sections.len() == 0 %}
-<p class="muted">По этой метке пока ничего нет.</p>
-{% endif %}
 {% endblock %}

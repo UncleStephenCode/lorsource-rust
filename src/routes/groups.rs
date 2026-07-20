@@ -17,6 +17,8 @@ struct GroupTopicsTemplate {
     topics: Vec<TopicSummary>,
     pager: Pager,
     current_user: Option<crate::models::UserSummary>,
+    main_page: bool,
+    tracker_layout: bool,
 }
 
 pub async fn forum_index(State(state): State<AppState>) -> Result<Html<String>> {
@@ -156,7 +158,7 @@ pub async fn group_page(State(state): State<AppState>, method: Method, Path(grou
     let pager = Pager::new(offset, limit);
     let title = format!("Форум / {group_title}");
 
-    Ok(Html(GroupTopicsTemplate { title, topics, pager, current_user: user }.render()?).into_response())
+    Ok(Html(GroupTopicsTemplate { title, topics, pager, current_user: user, main_page: false, tracker_layout: true }.render()?).into_response())
 }
 
 pub async fn group_archive(State(state): State<AppState>, Path(group_name): Path<String>) -> Result<Html<String>> {
