@@ -25,4 +25,5 @@ pub struct StGroup {
     pub info: Option<String>,
     pub longinfo: Option<String>,
     pub topics: i64,
+    pub topics_per_day: i32,
 }

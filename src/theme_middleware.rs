@@ -86,32 +86,36 @@ fn modern_header(nick: Option<&str>) -> String {
 fn waltz_header(nick: Option<&str>) -> String {
     let top_profile = nick.map_or_else(String::new, |nick| format!(r#"<a style="text-decoration: none" href="/people/{}/profile">{}</a>"#, urlencoding::encode(nick), html_escape::encode_text(nick)));
     let guest = if nick.is_none() { login_block(None, false) } else { String::new() };
-    format!(r#"<header id="hd"><div id="topProfile">{top_profile}</div><span id="sitetitle"><a href="/">LINUX.ORG.RU</a></span><nav class="menu"><div id="loginGreating">{guest}</div><ul><li><a href="/news/">Новости</a></li><li><a href="/gallery/">Галерея</a></li><li><a href="/articles/">Статьи</a></li><li><a href="/forum/">Форум</a></li><li><a href="/tracker/">Трекер</a></li><li><a href="/search.jsp">Поиск</a></li></ul></nav></header><div style="clear: both"></div>"#)
+    let events = if nick.is_some() { r#"<li><a href="/notifications">Уведомления <span id="main_events_count"></span></a></li>"# } else { "" };
+    format!(r#"<header id="hd"><div id="topProfile">{top_profile}</div><span id="sitetitle"><a href="/">LINUX.ORG.RU</a></span><nav class="menu"><div id="loginGreating">{guest}</div><ul><li><a href="/news/">Новости</a></li><li><a href="/gallery/">Галерея</a></li><li><a href="/articles/">Статьи</a></li><li><a href="/forum/">Форум</a></li><li><a href="/tracker/">Трекер</a></li>{events}<li><a href="/search.jsp">Поиск</a></li></ul></nav></header><div style="clear: both"></div>"#)
 }
 
 fn black_header(nick: Option<&str>, main_page: bool) -> String {
     let login = login_block(nick, false);
     if !main_page {
+        let events = if nick.is_some() { r#"<a style="text-decoration:none" href="/notifications">Уведомления <span id="main_events_count"></span></a> - "# } else { "" };
         return format!(
-            r#"<table border="0" cellspacing="0" cellpadding="0" width="100%" class="head"><tr><td rowspan="2" align="left"><a href="/"><img src="/black/lor-new.png" width="282" height="60" alt="Linux.org.ru"></a></td><td align="right">{login}</td></tr><tr><td align="right" valign="bottom"><a style="text-decoration:none" href="/news/">Новости</a> - <a style="text-decoration:none" href="/gallery/">Галерея</a> - <a style="text-decoration:none" href="/articles/">Статьи</a> - <a style="text-decoration:none" href="/forum/">Форум</a> - <a style="text-decoration:none" href="/tracker/">Трекер</a> - <a style="text-decoration:none" href="/search.jsp">Поиск</a></td></tr></table>"#,
+            r#"<table border="0" cellspacing="0" cellpadding="0" width="100%" class="head"><tr><td rowspan="2" align="left"><a href="/"><img src="/black/lor-new.png" width="282" height="60" alt="Linux.org.ru"></a></td><td align="right">{login}</td></tr><tr><td align="right" valign="bottom"><a style="text-decoration:none" href="/news/">Новости</a> - <a style="text-decoration:none" href="/gallery/">Галерея</a> - <a style="text-decoration:none" href="/articles/">Статьи</a> - <a style="text-decoration:none" href="/forum/">Форум</a> - {events}<a style="text-decoration:none" href="/tracker/">Трекер</a> - <a style="text-decoration:none" href="/search.jsp">Поиск</a></td></tr></table>"#,
         );
     }
     format!(
-        r#"<a href="/"><img style="float:left;border:0" src="/black/lorlogo-try.png" alt="Русская информация об ОС LINUX" width="270" height="208"></a><div id="hd"><div id="head-main"><table><tr><td><a href="/news/">Новости</a></td><td><a href="/tracker/">Трекер</a></td><td><a href="/about">О сервере</a></td></tr><tr><td><a href="/gallery/">Галерея</a></td><td><a href="/forum/">Форум</a></td><td><a href="/notifications">События</a></td></tr><tr><td><a href="/articles/">Статьи</a></td><td></td><td><a href="/search.jsp">Поиск</a></td></tr></table><br></div><div style="right:5px;text-align:right;top:5px;position:absolute" class="head">{login}</div></div>"#,
+        r#"<a href="/"><img style="float:left;border:0" src="/black/lorlogo-try.png" alt="Руссая информация об ОС LINUX" width="270" height="208"></a><div id="hd"><div id="head-main"><table><tr><td><a href="/news/">Новости</a></td><td><a href="/tracker/">Трекер</a></td><td><a href="/about">О сервере</a></td></tr><tr><td><a href="/gallery/">Галерея</a></td><td><a href="/forum/">Форум</a></td><td><a href="/notifications">Уведомления</a></td></tr><tr><td><a href="/articles/">Статьи</a></td><td></td><td><a href="/search.jsp">Поиск</a></td></tr></table><br></div><div style="right:5px;text-align:right;top:5px;position:absolute" class="head">{login}</div></div>"#,
     )
 }
 
 fn white2_header(nick: Option<&str>) -> String {
     let login = login_block(nick, false);
+    let events = if nick.is_some() { r#"<li><a href="/notifications">Уведомления <span id="main_events_count"></span></a></li>"# } else { "" };
     format!(
-        r#"<div id="hd"><div id="hdtux"><img src="/img/Tux.svg" height="100%" alt="Linux"></div><a id="sitetitle" href="/">LINUX.ORG.RU</a><ul class="menu"><li id="loginGreating">{login}</li><li><a href="/news/">Новости</a></li><li><a href="/gallery/">Галерея</a></li><li><a href="/articles/">Статьи</a></li><li><a href="/forum/">Форум</a></li><li><a href="/tracker/">Трекер</a></li><li><a href="/search.jsp">Поиск</a></li></ul></div><div style="clear: both"></div>"#,
+        r#"<div id="hd"><div id="hdtux"><img src="/img/Tux.svg" height="100%" alt="Linux"></div><a id="sitetitle" href="/">LINUX.ORG.RU</a><ul class="menu"><li id="loginGreating">{login}</li><li><a href="/news/">Новости</a></li><li><a href="/gallery/">Галерея</a></li><li><a href="/articles/">Статьи</a></li><li><a href="/forum/">Форум</a></li><li><a href="/tracker/">Трекер</a></li>{events}<li><a href="/search.jsp">Поиск</a></li></ul></div><div style="clear: both"></div>"#,
     )
 }
 
 fn pony_header(nick: Option<&str>) -> String {
     let login = login_block(nick, true);
+    let events = if nick.is_some() { r#"<li><a href="/notifications">Уведомления <span id="main_events_count"></span></a></li>"# } else { "" };
     format!(
-        r#"<div id="hd"><a id="sitetitle" href="/"><img src="/zomg_ponies/img/twilight_logo.png" id="twilight_logo" alt="">PONY.ORG.RU</a><div class="menu"><div id="loginGreating">{login}</div><ul><li><a href="/news/">Новости</a></li><li><a href="/gallery/">Галерея</a></li><li><a href="/articles/">Статьи</a></li><li><a href="/forum/">Форум</a></li><li><a href="/tracker/">Трекер</a></li><li><a href="/search.jsp">Поиск</a></li></ul></div></div><div style="clear: both"></div>"#,
+        r#"<div id="hd"><a id="sitetitle" href="/"><img src="/zomg_ponies/img/twilight_logo.png" id="twilight_logo" alt="">PONY.ORG.RU</a><div class="menu"><div id="loginGreating">{login}</div><ul><li><a href="/news/">Новости</a></li><li><a href="/gallery/">Галерея</a></li><li><a href="/articles/">Статьи</a></li><li><a href="/forum/">Форум</a></li><li><a href="/tracker/">Трекер</a></li>{events}<li><a href="/search.jsp">Поиск</a></li></ul></div></div><div style="clear: both"></div>"#,
     )
 }
 

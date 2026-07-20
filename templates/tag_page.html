@@ -6,9 +6,12 @@
   <div class="fav-buttons">
     {% if show_favorite_button %}<form method="post" action="/user-filter/favorite-tag"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="tagName" value="{{ tag }}"><input type="hidden" name="add" value="1"><button id="tagFavAdd" title="В избранное"><i class="icon-bell"></i></button></form>{% endif %}
     {% if show_unfavorite_button %}<form method="post" action="/user-filter/favorite-tag"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="tagName" value="{{ tag }}"><input type="hidden" name="del" value="1"><button id="tagFavAdd" class="selected" title="Удалить из избранного"><i class="icon-bell"></i></button></form>{% endif %}
-    <br>
+    {% if !show_favorite_button && !show_unfavorite_button %}<a id="tagFavNoth" href="/login.jsp"><i class="icon-bell" title="Добавить в избранное"></i></a>{% endif %}
+    <br><span id="favsCount" title="Кол-во пользователей, добавивших в избранное">{{ favorites_count }}</span><br>
     {% if show_ignore_button %}<form method="post" action="/user-filter/ignore-tag"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="tagName" value="{{ tag }}"><input type="hidden" name="add" value="1"><button id="tagIgnore" title="Игнорировать"><i class="icon-eye-with-line"></i></button></form>{% endif %}
     {% if show_unignore_button %}<form method="post" action="/user-filter/ignore-tag"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="tagName" value="{{ tag }}"><input type="hidden" name="del" value="1"><button id="tagIgnore" class="selected" title="Перестать игнорировать"><i class="icon-eye-with-line"></i></button></form>{% endif %}
+    {% if !show_ignore_button && !show_unignore_button %}<a id="tagIgnNoth" href="/login.jsp"><i class="icon-eye-with-line" title="Игнорировать"></i></a>{% endif %}
+    <br><span id="ignoreCount" title="Кол-во пользователей, игнорирующих тег">{{ ignored_count }}</span>
   </div>
   <p>Всего сообщений: {{ counter }}</p>
   {% if synonyms.len() > 0 %}Синонимы: <span class="tags">{% for s in synonyms %}<a class="tag" href="/tag/{{ s }}">{{ s }}</a>{% if !loop.last %}, {% endif %}{% endfor %}</span>{% endif %}
@@ -23,6 +26,9 @@
     {% for t in group.topics %}<li><span class="group-label">{{ t.group_title }}</span> <a href="{{ t.topic_url() }}">{{ t.title }}</a>{% if t.comments > 0 %} ({{ t.comments }}){% endif %}</li>{% endfor %}
     </ul></section>
   </div>
+  <div class="tag-page-buttons"><div>
+    {% match group.add_url %}{% when Some with (url) %}<a href="{{ url }}" class="btn btn-primary">{{ group.add_label }}</a>{% when None %}<a class="btn btn-primary disabled" title="{{ group.add_reason }}"><i class="icon-lock"></i> {{ group.add_label }}</a>{% endmatch %}
+  </div></div>
 </section>
 {% endfor %}
 {% endblock %}

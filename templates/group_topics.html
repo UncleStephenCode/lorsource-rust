@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<h1>Форум «{{ group.title }}»</h1>
+
+<nav>
+  <a class="btn {% if !lastmod %}btn-selected{% else %}btn-default{% endif %}" href="{{ new_url }}">Новые</a>
+  <a class="btn {% if lastmod %}btn-selected{% else %}btn-default{% endif %}" href="{{ active_url }}">Активные</a>
+  <a href="{{ archive_url }}" class="btn btn-default">Архив</a>
+  {% if is_moderator %}<a class="btn btn-default" href="/groupmod.jsp?group={{ group.id }}">Править группу</a>{% endif %}
+  {% match add_url %}{% when Some with (url) %}<a href="{{ url }}" class="btn btn-primary">Добавить</a>{% when None %}<a class="btn btn-primary disabled" title="{{ add_reason }}"><i class="icon-lock"></i> Добавить</a>{% endmatch %}
+  <div class="nav-buttons"><form><select name="group" onchange="window.location.href=this.options[this.selectedIndex].value" title="Быстрый переход" class="btn btn-default">
+    {% for item in quick_groups %}<option value="{{ item.url }}"{% if item.selected %} selected{% endif %}>{{ item.title }}</option>{% endfor %}
+  </select></form></div>
+</nav>
+
+{% if group.info.is_some() || group.longinfo.is_some() %}
+<div class="infoblock">
+  {% match group.info %}{% when Some with (info) %}<p style="margin-top: 0"><em>{{ info }}</em></p>{% when None %}{% endmatch %}
+  {% match group.longinfo %}{% when Some with (longinfo) %}<div class="infoblock-small">{{ longinfo|safe }}</div>{% when None %}{% endmatch %}
+  {% if is_moderator %}<p>[<a href="/groupmod.jsp?group={{ group.id }}">править</a>]</p>{% endif %}
+</div>
+{% endif %}
+
+<div class="tracker">
+{% for t in topics %}
+  <a href="{{ t.topic_url() }}" class="group-item">
+    <div class="tracker-count"><p>{% if t.comments == 0 %}-{% else %}<i class="icon-comment"></i> {{ t.comments }}{% endif %}</p></div>
+    <div class="tracker-title"><p>{% if t.deleted %}<img src="/img/del.png" alt="[X]" width="15" height="15">{% else if t.sticky %}<i class="icon-pin icon-pin-color" title="Прикрепленная тема"></i>{% endif %}{% if t.resolved.unwrap_or(false) %}<i class="icon-check" title="решено"></i>{% endif %}{{ t.title }} <span class="group-author">({{ t.author }})</span></p></div>
+    <div class="tracker-tags"><p>{% for tag in t.tags_vec() %}<span class="tag">{{ tag }}</span> {% endfor %}</p></div>
+    <div class="tracker-last"><p>{{ t.author }}, {{ t.postdate }}</p></div>
+  </a>
+{% endfor %}
+</div>
+{% if topics.len() == 0 %}<p>Тем пока нет.</p>{% endif %}
+
+<div class="nav"><div style="float: left">{% match prev_url %}{% when Some with (url) %}<a rel="prev" href="{{ url }}">← предыдущие</a>{% when None %}{% endmatch %}</div><div style="float: right">{% match next_url %}{% when Some with (url) %}<a rel="next" href="{{ url }}">следующие →</a>{% when None %}<a href="{{ archive_url }}">архив</a>{% endmatch %}</div></div>
+<p><i class="icon-rss"></i> <a href="/section-rss.jsp?section=2&amp;group={{ group.id }}">RSS подписка на новые темы</a></p>
+{% endblock %}

@@ -7,7 +7,7 @@
   {% match topic %}{% when Some with (t) %}<input type="hidden" name="id" value="{{ t.id }}">{% when None %}{% endmatch %}
   <div class="control-group">
     <label for="group">Раздел</label>
-    <select id="group" name="group">{% for g in groups %}<option value="{{ g.id }}">{{ g.section_name }} / {{ g.title }}</option>{% endfor %}</select>
+    <select id="group" name="group">{% for g in groups %}<option value="{{ g.id }}"{% if g.id == selected_group %} selected{% endif %}>{{ g.section_name }} / {{ g.title }}</option>{% endfor %}</select>
   </div>
   <div class="control-group">
     <label for="title">Заглавие</label>
@@ -36,7 +36,7 @@
   </div>
   <div class="control-group">
     <label for="tags"><a href="/tags" target="_blank">Метки</a> (разделенные запятой)</label>
-    <input id="tags" name="tags" required autocapitalize="off" data-tags-autocomplete="data-tags-autocomplete" value="{% match topic %}{% when Some with (t) %}{% for tag in t.tags_vec() %}{{ tag }}{% if !loop.last %}, {% endif %}{% endfor %}{% when None %}{% endmatch %}">
+    <input id="tags" name="tags" required autocapitalize="off" data-tags-autocomplete="data-tags-autocomplete" value="{% match topic %}{% when Some with (t) %}{% for tag in t.tags_vec() %}{{ tag }}{% if !loop.last %}, {% endif %}{% endfor %}{% when None %}{{ initial_tags }}{% endmatch %}">
   </div>
   <div class="form-actions">
     <button type="submit" class="btn btn-primary">Сохранить</button>

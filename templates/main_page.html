@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}LINUX.ORG.RU — Русская информация об ОС Linux{% endblock %}
+{% block content %}
+<div id="mainpage">
+<div id="news">
+  <div style="text-align: center; margin-top: 0.5em; height: 125px" id="interpage"></div>
+  <nav>
+    {% for item in uncommitted %}<a class="btn btn-default" href="/view-all.jsp?section={{ item.0 }}">{{ item.1 }}: {{ item.2 }}</a>{% endfor %}
+    {% match add_url %}{% when Some with (url) %}<a href="{{ url }}" class="btn btn-primary">Добавить</a>{% when None %}<a class="btn btn-primary disabled" title="{{ add_reason }}"><i class="icon-lock"></i> Добавить</a>{% endmatch %}
+  </nav>
+
+  {% for t in news %}
+  <article class="news" id="topic-{{ t.id }}">
+    <header><div class="group"><a href="/{{ t.section_prefix }}/">{{ t.section_name }}</a> — <a href="/{{ t.section_prefix }}/{{ t.group_urlname }}">{{ t.group_title }}</a></div><h1>{% if t.resolved.unwrap_or(false) %}<i class="icon-check"></i>{% endif %}<a href="{{ t.topic_url() }}">{{ t.title }}</a></h1>{% if t.tags_vec().len() > 0 %}<div class="tags">{% for tag in t.tags_vec() %}<a class="tag" href="/tag/{{ tag }}">{{ tag }}</a>{% endfor %}</div>{% endif %}</header>
+    <div class="entry-body"><div class="msg"><div class="sign"><a href="/people/{{ t.author }}/profile">{{ t.author }}</a> ({{ t.postdate }})</div><div class="nav">{% if t.comments == 0 %}<a href="/comment-message.jsp?topic={{ t.id }}">Добавить&nbsp;комментарий</a>{% else %}<a href="{{ t.topic_url() }}#comments">{{ t.comments }} комментариев</a>{% endif %}</div></div></div>
+  </article>
+  {% endfor %}
+
+  {% if brief.len() > 0 %}<section><h2>Еще топики</h2><div id="main-page-news"><section><ul>
+    {% for t in brief %}<li><span class="group-label">{{ t.group_title }}</span> <a href="{{ t.topic_url() }}">{{ t.title }}</a>{% if t.comments > 0 %} ({{ t.comments }}){% endif %}</li>{% endfor %}
+  </ul></section></div></section>{% endif %}
+
+  <nav><a href="/news/" class="btn btn-default">Все новости</a><a href="/gallery/" class="btn btn-default">Вся галерея</a><a href="/polls/" class="btn btn-default">Все опросы</a><a href="/articles/" class="btn btn-default">Все статьи</a></nav>
+  <p><i class="icon-rss"></i> <a href="/section-rss.jsp?section=1">RSS-подписка на новости</a></p>
+  <p><i class="icon-telegram"></i> <a href="https://t.me/best_of_lor">Канал в Telegram</a></p>
+</div>
+
+<aside id="boxlets">
+  {% match current_user %}{% when Some with (user) %}<div class="boxlet"><h2>Добро пожаловать!</h2><div class="boxlet_content">Ваш статус: {{ user_status }}<ul><li><a href="/people/{{ user.nick }}/">Мои темы</a></li>{% if favorite_present %}<li><a href="/people/{{ user.nick }}/favs">Избранные темы</a></li>{% endif %}<li><a href="/search.jsp?range=COMMENTS&amp;user={{ user.nick }}&amp;sort=DATE">Мои комментарии</a></li><li><a href="/people/{{ user.nick }}/reactions">Мои реакции</a></li>{% if drafts_count > 0 %}<li><a href="/people/{{ user.nick }}/drafts">Черновики</a> ({{ drafts_count }})</li>{% endif %}</ul><ul><li><a href="/people/{{ user.nick }}/settings">Настройки</a></li><li><a href="/people/{{ user.nick }}/edit">Редактировать профиль</a></li></ul></div></div>{% when None %}{% endmatch %}
+
+  <div align="center" class="boxlet"><div class="boxlet_content" style="padding-top: 1em"><a href="http://qrator.net/" rel="nofollow" target="_blank"><img src="/img/qrator-box.png" width="250" style="max-width: 100%; height: auto; aspect-ratio: 1" alt="Protected by Qrator"></a></div></div>
+
+  {% match poll %}{% when Some with (topic) %}<div class="boxlet"><h2><a href="/polls/">Опрос</a></h2><div class="boxlet_content"><p><a href="{{ topic.topic_url() }}">{{ topic.title }}</a></p><p><a href="/polls/">итоги прошедших опросов...</a></p><p><a class="btn btn-small btn-default" href="/add-section.jsp?section=5">добавить опрос</a></p></div></div>{% when None %}{% endmatch %}
+  {% if articles.len() > 0 %}<div class="boxlet"><h2><a href="/articles/">Статьи</a></h2><div class="boxlet_content"><ul>{% for topic in articles %}<li><a href="{{ topic.topic_url() }}">{{ topic.title }}</a> ({{ topic.comments }})</li>{% endfor %}</ul></div></div>{% endif %}
+  {% if top_topics.len() > 0 %}<div class="boxlet"><h2>Лучшие темы</h2><div class="boxlet_content"><ul>{% for topic in top_topics %}<li><a href="{{ topic.topic_url() }}">{{ topic.title }}</a> ({{ topic.comments }})</li>{% endfor %}</ul></div></div>{% endif %}
+  {% if gallery.len() > 0 %}<div class="boxlet"><h2><a href="/gallery/">Галерея</a></h2><div class="boxlet_content"><ul>{% for topic in gallery %}<li><a href="{{ topic.topic_url() }}">{{ topic.title }}</a></li>{% endfor %}</ul></div></div>{% endif %}
+  {% if tags.len() > 0 %}<div class="boxlet"><h2>Облако Меток</h2><div class="boxlet_content"><p align="center">{% for tag in tags %}<a class="cloud5" href="/tag/{{ tag.value }}">{{ tag.value }}</a> {% endfor %}</p><p><a href="/tags/">все метки...</a></p></div></div>{% endif %}
+</aside>
+</div>
+{% endblock %}

@@ -7,6 +7,8 @@
   <a href="/tracker/?filter=all" class="btn {% if filter == "all" %}btn-selected{% else %}btn-default{% endif %}">все</a>
   <a href="/tracker/?filter=notalks" class="btn {% if filter == "notalks" %}btn-selected{% else %}btn-default{% endif %}">без talks</a>
   <a href="/tracker/?filter=tech" class="btn {% if filter == "tech" %}btn-selected{% else %}btn-default{% endif %}">тех. форум</a>
+  {% if is_moderator %}<a class="btn btn-default" href="/sameip.jsp?score=-9999">anonymous</a><a class="btn btn-default" href="/sameip.jsp?score=46">score &lt;= 45</a>{% endif %}
+  {% for item in uncommitted %}<a class="btn btn-default" href="/view-all.jsp?section={{ item.0 }}">{{ item.1 }}: {{ item.2 }}</a>{% endfor %}
 </nav>
 <div class="tracker">
 {% for t in topics %}

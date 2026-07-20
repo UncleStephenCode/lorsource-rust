@@ -44,7 +44,7 @@ impl TrForumRepository for CForumPgRepository {
 const S_GROUP_SELECT_SQL: &str = r#"
 SELECT g.id, g.title, g.urlname, g.section, s.name AS section_name,
        CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END AS section_prefix,
-       g.info, g.longinfo, count(t.id) AS topics
+       g.info, g.longinfo, count(t.id) AS topics, g.stat3 AS topics_per_day
 FROM groups g
 JOIN sections s ON s.id=g.section
 LEFT JOIN topics t ON t.groupid=g.id AND NOT t.deleted

@@ -52,7 +52,7 @@ pub fn router() -> Router<AppState> {
         .route("/view-message.jsp", get(topics::legacy_view_message))
         .route("/jump-message.jsp", get(comments::jump_message))
         .route("/add.jsp", get(topics::new_topic_form).post(topics::create_topic))
-        .route("/add-section.jsp", get(topics::new_topic_form))
+        .route("/add-section.jsp", get(topics::choose_topic_section))
         .route("/edit.jsp", get(topics::edit_topic_form).post(topics::edit_topic))
         .route("/delete.jsp", get(topics::delete_topic_form).post(topics::delete_topic))
         .route("/undelete", get(topics::undelete_topic_form).post(topics::undelete_topic))

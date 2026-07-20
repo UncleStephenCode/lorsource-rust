@@ -38,6 +38,7 @@ struct LegacyIndexTemplate {
     current_user: Option<crate::models::UserSummary>,
     main_page: bool,
     tracker_layout: bool,
+    navigation: Option<crate::routes::topics::TopicListNavigation>,
 }
 
 #[derive(Deserialize)]
@@ -275,7 +276,7 @@ async fn render_archive(
         (Some(sec), _, _, _) => format!("Архив: {sec}"),
         _ => "Архив".to_string(),
     };
-    Ok(Html(LegacyIndexTemplate { title, topics, pager, current_user, main_page: false, tracker_layout: false }.render()?))
+    Ok(Html(LegacyIndexTemplate { title, topics, pager, current_user, main_page: false, tracker_layout: false, navigation: None }.render()?))
 }
 
 async fn list_archive_topics(state: &AppState, section: Option<&str>, group: Option<&str>, year: Option<i32>, month: Option<i32>, offset: i64, limit: i64) -> Result<Vec<TopicSummary>> {
