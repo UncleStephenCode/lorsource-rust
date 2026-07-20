@@ -55,6 +55,7 @@ pub struct StTopicDetail {
     pub title: String,
     pub message: String,
     pub bbcode: Option<bool>,
+    pub markup: String,
     pub url: Option<String>,
     pub linktext: Option<String>,
     pub postdate: DateTime<Utc>,

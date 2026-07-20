@@ -8,6 +8,8 @@ pub struct StCommentItem {
     pub replyto: Option<i32>,
     pub title: String,
     pub message: String,
+    pub bbcode: Option<bool>,
+    pub markup: String,
     pub postdate: DateTime<Utc>,
     pub author_id: i32,
     pub author: String,

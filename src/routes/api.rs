@@ -494,7 +494,7 @@ pub(crate) const REACTIONS: &[(&str, &str)] = &[
 ];
 
 async fn check_reaction_allowed(pool: &sqlx::PgPool, user_id: i32, topic_id: i32, comment_id: Option<i32>, set: bool, reaction: &str) -> Result<()> {
-    if set && !REACTIONS.iter().any(|(r, _)| *r == reaction) {
+    if !REACTIONS.iter().any(|(r, _)| *r == reaction) {
         return Err(crate::error::AppError::Forbidden);
     }
     if set {
@@ -560,7 +560,6 @@ async fn check_reaction_allowed(pool: &sqlx::PgPool, user_id: i32, topic_id: i32
 struct SetReactionResult {
     topic_id: i32,
     comment_id: Option<i32>,
-    reaction: String,
     count: i64,
 }
 
@@ -569,43 +568,79 @@ async fn do_set_reaction(state: &AppState, user_id: i32, form: ReactionForm) -> 
     let (reaction, set) = parse_reaction_action(form.reaction, form.value);
     check_reaction_allowed(&state.pool, user_id, topic_id, comment_id, set, &reaction).await?;
 
-    if set {
-        if let Some(comment_id) = comment_id {
-            sqlx::query("UPDATE comments SET reactions = reactions || jsonb_build_object($2::text, $3::text) WHERE id=$1")
-                .bind(comment_id).bind(user_id).bind(&reaction).execute(&state.pool).await?;
+    let mut tx = state.pool.begin().await?;
+    let reactions: serde_json::Value = if set {
+        let updated_reactions = if let Some(comment_id) = comment_id {
+            sqlx::query_scalar("UPDATE comments SET reactions=reactions || jsonb_build_object($2::text,$3::text) WHERE id=$1 RETURNING reactions")
+                .bind(comment_id).bind(user_id).bind(&reaction).fetch_one(&mut *tx).await?
         } else {
-            sqlx::query("UPDATE topics SET reactions = reactions || jsonb_build_object($2::text, $3::text) WHERE id=$1")
-                .bind(topic_id).bind(user_id).bind(&reaction).execute(&state.pool).await?;
-        }
+            sqlx::query_scalar("UPDATE topics SET reactions=reactions || jsonb_build_object($2::text,$3::text) WHERE id=$1 RETURNING reactions")
+                .bind(topic_id).bind(user_id).bind(&reaction).fetch_one(&mut *tx).await?
+        };
         sqlx::query(
             r#"INSERT INTO reactions_log(origin_user,topic_id,comment_id,reaction,set_date)
                VALUES($1,$2,$3,$4,now())
                ON CONFLICT (topic_id, comment_id, origin_user)
                DO UPDATE SET set_date=now(), reaction=EXCLUDED.reaction"#,
         )
-        .bind(user_id).bind(topic_id).bind(comment_id).bind(&reaction).execute(&state.pool).await?;
+        .bind(user_id).bind(topic_id).bind(comment_id).bind(&reaction).execute(&mut *tx).await?;
+        updated_reactions
     } else {
-        if let Some(comment_id) = comment_id {
-            sqlx::query("UPDATE comments SET reactions = reactions - $2::text WHERE id=$1")
-                .bind(comment_id).bind(user_id.to_string()).execute(&state.pool).await?;
+        let reactions = if let Some(comment_id) = comment_id {
+            sqlx::query_scalar("UPDATE comments SET reactions=reactions-$2::text WHERE id=$1 RETURNING reactions")
+                .bind(comment_id).bind(user_id.to_string()).fetch_one(&mut *tx).await?
         } else {
-            sqlx::query("UPDATE topics SET reactions = reactions - $2::text WHERE id=$1")
-                .bind(topic_id).bind(user_id.to_string()).execute(&state.pool).await?;
-        }
+            sqlx::query_scalar("UPDATE topics SET reactions=reactions-$2::text WHERE id=$1 RETURNING reactions")
+                .bind(topic_id).bind(user_id.to_string()).fetch_one(&mut *tx).await?
+        };
         sqlx::query(
             r#"DELETE FROM reactions_log
                WHERE origin_user=$1 AND topic_id=$2 AND (($3::int IS NULL AND comment_id IS NULL) OR comment_id=$3)"#,
         )
-        .bind(user_id).bind(topic_id).bind(comment_id).execute(&state.pool).await?;
+        .bind(user_id).bind(topic_id).bind(comment_id).execute(&mut *tx).await?;
+        reactions
+    };
+
+    // ReactionService updates topic ordering for both topic and comment
+    // reactions, and manages the target author's unread notification.
+    sqlx::query("UPDATE topics SET lastmod=now() WHERE id=$1")
+        .bind(topic_id).execute(&mut *tx).await?;
+    let target_user: i32 = if let Some(comment_id) = comment_id {
+        sqlx::query_scalar("SELECT userid FROM comments WHERE id=$1")
+            .bind(comment_id).fetch_one(&mut *tx).await?
+    } else {
+        sqlx::query_scalar("SELECT userid FROM topics WHERE id=$1")
+            .bind(topic_id).fetch_one(&mut *tx).await?
+    };
+    if set {
+        let settings_text: Option<String> = sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
+            .bind(target_user).fetch_optional(&mut *tx).await?.flatten();
+        let notify = crate::profile::ProfileSettings::from_hstore_text(settings_text).reaction_notification;
+        let ignored: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM ignore_list WHERE userid=$1 AND ignored=$2)",
+        ).bind(target_user).bind(user_id).fetch_one(&mut *tx).await?;
+        if notify && !ignored && target_user != crate::routes::comments::ANONYMOUS_USER_ID {
+            sqlx::query(
+                r#"INSERT INTO user_events(userid,type,private,message_id,comment_id,origin_user)
+                   VALUES($1,'REACTION',false,$2,$3,$4) ON CONFLICT DO NOTHING"#,
+            ).bind(target_user).bind(topic_id).bind(comment_id).bind(user_id).execute(&mut *tx).await?;
+        }
+    } else {
+        sqlx::query(
+            r#"DELETE FROM user_events WHERE userid=$1 AND message_id=$2
+               AND comment_id IS NOT DISTINCT FROM $3 AND origin_user=$4 AND unread AND type='REACTION'"#,
+        ).bind(target_user).bind(topic_id).bind(comment_id).bind(user_id).execute(&mut *tx).await?;
     }
+    sqlx::query(
+        "UPDATE users SET unread_events=(SELECT count(*) FROM user_events WHERE userid=$1 AND unread) WHERE id=$1",
+    ).bind(target_user).execute(&mut *tx).await?;
 
-    let count: i64 = sqlx::query_scalar(
-        r#"SELECT count(*) FROM reactions_log
-           WHERE topic_id=$1 AND (($2::int IS NULL AND comment_id IS NULL) OR comment_id=$2) AND reaction=$3"#,
-    )
-    .bind(topic_id).bind(comment_id).bind(&reaction).fetch_one(&state.pool).await?;
+    let count = reactions.as_object()
+        .map(|values| values.values().filter(|value| value.as_str() == Some(&reaction)).count() as i64)
+        .unwrap_or(0);
+    tx.commit().await?;
 
-    Ok(SetReactionResult { topic_id, comment_id, reaction, count })
+    Ok(SetReactionResult { topic_id, comment_id, count })
 }
 
 /// ReactionController.setCommentReaction/setTopicReaction (POST, non-ajax

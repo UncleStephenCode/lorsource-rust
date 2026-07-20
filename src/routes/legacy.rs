@@ -18,10 +18,6 @@ use image::GenericImageView;
 use serde::Deserialize;
 use serde_json::json;
 
-pub async fn gone() -> impl IntoResponse {
-    (StatusCode::GONE, Html("Legacy endpoint is no longer available."))
-}
-
 pub async fn error_403() -> AppError { AppError::Forbidden }
 pub async fn error_404() -> AppError { AppError::NotFound }
 
@@ -36,7 +32,6 @@ struct LegacyIndexTemplate {
     topics: Vec<TopicSummary>,
     news: Vec<crate::routes::topics::NewsTopicView>,
     pager: Pager,
-    current_user: Option<crate::models::UserSummary>,
     main_page: bool,
     tracker_layout: bool,
     navigation: Option<crate::routes::topics::TopicListNavigation>,
@@ -130,7 +125,13 @@ pub async fn markup_preview(CurrentUser(user): CurrentUser, Form(form): Form<Pre
     if text.chars().count() > 65_536 {
         return Json(json!({"error": "Слишком длинный текст"}));
     }
-    let html = markup::render_message(&text, Some(markup_id != "markdown"));
+    let stored_markup = match markup_id {
+        "markdown" => "MARKDOWN",
+        "ntobr" => "BBCODE_ULB",
+        "lorcode" => "BBCODE_TEX",
+        _ => "PLAIN",
+    };
+    let html = markup::render_message_with_markup(&text, Some(stored_markup), None);
     Json(json!({"html": html}))
 }
 
@@ -178,12 +179,19 @@ fn help_page_title(page: &str) -> Option<&'static str> {
     }
 }
 
+#[derive(Template)]
+#[template(path = "help.html")]
+struct HelpTemplate {
+    title: &'static str,
+    html: String,
+}
+
 pub async fn help_page(State(state): State<AppState>, Path(page): Path<String>) -> Result<Html<String>> {
     let Some(title) = help_page_title(&page) else { return Err(AppError::NotFound); };
     let path = format!("{}/help/{page}", state.config.static_dir);
     let source = tokio::fs::read_to_string(&path).await.map_err(|_| AppError::NotFound)?;
     let html = markup::render_message(&source, Some(false));
-    Ok(Html(format!("<h1>{}</h1>{html}", html_escape::encode_text(title))))
+    Ok(Html(HelpTemplate { title, html }.render()?))
 }
 
 const MONTH_NAMES: [&str; 12] = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
@@ -204,7 +212,6 @@ pub(crate) struct ArchiveIndexTemplate {
 
 pub(crate) struct ArchiveMonthLink {
     pub(crate) year: i32,
-    pub(crate) month: i32,
     pub(crate) month_name: &'static str,
     pub(crate) count: i64,
     pub(crate) url: String,
@@ -239,7 +246,7 @@ pub async fn archive_section(State(state): State<AppState>, uri: Uri, CurrentUse
     let section = section_from_uri(&uri).unwrap_or("news");
     let section_name = match section { "news" => "Новости", "forum" => "Форум", "gallery" => "Галерея", "articles" => "Статьи", "polls" => "Опросы", _ => "Темы" };
     let rows = list_archive_year_months(&state, Some(section), None).await?;
-    let months = rows.into_iter().map(|(y, m, c)| ArchiveMonthLink { year: y, month: m, month_name: month_name(m), count: c, url: format!("/{section}/archive/{y}/{m}") }).collect();
+    let months = rows.into_iter().map(|(y, m, c)| ArchiveMonthLink { year: y, month_name: month_name(m), count: c, url: format!("/{section}/archive/{y}/{m}") }).collect();
     Ok(Html(ArchiveIndexTemplate {
         title: format!("{section_name} - Архив"),
         heading: section_name.to_string(),
@@ -267,7 +274,7 @@ async fn render_archive(
     year: Option<i32>,
     month: Option<i32>,
     q: PagerQuery,
-    current_user: Option<crate::models::UserSummary>,
+    _current_user: Option<crate::models::UserSummary>,
 ) -> Result<Html<String>> {
     let pager = Pager::new(q.offset.unwrap_or(0), state.config.page_size);
     let topics = list_archive_topics(&state, section, group.as_deref(), year, month, pager.offset, pager.limit).await?;
@@ -278,7 +285,7 @@ async fn render_archive(
         (Some(sec), _, _, _) => format!("Архив: {sec}"),
         _ => "Архив".to_string(),
     };
-    Ok(Html(LegacyIndexTemplate { title, topics, news, pager, current_user, main_page: false, tracker_layout: false, navigation: None }.render()?))
+    Ok(Html(LegacyIndexTemplate { title, topics, news, pager, main_page: false, tracker_layout: false, navigation: None }.render()?))
 }
 
 async fn list_archive_topics(state: &AppState, section: Option<&str>, group: Option<&str>, year: Option<i32>, month: Option<i32>, offset: i64, limit: i64) -> Result<Vec<TopicSummary>> {
@@ -484,7 +491,7 @@ pub async fn view_deleted(State(state): State<AppState>, CurrentUser(user): Curr
         return Err(AppError::Forbidden);
     }
     let comments = sqlx::query_as::<_, CommentItem>(
-        r#"SELECT c.id, c.topic, c.replyto, c.title, m.message, c.postdate, u.id AS author_id, u.nick AS author, c.deleted
+        r#"SELECT c.id, c.topic, c.replyto, c.title, m.message, m.bbcode, m.markup, c.postdate, u.id AS author_id, u.nick AS author, c.deleted
            FROM comments c JOIN msgbase m ON m.id=c.id JOIN users u ON u.id=c.userid
            WHERE c.deleted ORDER BY c.postdate DESC LIMIT 100"#,
     )
@@ -494,7 +501,7 @@ pub async fn view_deleted(State(state): State<AppState>, CurrentUser(user): Curr
     for c in comments {
         html.push_str(&format!("<article id=\"comment-{}\"><h3>{}</h3><p>{} · topic #{}</p><div>{}</div></article>",
             c.id, html_escape::encode_text(&c.title), html_escape::encode_text(&c.author), c.topic,
-            markup::render_message(&c.message, Some(true))));
+            markup::render_message_with_markup(&c.message, Some(&c.markup), c.bbcode)));
     }
     Ok(Html(html))
 }
@@ -685,9 +692,13 @@ fn verify_activation_code(state: &AppState, nick: &str, email: &str, regdate: Op
         return true;
     }
     let Some(regdate) = regdate else { return false; };
-    let payload = format!("{nick}:{email}:{}:activate", regdate.and_utc().timestamp_millis());
-    let expected = crate::security::hmac_sha256_hex(&state.config.site_secret, &payload);
-    crate::security::verify_hash(&expected, supplied)
+    crate::security::secret_tokens::verify_activation_code(
+        &state.config.site_secret,
+        nick,
+        email,
+        regdate.and_utc().timestamp_millis(),
+        supplied,
+    )
 }
 
 pub async fn addphoto_form(CurrentUser(user): CurrentUser) -> Result<Html<String>> {
@@ -897,7 +908,6 @@ pub struct MemoryForm {
     pub msgid: Option<i32>,
     pub watch: Option<bool>,
     pub id: Option<i32>,
-    pub add: Option<String>,
     pub remove: Option<String>,
 }
 
@@ -956,7 +966,6 @@ pub struct UserTagForm {
     pub tag: Option<String>,
     #[serde(rename = "tagName")]
     pub tag_name: Option<String>,
-    pub add: Option<String>,
     pub del: Option<String>,
 }
 
@@ -1021,7 +1030,6 @@ async fn save_or_delete_user_tag(state: AppState, user: Option<crate::models::Us
 pub struct IgnoreUserForm {
     pub id: Option<i32>,
     pub nick: Option<String>,
-    pub add: Option<String>,
     pub del: Option<String>,
 }
 

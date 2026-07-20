@@ -52,65 +52,6 @@ pub mod password {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Role {
-    Anonymous,
-    User,
-    Corrector,
-    Moderator,
-    Admin,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Permission {
-    ViewDeleted,
-    EditOwnPost,
-    EditAnyPost,
-    DeleteOwnPost,
-    DeleteAnyPost,
-    ModeratePremoderation,
-    ManageUsers,
-    ManageGroups,
-    ManageTags,
-    PostWarning,
-}
-
-#[derive(Debug, Clone)]
-pub struct Principal {
-    pub user_id: Option<i32>,
-    pub activated: bool,
-    pub blocked: bool,
-    pub canmod: bool,
-    pub candel: bool,
-    pub corrector: bool,
-}
-
-impl Principal {
-    pub fn anonymous() -> Self {
-        Self { user_id: None, activated: false, blocked: false, canmod: false, candel: false, corrector: false }
-    }
-
-    pub fn roles(&self) -> Vec<Role> {
-        if self.user_id.is_none() || !self.activated || self.blocked {
-            return vec![Role::Anonymous];
-        }
-        let mut roles = vec![Role::User];
-        if self.corrector { roles.push(Role::Corrector); }
-        if self.canmod { roles.push(Role::Moderator); }
-        if self.canmod && self.candel { roles.push(Role::Admin); }
-        roles
-    }
-
-    pub fn has(&self, permission: Permission) -> bool {
-        match permission {
-            Permission::ViewDeleted | Permission::DeleteAnyPost | Permission::ModeratePremoderation | Permission::ManageTags | Permission::PostWarning => self.canmod,
-            Permission::EditAnyPost | Permission::ManageUsers | Permission::ManageGroups => self.canmod && self.candel,
-            Permission::EditOwnPost | Permission::DeleteOwnPost => self.user_id.is_some() && !self.blocked && self.activated,
-        }
-    }
-}
-
-
 /// Hex encoded HMAC-SHA256 compatible with the original `SecretTokenService`
 /// activation/reset code strategy.
 pub fn hmac_sha256_hex(secret: &str, payload: &str) -> String {

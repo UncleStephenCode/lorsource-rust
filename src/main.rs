@@ -11,7 +11,6 @@ mod error;
 mod form;
 mod markup;
 mod models;
-mod models_compat;
 mod security;
 mod pagination;
 mod profile;

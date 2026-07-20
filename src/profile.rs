@@ -75,14 +75,12 @@ pub const TRACKER_MODES: &[(&str, &str)] = &[
 /// re-open the raw-HTML-passthrough issue that was closed in markup.rs's
 /// ammonia sanitizer pass. LorcodeUlb is `deprecated=true`, gated by score
 /// the same way deprecated THEMES are (see `format_options` below) -
-/// unlike THEMES, this port renders it identically to plain Lorcode
-/// (a real but narrow simplification: Java's "User line break" mode also
-/// auto-converts single newlines to `<br>`, which this port's lorcode
-/// renderer doesn't distinguish from the non-Ulb path).
+/// unlike THEMES, its stored `BBCODE_ULB` mode is preserved so single
+/// newlines render as explicit line breaks just as they do in Java.
 pub const FORMAT_MODES: &[(&str, &str, bool)] = &[
     ("markdown", "Markdown", false),
     ("lorcode", "LORCODE", false),
-    ("ntobr", "LORCODE (User line break)", true),
+    ("ntobr", "User line break", true),
 ];
 
 impl Default for StProfileSettings {

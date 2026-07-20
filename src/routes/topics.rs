@@ -10,7 +10,6 @@ struct IndexTemplate {
     topics: Vec<TopicSummary>,
     news: Vec<NewsTopicView>,
     pager: Pager,
-    current_user: Option<crate::models::UserSummary>,
     main_page: bool,
     tracker_layout: bool,
     navigation: Option<TopicListNavigation>,
@@ -31,8 +30,18 @@ struct MainPageTemplate {
     poll: Option<TopicSummary>,
     articles: Vec<TopicSummary>,
     top_topics: Vec<TopicSummary>,
-    gallery: Vec<TopicSummary>,
+    gallery: Vec<GalleryBoxItem>,
     tags: Vec<TagItem>,
+    show_gallery_on_main: bool,
+}
+
+struct GalleryBoxItem {
+    topic: TopicSummary,
+    image_url: String,
+    image_srcset: String,
+    image_width: i32,
+    image_height: i32,
+    image_padding_percent: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -66,7 +75,6 @@ struct TopicTemplate {
     topic: TopicDetail,
     topic_html: String,
     comments: Vec<CommentView>,
-    current_user: Option<UserSummary>,
     /// Non-empty only outside thread/deleted mode, when there's more than
     /// one page of comments (TopicController.buildPages).
     pages: Vec<CommentPageLink>,
@@ -81,11 +89,14 @@ struct TopicTemplate {
     /// `unfilteredCount`, used to render "N скрыто, показать".
     filtered_count: usize,
     unfiltered_count: usize,
-    filter_show: bool,
     csrf_token: String,
     poll: Option<PollView>,
     images_html: String,
     topic_reactions_html: String,
+    topic_show_reactions_link: bool,
+    comment_format_mode: String,
+    comment_format_title: String,
+    can_comment: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -93,6 +104,7 @@ struct CommentView {
     item: CommentItem,
     html: String,
     reactions_html: String,
+    show_reactions_link: bool,
 }
 
 /// poll-form.tag rendered server-side: a topic's poll (if any), with vote
@@ -323,20 +335,21 @@ mod image_view_tests {
 pub(crate) async fn prepare_news_topics(state: &AppState, topics: Vec<TopicSummary>, show_group: bool) -> Result<Vec<NewsTopicView>> {
     let mut prepared = Vec::with_capacity(topics.len());
     for topic in topics {
-        let row: Option<(String, Option<bool>, Option<String>, Option<String>)> = sqlx::query_as(
-            "SELECT m.message, m.bbcode, t.linktext, g.image FROM msgbase m JOIN topics t ON t.id=m.id JOIN groups g ON g.id=t.groupid WHERE m.id=$1",
+        let row: Option<(String, Option<bool>, String, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT m.message, m.bbcode, m.markup, t.linktext, g.image FROM msgbase m JOIN topics t ON t.id=m.id JOIN groups g ON g.id=t.groupid WHERE m.id=$1",
         )
         .bind(topic.id)
         .fetch_optional(&state.pool)
         .await?;
-        let (message, bbcode, linktext, group_image) = row.unwrap_or_else(|| (String::new(), Some(true), None, None));
+        let (message, bbcode, message_markup, linktext, group_image) = row
+            .unwrap_or_else(|| (String::new(), Some(true), "BBCODE_TEX".into(), None, None));
         let images = load_topic_images(state, topic.id).await?;
         let images_html = render_topic_images(&images, &topic.title, topic.section_prefix == "gallery", true);
         let group_image_url = group_image.map(|path| {
             if path.starts_with('/') { format!("/tango{path}") } else { format!("/tango/{path}") }
         });
         prepared.push(NewsTopicView {
-            topic_html: markup::render_message(&message, bbcode),
+            topic_html: markup::render_message_with_markup(&message, Some(&message_markup), bbcode),
             images_html,
             group_image_url,
             linktext: linktext.filter(|value| !value.is_empty()).unwrap_or_else(|| "Подробности".to_string()),
@@ -358,19 +371,16 @@ fn reactions_allow_interact(current_user: &Option<UserSummary>, frozen: bool, to
     }
 }
 
-/// reactions.tag rendered server-side as a raw HTML fragment (consistent
-/// with this port's other hand-built widgets, e.g. `/notifications`) -
-/// non-zero reactions are always shown, all-zero ones collapse behind a
-/// "»" toggle (or the whole widget is hidden if every reaction is at zero).
-/// reactions.tag's exact nesting turns out to leave brand-new content (zero
-/// reactions ever) with no discoverable way to add the first one at all:
-/// the outer div gets `class="zero-reactions"` (CSS `display: none`) purely
-/// from `emptyMap`, and the only two things that could reveal it - the "?"
-/// full-log link and the "»" collapse toggle - are *both* separately gated
-/// on `not emptyMap` too. Reproducing that literally would make this port's
-/// inline widget just as unreachable for every new post, which defeats the
-/// point of adding it, so this renders every button whenever the viewer may
-/// interact (no zero-count collapsing) instead of replicating that gate.
+/// Server-rendered equivalent of `reactions.tag`.  A widget with no existing
+/// reactions is hidden as a whole; the message menu receives a separate
+/// "Реакции" link which reveals it.  Once at least one reaction exists, only
+/// non-zero buttons are visible and the zero-count choices live behind `»`.
+#[derive(Debug, Clone)]
+struct ReactionsWidget {
+    html: String,
+    show_menu_link: bool,
+}
+
 fn render_reactions_widget(
     topic_id: i32,
     comment_id: Option<i32>,
@@ -378,7 +388,7 @@ fn render_reactions_widget(
     current_user_id: Option<i32>,
     allow_interact: bool,
     csrf_token: &str,
-) -> String {
+) -> ReactionsWidget {
     let is_anonymous = current_user_id.is_none();
     let anon_class = if is_anonymous { " reaction-anonymous" } else { "" };
     let disabled = if allow_interact { "" } else { " disabled" };
@@ -396,37 +406,124 @@ fn render_reactions_widget(
         buttons.push(Btn { emoji: emoji.to_string(), count, clicked, tooltip });
     }
 
+    // PreparedReactions uses a TreeMap, so preserve the original UTF-16
+    // string order rather than the declaration order of REACTIONS.
+    buttons.sort_by_key(|button| button.emoji.encode_utf16().collect::<Vec<_>>());
+
+    let has_reactions = buttons.iter().any(|button| button.count > 0);
+    let outer_class = if has_reactions { "reactions" } else { "reactions zero-reactions" };
+
     let mut html = format!(
-        "<div class=\"reactions\"><form class=\"reactions-form\" action=\"/reactions\" method=\"post\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><input type=\"hidden\" name=\"topic\" value=\"{topic_id}\">",
-        html_escape::encode_text(csrf_token),
+        "<div class=\"{outer_class}\"><form class=\"reactions-form\" action=\"/reactions\" method=\"post\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><input type=\"hidden\" name=\"topic\" value=\"{topic_id}\">",
+        html_escape::encode_double_quoted_attribute(csrf_token),
     );
     if let Some(cid) = comment_id {
         html.push_str(&format!("<input type=\"hidden\" name=\"comment\" value=\"{cid}\">"));
     }
-    for b in &buttons {
-        if b.count == 0 && !allow_interact {
-            // A viewer who can't react at all (anonymous, the target's own
-            // author, ...) only sees reactions someone has actually left.
-            continue;
-        }
+    for b in buttons.iter().filter(|button| button.count > 0) {
         let value = format!("{}-{}", b.emoji, !b.clicked);
         let clicked_class = if b.clicked { " btn-primary" } else { "" };
         html.push_str(&format!(
             "<button name=\"reaction\" value=\"{}\" class=\"reaction{clicked_class}{anon_class}\" title=\"{}\"{disabled}>{} <span class=\"reaction-count\">{}</span></button>",
-            html_escape::encode_text(&value), html_escape::encode_text(&b.tooltip), html_escape::encode_text(&b.emoji), b.count,
+            html_escape::encode_double_quoted_attribute(&value),
+            html_escape::encode_double_quoted_attribute(&b.tooltip),
+            html_escape::encode_text(&b.emoji),
+            b.count,
         ));
     }
+    if has_reactions && current_user_id.is_some() {
+        let comment_query = comment_id.map(|id| format!("&comment={id}")).unwrap_or_default();
+        html.push_str(&format!(
+            "<a class=\"reaction reaction-show-list\" href=\"/reactions?topic={topic_id}{comment_query}\">?</a>",
+        ));
+    }
+    if allow_interact && buttons.iter().any(|button| button.count == 0) {
+        if has_reactions {
+            let comment_query = comment_id.map(|id| format!("&comment={id}")).unwrap_or_default();
+            html.push_str(&format!(
+                "<a class=\"reaction reaction-show\" href=\"/reactions?topic={topic_id}{comment_query}\">&raquo;</a><span class=\"zero-reactions\">",
+            ));
+        }
+        for b in buttons.iter().filter(|button| button.count == 0) {
+            html.push_str(&format!(
+                "<button name=\"reaction\" value=\"{}-true\" class=\"reaction{anon_class}\" title=\"{}\">{} <span class=\"reaction-count\">0</span></button>",
+                html_escape::encode_double_quoted_attribute(&b.emoji),
+                html_escape::encode_double_quoted_attribute(&b.tooltip),
+                html_escape::encode_text(&b.emoji),
+            ));
+        }
+        if has_reactions {
+            html.push_str("</span>");
+        }
+    }
     html.push_str("</form></div>");
-    html
+    ReactionsWidget {
+        html,
+        show_menu_link: !has_reactions && allow_interact,
+    }
+}
+
+#[cfg(test)]
+mod reactions_widget_tests {
+    use super::*;
+
+    #[test]
+    fn empty_reactions_are_hidden_and_revealed_from_the_message_menu() {
+        let widget = render_reactions_widget(42, None, &[], Some(7), true, "token");
+
+        assert!(widget.show_menu_link);
+        assert!(widget.html.starts_with("<div class=\"reactions zero-reactions\">"));
+        assert!(!widget.html.contains("class=\"reaction reaction-show\""));
+        assert!(widget.html.contains("name=\"reaction\""));
+        assert!(widget.html.contains("<span class=\"reaction-count\">0</span>"));
+    }
+
+    #[test]
+    fn existing_reactions_show_counts_and_collapse_zero_choices() {
+        let rows = vec![
+            ("👍".to_string(), 10, "alice".to_string(), 100),
+            ("🎉".to_string(), 11, "bob".to_string(), 50),
+        ];
+        let widget = render_reactions_widget(42, Some(9), &rows, Some(10), true, "token");
+
+        assert!(!widget.show_menu_link);
+        assert!(widget.html.starts_with("<div class=\"reactions\">"));
+        assert!(widget.html.contains("href=\"/reactions?topic=42&comment=9\">?</a>"));
+        assert!(widget.html.contains("class=\"reaction reaction-show\""));
+        assert!(widget.html.contains("<span class=\"zero-reactions\">"));
+        assert!(widget.html.find("🎉").unwrap() < widget.html.find("👍").unwrap());
+    }
+
+    #[test]
+    fn anonymous_empty_widget_has_no_reveal_link_or_buttons() {
+        let widget = render_reactions_widget(42, None, &[], None, false, "token");
+
+        assert!(!widget.show_menu_link);
+        assert!(widget.html.starts_with("<div class=\"reactions zero-reactions\">"));
+        assert!(!widget.html.contains("name=\"reaction\""));
+    }
 }
 
 /// All reactions for the topic in one query (topic-level rows have
 /// `comment_id IS NULL`), so per-comment widgets don't each hit the DB.
+/// The JSON maps on topics/comments are the authoritative state in Java;
+/// reactions_log is only an audit/date source and can be incomplete in an
+/// imported database.
 async fn load_all_reactions(state: &AppState, topic_id: i32) -> Result<Vec<(Option<i32>, String, i32, String, i32)>> {
     Ok(sqlx::query_as(
-        r#"SELECT rl.comment_id, rl.reaction, rl.origin_user, u.nick, COALESCE(u.score,0)
-           FROM reactions_log rl JOIN users u ON u.id=rl.origin_user
-           WHERE rl.topic_id=$1"#,
+        r#"SELECT NULL::integer AS comment_id, item.value AS reaction,
+                  item.key::integer AS origin_user, u.nick, COALESCE(u.score,0)
+           FROM topics t
+           CROSS JOIN LATERAL jsonb_each_text(COALESCE(t.reactions,'{}'::jsonb)) item
+           JOIN users u ON u.id=item.key::integer
+           WHERE t.id=$1 AND item.key ~ '^[0-9]+$'
+           UNION ALL
+           SELECT c.id AS comment_id, item.value AS reaction,
+                  item.key::integer AS origin_user, u.nick, COALESCE(u.score,0)
+           FROM comments c
+           CROSS JOIN LATERAL jsonb_each_text(COALESCE(c.reactions,'{}'::jsonb)) item
+           JOIN users u ON u.id=item.key::integer
+           WHERE c.topic=$1 AND item.key ~ '^[0-9]+$'"#,
     )
     .bind(topic_id)
     .fetch_all(&state.pool)
@@ -496,6 +593,34 @@ struct TopicFormTemplate {
     preview_html: Option<String>,
     noinfo: bool,
     add_info_html: Option<String>,
+    format_mode: String,
+    format_mode_title: String,
+}
+
+async fn user_format_mode(state: &AppState, user_id: i32) -> Result<(String, String, String)> {
+    let settings_text: Option<String> = sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
+        .bind(user_id).fetch_optional(&state.pool).await?.flatten();
+    let mode = crate::profile::ProfileSettings::from_hstore_text(settings_text).format_mode;
+    let title = crate::profile::FORMAT_MODES.iter().find(|(id, _, _)| *id == mode)
+        .map(|(_, title, _)| *title).unwrap_or("Markdown").to_string();
+    let markup = match mode.as_str() {
+        "markdown" => "MARKDOWN",
+        "ntobr" => "BBCODE_ULB",
+        "plain" => "PLAIN",
+        _ => "BBCODE_TEX",
+    };
+    Ok((mode, title, markup.to_string()))
+}
+
+fn markup_form_view(markup: &str, bbcode: Option<bool>) -> (String, String) {
+    match markup {
+        "MARKDOWN" => ("markdown".into(), "Markdown".into()),
+        "BBCODE_ULB" => ("ntobr".into(), "User line break".into()),
+        "PLAIN" => ("plain".into(), "HTML".into()),
+        "BBCODE_TEX" | "LORCODE" => ("lorcode".into(), "LORCODE".into()),
+        _ if bbcode == Some(false) => ("markdown".into(), "Markdown".into()),
+        _ => ("lorcode".into(), "LORCODE".into()),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -626,14 +751,50 @@ mod topic_form_contract_tests {
 
 pub async fn index(State(state): State<AppState>, Query(q): Query<PagerQuery>, CurrentUser(current_user): CurrentUser) -> Result<Html<String>> {
     let _ = q;
-    let all_topics = list_topics(&state, None, None, 0, 30).await?;
+    let show_gallery_on_main = match &current_user {
+        Some(user) => {
+            let settings_text: Option<String> = sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
+                .bind(user.id).fetch_optional(&state.pool).await?.flatten();
+            crate::profile::ProfileSettings::from_hstore_text(settings_text).main_gallery
+        }
+        None => crate::profile::ProfileSettings::default().main_gallery,
+    };
+    let all_topics = if show_gallery_on_main {
+        let mut topics = Vec::new();
+        for section in ["news", "gallery", "polls", "articles"] {
+            topics.extend(list_topics(&state, Some(section), None, 0, 30).await?);
+        }
+        topics.sort_by(|left, right| {
+            let left_date = left.lastmod.as_ref().unwrap_or(&left.postdate);
+            let right_date = right.lastmod.as_ref().unwrap_or(&right.postdate);
+            right.sticky.cmp(&left.sticky).then_with(|| {
+                right_date.cmp(left_date)
+            })
+        });
+        topics.truncate(30);
+        topics
+    } else {
+        list_topics(&state, Some("news"), None, 0, 30).await?
+    };
     let news = prepare_news_topics(&state, all_topics.iter().take(10).cloned().collect(), true).await?;
     let brief = all_topics.iter().skip(10).cloned().collect();
-    let news_restriction: i32 = sqlx::query_scalar("SELECT restrict_score FROM sections WHERE id=1").fetch_one(&state.pool).await?;
-    let add_reason = posting_reason_for_port(&state, news_restriction, &current_user).await?;
-    let uncommitted = sqlx::query_as::<_, (i32, String, i64)>(
+    let add_restriction: i32 = if show_gallery_on_main {
+        sqlx::query_scalar("SELECT min(restrict_score) FROM sections")
+            .fetch_one(&state.pool)
+            .await?
+    } else {
+        sqlx::query_scalar("SELECT restrict_score FROM sections WHERE id=1")
+            .fetch_one(&state.pool)
+            .await?
+    };
+    let add_reason = posting_reason_for_port(&state, add_restriction, &current_user).await?;
+    let mut uncommitted = sqlx::query_as::<_, (i32, String, i64)>(
         "SELECT s.id,s.name,count(t.id) FROM sections s JOIN groups g ON g.section=s.id JOIN topics t ON t.groupid=g.id WHERE t.moderate AND NOT t.deleted AND NOT t.draft GROUP BY s.id,s.name HAVING count(t.id)>0 ORDER BY s.id",
     ).fetch_all(&state.pool).await?;
+    let can_review_all_sections = current_user.as_ref().is_some_and(|user| user.canmod || user.corrector);
+    if !show_gallery_on_main && !can_review_all_sections {
+        uncommitted.retain(|(section_id, _, _)| *section_id == 1);
+    }
     let (drafts_count, favorite_present, user_status) = match &current_user {
         Some(user) => {
             let drafts: i64 = sqlx::query_scalar("SELECT count(*) FROM topics WHERE userid=$1 AND draft AND NOT deleted").bind(user.id).fetch_one(&state.pool).await?;
@@ -643,15 +804,34 @@ pub async fn index(State(state): State<AppState>, Query(q): Query<PagerQuery>, C
         }
         None => (0, false, String::new()),
     };
-    let poll = list_topics(&state, Some("polls"), None, 0, 1).await?.into_iter().next();
-    let articles = list_topics(&state, Some("articles"), None, 0, 7).await?;
+    let poll = if show_gallery_on_main { None } else { list_topics(&state, Some("polls"), None, 0, 1).await?.into_iter().next() };
+    let articles = if show_gallery_on_main { Vec::new() } else { list_topics(&state, Some("articles"), None, 0, 7).await? };
     let top_topics = all_topics.iter().take(10).cloned().collect();
-    let gallery = list_topics(&state, Some("gallery"), None, 0, 3).await?;
+    let mut gallery = Vec::new();
+    if !show_gallery_on_main {
+        for topic in list_topics(&state, Some("gallery"), None, 0, 12).await? {
+            if let Some(image) = load_topic_images(&state, topic.id).await?.into_iter().next() {
+                let srcset = image_srcset(&image);
+                let padding_percent = 100.0 * f64::from(image.medium_height) / f64::from(image.medium_width);
+                gallery.push(GalleryBoxItem {
+                    topic,
+                    image_url: image.medium_url,
+                    image_srcset: srcset,
+                    image_width: image.medium_width,
+                    image_height: image.medium_height,
+                    image_padding_percent: padding_percent,
+                });
+                if gallery.len() == 3 {
+                    break;
+                }
+            }
+        }
+    }
     let tags = sqlx::query_as::<_, TagItem>("SELECT value,counter FROM tags_values WHERE counter>0 ORDER BY counter DESC,lower(value) LIMIT 25").fetch_all(&state.pool).await?;
     Ok(Html(MainPageTemplate {
         news,
         brief,
-        add_url: add_reason.is_none().then(|| "/add-section.jsp?section=1".to_string()),
+        add_url: add_reason.is_none().then(|| if show_gallery_on_main { "/add-section.jsp".to_string() } else { "/add-section.jsp?section=1".to_string() }),
         add_reason: add_reason.unwrap_or_default(),
         uncommitted,
         current_user,
@@ -663,6 +843,7 @@ pub async fn index(State(state): State<AppState>, Query(q): Query<PagerQuery>, C
         top_topics,
         gallery,
         tags,
+        show_gallery_on_main,
     }.render()?))
 }
 
@@ -671,7 +852,7 @@ pub async fn lenta(State(state): State<AppState>, Query(q): Query<PagerQuery>, C
     let topics = list_topics(&state, Some("forum"), None, pager.offset, pager.limit).await?;
     let news = prepare_news_topics(&state, topics.clone(), true).await?;
     let navigation = build_topic_list_navigation(&state, "forum", None, &current_user).await?;
-    Ok(Html(IndexTemplate { title: "Форум / лента".into(), topics, news, pager, current_user, main_page: false, tracker_layout: false, navigation: Some(navigation) }.render()?))
+    Ok(Html(IndexTemplate { title: "Форум / лента".into(), topics, news, pager, main_page: false, tracker_layout: false, navigation: Some(navigation) }.render()?))
 }
 
 pub async fn section_topics(State(state): State<AppState>, uri: Uri, Query(q): Query<PagerQuery>, CurrentUser(current_user): CurrentUser) -> Result<Html<String>> {
@@ -680,7 +861,7 @@ pub async fn section_topics(State(state): State<AppState>, uri: Uri, Query(q): Q
     let topics = list_topics(&state, Some(section), None, pager.offset, pager.limit).await?;
     let news = prepare_news_topics(&state, topics.clone(), true).await?;
     let navigation = build_topic_list_navigation(&state, section, None, &current_user).await?;
-    Ok(Html(IndexTemplate { title: section_title(section).to_string(), topics, news, pager, current_user, main_page: false, tracker_layout: false, navigation: Some(navigation) }.render()?))
+    Ok(Html(IndexTemplate { title: section_title(section).to_string(), topics, news, pager, main_page: false, tracker_layout: false, navigation: Some(navigation) }.render()?))
 }
 
 pub async fn section_group_topics(State(state): State<AppState>, uri: Uri, Path(group): Path<String>, Query(q): Query<PagerQuery>, CurrentUser(current_user): CurrentUser) -> Result<Html<String>> {
@@ -691,14 +872,14 @@ pub async fn section_group_topics(State(state): State<AppState>, uri: Uri, Path(
     if selected.section_prefix != section { return Err(AppError::NotFound); }
     let news = prepare_news_topics(&state, topics.clone(), false).await?;
     let navigation = build_topic_list_navigation(&state, section, Some(&selected), &current_user).await?;
-    Ok(Html(IndexTemplate { title: format!("{} «{}»", section_title(section), selected.title), topics, news, pager, current_user, main_page: false, tracker_layout: false, navigation: Some(navigation) }.render()?))
+    Ok(Html(IndexTemplate { title: format!("{} «{}»", section_title(section), selected.title), topics, news, pager, main_page: false, tracker_layout: false, navigation: Some(navigation) }.render()?))
 }
 
-pub async fn legacy_show_topics(State(state): State<AppState>, Query(q): Query<PagerQuery>, CurrentUser(current_user): CurrentUser) -> Result<Html<String>> {
+pub async fn legacy_show_topics(State(state): State<AppState>, Query(q): Query<PagerQuery>, CurrentUser(_current_user): CurrentUser) -> Result<Html<String>> {
     let pager = Pager::new(q.offset.unwrap_or(0), state.config.page_size);
     let topics = list_topics(&state, None, None, pager.offset, pager.limit).await?;
     let news = prepare_news_topics(&state, topics.clone(), true).await?;
-    Ok(Html(IndexTemplate { title: "show-topics.jsp".into(), topics, news, pager, current_user, main_page: false, tracker_layout: false, navigation: None }.render()?))
+    Ok(Html(IndexTemplate { title: "show-topics.jsp".into(), topics, news, pager, main_page: false, tracker_layout: false, navigation: None }.render()?))
 }
 
 const VIEW_ALL_SECTION_PREFIX_CASE: &str = "CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END";
@@ -753,7 +934,6 @@ struct ViewAllTemplate {
     deleted_topics: Vec<DeletedTopicRow>,
     show_dates: bool,
     show_gallery_notice: bool,
-    current_user: Option<UserSummary>,
 }
 
 #[derive(Deserialize)]
@@ -939,7 +1119,6 @@ pub async fn view_all(State(state): State<AppState>, Query(q): Query<ViewAllQuer
         deleted_topics,
         show_dates: is_moderator,
         show_gallery_notice,
-        current_user: user,
     }.render()?))
 }
 
@@ -1053,7 +1232,7 @@ async fn render_topic_view(
         }
     }
 
-    let topic_html = markup::render_message(&topic.message, topic.bbcode);
+    let topic_html = markup::render_message_with_markup(&topic.message, Some(&topic.markup), topic.bbcode);
 
     let all_comments: Vec<CommentItem> = if want_deleted {
         topic_service(&state).vecListComments(id).await?
@@ -1120,14 +1299,14 @@ async fn render_topic_view(
     let current_user_id = current_user.as_ref().map(|u| u.id);
 
     let comments: Vec<CommentView> = page_comments.into_iter().map(|item| {
-        let html = markup::render_message(&item.message, Some(true));
+        let html = markup::render_message_with_markup(&item.message, Some(&item.markup), item.bbcode);
         let rows: Vec<(String, i32, String, i32)> = all_reactions.iter()
             .filter(|(cid, ..)| *cid == Some(item.id))
             .map(|(_, r, u, n, s)| (r.clone(), *u, n.clone(), *s))
             .collect();
         let allow_interact = reactions_allow_interact(&current_user, reactor_frozen, topic_expired, item.author_id, item.deleted, comments_hidden);
-        let reactions_html = render_reactions_widget(topic.id, Some(item.id), &rows, current_user_id, allow_interact, &csrf_token);
-        CommentView { item, html, reactions_html }
+        let reactions = render_reactions_widget(topic.id, Some(item.id), &rows, current_user_id, allow_interact, &csrf_token);
+        CommentView { item, html, reactions_html: reactions.html, show_reactions_link: reactions.show_menu_link }
     }).collect();
 
     let topic_reaction_rows: Vec<(String, i32, String, i32)> = all_reactions.iter()
@@ -1135,17 +1314,21 @@ async fn render_topic_view(
         .map(|(_, r, u, n, s)| (r.clone(), *u, n.clone(), *s))
         .collect();
     let topic_allow_interact = reactions_allow_interact(&current_user, reactor_frozen, topic_expired, topic.author_id, topic.deleted, false);
-    let topic_reactions_html = render_reactions_widget(topic.id, None, &topic_reaction_rows, current_user_id, topic_allow_interact, &csrf_token);
+    let topic_reactions = render_reactions_widget(topic.id, None, &topic_reaction_rows, current_user_id, topic_allow_interact, &csrf_token);
 
     let poll = load_poll_view(&state, topic.id, topic.deleted, topic.moderate, topic_expired, query.results.unwrap_or(false), &current_user).await?;
     let images = load_topic_images(&state, topic.id).await?;
     let images_html = render_topic_images(&images, &topic.title, topic.section_prefix == "gallery", false);
+    let (comment_format_mode, comment_format_title, _) = match &current_user {
+        Some(user) => user_format_mode(&state, user.id).await?,
+        None => (crate::profile::DEFAULT_FORMAT_MODE.into(), "Markdown".into(), "MARKDOWN".into()),
+    };
+    let can_comment = current_user.is_some() && !topic_expired && !topic.deleted && !comments_hidden;
 
     Ok(Html(TopicTemplate {
         topic,
         topic_html,
         comments,
-        current_user,
         pages,
         thread_mode,
         thread_root,
@@ -1153,11 +1336,14 @@ async fn render_topic_view(
         show_deleted_button: can_view_deleted_comments && !want_deleted,
         filtered_count,
         unfiltered_count,
-        filter_show,
         csrf_token,
         poll,
         images_html,
-        topic_reactions_html,
+        topic_reactions_html: topic_reactions.html,
+        topic_show_reactions_link: topic_reactions.show_menu_link,
+        comment_format_mode,
+        comment_format_title,
+        can_comment,
     }.render()?).into_response())
 }
 
@@ -1318,6 +1504,10 @@ pub async fn new_topic_form(State(state): State<AppState>, Query(q): Query<NewTo
         None => return Ok(Redirect::to("/add-section.jsp").into_response()),
     };
     let group = load_topic_form_group(&state, selected_group).await?;
+    let (format_mode, format_mode_title, _) = match &user {
+        Some(user) => user_format_mode(&state, user.id).await?,
+        None => (crate::profile::DEFAULT_FORMAT_MODE.into(), "Markdown".into(), "MARKDOWN".into()),
+    };
     let image_allowed = image_upload_allowed(&group, &user);
     let noinfo = q.noinfo.is_some();
     let initial_tags = q.tags.or(q.tag).unwrap_or_default();
@@ -1350,6 +1540,8 @@ pub async fn new_topic_form(State(state): State<AppState>, Query(q): Query<NewTo
         preview_html: None,
         noinfo,
         add_info_html,
+        format_mode,
+        format_mode_title,
     }.render()?).into_response())
 }
 
@@ -1482,6 +1674,7 @@ pub async fn create_topic(State(state): State<AppState>, CurrentUser(user): Curr
     let Some(user) = user else { return Err(AppError::Forbidden); };
     let (pairs, uploads) = parse_topic_request(&state, request, &csrf_token).await?;
     let form = parse_topic_form(&pairs)?;
+    let (format_mode, format_mode_title, markup_id) = user_format_mode(&state, user.id).await?;
     let group = load_topic_form_group(&state, form.group).await?;
     validate_topic_form(&form, group.links_allowed)?;
     let is_draft = form.draft.is_some();
@@ -1520,9 +1713,11 @@ pub async fn create_topic(State(state): State<AppState>, CurrentUser(user): Curr
             form_url: form.url.clone().unwrap_or_default(),
             form_linktext: form.linktext.clone().unwrap_or_default(),
             form_tags: form.tags.clone().unwrap_or_default(),
-            preview_html: Some(markup::render_message(&form.msg, Some(true))),
+            preview_html: Some(markup::render_message_with_markup(&form.msg, Some(&markup_id), None)),
             noinfo: form.noinfo.as_deref().is_some_and(|value| matches!(value, "1" | "true" | "on")),
             add_info_html: None,
+            format_mode: format_mode.clone(),
+            format_mode_title: format_mode_title.clone(),
         }.render()?).into_response());
     }
 
@@ -1538,6 +1733,8 @@ pub async fn create_topic(State(state): State<AppState>, CurrentUser(user): Curr
     let service = topic_service(&state);
     let id = service.iNextMessageId(&mut tx).await?;
     service.vInsertTopicMessage(&mut tx, id, &form.msg).await?;
+    sqlx::query("UPDATE msgbase SET markup=$2, bbcode=$3 WHERE id=$1")
+        .bind(id).bind(&markup_id).bind(markup_id != "MARKDOWN").execute(&mut *tx).await?;
     service.vInsertTopic(&mut tx, StNewTopic {
         iMsgId: id,
         iGroupId: form.group,
@@ -1561,18 +1758,27 @@ pub async fn create_topic(State(state): State<AppState>, CurrentUser(user): Curr
     tx.commit().await?;
     notify_topic_created(&state, id, user.id, &form.msg).await?;
     crate::search_index::index_topic(&state, id, false).await;
-    // The topic-view gate (render_topic) lets the author through even while
-    // draft/pending, so redirecting straight to the topic works for both
-    // cases - Java instead shows a dedicated "add-done-moderated" interim
-    // page for the premoderated case, which isn't replicated here.
+    // Java shows a dedicated confirmation for protected sections because
+    // the new topic is intentionally absent from the public section until
+    // a moderator commits it.
     let topic = get_topic(&state, id).await?;
+    if premoderated && !is_draft {
+        return Ok(Html(ModeratedTopicTemplate { topic_url: topic.topic_url() }.render()?).into_response());
+    }
     Ok(Redirect::to(&topic.topic_url()).into_response())
+}
+
+#[derive(Template)]
+#[template(path = "topic_created_moderated.html")]
+struct ModeratedTopicTemplate {
+    topic_url: String,
 }
 
 pub async fn edit_topic_form(State(state): State<AppState>, Query(q): Query<ViewMessageQuery>, CurrentUser(user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     let topic = get_topic(&state, q.msgid).await?;
     let selected_group = topic.group_id;
     let group = load_topic_form_group(&state, selected_group).await?;
+    let (format_mode, format_mode_title) = markup_form_view(&topic.markup, topic.bbcode);
     let image_allowed = image_upload_allowed(&group, &user);
     let image_count: i64 = sqlx::query_scalar("SELECT count(*) FROM images WHERE topic=$1 AND NOT deleted AND NOT primary_image").bind(q.msgid).fetch_one(&state.pool).await?;
     // PollDao.getPollByTopicId/EditTopicController: pre-fill existing
@@ -1610,6 +1816,8 @@ pub async fn edit_topic_form(State(state): State<AppState>, Query(q): Query<View
         preview_html: None,
         noinfo: false,
         add_info_html: None,
+        format_mode,
+        format_mode_title,
     }.render()?))
 }
 
@@ -1676,9 +1884,11 @@ pub async fn edit_topic(State(state): State<AppState>, CurrentUser(user): Curren
             additional_image_rows: if upload_allowed && group.section_prefix != "forum" { vec![(); 3usize.saturating_sub(additional_count as usize)] } else { Vec::new() },
             form_title: form.title.clone(), form_msg: form.msg.clone(), form_url: form.url.clone().unwrap_or_default(),
             form_linktext: form.linktext.clone().unwrap_or_default(), form_tags: form.tags.clone().unwrap_or_default(),
-            preview_html: Some(markup::render_message(&form.msg, current_topic.bbcode)),
+            preview_html: Some(markup::render_message_with_markup(&form.msg, Some(&current_topic.markup), current_topic.bbcode)),
             noinfo: false,
             add_info_html: None,
+            format_mode: markup_form_view(&current_topic.markup, current_topic.bbcode).0,
+            format_mode_title: markup_form_view(&current_topic.markup, current_topic.bbcode).1,
         }.render()?).into_response());
     }
 
@@ -1723,7 +1933,6 @@ struct TopicDeleteMeta {
     premoderated: bool,
     commited: bool,
     comment_count: i64,
-    section_id: i32,
     poll_allowed: bool,
 }
 
@@ -1864,9 +2073,9 @@ pub(crate) async fn check_topic_viewable(state: &AppState, topic_id: i32, user: 
 }
 
 async fn load_topic_delete_meta(state: &AppState, msgid: i32) -> Result<TopicDeleteMeta> {
-    let row: (i32, bool, chrono::DateTime<chrono::Utc>, Option<chrono::NaiveDateTime>, bool, bool, bool, i64, i32, bool) = sqlx::query_as(
+    let row: (i32, bool, chrono::DateTime<chrono::Utc>, Option<chrono::NaiveDateTime>, bool, bool, bool, i64, bool) = sqlx::query_as(
         r#"SELECT t.userid, t.deleted, t.postdate, t.commitdate, COALESCE(t.draft,false), s.moderate,
-                  (t.commitdate IS NOT NULL), t.stat1::bigint, s.id, s.vote
+                  (t.commitdate IS NOT NULL), t.stat1::bigint, s.vote
            FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section
            WHERE t.id=$1"#,
     )
@@ -1883,8 +2092,7 @@ async fn load_topic_delete_meta(state: &AppState, msgid: i32) -> Result<TopicDel
         premoderated: row.5,
         commited: row.6,
         comment_count: row.7,
-        section_id: row.8,
-        poll_allowed: row.9,
+        poll_allowed: row.8,
     })
 }
 

@@ -11,7 +11,7 @@
   {% if !is_edit %}<input type="hidden" name="group" value="{{ selected_group }}">{% endif %}
   <div class="control-group">
     <label for="title">Заглавие</label>
-    <input id="title" name="title" required{% if !is_edit %} autofocus{% endif %} value="{{ form_title }}">
+    <input id="title" name="title" type="text" required{% if !is_edit %} autofocus{% endif %} value="{{ form_title }}">
   </div>
   {% if poll_allowed %}
     <br>
@@ -24,9 +24,9 @@
       <p><label>Мультивыбор: <input type="checkbox" name="multiSelect"{% if poll_multiselect %} checked{% endif %}></label></p>
     {% endif %}
   {% endif %}
-  <div class="control-group" data-format-mode="html">
+  <div class="control-group" data-format-mode="{{ format_mode }}">
     <div class="markup-tabs">
-      <ul class="markup-tabs__nav"><li class="markup-tabs__tab active" data-tab="editor">HTML</li></ul>
+      <ul class="markup-tabs__nav"><li class="markup-tabs__tab active" data-tab="editor">{{ format_mode_title }}</li></ul>
       <div class="markup-tabs__content"><div class="markup-tabs__panel active" data-panel="editor">
         <textarea name="msg" id="form_msg">{{ form_msg }}</textarea>
       </div></div>
@@ -44,7 +44,7 @@
   {% endif %}
   <div class="control-group">
     <label for="tags"><a href="/tags" target="_blank">Метки</a> (разделенные запятой)</label>
-    <input id="tags" name="tags" required autocapitalize="off" data-tags-autocomplete="data-tags-autocomplete" value="{{ form_tags }}">
+    <input id="tags" name="tags" type="text" required autocapitalize="off" data-tags-autocomplete="data-tags-autocomplete" value="{{ form_tags }}">
   </div>
   {% if image_allowed %}
   <div class="control-group"><label for="image">{% if is_edit %}Заменить или добавить изображение:{% else %}Изображение:{% endif %} <input id="image" type="file" name="image" accept=".jpg,.jpeg,.png,.gif,image/jpeg,image/png,image/gif"{% if image_required && !is_edit %} required{% endif %}></label></div>

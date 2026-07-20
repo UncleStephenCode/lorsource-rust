@@ -11,18 +11,18 @@
 
   {% for t in news %}
   <article class="news" id="topic-{{ t.topic.id }}">
-    <header>{% if t.show_group %}<div class="group"><a href="/{{ t.topic.section_prefix }}/">{{ t.topic.section_name }}</a> — <a href="/{{ t.topic.section_prefix }}/{{ t.topic.group_urlname }}">{{ t.topic.group_title }}</a></div>{% endif %}<h1>{% if t.topic.resolved.unwrap_or(false) %}<i class="icon-check" title="решено"></i>{% endif %}<a href="{{ t.topic.topic_url() }}">{{ t.topic.title }}</a></h1>{% if t.topic.tags_vec().len() > 0 %}<div class="tags">{% for tag in t.topic.tags_vec() %}<a class="tag" href="/tag/{{ tag }}">{{ tag }}</a>{% endfor %}</div>{% endif %}</header>
+    <header>{% if t.show_group %}<div class="group"><a href="/{{ t.topic.section_prefix }}/">{{ t.topic.section_name }}</a> — <a href="/{{ t.topic.section_prefix }}/{{ t.topic.group_urlname }}">{{ t.topic.group_title }}</a></div>{% endif %}<h1>{% if t.topic.resolved.unwrap_or(false) %}<i class="icon-check" title="решено"></i>{% endif %}<a href="{{ t.topic.topic_url() }}">{{ t.topic.title }}</a></h1>{% if t.topic.tags_vec().len() > 0 %}<p class="tags"><i class="icon-tag"></i>&nbsp;{% for tag in t.topic.tags_vec() %}<a class="tag" href="/tag/{{ tag }}">{{ tag }}</a>{% if !loop.last %}, {% endif %}{% endfor %}</p>{% endif %}</header>
     {{ t.images_html|safe }}
     {% match t.group_image_url %}{% when Some with (image) %}<div class="entry-userpic"><a href="/{{ t.topic.section_prefix }}/{{ t.topic.group_urlname }}"><img class="groupimg" src="{{ image }}" alt="Группа {{ t.topic.group_title }}"></a></div>{% when None %}{% endmatch %}
     <div class="entry-body"><div class="msg">{{ t.topic_html|safe }}{% match t.topic.url %}{% when Some with (url) %}<p>&gt;&gt;&gt; <a href="{{ url }}">{{ t.linktext }}</a></p>{% when None %}{% endmatch %}</div><div class="sign"><a href="/people/{{ t.topic.author }}/profile">{{ t.topic.author }}</a> ({{ t.topic.postdate }})</div><div class="nav">{% if t.topic.comments == 0 %}<a href="/comment-message.jsp?topic={{ t.topic.id }}">Добавить&nbsp;комментарий</a>{% else %}<a href="{{ t.topic.topic_url() }}#comments">{{ t.topic.comments }} комментариев</a>{% endif %}</div></div>
   </article>
   {% endfor %}
 
-  {% if brief.len() > 0 %}<section><h2>Еще топики</h2><div id="main-page-news"><section><ul>
-    {% for t in brief %}<li><span class="group-label">{{ t.group_title }}</span> <a href="{{ t.topic_url() }}">{{ t.title }}</a>{% if t.comments > 0 %} ({{ t.comments }}){% endif %}</li>{% endfor %}
+  {% if brief.len() > 0 %}<section><h2>{% if show_gallery_on_main %}Еще топики{% else %}Еще новости{% endif %}</h2><div id="main-page-news"><section><ul>
+    {% for t in brief %}<li><span class="group-label">{% if show_gallery_on_main %}{{ t.section_name }} — {% endif %}{{ t.group_title }}</span> <a href="{{ t.topic_url() }}">{{ t.title }}</a>{% if t.comments > 0 %} ({{ t.comments }}){% endif %}</li>{% endfor %}
   </ul></section></div></section>{% endif %}
 
-  <nav><a href="/news/" class="btn btn-default">Все новости</a><a href="/gallery/" class="btn btn-default">Вся галерея</a><a href="/polls/" class="btn btn-default">Все опросы</a><a href="/articles/" class="btn btn-default">Все статьи</a></nav>
+  <nav><a href="/news/" class="btn btn-default">Все новости</a>{% if show_gallery_on_main %}<a href="/gallery/" class="btn btn-default">Вся галерея</a><a href="/polls/" class="btn btn-default">Все опросы</a><a href="/articles/" class="btn btn-default">Все статьи</a>{% endif %}</nav>
   <p><i class="icon-rss"></i> <a href="/section-rss.jsp?section=1">RSS-подписка на новости</a></p>
   <p><i class="icon-telegram"></i> <a href="https://t.me/best_of_lor">Канал в Telegram</a></p>
 </div>
@@ -35,7 +35,7 @@
   {% match poll %}{% when Some with (topic) %}<div class="boxlet"><h2><a href="/polls/">Опрос</a></h2><div class="boxlet_content"><p><a href="{{ topic.topic_url() }}">{{ topic.title }}</a></p><p><a href="/polls/">итоги прошедших опросов...</a></p><p><a class="btn btn-small btn-default" href="/add-section.jsp?section=5">добавить опрос</a></p></div></div>{% when None %}{% endmatch %}
   {% if articles.len() > 0 %}<div class="boxlet"><h2><a href="/articles/">Статьи</a></h2><div class="boxlet_content"><ul>{% for topic in articles %}<li><a href="{{ topic.topic_url() }}">{{ topic.title }}</a> ({{ topic.comments }})</li>{% endfor %}</ul></div></div>{% endif %}
   {% if top_topics.len() > 0 %}<div class="boxlet"><h2>Лучшие темы</h2><div class="boxlet_content"><ul>{% for topic in top_topics %}<li><a href="{{ topic.topic_url() }}">{{ topic.title }}</a> ({{ topic.comments }})</li>{% endfor %}</ul></div></div>{% endif %}
-  {% if gallery.len() > 0 %}<div class="boxlet"><h2><a href="/gallery/">Галерея</a></h2><div class="boxlet_content"><ul>{% for topic in gallery %}<li><a href="{{ topic.topic_url() }}">{{ topic.title }}</a></li>{% endfor %}</ul></div></div>{% endif %}
+  {% if gallery.len() > 0 %}<div class="boxlet"><h2><a href="/gallery/">Галерея</a></h2><div class="boxlet_content boxlet-gallery">{% for item in gallery %}<div style="margin-bottom:1em"><div style="position:relative;padding-bottom:{{ item.image_padding_percent }}%;margin:0"><a href="{{ item.topic.topic_url() }}" style="position:absolute"><img sizes="(min-width: 70em) 24vw, (min-width: 47em) 50vw, 100vw" srcset="{{ item.image_srcset }}" src="{{ item.image_url }}" width="{{ item.image_width }}" height="{{ item.image_height }}" loading="lazy" alt="{{ item.topic.title }}"></a></div><a href="{{ item.topic.topic_url() }}">{{ item.topic.title }}</a> от {{ item.topic.author }} ({{ item.topic.comments }})</div>{% endfor %}<a href="/gallery/">другие скриншоты...</a></div></div>{% endif %}
   {% if tags.len() > 0 %}<div class="boxlet"><h2>Облако Меток</h2><div class="boxlet_content"><p align="center">{% for tag in tags %}<a class="cloud5" href="/tag/{{ tag.value }}">{{ tag.value }}</a> {% endfor %}</p><p><a href="/tags/">все метки...</a></p></div></div>{% endif %}
 </aside>
 </div>

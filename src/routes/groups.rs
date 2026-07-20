@@ -203,7 +203,7 @@ pub async fn group_archive(State(state): State<AppState>, Path(group_name): Path
     let group = forum_service(&state).stArchiveGroup(&group_name).await?;
     let rows = crate::routes::legacy::list_archive_year_months(&state, Some("forum"), Some(&group_name)).await?;
     let months = rows.into_iter().map(|(y, m, c)| crate::routes::legacy::ArchiveMonthLink {
-        year: y, month: m, month_name: crate::routes::legacy::month_name(m), count: c, url: format!("/forum/{group_name}/{y}/{m}"),
+        year: y, month_name: crate::routes::legacy::month_name(m), count: c, url: format!("/forum/{group_name}/{y}/{m}"),
     }).collect();
     Ok(Html(crate::routes::legacy::ArchiveIndexTemplate {
         title: format!("Форум - {} - Архив", group.title),

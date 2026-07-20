@@ -6,7 +6,7 @@ use crate::domain::topic::{
     model::{StTopicDetail, StTopicSummary},
     repository::{StEditTopic, StNewTopic, TrTopicRepository},
 };
-use crate::error::Result;
+use crate::error::{AppError, Result};
 
 #[derive(Debug, Clone)]
 pub struct CTopicPgRepository {
@@ -102,29 +102,75 @@ impl TrTopicRepository for CTopicPgRepository {
     }
 
     async fn vReplaceTags(&self, txPg: &mut Transaction<'_, Postgres>, iMsgId: i32, optTags: Option<&str>) -> Result<()> {
-        sqlx::query("DELETE FROM tags WHERE msgid=$1").bind(iMsgId).execute(&mut **txPg).await?;
-        if let Some(sTags) = optTags {
-            // Callers (create_topic/edit_topic) already ran
-            // parse_and_validate_tags/check_can_create_new_tags against
-            // this same string, so re-parsing here with TagName.parseTags'
-            // exact rules (lowercase, dedupe, comma-or-pipe separated) just
-            // keeps this method idempotent on its own - it is not
-            // re-validating.
-            for sTag in crate::routes::tags::parse_tags(sTags).into_iter().take(crate::routes::tags::MAX_TAGS_PER_TOPIC) {
-                let iTagId: i32 = sqlx::query_scalar(
-                    r#"INSERT INTO tags_values(value,counter) VALUES ($1,1)
-                       ON CONFLICT(value) DO UPDATE SET counter=tags_values.counter+1
+        let tag_names = match optTags {
+            Some(tags) => crate::routes::tags::parse_and_validate_tags(tags).map_err(AppError::BadRequest)?,
+            None => Vec::new(),
+        };
+
+        // TagService.getOrCreateTag resolves a synonym before considering a
+        // same-named tag value. Without that step, entering a synonym created
+        // a second canonical tag and split its topic counter.
+        let mut desired_ids = Vec::with_capacity(tag_names.len());
+        for tag in tag_names {
+            let existing_id: Option<i32> = sqlx::query_scalar(
+                r#"SELECT id FROM (
+                     SELECT ts.tagid AS id, 0 AS priority
+                     FROM tags_synonyms ts WHERE lower(ts.value)=lower($1)
+                     UNION ALL
+                     SELECT tv.id, 1 AS priority
+                     FROM tags_values tv WHERE lower(tv.value)=lower($1)
+                   ) found ORDER BY priority LIMIT 1"#,
+            )
+            .bind(&tag)
+            .fetch_optional(&mut **txPg)
+            .await?;
+            let tag_id = match existing_id {
+                Some(id) => id,
+                None => sqlx::query_scalar(
+                    r#"INSERT INTO tags_values(value,counter) VALUES($1,0)
+                       ON CONFLICT(value) DO UPDATE SET value=EXCLUDED.value
                        RETURNING id"#,
                 )
-                .bind(&sTag)
+                .bind(&tag)
                 .fetch_one(&mut **txPg)
-                .await?;
-                sqlx::query("INSERT INTO tags(msgid, tagid) VALUES ($1,$2) ON CONFLICT DO NOTHING")
-                    .bind(iMsgId)
-                    .bind(iTagId)
-                    .execute(&mut **txPg)
-                    .await?;
+                .await?,
+            };
+            if !desired_ids.contains(&tag_id) {
+                desired_ids.push(tag_id);
             }
+        }
+
+        let old_ids: Vec<i32> = sqlx::query_scalar("SELECT tagid FROM tags WHERE msgid=$1")
+            .bind(iMsgId)
+            .fetch_all(&mut **txPg)
+            .await?;
+        sqlx::query("DELETE FROM tags WHERE msgid=$1").bind(iMsgId).execute(&mut **txPg).await?;
+        for tag_id in &desired_ids {
+            sqlx::query("INSERT INTO tags(msgid,tagid) VALUES($1,$2) ON CONFLICT DO NOTHING")
+                .bind(iMsgId)
+                .bind(tag_id)
+                .execute(&mut **txPg)
+                .await?;
+        }
+
+        // Recalculate every affected value from the actual relation. The old
+        // implementation incremented unchanged tags again on every edit and
+        // never corrected removed tags, so counters quickly diverged.
+        let mut affected_ids = old_ids;
+        for tag_id in desired_ids {
+            if !affected_ids.contains(&tag_id) {
+                affected_ids.push(tag_id);
+            }
+        }
+        if !affected_ids.is_empty() {
+            sqlx::query(
+                r#"UPDATE tags_values tv
+                   SET counter=(SELECT count(*)::int FROM tags t WHERE t.tagid=tv.id)
+                   WHERE tv.id=ANY($1)"#,
+            )
+            .bind(&affected_ids)
+            .execute(&mut **txPg)
+            .await?;
         }
         Ok(())
     }
@@ -214,7 +260,7 @@ OFFSET $3 LIMIT $4
 "#;
 
 const S_GET_TOPIC_SQL: &str = r#"
-SELECT t.id, t.title, m.message, m.bbcode, t.url, t.linktext, t.postdate, t.lastmod,
+SELECT t.id, t.title, m.message, m.bbcode, m.markup, t.url, t.linktext, t.postdate, t.lastmod,
        u.id AS author_id, u.nick AS author,
        g.id AS group_id, g.title AS group_title, g.urlname AS group_urlname,
        s.id AS section_id, s.name AS section_name,
@@ -238,7 +284,7 @@ GROUP BY t.id,m.id,u.id,g.id,s.id
 // separately (render_topic_view checks topics.deleted), so comments are
 // listed here regardless of that flag, matching current Java behavior.
 const S_LIST_COMMENTS_SQL: &str = r#"
-SELECT c.id, c.topic, c.replyto, c.title, m.message, c.postdate, u.id AS author_id, u.nick AS author, c.deleted
+SELECT c.id, c.topic, c.replyto, c.title, m.message, m.bbcode, m.markup, c.postdate, u.id AS author_id, u.nick AS author, c.deleted
 FROM comments c
 JOIN msgbase m ON m.id=c.id
 JOIN users u ON u.id=c.userid
