@@ -26,7 +26,7 @@ use axum::{routing::get, Router};
 use config::Config;
 use state::AppState;
 use std::net::SocketAddr;
-use tower_http::{compression::CompressionLayer, services::ServeDir, trace::TraceLayer};
+use tower_http::{compression::CompressionLayer, services::{ServeDir, ServeFile}, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -46,12 +46,15 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to create upload photos directory")?;
     std::fs::create_dir_all(format!("{}/gallery", config.upload_dir))
         .context("failed to create upload gallery directory")?;
+    std::fs::create_dir_all(format!("{}/images", config.upload_dir))
+        .context("failed to create upload images directory")?;
 
     let state = AppState::new(config.clone(), pool);
     search_index::ensure_index(&state).await;
     let app = Router::new()
         .merge(routes::router())
         .route("/healthz", get(routes::healthz))
+        .route_service("/favicon.ico", ServeFile::new(format!("{}/favicon.ico", &config.static_dir)))
         .nest_service("/static", ServeDir::new(&config.static_dir))
         .nest_service("/img", ServeDir::new(format!("{}/img", &config.static_dir)))
         .nest_service("/font", ServeDir::new(format!("{}/font", &config.static_dir)))
@@ -64,6 +67,7 @@ async fn main() -> anyhow::Result<()> {
         .nest_service("/adv", ServeDir::new(format!("{}/adv", &config.static_dir)))
         .nest_service("/photos", ServeDir::new(format!("{}/photos", &config.upload_dir)))
         .nest_service("/gallery-uploads", ServeDir::new(format!("{}/gallery", &config.upload_dir)))
+        .nest_service("/images", ServeDir::new(format!("{}/images", &config.upload_dir)))
         .fallback(routes::not_found)
         .layer(axum::middleware::from_fn_with_state(state.clone(), security_headers::apply))
         .layer(axum::middleware::from_fn_with_state(state.clone(), theme_middleware::apply_theme))

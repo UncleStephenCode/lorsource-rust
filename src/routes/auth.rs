@@ -72,25 +72,13 @@ pub async fn login(State(state): State<AppState>, headers: axum::http::HeaderMap
         .secure(is_secure)
         .same_site(SameSite::Lax)
         .build();
-    // UI compatibility cookie: original LOR immediately changes the top profile
-    // block after login.  The real session remains HttpOnly in `lor_session`;
-    // this cookie is only a display hint for the static base template.
-    let ui_cookie = Cookie::build(("lor_user", identity.nick.clone()))
-        .path("/")
-        .secure(is_secure)
-        .same_site(SameSite::Lax)
-        .build();
-    let mut jar = jar.add(session_cookie).add(ui_cookie);
-    if let Some(style) = identity.style.as_deref().filter(|style| !style.is_empty()) {
-        jar = jar.add(Cookie::build(("lor_theme", style.to_string())).path("/").secure(is_secure).same_site(SameSite::Lax).build());
-    }
+    let jar = jar.add(session_cookie);
     Ok((jar, Redirect::to(&redirect_url)))
 }
 
 pub async fn logout(jar: CookieJar) -> (CookieJar, Redirect) {
     let session_cookie = Cookie::build(("lor_session", "")).path("/").build();
-    let ui_cookie = Cookie::build(("lor_user", "")).path("/").build();
-    let jar = jar.remove(session_cookie).remove(ui_cookie);
+    let jar = jar.remove(session_cookie);
     (jar, Redirect::to("/"))
 }
 

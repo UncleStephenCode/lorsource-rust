@@ -1,0 +1,52 @@
+/*
+ * Copyright 1998-2026 Linux.org.ru
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS,
+ *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *    See the License for the specific language governing permissions and
+ *    limitations under the License.
+ */
+
+.autoComplete_wrapper {
+  display: block;
+  position: relative;
+}
+
+.autoComplete_list {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background-color: var(--article-background);
+  border: 1px solid var(--table-border-color);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.autoComplete_result {
+  margin: 0 !important;
+  padding: 4px 8px;
+  cursor: pointer;
+  color: var(--text-color);
+
+  mark {
+    background: none;
+    font-weight: bold;
+    color: inherit;
+  }
+
+  &:hover,
+  &[aria-selected="true"] {
+    background-color: var(--button-primary-background);
+    color: var(--table-link-color);
+  }
+}

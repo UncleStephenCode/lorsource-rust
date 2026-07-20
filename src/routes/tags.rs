@@ -1,4 +1,4 @@
-use crate::{auth::CurrentUser, error::{AppError, Result}, models::{PagerQuery, TagItem, TopicSummary}, pagination::Pager, state::AppState};
+use crate::{auth::CurrentUser, error::{AppError, Result}, models::{TagItem, TopicSummary}, state::AppState};
 use askama::Template;
 use axum::{extract::{Path, Query, State}, response::{Html, IntoResponse, Redirect}, Form, Json};
 use once_cell::sync::Lazy;
@@ -17,6 +17,18 @@ struct TagSectionGroup {
     section_prefix: String,
     section_name: String,
     topics: Vec<TopicSummary>,
+    full_news: Vec<crate::routes::topics::NewsTopicView>,
+    gallery: Vec<TagGalleryItem>,
+    add_url: Option<String>,
+    add_reason: String,
+    add_label: String,
+}
+
+#[derive(Debug, Clone)]
+struct TagGalleryItem {
+    topic: TopicSummary,
+    medium_url: String,
+    srcset: String,
 }
 
 #[derive(Template)]
@@ -34,6 +46,8 @@ struct TagPageTemplate {
     show_delete: bool,
     current_user: Option<crate::models::UserSummary>,
     csrf_token: String,
+    favorites_count: i64,
+    ignored_count: i64,
 }
 
 #[derive(Deserialize)]
@@ -142,6 +156,9 @@ pub async fn tag_page(State(state): State<AppState>, Path(tag): Path<String>, Cu
     let mut sections = Vec::new();
     for (prefix, name) in TAG_SECTION_ORDER {
         let limit = section_topic_limit(prefix);
+        let (section_id, restriction): (i32, i32) = sqlx::query_as(
+            r#"SELECT id,restrict_score FROM sections WHERE CASE name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(name) END=$1"#,
+        ).bind(prefix).fetch_one(&state.pool).await?;
         let topics = sqlx::query_as::<_, TopicSummary>(
             r#"SELECT t.id, t.title, t.url, t.postdate, t.lastmod, u.id AS author_id, u.nick AS author,
                       g.id AS group_id, g.title AS group_title, g.urlname AS group_urlname,
@@ -168,7 +185,35 @@ pub async fn tag_page(State(state): State<AppState>, Path(tag): Path<String>, Cu
         .fetch_all(&state.pool)
         .await?;
         if !topics.is_empty() {
-            sections.push(TagSectionGroup { section_prefix: prefix.to_string(), section_name: name.to_string(), topics });
+            let recent_news = *prefix == "news"
+                && topics.first().is_some_and(|topic| topic.postdate > chrono::Utc::now() - chrono::Duration::days(365));
+            let full_news = if recent_news {
+                crate::routes::topics::prepare_news_topics(&state, vec![topics[0].clone()], true).await?
+            } else {
+                Vec::new()
+            };
+            let mut gallery = Vec::new();
+            if *prefix == "gallery" {
+                for topic in &topics {
+                    if let Some(image) = crate::routes::topics::load_topic_images(&state, topic.id).await?.into_iter().next() {
+                        gallery.push(TagGalleryItem {
+                            topic: topic.clone(),
+                            medium_url: image.medium_url.clone(),
+                            srcset: crate::routes::topics::topic_image_srcset(&image),
+                        });
+                    }
+                }
+            }
+            let topics = if recent_news { topics.into_iter().skip(1).collect() } else { topics };
+            let add_reason = crate::routes::topics::posting_reason_for_port(&state, restriction, &user).await?;
+            let add_url = add_reason.is_none().then(|| format!("/add-section.jsp?section={section_id}&tag={}", urlencoding::encode(&tag)));
+            let add_label = match *prefix {
+                "news" => "Добавить новость",
+                "gallery" => "Добавить изображение",
+                "polls" => "Добавить опрос",
+                _ => "Добавить топик",
+            }.to_string();
+            sections.push(TagSectionGroup { section_prefix: prefix.to_string(), section_name: name.to_string(), topics, full_news, gallery, add_url, add_reason: add_reason.unwrap_or_default(), add_label });
         }
     }
 
@@ -187,6 +232,8 @@ pub async fn tag_page(State(state): State<AppState>, Path(tag): Path<String>, Cu
         }
         None => (false, false, false, false),
     };
+    let favorites_count: i64 = sqlx::query_scalar("SELECT count(*) FROM user_tags WHERE tag_id=$1 AND is_favorite").bind(tag_id).fetch_one(&state.pool).await?;
+    let ignored_count: i64 = sqlx::query_scalar("SELECT count(*) FROM user_tags WHERE tag_id=$1 AND NOT is_favorite").bind(tag_id).fetch_one(&state.pool).await?;
 
     Ok(Html(TagPageTemplate {
         tag: tag.clone(),
@@ -201,6 +248,8 @@ pub async fn tag_page(State(state): State<AppState>, Path(tag): Path<String>, Cu
         show_delete: is_moderator,
         current_user: user,
         csrf_token,
+        favorites_count,
+        ignored_count,
     }.render()?).into_response())
 }
 

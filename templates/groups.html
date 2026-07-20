@@ -1,14 +1,20 @@
 {% extends "base.html" %}
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
-<h1>{{ title }}</h1>
-<div class="group-grid">
-{% for g in groups %}
-  <article class="group-card">
-    <h2><a href="/{{ g.section_prefix }}/{{ g.urlname }}">{{ g.title }}</a></h2>
-    <p class="meta">{{ g.section_name }} · {{ g.topics }} тем</p>
-    {% match g.info %}{% when Some with (info) %}<p>{{ info }}</p>{% when None %}{% endmatch %}
-  </article>
+<h1>Технический форум</h1>
+<ul>
+{% for g in tech %}
+  <li><a class="navLink" href="/forum/{{ g.urlname }}">{{ g.title }}</a> ({{ g.topics_per_day }} за сутки){% match g.info %}{% when Some with (info) %} — <em>{{ info }}</em>{% when None %}{% endmatch %}</li>
 {% endfor %}
-</div>
+</ul>
+<h1>Остальное</h1>
+<ul>
+{% for g in other %}
+  <li><a class="navLink" href="/forum/{{ g.urlname }}">{{ g.title }}</a> ({{ g.topics_per_day }} за сутки){% match g.info %}{% when Some with (info) %} — <em>{{ info }}</em>{% when None %}{% endmatch %}</li>
+{% endfor %}
+</ul>
+<h1>Лента форума</h1>
+<ul><li><a href="/forum/lenta">Полная лента форума</a></li><li><a href="/forum/lenta?filter=tech">Лента технического форума</a></li><li><a href="/forum/lenta?filter=notalks">Лента форума без Talks</a></li></ul>
+<h1>RSS подписки</h1><p><i class="icon-rss"></i><a href="/section-rss.jsp?section=2">RSS-подписка на весь форум</a><br><i class="icon-rss"></i><a href="/section-rss.jsp?section=2&amp;filter=tech">RSS-подписка на технический форум</a><br><i class="icon-rss"></i><a href="/section-rss.jsp?section=2&amp;filter=notalks">RSS-подписка на форум без Talks</a></p>
+<p>Отдельные разделы форума также имеют RSS подписки, ссылки на них расположены на страницах разделов.</p>
 {% endblock %}

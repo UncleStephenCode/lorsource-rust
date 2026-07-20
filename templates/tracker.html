@@ -1,40 +1,26 @@
 {% extends "base.html" %}
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
-<h1>{{ title }}</h1>
-
-<nav class="tracker-filter">
-  <a href="/tracker/?filter=all"{% if filter == "all" %} class="selected"{% endif %}>все</a>
-  <a href="/tracker/?filter=main"{% if filter == "main" %} class="selected"{% endif %}>основные</a>
-  <a href="/tracker/?filter=notalks"{% if filter == "notalks" %} class="selected"{% endif %}>без talks</a>
-  <a href="/tracker/?filter=tech"{% if filter == "tech" %} class="selected"{% endif %}>тех. форум</a>
+<h1>Активные топики</h1>
+<nav>
+  <a href="/tracker/" class="btn {% if filter == "main" %}btn-selected{% else %}btn-default{% endif %}">основные</a>
+  <a href="/tracker/?filter=all" class="btn {% if filter == "all" %}btn-selected{% else %}btn-default{% endif %}">все</a>
+  <a href="/tracker/?filter=notalks" class="btn {% if filter == "notalks" %}btn-selected{% else %}btn-default{% endif %}">без talks</a>
+  <a href="/tracker/?filter=tech" class="btn {% if filter == "tech" %}btn-selected{% else %}btn-default{% endif %}">тех. форум</a>
+  {% if is_moderator %}<a class="btn btn-default" href="/sameip.jsp?score=-9999">anonymous</a><a class="btn btn-default" href="/sameip.jsp?score=46">score &lt;= 45</a>{% endif %}
+  {% for item in uncommitted %}<a class="btn btn-default" href="/view-all.jsp?section={{ item.0 }}">{{ item.1 }}: {{ item.2 }}</a>{% endfor %}
 </nav>
-
-{% if topics.len() == 0 %}
-  <p class="muted">В трекере пока нет активных тем.</p>
-{% endif %}
-
-<div class="tracker-list">
+<div class="tracker">
 {% for t in topics %}
-  <article class="topic-card tracker-item{% if t.sticky %} sticky{% endif %}">
-    <h2><a href="{{ t.topic_url() }}">{{ t.title }}</a></h2>
-    <div class="meta">
-      <a href="/{{ t.section_prefix }}/">{{ t.section_name }}</a> /
-      <a href="/{{ t.section_prefix }}/{{ t.group_urlname }}">{{ t.group_title }}</a> ·
-      <a href="/people/{{ t.author }}/profile">{{ t.author }}</a> ·
-      {{ t.postdate }} · {{ t.comments }} комм. · {{ t.views }} просмотров
-    </div>
-    {% if t.tags_vec().len() > 0 %}
-    <div class="tags">
-      {% for tag in t.tags_vec() %}<a href="/tag/{{ tag }}">#{{ tag }}</a>{% endfor %}
-    </div>
-    {% endif %}
-  </article>
+  <a href="{{ t.topic_url() }}" class="tracker-item">
+    <div class="tracker-src"><p><span class="group-label">{{ t.group_title }}</span><br class="hideon-phone hideon-tablet">{{ t.author }}</p></div>
+    <div class="tracker-count"><p>{% if t.comments == 0 %}-{% else %}<i class="icon-comment"></i> {{ t.comments }}{% endif %}</p></div>
+    <div class="tracker-title"><p>{% if t.sticky %}<i class="icon-pin icon-pin-color"></i>{% endif %}{% if t.resolved.unwrap_or(false) %}<i class="icon-check"></i>{% endif %}{{ t.title }}</p></div>
+    <div class="tracker-tags"><p>{% for tag in t.tags_vec() %}<span class="tag">{{ tag }}</span> {% endfor %}</p></div>
+    <div class="tracker-last"><p>{{ t.author }}, {{ t.postdate }}</p></div>
+  </a>
 {% endfor %}
 </div>
-
-<nav class="pager">
-  {% match prev_link %}{% when Some with (link) %}<a href="{{ link }}">← новее</a>{% when None %}{% endmatch %}
-  {% match next_link %}{% when Some with (link) %}<a href="{{ link }}">старее →</a>{% when None %}{% endmatch %}
-</nav>
+{% if topics.len() == 0 %}<p>В трекере пока нет активных тем.</p>{% endif %}
+<div class="nav"><div style="display:table;width:100%"><div style="display:table-cell;text-align:left">{% match prev_link %}{% when Some with (link) %}<a href="{{ link }}" rel="prev">← предыдущие</a>{% when None %}{% endmatch %}</div><div style="display:table-cell;text-align:right">{% match next_link %}{% when Some with (link) %}<a href="{{ link }}" rel="next">следующие →</a>{% when None %}{% endmatch %}</div></div></div>
 {% endblock %}

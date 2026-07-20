@@ -19,12 +19,24 @@ Cargo.lock
 # Remove the previous line if this repository should commit Cargo.lock.
 
 # Rust tooling / local caches
+.m2/
 .cargo/.package-cache
 .cargo/registry/
 .cargo/git/
 rust-project.json
 *.profraw
 *.profdata
+
+# Theme compiler intermediates (combined.css bundles are committed runtime assets)
+static/**/*.css.map
+static/opensans.css
+static/tango/auto.css
+static/tango/dark.css
+static/tango/light.css
+static/black/main.css
+static/white2/main.css
+static/waltz/main.css
+static/zomg_ponies/main.css
 
 # SQLx local/offline cache if generated locally
 .sqlx/

@@ -51,8 +51,6 @@ fn verify_legacy_session(value: &str, secret: &str) -> Option<i32> {
 #[derive(Debug, Clone)]
 pub struct StLoginIdentity {
     pub id: i32,
-    pub nick: String,
-    pub style: Option<String>,
 }
 
 pub type LoginIdentity = StLoginIdentity;
@@ -68,10 +66,9 @@ pub enum LoginOutcome {
 }
 
 pub async fn verify_login(pool: &sqlx::PgPool, login: &str, password: &str) -> Result<LoginOutcome, sqlx::Error> {
-    let row: Option<(i32, String, Option<String>, Option<String>, bool, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
-        r#"SELECT u.id, u.nick, u.passwd, COALESCE((us.settings -> 'style'), NULL) AS style, u.activated, u.frozen_until
+    let row: Option<(i32, String, Option<String>, bool, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
+        r#"SELECT u.id, u.nick, u.passwd, u.activated, u.frozen_until
            FROM users u
-           LEFT JOIN user_settings us ON us.id = u.id
            WHERE (lower(u.nick)=lower($1) OR lower(COALESCE(u.email,''))=lower($1))
              AND NOT COALESCE(u.blocked,false)
            LIMIT 1"#,
@@ -80,7 +77,7 @@ pub async fn verify_login(pool: &sqlx::PgPool, login: &str, password: &str) -> R
     .fetch_optional(pool)
     .await?;
 
-    let Some((id, nick, encoded_password, style, activated, frozen_until)) = row else { return Ok(LoginOutcome::Failed); };
+    let Some((id, nick, encoded_password, activated, frozen_until)) = row else { return Ok(LoginOutcome::Failed); };
     let Some(encoded_password) = encoded_password else { return Ok(LoginOutcome::Failed); };
     if !security::password::verify(password, &encoded_password) {
         return Ok(LoginOutcome::Failed);
@@ -91,5 +88,5 @@ pub async fn verify_login(pool: &sqlx::PgPool, login: &str, password: &str) -> R
     if frozen_until.map(|u| u > chrono::Utc::now()).unwrap_or(false) {
         return Ok(LoginOutcome::Frozen(nick));
     }
-    Ok(LoginOutcome::Success(LoginIdentity { id, nick, style }))
+    Ok(LoginOutcome::Success(LoginIdentity { id }))
 }

@@ -13,26 +13,64 @@
  *    limitations under the License.
  */
 
-$(document).ready(function () {
-  // fix images on Pale Moon
-  $('.medium-image-container').each(function () {
-    if ($(this).width() == 0) {
-      $(this).css('width', 'var(--image-width)')
-    }
-  });
-  $('.slider-parent').each(function () {
-    if ($(this).height() <= 48) {
-      $(this).css('width', 'var(--image-width)')
+/* The Java application initializes Swiffy through jQuery/$script.  The Rust
+ * port keeps the same DOM and CSS but initializes it without those global
+ * dependencies, which are not otherwise needed by the server-rendered UI. */
+document.addEventListener('DOMContentLoaded', function () {
+  document.querySelectorAll('.medium-image-container').forEach(function (element) {
+    if (element.getBoundingClientRect().width === 0) {
+      element.style.width = 'var(--image-width)';
     }
   });
 
-  $script.ready('plugins', function () {
-    if (window.matchMedia("(min-width: 70em)").matches) {
-      $(".msg_body .swiffy-slider").addClass("slider-nav-outside-expand").addClass("slider-nav-visible");
+  document.querySelectorAll('.slider-parent').forEach(function (element) {
+    if (element.getBoundingClientRect().height <= 48) {
+      element.style.width = 'var(--image-width)';
+    }
+  });
+
+  if (window.matchMedia('(min-width: 70em)').matches) {
+    document.querySelectorAll('.msg_body .swiffy-slider').forEach(function (slider) {
+      slider.classList.add('slider-nav-outside-expand', 'slider-nav-visible');
+    });
+  }
+
+  document.querySelectorAll('.swiffy-slider').forEach(function (slider) {
+    var container = slider.querySelector('.slider-container');
+    if (!container) return;
+
+    var slides = Array.from(container.children);
+    var indicators = Array.from(slider.querySelectorAll('.slider-indicators a'));
+    var previous = slider.querySelector('.slider-nav:not(.slider-nav-next)');
+    var next = slider.querySelector('.slider-nav-next');
+
+    function currentIndex() {
+      if (!container.clientWidth) return 0;
+      return Math.max(0, Math.min(slides.length - 1, Math.round(container.scrollLeft / container.clientWidth)));
     }
 
-    $(".slider-indicators a").attr('href', 'javascript:;');
+    function show(index) {
+      if (!slides.length) return;
+      index = (index + slides.length) % slides.length;
+      container.scrollTo({left: slides[index].offsetLeft, behavior: 'smooth'});
+      indicators.forEach(function (indicator, item) {
+        indicator.classList.toggle('active', item === index);
+      });
+    }
 
-    window.swiffyslider.init();
+    if (previous) previous.addEventListener('click', function () { show(currentIndex() - 1); });
+    if (next) next.addEventListener('click', function () { show(currentIndex() + 1); });
+    indicators.forEach(function (indicator, index) {
+      indicator.addEventListener('click', function (event) {
+        event.preventDefault();
+        show(index);
+      });
+    });
+    container.addEventListener('scroll', function () {
+      var index = currentIndex();
+      indicators.forEach(function (indicator, item) {
+        indicator.classList.toggle('active', item === index);
+      });
+    }, {passive: true});
   });
 });

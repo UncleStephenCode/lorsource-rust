@@ -1,4 +1,7 @@
-.PHONY: run dev-db migrate fmt clippy test docker-up docker-down
+.PHONY: run dev-db migrate themes fmt clippy test docker-up docker-down
+
+themes:
+	MAVEN_USER_HOME=$${PWD}/target/maven-home ../lorsource-java/mvnw -Dmaven.repo.local=$${PWD}/target/maven-repository -f theme-pom.xml compile
 
 dev-db:
 	docker compose -f docker-compose.dev.yml up -d postgres

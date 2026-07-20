@@ -2,12 +2,12 @@
 {% block title %}Редактирование профиля{% endblock %}
 {% block content %}
 <h1>Редактирование профиля</h1>
-<nav class="profile-nav">
+<nav>
   <a href="/people/{{ user.nick }}/edit" class="btn btn-selected">Редактировать профиль</a>
   <a class="btn btn-default" href="/addphoto.jsp">Добавить фотографию</a>
   <a class="btn btn-default" href="/people/{{ user.nick }}/settings">Настройки</a>
 </nav>
-<form method="post" action="/people/{{ user.nick }}/edit" id="editRegForm" class="form wide">
+<form method="post" action="/people/{{ user.nick }}/edit" id="editRegForm">
   <input type="hidden" name="csrf" value="{{ csrf_token }}">
   <dl>
     <dt><label for="name">Имя</label></dt><dd><input id="name" name="name" maxlength="255" value="{% match user.name %}{% when Some with (name) %}{{ name }}{% when None %}{% endmatch %}"><span class="help-block">&nbsp;</span></dd>

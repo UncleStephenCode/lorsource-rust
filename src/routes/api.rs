@@ -197,6 +197,8 @@ struct TrackerTemplate {
     topics: Vec<crate::models::TopicSummary>,
     prev_link: Option<String>,
     next_link: Option<String>,
+    is_moderator: bool,
+    uncommitted: Vec<(i32, String, i64)>,
 }
 
 pub async fn tracker_old_redirect(Query(q): Query<TrackerQuery>) -> Redirect {
@@ -330,7 +332,14 @@ pub async fn tracker(State(state): State<AppState>, CurrentUser(user): CurrentUs
     } else {
         None
     };
-    Ok(Html(TrackerTemplate { title, filter, topics, prev_link, next_link }.render()?))
+    let uncommitted = if is_moderator || is_corrector {
+        sqlx::query_as::<_, (i32, String, i64)>(
+            r#"SELECT s.id,s.name,count(t.id) FROM sections s JOIN groups g ON g.section=s.id JOIN topics t ON t.groupid=g.id WHERE t.moderate AND NOT t.deleted AND NOT t.draft GROUP BY s.id,s.name HAVING count(t.id)>0 ORDER BY s.id"#,
+        ).fetch_all(&state.pool).await?
+    } else {
+        Vec::new()
+    };
+    Ok(Html(TrackerTemplate { title, filter, topics, prev_link, next_link, is_moderator, uncommitted }.render()?))
 }
 
 pub async fn top10_boxlet(State(state): State<AppState>) -> Result<Html<String>> {

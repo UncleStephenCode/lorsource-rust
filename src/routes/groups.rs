@@ -1,4 +1,4 @@
-use crate::{application::forum::CForumService, auth::CurrentUser, error::{AppError, Result}, infra::postgres::forum_repository::CForumPgRepository, models::{Group, TopicSummary}, pagination::Pager, state::AppState};
+use crate::{application::forum::CForumService, auth::CurrentUser, error::{AppError, Result}, infra::postgres::forum_repository::CForumPgRepository, models::{Group, TopicSummary}, state::AppState};
 use askama::Template;
 use axum::{extract::{Path, Query, State}, http::Method, response::{Html, IntoResponse, Redirect, Response}};
 use serde::Deserialize;
@@ -7,21 +7,32 @@ use serde::Deserialize;
 #[template(path = "groups.html")]
 struct GroupsTemplate {
     title: String,
-    groups: Vec<Group>,
+    tech: Vec<Group>,
+    other: Vec<Group>,
 }
 
 #[derive(Template)]
-#[template(path = "index.html")]
+#[template(path = "group_topics.html")]
 struct GroupTopicsTemplate {
     title: String,
+    group: Group,
     topics: Vec<TopicSummary>,
-    pager: Pager,
-    current_user: Option<crate::models::UserSummary>,
+    quick_groups: Vec<crate::routes::topics::QuickGroupLink>,
+    new_url: String,
+    active_url: String,
+    archive_url: String,
+    add_url: Option<String>,
+    add_reason: String,
+    lastmod: bool,
+    prev_url: Option<String>,
+    next_url: Option<String>,
+    is_moderator: bool,
 }
 
 pub async fn forum_index(State(state): State<AppState>) -> Result<Html<String>> {
     let groups = forum_service(&state).vecListForumGroups().await?;
-    Ok(Html(GroupsTemplate { title: "Форум".into(), groups }.render()?))
+    let (other, tech): (Vec<_>, Vec<_>) = groups.into_iter().partition(|group| [8404, 4068, 9326, 19405].contains(&group.id));
+    Ok(Html(GroupsTemplate { title: "Форум".into(), tech, other }.render()?))
 }
 
 /// GroupController.forum: not the generic section-group listing (which
@@ -72,13 +83,9 @@ pub async fn group_page(State(state): State<AppState>, method: Method, Path(grou
     }
     let show_deleted = show_deleted_requested;
 
-    let Some(group_id): Option<i32> = sqlx::query_scalar("SELECT id FROM groups WHERE urlname=$1")
-        .bind(&group_urlname)
-        .fetch_optional(&state.pool)
-        .await?
-    else {
-        return Err(AppError::NotFound);
-    };
+    let group = find_group(&state, &group_urlname).await?;
+    if group.section_prefix != "forum" { return Err(AppError::NotFound); }
+    let group_id = group.id;
 
     let tag_id: Option<i32> = if let Some(tag) = q.tag.as_deref().filter(|t| !t.is_empty()) {
         let id: Option<i32> = sqlx::query_scalar("SELECT id FROM tags_values WHERE lower(value)=lower($1)").bind(tag).fetch_optional(&state.pool).await?;
@@ -152,11 +159,44 @@ pub async fn group_page(State(state): State<AppState>, method: Method, Path(grou
         topics = sticky;
     }
 
-    let group_title: String = sqlx::query_scalar("SELECT title FROM groups WHERE id=$1").bind(group_id).fetch_one(&state.pool).await?;
-    let pager = Pager::new(offset, limit);
-    let title = format!("Форум / {group_title}");
+    let restriction: i32 = sqlx::query_scalar("SELECT GREATEST(COALESCE(g.restrict_topics,-9999),s.restrict_score) FROM groups g JOIN sections s ON s.id=g.section WHERE g.id=$1")
+        .bind(group_id).fetch_one(&state.pool).await?;
+    let add_reason = crate::routes::topics::posting_reason_for_port(&state, restriction, &user).await?;
+    let tag_suffix = q.tag.as_deref().filter(|tag| !tag.is_empty()).map(|tag| format!("tag={}", urlencoding::encode(tag)));
+    let new_url = group_mode_url(&group_urlname, false, tag_suffix.as_deref(), None, show_ignored);
+    let active_url = group_mode_url(&group_urlname, true, tag_suffix.as_deref(), None, show_ignored);
+    let archive_url = format!("/forum/{}/archive", urlencoding::encode(&group_urlname));
+    let add_url = add_reason.is_none().then(|| {
+        let mut url = format!("/add.jsp?group={group_id}");
+        if let Some(tag) = q.tag.as_deref().filter(|tag| !tag.is_empty()) {
+            url.push_str("&tags=");
+            url.push_str(&urlencoding::encode(tag));
+        }
+        url
+    });
+    let quick_groups = list_groups_by_section(&state, Some("forum")).await?.into_iter().map(|item| crate::routes::topics::QuickGroupLink {
+        title: item.title,
+        url: group_mode_url(&item.urlname, lastmod, tag_suffix.as_deref(), None, show_ignored),
+        selected: item.id == group_id,
+    }).collect();
+    let non_sticky_count = topics.iter().filter(|topic| !topic.sticky).count() as i64;
+    let prev_url = (offset > 0).then(|| group_mode_url(&group_urlname, lastmod, tag_suffix.as_deref(), Some((offset - limit).max(0)), show_ignored));
+    let next_url = (non_sticky_count >= limit).then(|| group_mode_url(&group_urlname, lastmod, tag_suffix.as_deref(), Some(offset + limit), show_ignored));
+    let title = format!("Форум — {}", group.title);
+    let is_moderator = user.as_ref().is_some_and(|current| current.canmod);
 
-    Ok(Html(GroupTopicsTemplate { title, topics, pager, current_user: user }.render()?).into_response())
+    Ok(Html(GroupTopicsTemplate { title, group, topics, quick_groups, new_url, active_url, archive_url, add_url, add_reason: add_reason.unwrap_or_default(), lastmod, prev_url, next_url, is_moderator }.render()?).into_response())
+}
+
+fn group_mode_url(group: &str, lastmod: bool, tag_query: Option<&str>, offset: Option<i64>, show_ignored: bool) -> String {
+    let mut params = Vec::new();
+    if lastmod { params.push("lastmod=true".to_string()); }
+    if let Some(tag) = tag_query { params.push(tag.to_string()); }
+    if show_ignored { params.push("showignored=true".to_string()); }
+    if let Some(offset) = offset.filter(|offset| *offset > 0) { params.push(format!("offset={offset}")); }
+    let mut url = format!("/forum/{}", urlencoding::encode(group));
+    if !params.is_empty() { url.push('?'); url.push_str(&params.join("&")); }
+    url
 }
 
 pub async fn group_archive(State(state): State<AppState>, Path(group_name): Path<String>) -> Result<Html<String>> {
@@ -176,6 +216,13 @@ pub async fn group_archive(State(state): State<AppState>, Path(group_name): Path
 
 pub async fn list_groups(state: &AppState) -> Result<Vec<Group>> {
     forum_service(state).vecListGroups().await
+}
+
+pub async fn find_group(state: &AppState, urlname: &str) -> Result<Group> {
+    forum_service(state).stArchiveGroup(urlname).await.map_err(|error| match error {
+        AppError::Sqlx(sqlx::Error::RowNotFound) => AppError::NotFound,
+        other => other,
+    })
 }
 
 pub async fn list_groups_by_section(state: &AppState, section_prefix: Option<&str>) -> Result<Vec<Group>> {

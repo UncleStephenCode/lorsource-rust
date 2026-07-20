@@ -2,22 +2,22 @@
 {% block title %}Информация о пользователе {{ profile.nick }}{% endblock %}
 {% block content %}
 {% if is_owner %}
-<nav class="profile-nav">
+<nav>
   <a href="/people/{{ profile.nick }}/edit" class="btn btn-default">Редактировать профиль</a>
   <a href="/people/{{ profile.nick }}/settings" class="btn btn-default">Настройки</a>
-  <form action="/logout" method="post" class="inline-form"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button type="submit" class="btn btn-danger">Выйти</button></form>
-  <form action="/logout_all_sessions" method="post" class="inline-form"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button type="submit" class="btn btn-danger">Выйти со всех устройств</button></form>
+  <form action="/logout" method="post" style="display: inline-block"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button type="submit" class="btn btn-danger">Выйти</button></form>
+  <form action="/logout_all_sessions" method="post" style="display: inline-block"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button type="submit" class="btn btn-danger">Выйти со всех устройств</button></form>
 </nav>
 {% else %}
 <h1>Информация о пользователе {{ profile.nick }}</h1>
 {% endif %}
 
-<div id="whois_userpic" class="userpic-box">
-  <img src="{{ userpic_url }}" alt="{{ profile.nick }}" class="userpic">
-  {% if is_owner %}<a class="btn btn-small btn-default" href="/addphoto.jsp">Изменить</a>{% endif %}
+<div id="whois_userpic">
+  <div class="userpic"><img src="{{ userpic_url }}" alt="{{ profile.nick }}"></div>
+  {% if is_owner %}<span><a class="btn btn-small btn-default" href="/addphoto.jsp">Изменить</a></span>{% endif %}
 </div>
 
-<div class="vcard profile-card">
+<div class="vcard">
   <b>Nick:</b> <span class="nickname">{{ profile.nick }}</span><br>
   {% match profile.name %}{% when Some with (name) %}<b>Имя:</b> <span class="fn">{{ name }}</span><br>{% when None %}{% endmatch %}
   <b>ID:</b> {{ profile.id }}<br>
@@ -41,9 +41,9 @@
 {% when Some with (until) %}<div class="infoblock freeze-info"><b>Заморожен до:</b> {{ until }}</div>
 {% when None %}{% endmatch %}
 {% if can_view_private && (blockable || freezable) %}
-<nav class="profile-nav">
+<nav>
   {% if blockable %}
-  <form method="post" action="/usermod.jsp" class="inline-form">
+  <form method="post" action="/usermod.jsp" style="display: inline-block">
     <input type="hidden" name="csrf" value="{{ csrf_token }}">
     <input type="hidden" name="id" value="{{ profile.id }}">
     <input type="hidden" name="action" value="block">
@@ -52,7 +52,7 @@
   </form>
   {% endif %}
   {% if freezable %}
-  <form method="post" action="/usermod.jsp" class="inline-form">
+  <form method="post" action="/usermod.jsp" style="display: inline-block">
     <input type="hidden" name="csrf" value="{{ csrf_token }}">
     <input type="hidden" name="id" value="{{ profile.id }}">
     <input type="hidden" name="action" value="freeze">
@@ -119,13 +119,13 @@
 <b>Число тем:</b> {{ stats.topic_count }}
 
 <h2>Темы пользователя</h2>
-<nav class="profile-nav">
+<nav>
   <a href="/people/{{ profile.nick }}/profile" class="btn btn-selected">Темы</a>
   <a href="/people/{{ profile.nick }}/reactions" class="btn btn-default">Реакции</a>
   <a href="/people/{{ profile.nick }}/favs" class="btn btn-default">Избранное</a>
   <a href="/people/{{ profile.nick }}/tracked" class="btn btn-default">Отслеживаемое</a>
 </nav>
 {% for t in topics %}
-<article class="topic-card"><h3><a href="{{ t.topic_url() }}">{{ t.title }}</a></h3><div class="meta">{{ t.postdate }} · {{ t.comments }} комментариев</div></article>
+<article class="msg"><h1><a href="{{ t.topic_url() }}">{{ t.title }}</a></h1><div class="msg_body"><div class="sign">{{ t.postdate }} · {{ t.comments }} комментариев</div></div></article>
 {% endfor %}
 {% endblock %}

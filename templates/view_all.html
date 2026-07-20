@@ -3,7 +3,7 @@
 {% block content %}
 <h1>{% if let Some(s) = section %}{{ s.name }}{% else %}{{ title }}{% endif %}</h1>
 
-<nav class="view-all-nav">
+<nav>
   {% if let Some(s) = section %}
     <a class="btn btn-default" href="/{{ s.section_prefix }}/">Лента</a>
     <a class="btn btn-selected" href="/view-all.jsp?section={{ s.id }}">Неподтверждённые: {{ uncommitted }}</a>
@@ -27,19 +27,19 @@
 <p><strong>Внимание модераторам!</strong> Не подтверждайте сразу много скриншотов, дайте им повисеть на главной странице.</p>
 {% endif %}
 
-<div class="topic-list">
+<div class="messages">
 {% for t in messages %}
-  <article class="topic-card{% if t.sticky %} sticky{% endif %}">
-    <h3><a href="{{ t.topic_url() }}">{{ t.title }}</a></h3>
-    <div class="meta">
+  <article class="msg">
+    <h1><a href="{{ t.topic_url() }}">{{ t.title }}</a></h1>
+    <div class="msg_body"><div class="sign">
       <a href="/{{ t.section_prefix }}/{{ t.group_urlname }}">{{ t.group_title }}</a> ·
       <a href="/people/{{ t.author }}/profile">{{ t.author }}</a> ·
       {{ t.postdate }} · {{ t.comments }} комм.
-    </div>
+    </div></div>
   </article>
 {% endfor %}
 {% if messages.len() == 0 %}
-<p class="muted">Нет неподтверждённых тем.</p>
+<p>Нет неподтверждённых тем.</p>
 {% endif %}
 </div>
 

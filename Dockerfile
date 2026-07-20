@@ -5,6 +5,7 @@ COPY Cargo.toml Cargo.lock* ./
 COPY src ./src
 COPY templates ./templates
 COPY db ./db
+COPY static ./static
 RUN cargo build --release
 
 FROM debian:bookworm-slim

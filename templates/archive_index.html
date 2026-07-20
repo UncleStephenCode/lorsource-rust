@@ -8,12 +8,10 @@
   <a class="btn btn-selected" href="#">Архив</a>
 </nav>
 
-<div class="archive-index">
 {% for m in months %}
   <p><a href="{{ m.url }}">{{ m.month_name }} {{ m.year }} года ({{ m.count }})</a></p>
 {% endfor %}
 {% if months.len() == 0 %}
-<p class="muted">Архив пуст.</p>
+<p>Архив пуст.</p>
 {% endif %}
-</div>
 {% endblock %}

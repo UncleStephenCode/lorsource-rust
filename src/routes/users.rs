@@ -122,6 +122,25 @@ struct EditProfileTemplate {
     csrf_token: String,
 }
 
+#[derive(Debug, Clone)]
+struct UserSectionLink {
+    id: i32,
+    name: String,
+    selected: bool,
+}
+
+#[derive(Template)]
+#[template(path = "user_topics.html")]
+struct UserTopicsTemplate {
+    title: String,
+    nick: String,
+    topics: Vec<crate::routes::topics::NewsTopicView>,
+    sections: Vec<UserSectionLink>,
+    all_selected: bool,
+    prev_link: Option<String>,
+    next_link: Option<String>,
+}
+
 #[derive(Deserialize)]
 pub struct UserTopicFeedQuery {
     pub offset: Option<i64>,
@@ -165,8 +184,30 @@ pub async fn topic_feed(State(state): State<AppState>, Path(nick): Path<String>,
     if topics.is_empty() {
         return Err(AppError::NotFound);
     }
-
-    Ok(Html(simple_topic_list(&format!("Сообщения {}", user.nick), &topics)))
+    let section_rows: Vec<(i32, String)> = sqlx::query_as(
+        "SELECT DISTINCT s.id,s.name FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section WHERE t.userid=$1 AND NOT t.deleted AND NOT t.draft AND NOT t.moderate ORDER BY s.id",
+    ).bind(user.id).fetch_all(&state.pool).await?;
+    let sections = section_rows.into_iter().map(|(id, name)| UserSectionLink { id, name, selected: q.section == Some(id) }).collect();
+    let base = format!("/people/{}/", urlencoding::encode(&user.nick));
+    let query_prefix = q.section.map(|id| format!("section={id}"));
+    let page_url = |new_offset: i64| {
+        let mut params = Vec::new();
+        if let Some(section) = &query_prefix { params.push(section.clone()); }
+        if new_offset > 0 { params.push(format!("offset={new_offset}")); }
+        if params.is_empty() { base.clone() } else { format!("{base}?{}", params.join("&")) }
+    };
+    let prev_link = (pager.offset > 0).then(|| page_url((pager.offset - pager.limit).max(0)));
+    let next_link = (topics.len() as i64 == pager.limit && pager.offset < 200).then(|| page_url(pager.offset + pager.limit));
+    let topics = crate::routes::topics::prepare_news_topics(&state, topics, q.section.is_none()).await?;
+    Ok(Html(UserTopicsTemplate {
+        title: format!("Сообщения {}", user.nick),
+        nick: user.nick,
+        topics,
+        sections,
+        all_selected: q.section.is_none(),
+        prev_link,
+        next_link,
+    }.render()?))
 }
 
 pub async fn profile_full(State(state): State<AppState>, Path(nick): Path<String>, Query(q): Query<PagerQuery>, current: CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
