@@ -75,7 +75,7 @@ pub async fn add_comment_ajax(State(state): State<AppState>, CurrentUser(user): 
 /// Section.getCommentPostscore: Forum/News are unrestricted by section;
 /// Articles/Gallery/Polls/anything else default to a registered-with-score
 /// floor. Section ids per db/migrations/0002_seed.sql (1=Новости, 2=Форум,
-/// 3=Галерея, 4=Статьи, 5=Опросы).
+/// 3=Галерея, 5=Опросы, 6=Статьи).
 fn section_comment_postscore(section_id: i32) -> i32 {
     match section_id {
         1 | 2 => -9999,

@@ -1,46 +1,60 @@
 {% extends "base.html" %}
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
+{% match preview_html %}{% when Some with (html) %}<h1>Предпросмотр</h1><div class="messages"><article class="msg"><div class="msg-container"><div class="msg_body"><div class="msg-text">{{ html|safe }}</div></div></div></article></div>{% when None %}{% endmatch %}
 <h1>{{ title }}</h1>
-<form method="post" action="{{ action }}" id="messageForm">
+{% match add_info_html %}{% when Some with (html) %}{{ html|safe }}{% when None %}{% endmatch %}
+<form method="post" action="{{ action }}" id="messageForm"{% if image_allowed %} enctype="multipart/form-data"{% endif %}>
   <input type="hidden" name="csrf" value="{{ csrf_token }}">
-  {% match topic %}{% when Some with (t) %}<input type="hidden" name="id" value="{{ t.id }}">{% when None %}{% endmatch %}
-  <div class="control-group">
-    <label for="group">Раздел</label>
-    <select id="group" name="group">{% for g in groups %}<option value="{{ g.id }}"{% if g.id == selected_group %} selected{% endif %}>{{ g.section_name }} / {{ g.title }}</option>{% endfor %}</select>
-  </div>
+  <input type="hidden" name="noinfo" value="{% if noinfo %}true{% else %}false{% endif %}">
+  {% match topic_id %}{% when Some with (id) %}<input type="hidden" name="msgid" value="{{ id }}">{% when None %}{% endmatch %}
+  {% if !is_edit %}<input type="hidden" name="group" value="{{ selected_group }}">{% endif %}
   <div class="control-group">
     <label for="title">Заглавие</label>
-    <input id="title" name="title" required autofocus value="{% match topic %}{% when Some with (t) %}{{ t.title }}{% when None %}{% endmatch %}">
+    <input id="title" name="title" required{% if !is_edit %} autofocus{% endif %} value="{{ form_title }}">
   </div>
-  {% if poll_variants.len() > 0 || poll_new_rows.len() > 0 %}
-    {% for (vid, label) in poll_variants %}<label>Вариант #{{ loop.index0 }}: <input type="hidden" name="variant_id" value="{{ vid }}"><input name="poll" size="40" value="{{ label }}"></label><br>{% endfor %}
-    {% for _ in poll_new_rows %}<label>Новый #{{ loop.index0 }}: <input type="hidden" name="variant_id" value="0"><input name="poll" size="40"></label><br>{% endfor %}
-    <label>Мультивыбор: <input type="checkbox" name="multiselect" {% if poll_multiselect %}checked{% endif %}></label><br>
+  {% if poll_allowed %}
+    <br>
+    {% if is_edit %}
+      {% for (vid, label) in poll_variants %}<label>Вариант #{{ loop.index0 }}: <input name="poll[{{ vid }}]" size="40" value="{{ label }}"></label><br>{% endfor %}
+      {% for label in poll_new_rows %}<label>Новый #{{ loop.index0 }}: <input name="newPoll[{{ loop.index0 }}]" size="40" value="{{ label }}"></label><br>{% endfor %}
+      <label>Мультивыбор: <input type="checkbox" name="multiselect"{% if poll_multiselect %} checked{% endif %}></label><br>
+    {% else %}
+      {% for label in poll_new_rows %}<label>Вариант #{{ loop.index0 }}: <input name="poll[{{ loop.index0 }}]" size="40" value="{{ label }}"></label>{% endfor %}
+      <p><label>Мультивыбор: <input type="checkbox" name="multiSelect"{% if poll_multiselect %} checked{% endif %}></label></p>
+    {% endif %}
   {% endif %}
   <div class="control-group" data-format-mode="html">
     <div class="markup-tabs">
       <ul class="markup-tabs__nav"><li class="markup-tabs__tab active" data-tab="editor">HTML</li></ul>
       <div class="markup-tabs__content"><div class="markup-tabs__panel active" data-panel="editor">
-        <textarea name="msg" id="form_msg" required>{% match topic %}{% when Some with (t) %}{{ t.message }}{% when None %}{% endmatch %}</textarea>
+        <textarea name="msg" id="form_msg">{{ form_msg }}</textarea>
       </div></div>
     </div>
   </div>
+  {% if links_allowed %}
   <div class="control-group">
     <label for="linktext">Текст ссылки</label>
-    <input id="linktext" name="linktext" value="{% match topic %}{% when Some with (t) %}{% match t.linktext %}{% when Some with (lt) %}{{ lt }}{% when None %}{% endmatch %}{% when None %}{% endmatch %}">
+    <input id="linktext" name="linktext" value="{{ form_linktext }}">
   </div>
   <div class="control-group">
     <label for="url">Ссылка (не забудьте <b>https://</b>)</label>
-    <input id="url" name="url" type="url" placeholder="https://" value="{% match topic %}{% when Some with (t) %}{% match t.url %}{% when Some with (u) %}{{ u }}{% when None %}{% endmatch %}{% when None %}{% endmatch %}">
+    <input id="url" name="url" type="url" placeholder="https://" value="{{ form_url }}">
   </div>
+  {% endif %}
   <div class="control-group">
     <label for="tags"><a href="/tags" target="_blank">Метки</a> (разделенные запятой)</label>
-    <input id="tags" name="tags" required autocapitalize="off" data-tags-autocomplete="data-tags-autocomplete" value="{% match topic %}{% when Some with (t) %}{% for tag in t.tags_vec() %}{{ tag }}{% if !loop.last %}, {% endif %}{% endfor %}{% when None %}{{ initial_tags }}{% endmatch %}">
+    <input id="tags" name="tags" required autocapitalize="off" data-tags-autocomplete="data-tags-autocomplete" value="{{ form_tags }}">
   </div>
+  {% if image_allowed %}
+  <div class="control-group"><label for="image">{% if is_edit %}Заменить или добавить изображение:{% else %}Изображение:{% endif %} <input id="image" type="file" name="image" accept=".jpg,.jpeg,.png,.gif,image/jpeg,image/png,image/gif"{% if image_required && !is_edit %} required{% endif %}></label></div>
+  {% if additional_image_rows.len() > 0 %}<div class="control-group">{% for _ in additional_image_rows %}<label>Дополнительное изображение #{{ loop.index0 }}: <input type="file" name="additionalImage" accept=".jpg,.jpeg,.png,.gif,image/jpeg,image/png,image/gif"></label>{% endfor %}</div>{% endif %}
+  {% endif %}
   <div class="form-actions">
-    <button type="submit" class="btn btn-primary">Сохранить</button>
+    <button type="submit" class="btn btn-primary">{% if is_edit %}Отредактировать{% else %}Поместить{% endif %}</button>
     <button type="submit" name="preview" class="btn btn-default">Предпросмотр</button>
+    {% if !is_edit %}<button type="submit" name="draft" class="btn btn-default">Сохранить в черновики</button>{% endif %}
   </div>
 </form>
+{% if image_allowed %}<p>Технические требования к изображению:</p><ul><li>Ширина x Высота: от 400x400 до 5120x5120 пикселей</li><li>Тип: jpeg, gif, png</li><li>Размер не более 8142 Kb</li></ul>{% endif %}
 {% endblock %}

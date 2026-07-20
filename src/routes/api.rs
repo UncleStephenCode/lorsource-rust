@@ -668,37 +668,42 @@ pub async fn vote(State(state): State<AppState>, CurrentUser(user): CurrentUser,
         return Err(crate::error::AppError::BadRequest("этот опрос допускает только один вариант ответа".into()));
     }
 
+    let mut selected = form.vote;
+    selected.sort_unstable();
+    selected.dedup();
+    let valid_count: i64 = sqlx::query_scalar("SELECT count(*) FROM polls_variants WHERE vote=$1 AND id = ANY($2)")
+        .bind(form.voteid).bind(&selected).fetch_one(&state.pool).await?;
+    if valid_count != selected.len() as i64 {
+        return Err(crate::error::AppError::BadRequest("неправильный вариант ответа".into()));
+    }
+
+    let mut tx = state.pool.begin().await?;
     let already_voted: i64 = sqlx::query_scalar("SELECT count(vote) FROM vote_users WHERE vote=$1 AND userid=$2")
         .bind(form.voteid)
         .bind(user.id)
-        .fetch_one(&state.pool)
+        .fetch_one(&mut *tx)
         .await?;
     if already_voted == 0 {
-        for variant_id in form.vote {
-            let Some(valid_variant) = sqlx::query_scalar::<_, i32>("SELECT id FROM polls_variants WHERE id=$1 AND vote=$2")
-                .bind(variant_id)
-                .bind(form.voteid)
-                .fetch_optional(&state.pool)
-                .await? else {
-                    return Err(crate::error::AppError::BadRequest("неправильный вариант ответа".into()));
-                };
+        for variant_id in selected {
             let inserted = sqlx::query(
                 "INSERT INTO vote_users(vote, userid, variant_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
             )
             .bind(form.voteid)
             .bind(user.id)
-            .bind(valid_variant)
-            .execute(&state.pool)
+            .bind(variant_id)
+            .execute(&mut *tx)
             .await?
             .rows_affected();
             if inserted > 0 {
-                sqlx::query("UPDATE polls_variants SET votes=votes+1 WHERE id=$1")
-                    .bind(valid_variant)
-                    .execute(&state.pool)
+                sqlx::query("UPDATE polls_variants SET votes=votes+1 WHERE id=$1 AND vote=$2")
+                    .bind(variant_id)
+                    .bind(form.voteid)
+                    .execute(&mut *tx)
                     .await?;
             }
         }
     }
+    tx.commit().await?;
 
     Ok(axum::response::Redirect::to(&format!("/{section_prefix}/{group_urlname}/{topic_id}")))
 }

@@ -31,8 +31,8 @@ Missing route declaration: **0**
 | covered | `GET` | `/admin/search-reindex` | `SearchControlController.reindex` | `GET,POST /admin/search-reindex` |
 | covered | `ANY` | `/articles.boxlet` | `ArticlesBoxlet.getData` | `GET /articles.boxlet` |
 | covered | `ANY` | `/articles/archive` | `ArchiveController.articlesArchive` | `GET /articles/archive` |
-| covered | `ANY` | `/articles/{group}/{id}/history` | `EditHistoryController.showEditInfo` | `GET /articles/{group}/{id}/history` |
-| covered | `ANY` | `/articles/{group}/{id}/{commentid}/history` | `EditHistoryController.showCommentEditInfo` | `GET /articles/{group}/{id}/{commentid}/history` |
+| covered | `ANY` | `/articles/{group}/{id}/history` | `EditHistoryController.showEditInfo` | `GET /articles/:group/:id/history` |
+| covered | `ANY` | `/articles/{group}/{id}/{commentid}/history` | `EditHistoryController.showCommentEditInfo` | `GET /articles/:group/:id/:commentid/history` |
 | covered | `POST` | `/banip.jsp` | `BanIPController.banIP` | `POST /banip.jsp` |
 | covered | `ANY` | `/check-login` | `RegisterController.ajaxLoginCheck` | `GET /check-login` |
 | covered | `POST` | `/clear-warning` | `WarningController.clear` | `POST /clear-warning` |
@@ -53,21 +53,21 @@ Missing route declaration: **0**
 | covered | `POST` | `/edit_comment` | `EditCommentController.editCommentPostHandler` | `GET,POST /edit_comment` |
 | covered | `ANY` | `/errors/403` | `HttpErrorController.handle403` | `GET /errors/403` |
 | covered | `ANY` | `/errors/404` | `HttpErrorController.handle404` | `GET /errors/404` |
-| covered | `ANY` | `/forum` | `SectionController.forum` | `GET /forum` |
+| covered | `ANY` | `/forum` | `SectionController.forum` | `GET /forum; GET /forum/` |
 | covered | `ANY` | `/forum/lenta` | `TopicListController.forum` | `GET /forum/lenta` |
-| covered | `ANY` | `/forum/{group}` | `GroupController.forum` | `GET /forum/{group}` |
-| covered | `ANY` | `/forum/{group}/archive` | `ArchiveController.forumArchive` | `GET /forum/{group}/archive` |
-| covered | `ANY` | `/forum/{group}/{id}/history` | `EditHistoryController.showEditInfo` | `GET /forum/{group}/{id}/history` |
-| covered | `ANY` | `/forum/{group}/{id}/{commentid}/history` | `EditHistoryController.showCommentEditInfo` | `GET /forum/{group}/{id}/{commentid}/history` |
-| covered | `ANY` | `/forum/{group}/{year}/{month}` | `GroupController.forumArchive` | `GET /forum/{group}/{id_or_year}/{page_or_month}` |
+| covered | `ANY` | `/forum/{group}` | `GroupController.forum` | `GET,POST /forum/:group` |
+| covered | `ANY` | `/forum/{group}/archive` | `ArchiveController.forumArchive` | `GET /forum/:group/archive` |
+| covered | `ANY` | `/forum/{group}/{id}/history` | `EditHistoryController.showEditInfo` | `GET /forum/:group/:id/history` |
+| covered | `ANY` | `/forum/{group}/{id}/{commentid}/history` | `EditHistoryController.showCommentEditInfo` | `GET /forum/:group/:id/:commentid/history` |
+| covered | `ANY` | `/forum/{group}/{year}/{month}` | `GroupController.forumArchive` | `GET /forum/:group/:id_or_year/:page_or_month` |
 | covered | `ANY` | `/gallery/archive` | `ArchiveController.galleryArchive` | `GET /gallery/archive` |
-| covered | `ANY` | `/gallery/{group}/{id}/history` | `EditHistoryController.showEditInfo` | `GET /gallery/{group}/{id}/history` |
-| covered | `ANY` | `/gallery/{group}/{id}/{commentid}/history` | `EditHistoryController.showCommentEditInfo` | `GET /gallery/{group}/{id}/{commentid}/history` |
+| covered | `ANY` | `/gallery/{group}/{id}/history` | `EditHistoryController.showEditInfo` | `GET /gallery/:group/:id/history` |
+| covered | `ANY` | `/gallery/{group}/{id}/{commentid}/history` | `EditHistoryController.showCommentEditInfo` | `GET /gallery/:group/:id/:commentid/history` |
 | covered | `ANY` | `/group-lastmod.jsp` | `GroupController.topicsLastmod` | `GET /group-lastmod.jsp` |
 | covered | `ANY` | `/group.jsp` | `GroupController.topics` | `GET /group.jsp` |
 | covered | `GET` | `/groupmod.jsp` | `GroupModificationController.showForm` | `GET,POST /groupmod.jsp` |
 | covered | `POST` | `/groupmod.jsp` | `GroupModificationController.modifyGroup` | `GET,POST /groupmod.jsp` |
-| covered | `ANY` | `/help/{page}` | `HelpController.helpPage` | `GET /help/{page}` |
+| covered | `ANY` | `/help/{page}` | `HelpController.helpPage` | `GET /help/:page` |
 | covered | `ANY` | `/index.jsp` | `MainPageController.mainPage` | `GET /index.jsp` |
 | covered | `GET,HEAD` | `/jump-message.jsp` | `TopicController.jumpMessage` | `GET /jump-message.jsp` |
 | covered | `GET,HEAD` | `/login.jsp` | `LoginController.loginForm` | `GET /login.jsp` |
@@ -85,35 +85,35 @@ Missing route declaration: **0**
 | covered | `GET` | `/mt.jsp` | `TopicModificationController.moveToForumForm` | `GET,POST /mt.jsp` |
 | covered | `GET` | `/mtn.jsp` | `TopicModificationController.movePremoderatedForm` | `GET /mtn.jsp` |
 | covered | `ANY` | `/news/archive` | `ArchiveController.newsArchive` | `GET /news/archive` |
-| covered | `ANY` | `/news/{group}/{id}/history` | `EditHistoryController.showEditInfo` | `GET /news/{group}/{id}/history` |
-| covered | `ANY` | `/news/{group}/{id}/{commentid}/history` | `EditHistoryController.showCommentEditInfo` | `GET /news/{group}/{id}/{commentid}/history` |
+| covered | `ANY` | `/news/{group}/{id}/history` | `EditHistoryController.showEditInfo` | `GET /news/:group/:id/history` |
+| covered | `ANY` | `/news/{group}/{id}/{commentid}/history` | `EditHistoryController.showCommentEditInfo` | `GET /news/:group/:id/:commentid/history` |
 | covered | `POST` | `/notifications` | `UserEventController.resetNotifications` | `GET,POST /notifications` |
 | covered | `GET,HEAD` | `/notifications` | `UserEventController.showNotifications` | `GET,POST /notifications` |
 | covered | `POST` | `/notifications-click` | `UserEventController.clickNotifications` | `POST /notifications-click` |
 | covered | `POST` | `/notifications-click/ajax` | `UserEventController.clickNotificationsAjax` | `POST /notifications-click/ajax` |
 | covered | `GET` | `/notifications-count` | `UserEventApiController.getEventsCount` | `GET /notifications-count` |
 | covered | `POST` | `/notifications-reset` | `UserEventApiController.resetNotifications` | `POST /notifications-reset` |
-| covered | `ANY` | `/people/{nick}` | `UserTopicListController.showUserTopicsRssGone` | `GET /people/{nick}` |
-| covered | `ANY` | `/people/{nick}/deleted-comments` | `ShowCommentsController.showDeletedComments` | `GET /people/{nick}/deleted-comments` |
-| covered | `GET` | `/people/{nick}/deleted-topics` | `UserTopicListController.showDeletedTopics` | `GET /people/{nick}/deleted-topics` |
-| covered | `ANY` | `/people/{nick}/drafts` | `UserTopicListController.showUserDrafts` | `GET /people/{nick}/drafts` |
-| covered | `GET` | `/people/{nick}/edit` | `EditProfileController.show` | `GET,POST /people/{nick}/edit` |
-| covered | `POST` | `/people/{nick}/edit` | `EditProfileController.edit` | `GET,POST /people/{nick}/edit` |
-| covered | `ANY` | `/people/{nick}/favs` | `UserTopicListController.showUserFavs` | `GET /people/{nick}/favs` |
-| covered | `GET,HEAD` | `/people/{nick}/profile` | `ResetPasswordController.showModeratorForm` | `GET /people/{nick}/profile` |
-| covered | `GET,HEAD` | `/people/{nick}/profile` | `WhoisController.getInfoNew` | `GET /people/{nick}/profile` |
-| covered | `GET,HEAD` | `/people/{nick}/profile` | `WhoisController.yearStats` | `GET /people/{nick}/profile` |
-| covered | `GET,HEAD` | `/people/{nick}/profile/wipe` | `UserModificationController.wipe` | `GET /people/{nick}/profile/wipe` |
-| covered | `GET` | `/people/{nick}/remark` | `EditRemarkController.showForm` | `GET,POST /people/{nick}/remark` |
-| covered | `POST` | `/people/{nick}/remark` | `EditRemarkController.editProfile` | `GET,POST /people/{nick}/remark` |
-| covered | `ANY` | `/people/{nick}/remarks` | `ShowRemarkController.showRemarks` | `GET /people/{nick}/remarks` |
-| covered | `GET` | `/people/{nick}/settings` | `EditSettingsController.showForm` | `GET,POST /people/{nick}/settings` |
-| covered | `POST` | `/people/{nick}/settings` | `EditSettingsController.updateSettings` | `GET,POST /people/{nick}/settings` |
-| covered | `ANY` | `/people/{nick}/tracked` | `UserTopicListController.showUserWatches` | `GET /people/{nick}/tracked` |
+| covered | `ANY` | `/people/{nick}` | `UserTopicListController.showUserTopicsRssGone` | `GET /people/:nick` |
+| covered | `ANY` | `/people/{nick}/deleted-comments` | `ShowCommentsController.showDeletedComments` | `GET /people/:nick/deleted-comments` |
+| covered | `GET` | `/people/{nick}/deleted-topics` | `UserTopicListController.showDeletedTopics` | `GET /people/:nick/deleted-topics` |
+| covered | `ANY` | `/people/{nick}/drafts` | `UserTopicListController.showUserDrafts` | `GET /people/:nick/drafts` |
+| covered | `GET` | `/people/{nick}/edit` | `EditProfileController.show` | `GET,POST /people/:nick/edit` |
+| covered | `POST` | `/people/{nick}/edit` | `EditProfileController.edit` | `GET,POST /people/:nick/edit` |
+| covered | `ANY` | `/people/{nick}/favs` | `UserTopicListController.showUserFavs` | `GET /people/:nick/favs` |
+| covered | `GET,HEAD` | `/people/{nick}/profile` | `ResetPasswordController.showModeratorForm` | `GET /people/:nick/profile; GET /people/:nick/profile/` |
+| covered | `GET,HEAD` | `/people/{nick}/profile` | `WhoisController.getInfoNew` | `GET /people/:nick/profile; GET /people/:nick/profile/` |
+| covered | `GET,HEAD` | `/people/{nick}/profile` | `WhoisController.yearStats` | `GET /people/:nick/profile; GET /people/:nick/profile/` |
+| covered | `GET,HEAD` | `/people/{nick}/profile/wipe` | `UserModificationController.wipe` | `GET /people/:nick/profile/wipe` |
+| covered | `GET` | `/people/{nick}/remark` | `EditRemarkController.showForm` | `GET,POST /people/:nick/remark` |
+| covered | `POST` | `/people/{nick}/remark` | `EditRemarkController.editProfile` | `GET,POST /people/:nick/remark` |
+| covered | `ANY` | `/people/{nick}/remarks` | `ShowRemarkController.showRemarks` | `GET /people/:nick/remarks` |
+| covered | `GET` | `/people/{nick}/settings` | `EditSettingsController.showForm` | `GET,POST /people/:nick/settings; GET,POST /people/:nick/settings/` |
+| covered | `POST` | `/people/{nick}/settings` | `EditSettingsController.updateSettings` | `GET,POST /people/:nick/settings; GET,POST /people/:nick/settings/` |
+| covered | `ANY` | `/people/{nick}/tracked` | `UserTopicListController.showUserWatches` | `GET /people/:nick/tracked` |
 | covered | `ANY` | `/poll.boxlet` | `PollBoxlet.getData` | `GET /poll.boxlet` |
 | covered | `ANY` | `/polls/archive` | `ArchiveController.pollsArchive` | `GET /polls/archive` |
-| covered | `ANY` | `/polls/{group}/{id}/history` | `EditHistoryController.showEditInfo` | `GET /polls/{group}/{id}/history` |
-| covered | `ANY` | `/polls/{group}/{id}/{commentid}/history` | `EditHistoryController.showCommentEditInfo` | `GET /polls/{group}/{id}/{commentid}/history` |
+| covered | `ANY` | `/polls/{group}/{id}/history` | `EditHistoryController.showEditInfo` | `GET /polls/:group/:id/history` |
+| covered | `ANY` | `/polls/{group}/{id}/{commentid}/history` | `EditHistoryController.showCommentEditInfo` | `GET /polls/:group/:id/:commentid/history` |
 | covered | `GET` | `/post-warning` | `WarningController.showForm` | `GET,POST /post-warning` |
 | covered | `POST` | `/post-warning` | `WarningController.post` | `GET,POST /post-warning` |
 | covered | `GET` | `/reactions` | `ReactionController.commentReaction` | `GET,POST /reactions` |
@@ -138,8 +138,8 @@ Missing route declaration: **0**
 | covered | `GET,HEAD` | `/show-replies.jsp` | `UserEventController.showNotificationsForModerator` | `GET /show-replies.jsp` |
 | covered | `GET,HEAD` | `/show-replies.jsp` | `UserEventController.repliesFeed` | `GET /show-replies.jsp` |
 | covered | `GET` | `/show-topics.jsp` | `TopicListController.showUserTopics` | `GET /show-topics.jsp` |
-| covered | `GET,HEAD` | `/tag/{tag}` | `TagPageController.tagPage` | `GET /tag/{tag}` |
-| covered | `GET,HEAD` | `/tag/{tag}` | `TagTopicListController.tagFeed` | `GET /tag/{tag}` |
+| covered | `GET,HEAD` | `/tag/{tag}` | `TagPageController.tagPage` | `GET /tag/:tag` |
+| covered | `GET,HEAD` | `/tag/{tag}` | `TagTopicListController.tagFeed` | `GET /tag/:tag` |
 | covered | `ANY` | `/tags` | `TagController.showDefaultTagListHandlertags` | `GET /tags` |
 | covered | `ANY` | `/tags` | `TagController.showTagListHandlerJSON` | `GET /tags` |
 | covered | `ANY` | `/tags.jsp` | `TagController.oldTagsRedirectHandler` | `GET /tags.jsp` |
@@ -147,9 +147,9 @@ Missing route declaration: **0**
 | covered | `POST` | `/tags/change` | `TagController.changeTagSubmitHandler` | `GET,POST /tags/change` |
 | covered | `GET` | `/tags/delete` | `TagController.deleteTagShowFormHandler` | `GET,POST /tags/delete` |
 | covered | `POST` | `/tags/delete` | `TagController.deleteTagSubmitHandler` | `GET,POST /tags/delete` |
-| covered | `ANY` | `/tags/{firstLetter}` | `TagController.showTagListHandler` | `GET /tags/{first_letter}` |
+| covered | `ANY` | `/tags/{firstLetter}` | `TagController.showTagListHandler` | `GET /tags/:first_letter` |
 | covered | `ANY` | `/top10.boxlet` | `TopTenBoxlet.getData` | `GET /top10.boxlet` |
-| covered | `ANY` | `/tracker` | `TrackerController.tracker` | `GET /tracker` |
+| covered | `ANY` | `/tracker` | `TrackerController.tracker` | `GET /tracker; GET /tracker/` |
 | covered | `ANY` | `/tracker.jsp` | `TrackerController.trackerOldUrl` | `GET /tracker.jsp` |
 | covered | `GET` | `/uncommit.jsp` | `TopicModificationController.uncommitForm` | `GET,POST /uncommit.jsp` |
 | covered | `POST` | `/uncommit.jsp` | `TopicModificationController.uncommit` | `GET,POST /uncommit.jsp` |
@@ -185,9 +185,9 @@ Missing route declaration: **0**
 | covered | `POST` | `/vote.jsp` | `VoteController.vote` | `POST /vote.jsp` |
 | covered | `ANY` | `/whois.jsp` | `WhoisController.getInfo` | `GET /whois.jsp` |
 | covered | `GET` | `/yandex-tableau` | `UserEventApiController.getYandexWidget` | `GET /yandex-tableau` |
-| covered | `ANY` | `/{section}/` | `TopicListController.topics` | `GET /forum; GET /news; GET /news/; GET /polls; GET /polls/; GET /articles; GET /articles/; GET /gallery; GET /gallery/` |
-| covered | `ANY` | `/{section}/archive/{year}/{month}` | `TopicListController.sectionArchive` | `GET /news/archive/{year}/{month}; GET /polls/archive/{year}/{month}; GET /articles/archive/{year}/{month}; GET /gallery/archive/{year}/{month}` |
-| covered | `ANY` | `/{section}/{group}` | `TopicListController.topicsByGroup` | `GET /forum/{group}; GET /news/{group}; GET /polls/{group}; GET /articles/{group}; GET /gallery/{group}` |
-| covered | `ANY` | `/{section}/{group}/{id}` | `TopicController.getMessageMain` | `GET /forum/{group}/{id}; GET /news/{group}/{id}; GET /polls/{group}/{id}; GET /articles/{group}/{id}; GET /gallery/{group}/{id}` |
-| covered | `GET` | `/{section}/{group}/{id}/page{page}` | `TopicController.getMessagePage` | `GET /forum/{group}/{id_or_year}/{page_or_month}; GET /news/{group}/{id}/{page_marker}; GET /polls/{group}/{id}/{page_marker}; GET /articles/{group}/{id}/{page_marker}; GET /gallery/{group}/{id}/{page_marker}` |
-| covered | `GET` | `/{section}/{group}/{id}/thread/{threadRoot}` | `TopicController.getMessageThread` | `GET /forum/{group}/{id}/thread/{thread_root}; GET /news/{group}/{id}/thread/{thread_root}; GET /polls/{group}/{id}/thread/{thread_root}; GET /articles/{group}/{id}/thread/{thread_root}; GET /gallery/{group}/{id}/thread/{thread_root}` |
+| covered | `ANY` | `/{section}/` | `TopicListController.topics` | `GET /forum; GET /forum/; GET /news; GET /news/; GET /polls; GET /polls/; GET /articles; GET /articles/; GET /gallery; GET /gallery/` |
+| covered | `ANY` | `/{section}/archive/{year}/{month}` | `TopicListController.sectionArchive` | `GET /news/archive/:year/:month; GET /polls/archive/:year/:month; GET /articles/archive/:year/:month; GET /gallery/archive/:year/:month` |
+| covered | `ANY` | `/{section}/{group}` | `TopicListController.topicsByGroup` | `GET,POST /forum/:group; GET /news/:group; GET /polls/:group; GET /articles/:group; GET /gallery/:group` |
+| covered | `ANY` | `/{section}/{group}/{id}` | `TopicController.getMessageMain` | `GET /forum/:group/:id; GET /news/:group/:id; GET /polls/:group/:id; GET /articles/:group/:id; GET /gallery/:group/:id` |
+| covered | `GET` | `/{section}/{group}/{id}/page{page}` | `TopicController.getMessagePage` | `GET /forum/:group/:id_or_year/:page_or_month; GET /news/:group/:id/:page_marker; GET /polls/:group/:id/:page_marker; GET /articles/:group/:id/:page_marker; GET /gallery/:group/:id/:page_marker` |
+| covered | `GET` | `/{section}/{group}/{id}/thread/{threadRoot}` | `TopicController.getMessageThread` | `GET /forum/:group/:id/thread/:thread_root; GET /news/:group/:id/thread/:thread_root; GET /polls/:group/:id/thread/:thread_root; GET /articles/:group/:id/thread/:thread_root; GET /gallery/:group/:id/thread/:thread_root` |

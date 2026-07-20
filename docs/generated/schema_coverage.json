@@ -30,14 +30,19 @@
       "reason"
     ],
     "rust_columns": [
+      "allow_posting",
       "ban_date",
+      "captcha_required",
       "date",
       "ip",
       "mod_id",
       "reason"
     ],
     "missing_columns": [],
-    "extra_columns": []
+    "extra_columns": [
+      "allow_posting",
+      "captcha_required"
+    ]
   },
   {
     "table": "ban_info",
@@ -106,13 +111,16 @@
       "reason"
     ],
     "rust_columns": [
+      "bonus",
       "delby",
       "deldate",
       "msgid",
       "reason"
     ],
     "missing_columns": [],
-    "extra_columns": []
+    "extra_columns": [
+      "bonus"
+    ]
   },
   {
     "table": "edit_info",
@@ -223,8 +231,10 @@
     "original_columns": [],
     "rust_columns": [
       "deleted",
+      "extension",
       "height",
       "id",
+      "main",
       "medium",
       "original",
       "original_name",
@@ -238,8 +248,10 @@
     "missing_columns": [],
     "extra_columns": [
       "deleted",
+      "extension",
       "height",
       "id",
+      "main",
       "medium",
       "original",
       "original_name",
@@ -876,6 +888,7 @@
       "havelink",
       "id",
       "image_allowed",
+      "imageallowed",
       "imagepost",
       "linktext",
       "moderate",
@@ -888,6 +901,7 @@
     "missing_columns": [],
     "extra_columns": [
       "image_allowed",
+      "imageallowed",
       "restrict_score",
       "scroll_mode"
     ]
@@ -1074,6 +1088,7 @@
       "id",
       "message",
       "message_id",
+      "origin_user",
       "private",
       "topic_id",
       "type",
@@ -1084,6 +1099,7 @@
     "missing_columns": [],
     "extra_columns": [
       "event_type",
+      "origin_user",
       "topic_id",
       "warning_id"
     ]

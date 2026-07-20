@@ -15,15 +15,24 @@
         {% match topic.url %}{% when Some with (url) %}<p>&gt;&gt;&gt; <a rel="nofollow" href="{{ url }}">{% match topic.linktext %}{% when Some with (lt) %}{{ lt }}{% when None %}Подробности{% endmatch %}</a></p>{% when None %}{% endmatch %}
       </div>
       {% match poll %}{% when Some with (p) %}
-      <div class="poll-result">
-        {% if p.can_vote %}<form action="/vote.jsp" method="post"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="voteid" value="{{ p.voteid }}">{% for v in p.variants %}<label class="penguin_label"><input type="{% if p.multiselect %}checkbox{% else %}radio{% endif %}" name="vote" value="{{ v.id }}"> {{ v.label }}</label><br>{% endfor %}<button class="btn btn-primary" type="submit">Голосовать</button></form>{% else %}<ol>{% for v in p.variants %}<li><span class="penguin_label">{{ v.label }}</span><span class="penguin_percent">{{ v.pct }}%</span></li>{% endfor %}</ol><div class="poll-sum"><p>Всего голосов: {{ p.total_votes }}</p></div>{% endif %}
-      </div>
+        {% if p.pending %}<div class="infoblock"><i class="icon-lock"></i> Опрос ожидает подтверждения модератором. Голосование недоступно.</div>{% endif %}
+        {% if p.show_results %}
+          <div class="poll-result"><ol>{% for v in p.variants %}<li>{% if v.user_voted %}<span class="penguin_label poll-selected"><b>{{ v.label }}</b></span><span class="penguin_percent"><b>{{ v.votes }} ({{ v.pct }}%)</b></span>{% else %}<span class="penguin_label"> {{ v.label }}</span><span class="penguin_percent">{{ v.votes }} ({{ v.pct }}%)</span>{% endif %}<p class="penguin_progress"><span style="width: {{ v.progress_pct }}%"><span></span></span></p></li>{% endfor %}</ol></div>
+          <div class="poll-sum"><p>Всего голосов: {{ p.total_votes }}{% if p.multiselect %}, всего проголосовавших: {{ p.total_people }}{% endif %}</p></div>
+        {% else %}
+          {% if p.can_vote %}<form action="/vote.jsp" method="POST" style="margin-bottom: 1em"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="voteid" value="{{ p.voteid }}">{% endif %}
+          {% if p.pending %}<div class="poll-uncommited">{% endif %}
+          {% for v in p.variants %}<div class="{% if p.multiselect %}checkbox{% else %}radio{% endif %}"><label><input type="{% if p.multiselect %}checkbox{% else %}radio{% endif %}"{% if !p.can_vote %} disabled{% endif %} name="vote" value="{{ v.id }}"> {{ v.label }}</label></div>{% endfor %}
+          {% if p.pending %}</div>{% endif %}
+          {% if p.can_vote %}<button type="submit" class="btn btn-default">Голосовать</button></form>{% endif %}
+          {% if !p.pending %}<p>&gt;&gt;&gt; <a href="{{ topic.topic_url() }}?results=true">Результаты</a></p>{% endif %}
+          {% if !p.authorized && !p.pending %}<div class="infoblock">Для участия в опросе <a href="/login.jsp">войдите</a> или <a href="/register.jsp">зарегистрируйтесь</a>.</div>{% endif %}
+        {% endif %}
       {% when None %}{% endmatch %}
       <footer><div class="sign" style="margin-left:0"><a href="/people/{{ topic.author }}/profile">{{ topic.author }}</a><br>{{ topic.postdate }}</div></footer>
       {{ topic_reactions_html|safe }}
     </div>
   </div>
-  {% if show_add_image_link %}<nav><a class="btn btn-default" href="/addphoto-topic.jsp?msgid={{ topic.id }}">Добавить изображение</a></nav>{% endif %}
 </article>
 
 {% match thread_root %}{% when Some with (root) %}<p><a href="{{ topic.topic_url() }}">← вернуться ко всем комментариям</a> (режим ветки, корень #{{ root }})</p>{% when None %}{% endmatch %}

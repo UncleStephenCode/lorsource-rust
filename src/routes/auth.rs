@@ -79,7 +79,21 @@ pub async fn login(State(state): State<AppState>, headers: axum::http::HeaderMap
 pub async fn logout(jar: CookieJar) -> (CookieJar, Redirect) {
     let session_cookie = Cookie::build(("lor_session", "")).path("/").build();
     let jar = jar.remove(session_cookie);
-    (jar, Redirect::to("/"))
+    (jar, Redirect::to("/login.jsp"))
+}
+
+pub async fn logout_link(CurrentUser(user): CurrentUser) -> Redirect {
+    match user {
+        Some(user) => Redirect::to(&format!("/people/{}/profile", urlencoding::encode(&user.nick))),
+        None => Redirect::to("/login.jsp"),
+    }
+}
+
+pub async fn logout_all_sessions(State(state): State<AppState>, CurrentUser(user): CurrentUser, jar: CookieJar) -> Result<(CookieJar, Redirect)> {
+    if let Some(user) = user {
+        sqlx::query("UPDATE users SET force_unlogin=COALESCE(force_unlogin,0)+1 WHERE id=$1").bind(user.id).execute(&state.pool).await?;
+    }
+    Ok(logout(jar).await)
 }
 
 pub async fn register_form(State(state): State<AppState>, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {

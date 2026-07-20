@@ -8,15 +8,15 @@ Dropped upstream legacy tables: **19**
 | Status | Table | Missing columns from Rust migration | Extra Rust columns |
 |---|---|---|---|
 | rust-only | `adv_counts` | `` | `adv, clicks, event_date, id, views` |
-| covered | `b_ips` | `` | `` |
+| covered | `b_ips` | `` | `allow_posting, captcha_required` |
 | covered | `ban_info` | `` | `` |
 | covered | `comments` | `` | `edit_count, editdate, editor, reactions` |
-| covered | `del_info` | `` | `` |
+| covered | `del_info` | `` | `bonus` |
 | covered | `edit_info` | `` | `minor, object_type, oldimage` |
 | rust-only | `email_domains_block` | `` | `created_at, domain, reason` |
 | covered | `groups` | `` | `` |
 | covered | `ignore_list` | `` | `` |
-| rust-only | `images` | `` | `deleted, height, id, medium, original, original_name, postdate, primary_image, thumbnail, topic, userid, width` |
+| rust-only | `images` | `` | `deleted, extension, height, id, main, medium, original, original_name, postdate, primary_image, thumbnail, topic, userid, width` |
 | dropped-upstream | `jam_category` | `category_name, child_topic_id, sort_key` | `` |
 | dropped-upstream | `jam_configuration` | `config_key, config_value` | `` |
 | dropped-upstream | `jam_file` | `delete_date, file_admin_only, file_id, file_name, file_read_only, file_size, file_url, mime_type, topic_id, virtual_wiki_id` | `` |
@@ -44,7 +44,7 @@ Dropped upstream legacy tables: **19**
 | rust-only | `polls` | `` | `id, multiselect, topic` |
 | rust-only | `polls_variants` | `` | `id, label, vote, votes` |
 | rust-only | `reactions_log` | `` | `action_date, comment_id, id, msgid, origin_user, reaction, set_date, set_value, topic_id, userid` |
-| covered | `sections` | `` | `image_allowed, restrict_score, scroll_mode` |
+| covered | `sections` | `` | `image_allowed, imageallowed, restrict_score, scroll_mode` |
 | covered | `tags` | `` | `` |
 | rust-only | `tags_synonyms` | `` | `id, synonym, tag_id` |
 | covered | `tags_values` | `` | `` |
@@ -52,7 +52,7 @@ Dropped upstream legacy tables: **19**
 | rust-only | `topic_users_notified` | `` | `topic, userid` |
 | covered | `topics` | `` | `draft, image, no_comments, open_warnings, reactions, score_loss, warning_counter` |
 | covered | `user_agents` | `` | `` |
-| covered | `user_events` | `` | `event_type, topic_id, warning_id` |
+| covered | `user_events` | `` | `event_type, origin_user, topic_id, warning_id` |
 | rust-only | `user_invites` | `` | `created_at, email, id, invite_code, invited_user, issue_date, owner, used_at, used_by, valid_until` |
 | rust-only | `user_log` | `` | `action, action_date, action_userid, id, info, userid` |
 | rust-only | `user_remarks` | `` | `remark, userid, who` |
