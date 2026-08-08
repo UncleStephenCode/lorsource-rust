@@ -148,6 +148,14 @@ where
         Self { oRepository }
     }
 
+    pub async fn bSlowModeRestricted(&self, stActor: StAddTopicActor) -> Result<bool> {
+        let Some(iUserId) = stActor.optUserId.filter(|_| !stActor.bAnonymous) else {
+            return Ok(false);
+        };
+        let stInfo = self.oRepository.stSlowModeInfo(iUserId).await?;
+        Ok(bSlowModeRestricted(stActor, stInfo))
+    }
+
     /// Loads the same request-dependent inputs used by Java's AnySession and
     /// checks the maximum of group and section `restrict_topics`.
     pub async fn optCheckGroup(

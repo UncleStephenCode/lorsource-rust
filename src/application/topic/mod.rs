@@ -5,7 +5,7 @@ use crate::domain::topic::{
     model::{StTopicDetail, StTopicSummary},
     repository::{StEditTopic, StNewTopic, TrTopicRepository},
 };
-use crate::error::Result;
+use crate::error::{AppError, Result};
 use sqlx::{Postgres, Transaction};
 
 #[derive(Debug, Clone)]
@@ -14,6 +14,12 @@ where
     R: TrTopicRepository,
 {
     oRepository: R,
+}
+
+#[derive(Debug, Clone)]
+pub struct StRssFeed {
+    pub sTitle: String,
+    pub vecTopics: Vec<StTopicSummary>,
 }
 
 impl<R> CTopicService<R>
@@ -38,6 +44,40 @@ where
 
     pub async fn stGetTopic(&self, iTopicId: i32) -> Result<StTopicDetail> {
         self.oRepository.stGetTopic(iTopicId).await
+    }
+
+    pub async fn stRssFeed(
+        &self,
+        iSectionId: i32,
+        iGroupId: i32,
+        optFilter: Option<&str>,
+    ) -> Result<StRssFeed> {
+        let (bNoTalks, bTech, optFilterTitle) = match optFilter {
+            None => (false, false, None),
+            Some("notalks") => (true, false, Some("без talks")),
+            Some("tech") => (false, true, Some("тех. форум")),
+            Some(_) => {
+                return Err(AppError::BadRequest(
+                    "Некорректное значение filter".to_string(),
+                ));
+            }
+        };
+        let stContext = self.oRepository.stRssContext(iSectionId, iGroupId).await?;
+        let mut sTitle = stContext.sSectionName.clone();
+        if let Some(sGroupTitle) = stContext.optGroupTitle.as_deref() {
+            sTitle.push_str(" - ");
+            sTitle.push_str(sGroupTitle);
+        }
+        if let Some(sFilterTitle) = optFilterTitle {
+            sTitle.push_str(" (");
+            sTitle.push_str(sFilterTitle);
+            sTitle.push(')');
+        }
+        let vecTopics = self
+            .oRepository
+            .vecListRssTopics(iSectionId, iGroupId, bNoTalks, bTech)
+            .await?;
+        Ok(StRssFeed { sTitle, vecTopics })
     }
 
     pub async fn vecListComments(&self, iTopicId: i32) -> Result<Vec<StCommentItem>> {
@@ -94,10 +134,6 @@ where
         optTags: Option<&str>,
     ) -> Result<()> {
         self.oRepository.vReplaceTags(txPg, iMsgId, optTags).await
-    }
-
-    pub async fn vSetDeleted(&self, iTopicId: i32, bDeleted: bool) -> Result<()> {
-        self.oRepository.vSetDeleted(iTopicId, bDeleted).await
     }
 
     pub async fn optResolveMeta(&self, iTopicId: i32) -> Result<Option<(i32, bool)>> {

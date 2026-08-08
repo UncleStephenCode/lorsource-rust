@@ -1,0 +1,112 @@
+name: compatibility
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-and-static-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain
+        run: rustup show
+      - name: Rust format
+        run: cargo fmt --all -- --check
+      - name: Rust compile
+        run: cargo check --locked --all-targets --all-features
+      - name: Rust tests
+        run: cargo test --locked --all-features
+      - name: Rust lints
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - name: Python contract tests
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -m unittest discover -s tools/tests -p 'test_*.py'
+      - name: CSRF surface audit
+        run: python3 tools/audit_csrf_surface.py .
+      - name: Shell syntax
+        run: |
+          for file in scripts/*.sh .devcontainer/*.sh compat/java-db/*.sh; do
+            bash -n "$file"
+          done
+      - name: JavaScript syntax
+        run: node --check static/js/lor/forms-and-reactions.js
+      - name: Docker release build
+        run: docker compose build app
+      - name: Start Java-schema compatibility stack
+        env:
+          # Java's FloodProtector intentionally disables its in-memory delay
+          # when mainURI.host is exactly 127.0.0.1, keeping the stateful CI
+          # workflow deterministic without weakening normal localhost/prod.
+          PUBLIC_URL: http://127.0.0.1:8181
+          WS_URL: ws://127.0.0.1:8181/
+        run: docker compose up -d
+      - name: Wait for application health
+        run: |
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent http://127.0.0.1:8181/healthz >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose logs --no-color app db-bootstrap
+          exit 1
+      - name: Runtime HTTP compatibility matrix
+        env:
+          NEW_BASE_URL: http://127.0.0.1:8181
+        run: python3 compat/test_http_compat.py
+      - name: Seed disposable write-flow users
+        run: |
+          docker compose exec -T postgres psql -U postgres -d lor --set ON_ERROR_STOP=1 <<'SQL'
+          INSERT INTO users(id,nick,passwd,email,score,max_score,lastlogin,regdate,activated,canmod)
+          VALUES
+            (nextval('s_uid')::int,'rust-ci-author','$2b$12$Ru.keTlZ2jORV8uWKwQJ9.KnPTv8iFVh0wla7jCnwSxul4KGryElK','rust-ci-author@example.invalid',1000,1000,now(),now(),true,true),
+            (nextval('s_uid')::int,'rust-ci-reactor','$2b$12$FHB9so4OyGyXlGasu5UpROuAKwPAaUooWUuoYkBwwU.LS4.CwZyRG','rust-ci-reactor@example.invalid',1000,1000,now(),now(),true,false);
+          SQL
+      - name: Stateful topic, tag, comment and reaction regression
+        env:
+          NEW_BASE_URL: http://127.0.0.1:8181
+          WRITE_FLOW_ALLOW_MUTATION: "yes"
+          WRITE_FLOW_AUTHOR_NICK: rust-ci-author
+          WRITE_FLOW_AUTHOR_PASSWORD: CompatAuthor123!
+          WRITE_FLOW_REACTOR_NICK: rust-ci-reactor
+          WRITE_FLOW_REACTOR_PASSWORD: CompatReactor123!
+          WRITE_FLOW_GROUP_ID: "126"
+          WRITE_FLOW_GALLERY_GROUP_ID: "4962"
+        run: python3 compat/test_write_flows.py
+      - name: Seed disposable moderation-flow users
+        run: |
+          docker compose exec -T postgres psql -U postgres -d lor --set ON_ERROR_STOP=1 <<'SQL'
+          INSERT INTO users(id,nick,passwd,email,score,max_score,lastlogin,regdate,activated,canmod,userinfo,town,url,photo)
+          VALUES
+            (nextval('s_uid')::int,'rust-ci-moderation','$2b$12$Ru.keTlZ2jORV8uWKwQJ9.KnPTv8iFVh0wla7jCnwSxul4KGryElK','rust-ci-moderation@example.invalid',250,250,now(),now(),true,false,'bad profile','bad town','https://bad.invalid','compat-userpic.png'),
+            (nextval('s_uid')::int,'rust-ci-score50','$2b$12$Ru.keTlZ2jORV8uWKwQJ9.KnPTv8iFVh0wla7jCnwSxul4KGryElK','rust-ci-score50@example.invalid',10,20,now(),now(),true,false,null,null,null,null),
+            (nextval('s_uid')::int,'rust-ci-delete','$2b$12$Ru.keTlZ2jORV8uWKwQJ9.KnPTv8iFVh0wla7jCnwSxul4KGryElK','rust-ci-delete@example.invalid',1000,1000,now(),now(),true,false,null,null,null,null),
+            (nextval('s_uid')::int,'rust-ci-corrector','$2b$12$FHB9so4OyGyXlGasu5UpROuAKwPAaUooWUuoYkBwwU.LS4.CwZyRG','rust-ci-corrector@example.invalid',1000,1000,now(),now(),true,false,null,null,null,null);
+          UPDATE users SET corrector=true WHERE nick='rust-ci-corrector';
+          SQL
+      - name: Stateful user moderation transaction and audit regression
+        env:
+          NEW_BASE_URL: http://127.0.0.1:8181
+          MODERATION_FLOW_ALLOW_MUTATION: "yes"
+          MODERATION_FLOW_MODERATOR_NICK: rust-ci-author
+          MODERATION_FLOW_MODERATOR_PASSWORD: CompatAuthor123!
+          MODERATION_FLOW_TARGET_NICK: rust-ci-moderation
+          MODERATION_FLOW_LOW_NICK: rust-ci-score50
+          MODERATION_FLOW_LOW_PASSWORD: CompatAuthor123!
+          MODERATION_FLOW_DELETE_NICK: rust-ci-delete
+          MODERATION_FLOW_DELETE_PASSWORD: CompatAuthor123!
+          MODERATION_FLOW_CORRECTOR_NICK: rust-ci-corrector
+          MODERATION_FLOW_CORRECTOR_PASSWORD: CompatReactor123!
+          MODERATION_FLOW_GROUP_ID: "126"
+        run: python3 compat/test_moderation_flows.py
+      - name: Runtime logs
+        if: always()
+        run: docker compose logs --no-color app db-bootstrap
+      - name: Stop compatibility stack
+        if: always()
+        run: docker compose down -v

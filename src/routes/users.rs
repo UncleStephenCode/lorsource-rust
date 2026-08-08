@@ -10,10 +10,11 @@ use crate::{
 };
 use askama::Template;
 use axum::{
-    Form,
+    Form, Json,
     extract::{OriginalUri, Path, Query, RawQuery, State},
     response::{Html, IntoResponse, Redirect, Response},
 };
+use axum_extra::extract::cookie::CookieJar;
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -108,6 +109,8 @@ struct UserTemplate {
     /// (`DisabledUserpic`) rather than a "no photo" box when the viewer has
     /// avatars disabled or the target has neither a local photo nor email.
     userpic_url: String,
+    year_stats_url: String,
+    year_stats_user: String,
     csrf_token: String,
 }
 
@@ -267,8 +270,33 @@ pub async fn profile_full(
     RawQuery(optRawQuery): RawQuery,
     Query(q): Query<PagerQuery>,
     current: CurrentUser,
+    stJar: CookieJar,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
-) -> Result<Html<String>> {
+) -> Result<Response> {
+    if bHasRequestParameter(optRawQuery.as_deref(), "year-stats") {
+        let stProfile = get_user_profile(&state, &nick).await?;
+        if stProfile.blocked
+            && !current
+                .0
+                .as_ref()
+                .map(|stUser| stUser.canmod)
+                .unwrap_or(false)
+        {
+            return Err(AppError::Forbidden);
+        }
+
+        let stTimezone = stRequestTimezone(&stJar);
+        let cRepository = crate::infra::opensearch::CUserStatisticsOpenSearchRepository::new(
+            state.config.opensearch_url.clone(),
+            state.http.clone(),
+        );
+        let cService =
+            crate::application::user::statistics::CUserStatisticsService::new(cRepository);
+        let sTimezone = stTimezone.to_string();
+        let mapStats = cService.mapYearStats(&stProfile.nick, &sTimezone).await?;
+        return Ok(Json(mapStats).into_response());
+    }
+
     if bHasRequestParameter(optRawQuery.as_deref(), "reset-password") {
         let _stModerator = current
             .0
@@ -285,15 +313,33 @@ pub async fn profile_full(
                 sCsrfToken: csrf_token,
             }
             .render()?,
-        ));
+        )
+        .into_response());
     }
-    render_profile(state, nick, q, current, csrf_token).await
+    Ok(render_profile(state, nick, q, current, csrf_token)
+        .await?
+        .into_response())
 }
 
 fn bHasRequestParameter(optRawQuery: Option<&str>, sName: &str) -> bool {
     optRawQuery
         .and_then(|sRawQuery| serde_urlencoded::from_str::<HashMap<String, String>>(sRawQuery).ok())
         .is_some_and(|mapQuery| mapQuery.contains_key(sName))
+}
+
+fn stRequestTimezone(stJar: &CookieJar) -> chrono_tz::Tz {
+    stJar
+        .get("tz")
+        .map(|stCookie| stCookie.value())
+        .filter(|sTimezone| !sTimezone.is_empty())
+        .filter(|sTimezone| !matches!(*sTimezone, "Factory" | "Etc/Unknown"))
+        .and_then(|sTimezone| sTimezone.parse().ok())
+        .or_else(|| {
+            std::env::var("TZ")
+                .ok()
+                .and_then(|sTimezone| sTimezone.parse().ok())
+        })
+        .unwrap_or(chrono_tz::Europe::Moscow)
 }
 
 async fn render_profile(
@@ -458,6 +504,12 @@ async fn render_profile(
     .await
     .unwrap_or_default();
 
+    let year_stats_url = format!(
+        "/people/{}/profile?year-stats",
+        urlencoding::encode(&profile.nick)
+    );
+    let year_stats_user = profile.nick.clone();
+
     Ok(Html(
         UserTemplate {
             profile,
@@ -480,6 +532,8 @@ async fn render_profile(
             user_log,
             invited_users,
             userpic_url,
+            year_stats_url,
+            year_stats_user,
             csrf_token,
         }
         .render()?,
@@ -773,7 +827,9 @@ async fn reactions_view(
             html_escape::encode_text(&prev_url)
         ));
     }
-    if has_more && offset + REACTIONS_ITEMS_PER_PAGE < REACTIONS_MAX_OFFSET {
+    // Java permits offset == MaxOffset and therefore emits the final link
+    // from 9950 to 10000 when a full look-ahead row exists.
+    if has_more && offset < REACTIONS_MAX_OFFSET {
         html.push_str(&format!(
             r#"<td align="right" width="35%"><a href="{url}?offset={}">следующие →</a></td>"#,
             offset + REACTIONS_ITEMS_PER_PAGE,
@@ -1449,9 +1505,7 @@ fn ensure_self(current: &Option<UserSummary>, target: &UserSummary) -> Result<()
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        bHasRequestParameter, edit_profile_form, optSelfServiceLoginRedirect, settings,
-    };
+    use super::{bHasRequestParameter, edit_profile_form, optSelfServiceLoginRedirect, settings};
     use crate::{config::StConfig, error::AppError, models::UserSummary, state::AppState};
     use axum::{Router, http::header, routing::get};
 
@@ -1497,7 +1551,10 @@ mod tests {
 
     #[test]
     fn reset_password_confirmation_matches_bare_and_encoded_query_key() {
-        assert!(bHasRequestParameter(Some("reset-password"), "reset-password"));
+        assert!(bHasRequestParameter(
+            Some("reset-password"),
+            "reset-password"
+        ));
         assert!(bHasRequestParameter(
             Some("%72eset-password=&offset=30"),
             "reset-password"
@@ -1506,6 +1563,8 @@ mod tests {
             Some("reset_password=true"),
             "reset-password"
         ));
+        assert!(bHasRequestParameter(Some("year-stats"), "year-stats"));
+        assert!(!bHasRequestParameter(Some("year_stats=true"), "year-stats"));
     }
 
     #[tokio::test]
@@ -1525,6 +1584,18 @@ mod tests {
                 cookie_secret: "test-cookie-secret-test-cookie-secret".to_owned(),
                 site_secret: "test-site-secret-test-site-secret".to_owned(),
                 opensearch_url: None,
+                captcha_public_key: None,
+                captcha_private_key: None,
+                captcha_verify_url: "https://hcaptcha.com/siteverify".to_owned(),
+                admin_email: None,
+                smtp_host: "localhost".to_owned(),
+                smtp_port: 25,
+                smtp_helo_name: "localhost".to_owned(),
+                telegram_token: None,
+                fallback_proxy_url: None,
+                enable_background_jobs: false,
+                clean_old_userpics: false,
+                trusted_proxy_cidrs: Vec::new(),
                 page_size: 30,
                 enable_hsts: false,
                 enable_dev_bypasses: false,
@@ -1532,8 +1603,8 @@ mod tests {
             oPool,
         );
         let cApp = Router::new()
-            .route("/people/:nick/settings", get(settings))
-            .route("/people/:nick/edit", get(edit_profile_form))
+            .route("/people/{nick}/settings", get(settings))
+            .route("/people/{nick}/edit", get(edit_profile_form))
             .with_state(stState);
         let stListener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await

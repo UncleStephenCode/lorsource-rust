@@ -1,50 +1,76 @@
-use crate::{error::Result, state::AppState};
+use crate::{
+    application::topic::CTopicService, error::Result,
+    infra::postgres::topic_repository::CTopicPgRepository, state::AppState,
+};
 use axum::{
     extract::{Query, State},
     http::{HeaderMap, header},
 };
 use serde::Deserialize;
 
-#[derive(Deserialize)]
-pub struct RssQuery {
-    pub section: Option<String>,
+fn iDefaultSection() -> i32 {
+    1
 }
 
-pub async fn main_rss(State(state): State<AppState>) -> Result<(HeaderMap, String)> {
-    render_rss(&state, None).await
+#[derive(Deserialize)]
+pub struct RssQuery {
+    #[serde(default = "iDefaultSection")]
+    pub section: i32,
+    #[serde(default)]
+    pub group: i32,
+    pub filter: Option<String>,
 }
 
 pub async fn section_rss(
-    State(state): State<AppState>,
-    Query(q): Query<RssQuery>,
+    State(stState): State<AppState>,
+    Query(stQuery): Query<RssQuery>,
 ) -> Result<(HeaderMap, String)> {
-    render_rss(&state, q.section).await
-}
-
-async fn render_rss(state: &AppState, optSection: Option<String>) -> Result<(HeaderMap, String)> {
-    let section = optSection.as_deref();
-    let topics = crate::routes::topics::list_topics(state, section, None, 0, 30).await?;
-    let mut body =
-        String::from(r#"<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel>"#);
-    body.push_str("<title>LOR Rust</title><link>");
-    body.push_str(&state.config.public_url);
-    body.push_str("</link><description>lorsource-rust feed</description>");
-    for t in topics {
-        let link = format!("{}{}", state.config.public_url, t.topic_url());
-        body.push_str("<item>");
-        body.push_str(&format!(
-            "<title>{}</title>",
-            html_escape::encode_text(&t.title)
-        ));
-        body.push_str(&format!("<link>{}</link><guid>{}</guid>", link, link));
-        body.push_str(&format!("<pubDate>{}</pubDate>", t.postdate.to_rfc2822()));
-        body.push_str("</item>");
+    let cTopicService = CTopicService::new(CTopicPgRepository::new(stState.pool.clone()));
+    let stFeed = cTopicService
+        .stRssFeed(stQuery.section, stQuery.group, stQuery.filter.as_deref())
+        .await?;
+    let sPublicUrl = stState.config.public_url.trim_end_matches('/');
+    let sTitle = format!("Linux.org.ru: {}", stFeed.sTitle);
+    let mut sBody =
+        String::from(r#"<?xml version="1.0" encoding="utf-8"?><rss version="2.0"><channel>"#);
+    sBody.push_str("<link>");
+    sBody.push_str(&html_escape::encode_text(&format!("{sPublicUrl}/")));
+    sBody.push_str("</link><language>ru</language><title>");
+    sBody.push_str(&html_escape::encode_text(&sTitle));
+    sBody.push_str("</title><description>");
+    sBody.push_str(&html_escape::encode_text(&sTitle));
+    sBody.push_str("</description><pubDate>");
+    sBody.push_str(&chrono::Utc::now().to_rfc2822());
+    sBody.push_str("</pubDate>");
+    for stTopic in stFeed.vecTopics {
+        let sLink = format!("{sPublicUrl}{}", stTopic.topic_url());
+        sBody.push_str("<item><author>");
+        sBody.push_str(&html_escape::encode_text(&stTopic.author));
+        sBody.push_str("</author><link>");
+        sBody.push_str(&html_escape::encode_text(&sLink));
+        sBody.push_str("</link><guid>");
+        sBody.push_str(&html_escape::encode_text(&sLink));
+        sBody.push_str("</guid><title>");
+        sBody.push_str(&html_escape::encode_text(&stTopic.title));
+        sBody.push_str("</title><pubDate>");
+        sBody.push_str(&stTopic.postdate.to_rfc2822());
+        sBody.push_str("</pubDate></item>");
     }
-    body.push_str("</channel></rss>");
-    let mut headers = HeaderMap::new();
-    headers.insert(
+    sBody.push_str("</channel></rss>");
+    let mut stHeaders = HeaderMap::new();
+    stHeaders.insert(
         header::CONTENT_TYPE,
         "application/rss+xml; charset=utf-8".parse().unwrap(),
     );
-    Ok((headers, body))
+    Ok((stHeaders, sBody))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_section_matches_java_controller() {
+        assert_eq!(iDefaultSection(), 1);
+    }
 }

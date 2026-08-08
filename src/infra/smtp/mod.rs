@@ -31,16 +31,6 @@ impl CSmtpEmailSender {
         }
     }
 
-    pub fn from_env() -> Self {
-        let sHost = std::env::var("SMTP_HOST").unwrap_or_else(|_| "localhost".to_string());
-        let iPort = std::env::var("SMTP_PORT")
-            .ok()
-            .and_then(|sValue| sValue.parse().ok())
-            .unwrap_or(25);
-        let sHeloName = std::env::var("SMTP_HELO_NAME").unwrap_or_else(|_| "localhost".to_string());
-        Self::new(sHost, iPort, sHeloName)
-    }
-
     async fn vSendCommand<W>(
         oWriter: &mut W,
         sCommand: &str,
@@ -60,6 +50,7 @@ impl TrEmailSender for CSmtpEmailSender {
         vValidateMailbox(&stMessage.sFrom)?;
         vValidateMailbox(&stMessage.sTo)?;
         vValidateHeader(&stMessage.sSubject)?;
+        vValidateSmtpAtom(&self.sHeloName, "SMTP_HELO_NAME")?;
 
         let oStream = timeout(
             DT_SMTP_TIMEOUT,
@@ -113,6 +104,17 @@ fn vValidateHeader(sValue: &str) -> Result<()> {
     Ok(())
 }
 
+fn vValidateSmtpAtom(sValue: &str, sName: &str) -> Result<()> {
+    if sValue.is_empty()
+        || !sValue.chars().all(|cCharacter| {
+            cCharacter.is_ascii_alphanumeric() || matches!(cCharacter, '.' | '-' | ':' | '[' | ']')
+        })
+    {
+        return Err(AppError::BadRequest(format!("invalid {sName}")));
+    }
+    Ok(())
+}
+
 fn sEncodedHeader(sValue: &str) -> String {
     if sValue.is_ascii() {
         sValue.to_string()
@@ -126,10 +128,12 @@ fn sWireMessage(stMessage: &StEmailMessage) -> Result<String> {
     vValidateMailbox(&stMessage.sTo)?;
     vValidateHeader(&stMessage.sSubject)?;
     let mut sResult = format!(
-        "From: {}\r\nTo: {}\r\nSubject: {}\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n",
+        "From: {}\r\nTo: {}\r\nSubject: {}\r\nDate: {}\r\nMessage-ID: <{}@linux.org.ru>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n",
         stMessage.sFrom,
         stMessage.sTo,
         sEncodedHeader(&stMessage.sSubject),
+        chrono::Utc::now().to_rfc2822(),
+        uuid::Uuid::new_v4(),
     );
     let sNormalized = stMessage.sBody.replace("\r\n", "\n").replace('\r', "\n");
     for (iIndex, sLine) in sNormalized.split('\n').enumerate() {
@@ -206,6 +210,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rejects_smtp_helo_command_injection_before_connecting() {
+        let oSender = CSmtpEmailSender::new("127.0.0.1", 1, "localhost\r\nMAIL FROM:<evil>");
+        let stError = oSender
+            .vSend(&StEmailMessage {
+                sFrom: "no-reply@linux.org.ru".to_owned(),
+                sTo: "admin@example.org".to_owned(),
+                sSubject: "test".to_owned(),
+                sBody: "body".to_owned(),
+            })
+            .await
+            .expect_err("invalid HELO must fail before SMTP connection");
+        assert!(stError.to_string().contains("SMTP_HELO_NAME"));
+    }
+
+    #[tokio::test]
     async fn sends_a_complete_message_to_a_local_smtp_server() {
         let oListener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
@@ -258,6 +277,8 @@ mod tests {
             .unwrap();
         let sData = hServer.await.unwrap();
         assert!(sData.contains("Subject: Test\r\n"));
+        assert!(sData.contains("Date: "));
+        assert!(sData.contains("Message-ID: <"));
         assert!(sData.contains("hello\r\n..world\r\n"));
     }
 }

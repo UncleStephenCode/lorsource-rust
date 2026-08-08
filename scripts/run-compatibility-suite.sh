@@ -20,6 +20,10 @@ else
   "$ROOT/scripts/check-db-workflow.sh"
 fi
 
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+  -s "$ROOT/tools/tests" -p 'test_*.py'
+python3 "$ROOT/tools/audit_csrf_surface.py" "$ROOT"
+
 python3 "$ROOT/tools/extract_axum_routes.py" "$ROOT" \
   --json "$ROOT/docs/generated/rust_routes.json" \
   --csv "$ROOT/docs/generated/rust_routes.csv"

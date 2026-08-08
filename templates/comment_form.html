@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Добавить комментарий{% endblock %}
 {% block content %}
+{% match preview_html %}{% when Some with (html) %}<h1>Предпросмотр</h1><div class="messages"><article class="msg"><div class="msg-container"><div class="msg_body"><div class="msg-text">{{ html|safe }}</div></div></div></article></div>{% when None %}{% endmatch %}
 <h1>Добавить комментарий</h1>
 <p><a href="{{ topic_url }}">{{ topic_title }}</a></p>
 <p class="help-block">Комментарий должен соответствовать <a href="/help/rules.md">правилам</a> сайта.</p>
@@ -9,7 +10,14 @@
   <input type="hidden" name="csrf" value="{{ csrf_token }}">
   <input type="hidden" name="topic" value="{{ topic_id }}">
   {% match replyto %}{% when Some with (id) %}<input type="hidden" name="replyto" value="{{ id }}">{% when None %}<input type="hidden" name="replyto" value="0">{% endmatch %}
-  <div class="control-group" data-format-mode="{{ format_mode }}"><div class="markup-tabs"><ul class="markup-tabs__nav"><li class="markup-tabs__tab active" data-tab="editor">{{ format_title }}</li></ul><div class="markup-tabs__content"><div class="markup-tabs__panel active" data-panel="editor"><textarea id="msg" name="msg" required autofocus></textarea></div></div></div></div>
+  {% match form_error %}{% when Some with (error) %}<div class="error">{{ error }}</div>{% when None %}{% endmatch %}
+  {% if anonymous_form %}
+  <div class="control-group"><label for="nick">Имя</label><input id="nick" name="nick" type="text" value="{{ form_nick }}"></div>
+  <div class="control-group"><label for="password">Пароль:</label><input id="password" name="password" type="password"></div>
+  {% endif %}
+  {% if !form_title.is_empty() %}<input type="hidden" name="title" value="{{ form_title }}">{% endif %}
+  <div class="control-group" data-format-mode="{{ format_mode }}"><div class="markup-tabs"><ul class="markup-tabs__nav"><li class="markup-tabs__tab active" data-tab="editor">{{ format_title }}</li></ul><div class="markup-tabs__content"><div class="markup-tabs__panel active" data-panel="editor"><textarea id="msg" name="msg" required autofocus>{{ form_msg }}</textarea></div></div></div></div>
+  {% if require_captcha %}<div class="help-block"><script src="https://js.hcaptcha.com/1/api.js" async defer></script><div class="h-captcha" data-sitekey="{{ captcha_site_key }}"></div></div>{% endif %}
   <div class="form-actions"><button class="btn btn-primary" type="submit">Поместить</button><button class="btn btn-default" type="submit" name="preview">Предпросмотр</button><a class="btn btn-default" href="{{ topic_url }}">Отменить</a><div class="help-block">Используйте Ctrl-Enter для размещения комментария</div></div>
 </form>
 </div>

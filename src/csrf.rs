@@ -7,14 +7,14 @@
 //! logout/nav form is injected client-side after load and has no other way
 //! to read a value the server computed for this request.
 //!
-//! Both URL-encoded and multipart forms are checked. `/add.jsp` is the one
-//! multipart exception currently handled in its route because Java marks the
-//! controller `@CSRFNoAuto`: preview is allowed without a token, while the
-//! actual publish branch performs the check itself.
+//! Both URL-encoded and multipart forms are checked. Java's `@CSRFNoAuto`
+//! write handlers (`/add.jsp`, `/add_comment.jsp`, `/edit_comment`) validate
+//! the token only in their non-preview branch, so those paths are checked in
+//! the route after form parsing rather than unconditionally here.
 use crate::state::AppState;
 use axum::{
     body::Body,
-    extract::{FromRequestParts, Request, State},
+    extract::{ConnectInfo, FromRequestParts, Request, State},
     http::{Method, StatusCode, request::Parts},
     middleware::Next,
     response::{IntoResponse, Response},
@@ -25,6 +25,7 @@ use bytes::Bytes;
 use futures_util::stream;
 use rand::RngCore;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use time::Duration;
 
 /// Matches Java's `CSRFProtectionService.CSRF_COOKIE` exactly - the
@@ -77,7 +78,6 @@ async fn optMultipartCsrf(sContentType: &str, vecBody: Bytes) -> Option<String> 
 #[derive(Debug, Clone)]
 pub struct CsrfToken(pub String);
 
-#[axum::async_trait]
 impl<S> FromRequestParts<S> for CsrfToken
 where
     S: Send + Sync,
@@ -93,18 +93,30 @@ where
     }
 }
 
-pub async fn apply(State(_state): State<AppState>, mut req: Request, next: Next) -> Response {
+pub async fn apply(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
     let jar = CookieJar::from_headers(req.headers());
     let existing = jar
         .get(COOKIE_NAME)
         .map(|c| c.value().trim().to_string())
         .filter(|v| is_valid_token(v));
     let token = existing.clone().unwrap_or_else(generate_token);
-    let is_secure = crate::security::is_secure_request(req.headers());
+    let optPeerIp = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|stInfo| stInfo.0.ip());
+    let is_secure = crate::security::is_secure_request(
+        req.headers(),
+        optPeerIp,
+        &state.config.trusted_proxy_cidrs,
+    );
 
     req.extensions_mut().insert(CsrfToken(token.clone()));
 
-    if req.method() == Method::POST && req.uri().path() != "/add.jsp" {
+    let bManualCsrf = matches!(
+        req.uri().path(),
+        "/add.jsp" | "/add_comment.jsp" | "/edit_comment"
+    );
+    if req.method() == Method::POST && !bManualCsrf {
         // A missing content-type is still checked: a bodyless cross-site POST
         // is a browser "simple request" and must not bypass the interceptor.
         let optContentType = req

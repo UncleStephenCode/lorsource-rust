@@ -8,9 +8,11 @@ The original archive is the current lorsource Scala/Spring MVC codebase with JSP
 
 | Area | Original | Rust port v4 | Status |
 |---|---:|---:|---|
-| Extracted Spring endpoint shapes | 184 | — | Source of truth |
-| Axum route declarations | — | 146 | Some Axum routes cover several Spring handlers via method/parameter aggregation |
-| Route coverage | 184/184 | 184/184 | Covered by declaration |
+| Expanded Spring endpoint variants | 193 | — | Source of truth |
+| Axum route declarations | — | 159 | Some Axum routes cover several Spring handlers via method/parameter aggregation |
+| Fully declared path/method variants | 113/193 | 113/193 | Exact declared-method overlap |
+| Spring `ANY` variants with a concrete Rust method | 80/193 | 80/193 | Reported separately; not a semantic mismatch by itself |
+| Missing route declarations | 0 | 0 | Structural coverage only |
 | `legacy::not_implemented` routes | — | 0 | Removed in v4 |
 | Active original demo tables | 20 | 20 | Covered by migrations |
 | Original `monthly_stats` columns | 5 | 5 | Fixed in v4 |
@@ -52,7 +54,7 @@ Rust v4: `/deregister.jsp` implements the same high-level policy: permission gat
 
 Original: admin and moderation controllers cover GeoIP, search reindex, IP bans, group editing, user moderation and warnings.
 
-Rust v4: previous broad admin stubs were replaced by concrete handlers that operate on the compatibility tables (`b_ips`, `ban_info`, `groups`, `users`, `message_warnings`). External integrations such as real GeoIP and search reindex workers remain adapter points.
+Rust: previous broad admin stubs were replaced by concrete handlers that operate on the canonical tables (`b_ips`, `ban_info`, `groups`, `users`, `message_warnings`). Search reindex runs the Java-compatible current-three-month or full month sequence, while normal writes use an atomic persistent spool with retry after restart. Real GeoIP remains an adapter point requiring live verification.
 
 
 ## v5 current Java-source parity fixes
@@ -71,15 +73,35 @@ See `docs/CURRENT_JAVA_COMPATIBILITY.md` for the detailed finding list.
 
 ## Still not production-equivalent
 
-The port now has URL coverage and no explicit 501 placeholders, but exact functional parity is still incomplete for subsystems that depend on external services, historical side effects or deep business rules:
+The port now has URL coverage and no explicit 501 placeholders. Captcha, topic
+and comment flood checks, IP blocks/slow mode, Java remember-me cookies, the
+three SMTP account flows, OpenSearch indexing, WebSocket delivery, reaction
+visibility and the principal notification writes are implemented and tested.
+The browser notification view now also resolves reactions against the current
+topic/comment JSONB state, omits removed reactions, groups reaction/WATCH
+events like `UserEventPrepareService`, honors the `oldNotifications` profile
+key and submits grouped rows through `/notifications-click`.
 
-- captcha, rate limits, flood protection and IP block policy;
-- exact Spring Security roles/remember-me sessions;
-- SMTP templates, resend flows and password reset token emails;
-- full image pipeline including animation detection, resizing and CDN/storage layout;
-- search reindex backend and ranking behavior;
-- complete notification/tracker/realtime event generation;
-- exact moderator audit log semantics and score penalties;
-- all JSP-level presentation details.
+Production equivalence is still not proven for:
+
+- gallery preview/reuse/cleanup is implemented; production storage/CDN
+  deployment still requires rehearsal;
+- production-egress verification of the Java-compatible `ipwho.is` GeoIP
+  adapter (isolated success/API-error/non-2xx/parse tests pass), administrator
+  exception-mail and scheduled Telegram adapter; TOR/disposable feeds have
+  isolated 2xx/non-2xx coverage but still require production-egress rehearsal;
+- user-moderation audit/score transactions and destructive mass-delete are
+  covered by a guarded HTTP+database regression, including reply-preserving
+  order, `del_info`, event cleanup and unread-counter recalculation; warning
+  creation/clearing, active moderator/corrector events, counters and rate limit
+  are covered in the same flow. Warning/delete payload rendering, closed
+  strikeout, delete bonus, DEL click-through and the original recent-author
+  `/view-deleted?id=` path are also covered; uncommon expired tracker/realtime
+  edges still require production-clone evidence;
+- every JSP model attribute and theme/page combination;
+- the isolated demo dual-runtime HTTP matrix passes, including canonical
+  paths, legacy redirects, comment jumps, RSS and an initialized OpenSearch;
+  a migration rehearsal on a clone of the real production Java database and
+  uploaded-media store is still mandatory.
 
 Use this file together with `docs/SERVICE_PORTING_MAP.md` to continue service-by-service replacement of simplified Rust handlers with full parity implementations.

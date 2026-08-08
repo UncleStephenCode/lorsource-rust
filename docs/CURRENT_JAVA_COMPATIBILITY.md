@@ -16,11 +16,16 @@ notes later in this document remain historical and must not override the source.
 | Spring handler methods | 179 |
 | Expanded Spring mapping variants | 193 |
 | Unique normalized Spring MVC paths | 131 |
-| Axum route declarations | 158 |
-| Path + all declared methods present | 111 |
+| Axum route declarations | 159 |
+| Path + all declared methods present | 113 |
 | Partial method coverage (`ANY` or explicit method subset) | 80 |
-| Missing route declarations | 2 (`/gallery.boxlet`, `/tagcloud.boxlet`) |
+| Missing route declarations | 0 |
 | Explicit `legacy::not_implemented` handlers | 0 |
+
+The runtime baseline is Axum 0.8.9 with axum-extra 0.12.6. All dynamic route
+declarations use `{parameter}` syntax; the generated inventory and the
+dual-runtime matrix are rerun after framework upgrades to catch silent matcher
+regressions.
 
 The structural comparison is kept in `docs/ROUTE_COVERAGE.md`. It does not prove
 parameter, authorization, response, UI, database or side-effect compatibility;
@@ -84,15 +89,16 @@ The group moderation form had a duplicate hidden `id` field. It has been removed
 
 ## Still not a mathematically exact port
 
-The current Rust tree is substantially closer to the Java source, but it is still not safe to call it a production-identical rewrite. The remaining parity gaps are service-level, not URL-level:
+The current Rust tree is substantially closer to the Java source, but it is
+still not safe to call it a production-identical rewrite. Remember-me cookie
+compatibility, captcha/flood/IP/slow-mode policy, SMTP activation/reset flows,
+OpenSearch document indexing, tracker HTML, realtime delivery and the main
+notification writes have since been implemented. Remaining release gates are
+listed in `docs/FUNCTIONAL_COMPARISON_JAVA_RUST.md`; the operational rehearsal
+is defined in `docs/PRODUCTION_CUTOVER.md`.
 
-- exact Spring Security roles and remember-me token generation;
-- captcha, flood protection, IP block policy and slow-mode rules;
-- SMTP templates and full password-reset/activation mail flow;
-- exact image resizing/storage/CDN pipeline;
-- OpenSearch indexing/ranking and reindex workers;
-- full tracker/notification/realtime event generation;
-- JSP-level presentation details and all model attributes;
-- exact moderator audit side effects and score penalties for every action.
-
-The next phase should run both apps against the same migrated DB and convert the smoke tests into endpoint-specific assertions for these subsystems.
+The isolated Java/Rust demo runtimes now pass the shared HTTP matrix. The next
+phase is the operator-run gate from `docs/PRODUCTION_CUTOVER.md` against
+separately restored copies of a current production snapshot, representative
+uploaded media and isolated production adapters; Java and Rust must not act as
+concurrent writers during the first migration rehearsal.

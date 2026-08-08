@@ -1,4 +1,12 @@
 document.addEventListener('DOMContentLoaded', function () {
+  function readCsrfToken() {
+    var tokenCookie = document.cookie.split('; ').find(function (cookie) {
+      return cookie.startsWith('CSRF_TOKEN=');
+    });
+    if (!tokenCookie) return '';
+    return tokenCookie.slice('CSRF_TOKEN='.length).replace(/(^")|("$)/g, '');
+  }
+
   document.querySelectorAll('form').forEach(function (form) {
     var formatGroup = form.querySelector('[data-format-mode]');
     var textarea = formatGroup && formatGroup.querySelector('textarea');
@@ -25,6 +33,8 @@ document.addEventListener('DOMContentLoaded', function () {
     async function showPreview() {
       previewContent.textContent = 'Загрузка…';
       var body = new URLSearchParams({text: textarea.value, markup: formatGroup.dataset.formatMode});
+      var csrfToken = readCsrfToken();
+      if (csrfToken) body.set('csrf', csrfToken);
       try {
         var response = await fetch('/markup/preview', {
           method: 'POST',
@@ -60,6 +70,15 @@ document.addEventListener('DOMContentLoaded', function () {
       toggle.innerHTML = '&raquo;';
     });
   }
+
+  document.querySelectorAll('button.reaction-anonymous').forEach(function (button) {
+    button.disabled = false;
+    button.title = 'Для добавления реакции нужно залогиниться!';
+    button.addEventListener('click', function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+  });
 
   document.addEventListener('click', function (event) {
     var reveal = event.target.closest('a.reaction-show');

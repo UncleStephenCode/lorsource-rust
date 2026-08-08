@@ -288,12 +288,50 @@ pub fn verify_hash(expected: &str, supplied: &str) -> bool {
 /// than the connection axum sees directly. Used to decide whether to set
 /// the `Secure` cookie flag (see `security_headers::apply` for the
 /// equivalent HSTS-header check).
-pub fn is_secure_request(headers: &axum::http::HeaderMap) -> bool {
-    headers
-        .get("x-forwarded-proto")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.eq_ignore_ascii_case("https"))
-        .unwrap_or(false)
+fn bTrustedProxy(stIp: std::net::IpAddr, vecTrusted: &[ipnetwork::IpNetwork]) -> bool {
+    vecTrusted.iter().any(|stNetwork| stNetwork.contains(stIp))
+}
+
+/// Resolve the original client by walking the proxy chain from the trusted
+/// TCP peer toward the left. Values supplied beyond the first untrusted hop
+/// are ignored, preventing a client from spoofing the moderation/flood key.
+pub fn stClientIp(
+    stPeerIp: std::net::IpAddr,
+    headers: &axum::http::HeaderMap,
+    vecTrusted: &[ipnetwork::IpNetwork],
+) -> std::net::IpAddr {
+    if !bTrustedProxy(stPeerIp, vecTrusted) {
+        return stPeerIp;
+    }
+    let Some(sForwarded) = headers
+        .get("x-forwarded-for")
+        .and_then(|stValue| stValue.to_str().ok())
+    else {
+        return stPeerIp;
+    };
+    let mut stCurrent = stPeerIp;
+    for sCandidate in sForwarded.split(',').rev().map(str::trim) {
+        if !bTrustedProxy(stCurrent, vecTrusted) {
+            break;
+        }
+        let Ok(stCandidate) = sCandidate.parse::<std::net::IpAddr>() else {
+            break;
+        };
+        stCurrent = stCandidate;
+    }
+    stCurrent
+}
+
+pub fn is_secure_request(
+    headers: &axum::http::HeaderMap,
+    optPeerIp: Option<std::net::IpAddr>,
+    vecTrusted: &[ipnetwork::IpNetwork],
+) -> bool {
+    optPeerIp.is_some_and(|stPeerIp| bTrustedProxy(stPeerIp, vecTrusted))
+        && headers
+            .get("x-forwarded-proto")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.eq_ignore_ascii_case("https"))
 }
 
 pub fn sign_payload(payload: &str, secret: &str) -> String {
@@ -432,7 +470,7 @@ pub mod secret_tokens {
 
 #[cfg(test)]
 mod tests {
-    use super::{password, remember_me};
+    use super::{is_secure_request, password, remember_me, stClientIp};
 
     #[test]
     fn verifies_java_jasypt_basic_password_encryptor_fixture() {
@@ -446,6 +484,32 @@ mod tests {
             "VEc1e68qZA1zkq6VSi+SYkFe08leeNrk"
         ));
         assert!(!password::verify("password", "not-a-valid-hash"));
+    }
+
+    #[test]
+    fn forwarded_headers_are_used_only_from_trusted_proxy_chain() {
+        let vecTrusted = vec!["10.0.0.0/8".parse().unwrap()];
+        let mut stHeaders = axum::http::HeaderMap::new();
+        stHeaders.insert("x-forwarded-for", "198.51.100.9, 10.1.2.3".parse().unwrap());
+        stHeaders.insert("x-forwarded-proto", "https".parse().unwrap());
+        assert_eq!(
+            stClientIp("10.2.3.4".parse().unwrap(), &stHeaders, &vecTrusted),
+            "198.51.100.9".parse::<std::net::IpAddr>().unwrap()
+        );
+        assert_eq!(
+            stClientIp("203.0.113.4".parse().unwrap(), &stHeaders, &vecTrusted),
+            "203.0.113.4".parse::<std::net::IpAddr>().unwrap()
+        );
+        assert!(is_secure_request(
+            &stHeaders,
+            Some("10.2.3.4".parse().unwrap()),
+            &vecTrusted
+        ));
+        assert!(!is_secure_request(
+            &stHeaders,
+            Some("203.0.113.4".parse().unwrap()),
+            &vecTrusted
+        ));
     }
 
     #[test]

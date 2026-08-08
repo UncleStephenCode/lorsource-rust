@@ -73,7 +73,11 @@ def extract_routes(root: Path) -> list[dict[str, object]]:
 
 def write_csv(rows: list[dict[str, object]], output: Path) -> None:
     with output.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=["methods", "path", "handler", "source", "line"])
+        writer = csv.DictWriter(
+            fh,
+            fieldnames=["methods", "path", "handler", "source", "line"],
+            lineterminator="\n",
+        )
         writer.writeheader()
         for row in rows:
             writer.writerow({**row, "methods": ",".join(row["methods"])})

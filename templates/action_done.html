@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}{{ message }}{% endblock %}
+{% block content %}
+<p>{{ message }}</p>
+
+{% match big_message %}{% when Some with (details) %}<p>{{ details }}</p>{% when None %}<p></p>{% endmatch %}
+{% match link %}{% when Some with (url) %}<p><a href="{{ url }}">Продолжить</a></p>{% when None %}{% endmatch %}
+{% endblock %}

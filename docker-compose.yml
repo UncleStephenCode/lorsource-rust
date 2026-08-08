@@ -39,8 +39,8 @@ services:
     build: .
     environment:
       DATABASE_URL: postgres://linuxweb:linuxweb@postgres:5432/lor
-      PUBLIC_URL: http://localhost:8181
-      WS_URL: ws://localhost:8181/
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8181}
+      WS_URL: ${WS_URL:-ws://localhost:8181/}
       UPLOAD_DIR: /app/uploads
       SITE_SECRET: change-me-in-production-change-me-in-production
       COOKIE_SECRET: change-me-in-production-change-me-in-production
@@ -49,6 +49,11 @@ services:
       SMTP_HOST: ${SMTP_HOST:-localhost}
       SMTP_PORT: ${SMTP_PORT:-25}
       SMTP_HELO_NAME: ${SMTP_HELO_NAME:-localhost}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN:-false}
+      FALLBACK_PROXY_URL: ${FALLBACK_PROXY_URL:-}
+      ENABLE_BACKGROUND_JOBS: ${ENABLE_BACKGROUND_JOBS:-false}
+      CLEAN_OLD_USERPICS: ${CLEAN_OLD_USERPICS:-false}
     ports:
       - "8181:8181"
     volumes:

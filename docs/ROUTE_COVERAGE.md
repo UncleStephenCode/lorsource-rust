@@ -39,8 +39,8 @@ Spring `ANY` mappings are intentionally reported as partial unless the Rust inve
 | method-declared | `GET` | `/admin/search-reindex` | `` | `SearchControlController.reindex` | `GET,POST /admin/search-reindex` |
 | partial-method | `ANY` | `/articles.boxlet` | `` | `ArticlesBoxlet.getData` | `GET /articles.boxlet` |
 | partial-method | `ANY` | `/articles/archive` | `` | `ArchiveController.articlesArchive` | `GET /articles/archive` |
-| partial-method | `ANY` | `/articles/{group}/{id}/history` | `` | `EditHistoryController.showEditInfo` | `GET /articles/:group/:id/history` |
-| partial-method | `ANY` | `/articles/{group}/{id}/{commentid}/history` | `` | `EditHistoryController.showCommentEditInfo` | `GET /articles/:group/:id/:commentid/history` |
+| partial-method | `ANY` | `/articles/{group}/{id}/history` | `` | `EditHistoryController.showEditInfo` | `GET /articles/{group}/{id}/history` |
+| partial-method | `ANY` | `/articles/{group}/{id}/{commentid}/history` | `` | `EditHistoryController.showCommentEditInfo` | `GET /articles/{group}/{id}/{commentid}/history` |
 | method-declared | `POST` | `/banip.jsp` | `` | `BanIPController.banIP` | `POST /banip.jsp` |
 | partial-method | `ANY` | `/check-login` | `` | `RegisterController.ajaxLoginCheck` | `GET /check-login` |
 | method-declared | `POST` | `/clear-warning` | `` | `WarningController.clear` | `POST /clear-warning` |
@@ -63,20 +63,20 @@ Spring `ANY` mappings are intentionally reported as partial unless the Rust inve
 | partial-method | `ANY` | `/errors/404` | `` | `HttpErrorController.handle404` | `GET /errors/404` |
 | partial-method | `ANY` | `/forum` | `` | `SectionController.forum` | `GET /forum; GET /forum/` |
 | partial-method | `ANY` | `/forum/lenta` | `` | `TopicListController.forum` | `GET /forum/lenta` |
-| partial-method | `ANY` | `/forum/{group}` | `` | `GroupController.forum` | `GET,POST /forum/:group` |
-| partial-method | `ANY` | `/forum/{group}/archive` | `` | `ArchiveController.forumArchive` | `GET /forum/:group/archive` |
-| partial-method | `ANY` | `/forum/{group}/{id}/history` | `` | `EditHistoryController.showEditInfo` | `GET /forum/:group/:id/history` |
-| partial-method | `ANY` | `/forum/{group}/{id}/{commentid}/history` | `` | `EditHistoryController.showCommentEditInfo` | `GET /forum/:group/:id/:commentid/history` |
-| partial-method | `ANY` | `/forum/{group}/{year}/{month}` | `` | `GroupController.forumArchive` | `GET /forum/:group/:id_or_year/:page_or_month` |
+| partial-method | `ANY` | `/forum/{group}` | `` | `GroupController.forum` | `GET,POST /forum/{group}` |
+| partial-method | `ANY` | `/forum/{group}/archive` | `` | `ArchiveController.forumArchive` | `GET /forum/{group}/archive` |
+| partial-method | `ANY` | `/forum/{group}/{id}/history` | `` | `EditHistoryController.showEditInfo` | `GET /forum/{group}/{id}/history` |
+| partial-method | `ANY` | `/forum/{group}/{id}/{commentid}/history` | `` | `EditHistoryController.showCommentEditInfo` | `GET /forum/{group}/{id}/{commentid}/history` |
+| partial-method | `ANY` | `/forum/{group}/{year}/{month}` | `` | `GroupController.forumArchive` | `GET /forum/{group}/{id_or_year}/{page_or_month}` |
 | method-declared | `ANY` | `/gallery.boxlet` | `` | `GalleryBoxlet.getData` | `ANY /gallery.boxlet` |
 | partial-method | `ANY` | `/gallery/archive` | `` | `ArchiveController.galleryArchive` | `GET /gallery/archive` |
-| partial-method | `ANY` | `/gallery/{group}/{id}/history` | `` | `EditHistoryController.showEditInfo` | `GET /gallery/:group/:id/history` |
-| partial-method | `ANY` | `/gallery/{group}/{id}/{commentid}/history` | `` | `EditHistoryController.showCommentEditInfo` | `GET /gallery/:group/:id/:commentid/history` |
+| partial-method | `ANY` | `/gallery/{group}/{id}/history` | `` | `EditHistoryController.showEditInfo` | `GET /gallery/{group}/{id}/history` |
+| partial-method | `ANY` | `/gallery/{group}/{id}/{commentid}/history` | `` | `EditHistoryController.showCommentEditInfo` | `GET /gallery/{group}/{id}/{commentid}/history` |
 | partial-method | `ANY` | `/group-lastmod.jsp` | `` | `GroupController.topicsLastmod` | `GET /group-lastmod.jsp` |
 | partial-method | `ANY` | `/group.jsp` | `` | `GroupController.topics` | `GET /group.jsp` |
 | method-declared | `GET` | `/groupmod.jsp` | `` | `GroupModificationController.showForm` | `GET,POST /groupmod.jsp` |
 | method-declared | `POST` | `/groupmod.jsp` | `` | `GroupModificationController.modifyGroup` | `GET,POST /groupmod.jsp` |
-| partial-method | `ANY` | `/help/{page}` | `` | `HelpController.helpPage` | `GET /help/:page` |
+| partial-method | `ANY` | `/help/{page}` | `` | `HelpController.helpPage` | `GET /help/{page}` |
 | partial-method | `ANY` | `/index.jsp` | `` | `MainPageController.mainPage` | `GET /index.jsp` |
 | partial-method | `GET,HEAD` | `/jump-message.jsp` | `` | `TopicController.jumpMessage` | `GET /jump-message.jsp` |
 | partial-method | `GET,HEAD` | `/login.jsp` | `` | `LoginController.loginForm` | `GET /login.jsp` |
@@ -94,38 +94,38 @@ Spring `ANY` mappings are intentionally reported as partial unless the Rust inve
 | method-declared | `GET` | `/mt.jsp` | `` | `TopicModificationController.moveToForumForm` | `GET,POST /mt.jsp` |
 | method-declared | `GET` | `/mtn.jsp` | `` | `TopicModificationController.movePremoderatedForm` | `GET /mtn.jsp` |
 | partial-method | `ANY` | `/news/archive` | `` | `ArchiveController.newsArchive` | `GET /news/archive` |
-| partial-method | `ANY` | `/news/{group}/{id}/history` | `` | `EditHistoryController.showEditInfo` | `GET /news/:group/:id/history` |
-| partial-method | `ANY` | `/news/{group}/{id}/{commentid}/history` | `` | `EditHistoryController.showCommentEditInfo` | `GET /news/:group/:id/:commentid/history` |
+| partial-method | `ANY` | `/news/{group}/{id}/history` | `` | `EditHistoryController.showEditInfo` | `GET /news/{group}/{id}/history` |
+| partial-method | `ANY` | `/news/{group}/{id}/{commentid}/history` | `` | `EditHistoryController.showCommentEditInfo` | `GET /news/{group}/{id}/{commentid}/history` |
 | method-declared | `POST` | `/notifications` | `` | `UserEventController.resetNotifications` | `GET,POST /notifications` |
 | partial-method | `GET,HEAD` | `/notifications` | `` | `UserEventController.showNotifications` | `GET,POST /notifications` |
 | method-declared | `POST` | `/notifications-click` | `` | `UserEventController.clickNotifications` | `POST /notifications-click` |
 | method-declared | `POST` | `/notifications-click/ajax` | `produces=application/json` | `UserEventController.clickNotificationsAjax` | `POST /notifications-click/ajax` |
 | method-declared | `GET` | `/notifications-count` | `` | `UserEventApiController.getEventsCount` | `GET /notifications-count` |
 | method-declared | `POST` | `/notifications-reset` | `` | `UserEventApiController.resetNotifications` | `POST /notifications-reset` |
-| partial-method | `ANY` | `/people/{nick}` | `params=output=rss` | `UserTopicListController.showUserTopicsRssGone` | `GET /people/:nick` |
-| partial-method | `ANY` | `/people/{nick}` | `` | `UserTopicListController.showUserTopics` | `GET /people/:nick` |
-| partial-method | `ANY` | `/people/{nick}/deleted-comments` | `` | `ShowCommentsController.showDeletedComments` | `GET /people/:nick/deleted-comments` |
-| method-declared | `GET` | `/people/{nick}/deleted-topics` | `` | `UserTopicListController.showDeletedTopics` | `GET /people/:nick/deleted-topics` |
-| partial-method | `ANY` | `/people/{nick}/drafts` | `` | `UserTopicListController.showUserDrafts` | `GET /people/:nick/drafts` |
-| method-declared | `GET` | `/people/{nick}/edit` | `` | `EditProfileController.show` | `GET,POST /people/:nick/edit; GET /people/:nick/edit` |
-| method-declared | `POST` | `/people/{nick}/edit` | `` | `EditProfileController.edit` | `GET,POST /people/:nick/edit` |
-| partial-method | `ANY` | `/people/{nick}/favs` | `` | `UserTopicListController.showUserFavs` | `GET /people/:nick/favs` |
-| partial-method | `GET,HEAD` | `/people/{nick}/profile` | `params=reset-password` | `ResetPasswordController.showModeratorForm` | `GET /people/:nick/profile; GET /people/:nick/profile/` |
-| partial-method | `GET,HEAD` | `/people/{nick}/profile` | `` | `WhoisController.getInfoNew` | `GET /people/:nick/profile; GET /people/:nick/profile/` |
-| partial-method | `GET,HEAD` | `/people/{nick}/profile` | `params=year-stats` | `WhoisController.yearStats` | `GET /people/:nick/profile; GET /people/:nick/profile/` |
-| partial-method | `GET,HEAD` | `/people/{nick}/profile/wipe` | `` | `UserModificationController.wipe` | `GET /people/:nick/profile/wipe` |
-| partial-method | `ANY` | `/people/{nick}/reactions` | `` | `UserReactionsController.reactions` | `GET /people/:nick/reactions` |
-| partial-method | `ANY` | `/people/{nick}/reactions/{mode}` | `` | `UserReactionsController.reactions` | `GET /people/:nick/reactions/:mode` |
-| method-declared | `GET` | `/people/{nick}/remark` | `` | `EditRemarkController.showForm` | `GET,POST /people/:nick/remark` |
-| method-declared | `POST` | `/people/{nick}/remark` | `` | `EditRemarkController.editProfile` | `GET,POST /people/:nick/remark` |
-| partial-method | `ANY` | `/people/{nick}/remarks` | `` | `ShowRemarkController.showRemarks` | `GET /people/:nick/remarks` |
-| method-declared | `GET` | `/people/{nick}/settings` | `` | `EditSettingsController.showForm` | `GET,POST /people/:nick/settings; GET,POST /people/:nick/settings/; GET /people/:nick/settings` |
-| method-declared | `POST` | `/people/{nick}/settings` | `` | `EditSettingsController.updateSettings` | `GET,POST /people/:nick/settings; GET,POST /people/:nick/settings/` |
-| partial-method | `ANY` | `/people/{nick}/tracked` | `` | `UserTopicListController.showUserWatches` | `GET /people/:nick/tracked` |
+| partial-method | `ANY` | `/people/{nick}` | `params=output=rss` | `UserTopicListController.showUserTopicsRssGone` | `GET /people/{nick}` |
+| partial-method | `ANY` | `/people/{nick}` | `` | `UserTopicListController.showUserTopics` | `GET /people/{nick}` |
+| partial-method | `ANY` | `/people/{nick}/deleted-comments` | `` | `ShowCommentsController.showDeletedComments` | `GET /people/{nick}/deleted-comments` |
+| method-declared | `GET` | `/people/{nick}/deleted-topics` | `` | `UserTopicListController.showDeletedTopics` | `GET /people/{nick}/deleted-topics` |
+| partial-method | `ANY` | `/people/{nick}/drafts` | `` | `UserTopicListController.showUserDrafts` | `GET /people/{nick}/drafts` |
+| method-declared | `GET` | `/people/{nick}/edit` | `` | `EditProfileController.show` | `GET,POST /people/{nick}/edit; GET /people/{nick}/edit` |
+| method-declared | `POST` | `/people/{nick}/edit` | `` | `EditProfileController.edit` | `GET,POST /people/{nick}/edit` |
+| partial-method | `ANY` | `/people/{nick}/favs` | `` | `UserTopicListController.showUserFavs` | `GET /people/{nick}/favs` |
+| partial-method | `GET,HEAD` | `/people/{nick}/profile` | `params=reset-password` | `ResetPasswordController.showModeratorForm` | `GET /people/{nick}/profile; GET /people/{nick}/profile/` |
+| partial-method | `GET,HEAD` | `/people/{nick}/profile` | `` | `WhoisController.getInfoNew` | `GET /people/{nick}/profile; GET /people/{nick}/profile/` |
+| partial-method | `GET,HEAD` | `/people/{nick}/profile` | `params=year-stats` | `WhoisController.yearStats` | `GET /people/{nick}/profile; GET /people/{nick}/profile/` |
+| partial-method | `GET,HEAD` | `/people/{nick}/profile/wipe` | `` | `UserModificationController.wipe` | `GET /people/{nick}/profile/wipe` |
+| partial-method | `ANY` | `/people/{nick}/reactions` | `` | `UserReactionsController.reactions` | `GET /people/{nick}/reactions` |
+| partial-method | `ANY` | `/people/{nick}/reactions/{mode}` | `` | `UserReactionsController.reactions` | `GET /people/{nick}/reactions/{mode}` |
+| method-declared | `GET` | `/people/{nick}/remark` | `` | `EditRemarkController.showForm` | `GET,POST /people/{nick}/remark` |
+| method-declared | `POST` | `/people/{nick}/remark` | `` | `EditRemarkController.editProfile` | `GET,POST /people/{nick}/remark` |
+| partial-method | `ANY` | `/people/{nick}/remarks` | `` | `ShowRemarkController.showRemarks` | `GET /people/{nick}/remarks` |
+| method-declared | `GET` | `/people/{nick}/settings` | `` | `EditSettingsController.showForm` | `GET,POST /people/{nick}/settings; GET,POST /people/{nick}/settings/; GET /people/{nick}/settings` |
+| method-declared | `POST` | `/people/{nick}/settings` | `` | `EditSettingsController.updateSettings` | `GET,POST /people/{nick}/settings; GET,POST /people/{nick}/settings/` |
+| partial-method | `ANY` | `/people/{nick}/tracked` | `` | `UserTopicListController.showUserWatches` | `GET /people/{nick}/tracked` |
 | partial-method | `ANY` | `/poll.boxlet` | `` | `PollBoxlet.getData` | `GET /poll.boxlet` |
 | partial-method | `ANY` | `/polls/archive` | `` | `ArchiveController.pollsArchive` | `GET /polls/archive` |
-| partial-method | `ANY` | `/polls/{group}/{id}/history` | `` | `EditHistoryController.showEditInfo` | `GET /polls/:group/:id/history` |
-| partial-method | `ANY` | `/polls/{group}/{id}/{commentid}/history` | `` | `EditHistoryController.showCommentEditInfo` | `GET /polls/:group/:id/:commentid/history` |
+| partial-method | `ANY` | `/polls/{group}/{id}/history` | `` | `EditHistoryController.showEditInfo` | `GET /polls/{group}/{id}/history` |
+| partial-method | `ANY` | `/polls/{group}/{id}/{commentid}/history` | `` | `EditHistoryController.showCommentEditInfo` | `GET /polls/{group}/{id}/{commentid}/history` |
 | method-declared | `GET` | `/post-warning` | `` | `WarningController.showForm` | `GET,POST /post-warning` |
 | method-declared | `POST` | `/post-warning` | `` | `WarningController.post` | `GET,POST /post-warning` |
 | method-declared | `GET` | `/reactions` | `params=comment` | `ReactionController.commentReaction` | `GET,POST /reactions` |
@@ -150,8 +150,8 @@ Spring `ANY` mappings are intentionally reported as partial unless the Rust inve
 | partial-method | `GET,HEAD` | `/show-replies.jsp` | `params=!output` | `UserEventController.showNotificationsForModerator` | `GET /show-replies.jsp` |
 | partial-method | `GET,HEAD` | `/show-replies.jsp` | `params=output` | `UserEventController.repliesFeed` | `GET /show-replies.jsp` |
 | method-declared | `GET` | `/show-topics.jsp` | `` | `TopicListController.showUserTopics` | `GET /show-topics.jsp` |
-| partial-method | `GET,HEAD` | `/tag/{tag}` | `params=!section` | `TagPageController.tagPage` | `GET /tag/:tag` |
-| partial-method | `GET,HEAD` | `/tag/{tag}` | `params=section` | `TagTopicListController.tagFeed` | `GET /tag/:tag` |
+| partial-method | `GET,HEAD` | `/tag/{tag}` | `params=!section` | `TagPageController.tagPage` | `GET /tag/{tag}` |
+| partial-method | `GET,HEAD` | `/tag/{tag}` | `params=section` | `TagTopicListController.tagFeed` | `GET /tag/{tag}` |
 | method-declared | `ANY` | `/tagcloud.boxlet` | `` | `TagCloudBoxlet.getData` | `ANY /tagcloud.boxlet` |
 | partial-method | `ANY` | `/tags` | `` | `TagController.showDefaultTagListHandlertags` | `GET /tags` |
 | partial-method | `ANY` | `/tags` | `params=term` | `TagController.showTagListHandlerJSON` | `GET /tags` |
@@ -160,7 +160,7 @@ Spring `ANY` mappings are intentionally reported as partial unless the Rust inve
 | method-declared | `POST` | `/tags/change` | `` | `TagController.changeTagSubmitHandler` | `GET,POST /tags/change` |
 | method-declared | `GET` | `/tags/delete` | `` | `TagController.deleteTagShowFormHandler` | `GET,POST /tags/delete` |
 | method-declared | `POST` | `/tags/delete` | `` | `TagController.deleteTagSubmitHandler` | `GET,POST /tags/delete` |
-| partial-method | `ANY` | `/tags/{firstLetter}` | `` | `TagController.showTagListHandler` | `GET /tags/:first_letter` |
+| partial-method | `ANY` | `/tags/{firstLetter}` | `` | `TagController.showTagListHandler` | `GET /tags/{first_letter}` |
 | partial-method | `ANY` | `/top10.boxlet` | `` | `TopTenBoxlet.getData` | `GET /top10.boxlet` |
 | partial-method | `ANY` | `/tracker` | `` | `TrackerController.tracker` | `GET /tracker; GET /tracker/` |
 | partial-method | `ANY` | `/tracker.jsp` | `` | `TrackerController.trackerOldUrl` | `GET /tracker.jsp` |
@@ -199,9 +199,9 @@ Spring `ANY` mappings are intentionally reported as partial unless the Rust inve
 | method-declared | `POST` | `/vote.jsp` | `` | `VoteController.vote` | `POST /vote.jsp` |
 | partial-method | `ANY` | `/whois.jsp` | `` | `WhoisController.getInfo` | `GET /whois.jsp` |
 | method-declared | `GET` | `/yandex-tableau` | `produces=application/json` | `UserEventApiController.getYandexWidget` | `GET /yandex-tableau` |
-| partial-method | `ANY` | `/{section}/` | `` | `TopicListController.topics` | `GET /forum; GET /forum/; GET /news; GET /news/; GET /polls; GET /polls/; GET /articles; GET /articles/; GET /gallery; GET /gallery/` |
-| partial-method | `ANY` | `/{section}/archive/{year}/{month}` | `` | `TopicListController.sectionArchive` | `GET /news/archive/:year/:month; GET /polls/archive/:year/:month; GET /articles/archive/:year/:month; GET /gallery/archive/:year/:month` |
-| partial-method | `ANY` | `/{section}/{group}` | `` | `TopicListController.topicsByGroup` | `GET,POST /forum/:group; GET /news/:group; GET /polls/:group; GET /articles/:group; GET /gallery/:group` |
-| partial-method | `ANY` | `/{section}/{group}/{id}` | `` | `TopicController.getMessageMain` | `GET /forum/:group/:id; GET /news/:group/:id; GET /polls/:group/:id; GET /articles/:group/:id; GET /gallery/:group/:id` |
-| method-declared | `GET` | `/{section}/{group}/{id}/page{page}` | `` | `TopicController.getMessagePage` | `GET /forum/:group/:id_or_year/:page_or_month; GET /news/:group/:id/:page_marker; GET /polls/:group/:id/:page_marker; GET /articles/:group/:id/:page_marker; GET /gallery/:group/:id/:page_marker` |
-| method-declared | `GET` | `/{section}/{group}/{id}/thread/{threadRoot}` | `` | `TopicController.getMessageThread` | `GET /forum/:group/:id/thread/:thread_root; GET /news/:group/:id/thread/:thread_root; GET /polls/:group/:id/thread/:thread_root; GET /articles/:group/:id/thread/:thread_root; GET /gallery/:group/:id/thread/:thread_root` |
+| partial-method | `ANY` | `/{section}/` | `` | `TopicListController.topics` | `GET /forum; GET /forum/; GET /news/; GET /polls/; GET /articles/; GET /gallery/` |
+| partial-method | `ANY` | `/{section}/archive/{year}/{month}` | `` | `TopicListController.sectionArchive` | `GET /news/archive/{year}/{month}; GET /polls/archive/{year}/{month}; GET /articles/archive/{year}/{month}; GET /gallery/archive/{year}/{month}` |
+| partial-method | `ANY` | `/{section}/{group}` | `` | `TopicListController.topicsByGroup` | `GET,POST /forum/{group}; GET /news/{group}; GET /polls/{group}; GET /articles/{group}; GET /gallery/{group}` |
+| partial-method | `ANY` | `/{section}/{group}/{id}` | `` | `TopicController.getMessageMain` | `GET /forum/{group}/{id}; GET /news/{group}/{id}; GET /polls/{group}/{id}; GET /articles/{group}/{id}; GET /gallery/{group}/{id}` |
+| method-declared | `GET` | `/{section}/{group}/{id}/page{page}` | `` | `TopicController.getMessagePage` | `GET /forum/{group}/{id_or_year}/{page_or_month}; GET /news/{group}/{id}/{page_marker}; GET /polls/{group}/{id}/{page_marker}; GET /articles/{group}/{id}/{page_marker}; GET /gallery/{group}/{id}/{page_marker}` |
+| method-declared | `GET` | `/{section}/{group}/{id}/thread/{threadRoot}` | `` | `TopicController.getMessageThread` | `GET /forum/{group}/{id}/thread/{thread_root}; GET /news/{group}/{id}/thread/{thread_root}; GET /polls/{group}/{id}/thread/{thread_root}; GET /articles/{group}/{id}/thread/{thread_root}; GET /gallery/{group}/{id}/thread/{thread_root}` |

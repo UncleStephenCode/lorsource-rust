@@ -6,3 +6,4 @@ pub mod forum_repository;
 pub mod realtime_repository;
 pub mod topic_repository;
 pub mod user_moderation_repository;
+pub mod warning_repository;

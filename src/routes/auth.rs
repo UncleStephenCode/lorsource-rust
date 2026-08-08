@@ -7,20 +7,25 @@ use crate::{
 use askama::Template;
 use axum::{
     Form,
-    extract::{Query, State},
+    extract::{ConnectInfo, Query, State},
     http::{StatusCode, header},
     response::{Html, IntoResponse, Redirect, Response},
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar};
 use rand::Rng;
 use serde::Deserialize;
+use std::net::SocketAddr;
 use time::Duration;
 
 pub(crate) fn cEmailService(
     stState: &AppState,
 ) -> crate::application::email::CEmailService<crate::infra::smtp::CSmtpEmailSender> {
     crate::application::email::CEmailService::new(
-        crate::infra::smtp::CSmtpEmailSender::from_env(),
+        crate::infra::smtp::CSmtpEmailSender::new(
+            stState.config.smtp_host.clone(),
+            stState.config.smtp_port,
+            stState.config.smtp_helo_name.clone(),
+        ),
         stState.config.site_secret.clone(),
     )
 }
@@ -34,6 +39,46 @@ struct LoginTemplate<'a> {
     login_action: String,
     redirect_url: String,
     csrf_token: String,
+    require_captcha: bool,
+    captcha_site_key: String,
+}
+
+fn render_login_page(
+    state: &AppState,
+    error: Option<String>,
+    nick: String,
+    redirect_url: String,
+    csrf_token: String,
+    require_captcha: bool,
+) -> Result<Response> {
+    Ok(Html(
+        LoginTemplate {
+            title: "Login",
+            error,
+            nick,
+            login_action: format!(
+                "{}/login_process",
+                state.config.public_url.trim_end_matches('/')
+            ),
+            redirect_url,
+            csrf_token,
+            require_captcha,
+            captcha_site_key: state.config.captcha_public_key.clone().unwrap_or_default(),
+        }
+        .render()?,
+    )
+    .into_response())
+}
+
+pub(crate) async fn bIpCaptchaRequired(state: &AppState, sIp: &str) -> Result<bool> {
+    Ok(sqlx::query_scalar::<_, Option<bool>>(
+        "SELECT captcha_required FROM b_ips WHERE ip=$1::inet",
+    )
+    .bind(sIp)
+    .fetch_optional(&state.pool)
+    .await?
+    .flatten()
+    .unwrap_or(false))
 }
 
 /// Mirrors LoginController.safeRedirectUrl from the Java/Scala implementation:
@@ -70,6 +115,40 @@ struct RegisterTemplate<'a> {
     error: Option<String>,
     permit: String,
     csrf_token: String,
+    captcha_site_key: String,
+    form_nick: String,
+    form_email: String,
+    rules_checked: bool,
+}
+
+fn render_register_page(
+    state: &AppState,
+    error: Option<String>,
+    permit: String,
+    csrf_token: String,
+    form_nick: String,
+    form_email: String,
+    rules_checked: bool,
+) -> Result<Response> {
+    let mut stResponse = Html(
+        RegisterTemplate {
+            title: "Регистрация",
+            error,
+            permit,
+            csrf_token,
+            captcha_site_key: state.config.captcha_public_key.clone().unwrap_or_default(),
+            form_nick,
+            form_email,
+            rules_checked,
+        }
+        .render()?,
+    )
+    .into_response();
+    stResponse.headers_mut().insert(
+        header::CACHE_CONTROL,
+        "no-store, no-cache, must-revalidate".parse().unwrap(),
+    );
+    Ok(stResponse)
 }
 
 #[derive(Deserialize)]
@@ -83,33 +162,38 @@ pub struct LoginForm {
     pub passwd: String,
     #[serde(rename = "redirectUrl", alias = "redirect_url")]
     pub redirect_url: Option<String>,
+    #[serde(rename = "h-captcha-response")]
+    pub captcha_response: Option<String>,
 }
 
 pub async fn login_form(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Query(query): Query<LoginQuery>,
     CurrentUser(current_user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
 ) -> Result<impl IntoResponse> {
     let redirect_url = safe_redirect_url(query.from.as_deref().unwrap_or(""));
     if current_user.is_some() {
         return Ok(found(&redirect_url));
     }
-    Ok(Html(
-        LoginTemplate {
-            title: "Login",
-            error: None,
-            nick: String::new(),
-            login_action: format!(
-                "{}/login_process",
-                state.config.public_url.trim_end_matches('/')
-            ),
-            redirect_url,
-            csrf_token,
-        }
-        .render()?,
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
     )
-    .into_response())
+    .to_string();
+    let bRequireCaptcha = state.login_attempts.bRequireForIp(&sRemoteIp)
+        || bIpCaptchaRequired(&state, &sRemoteIp).await?;
+    render_login_page(
+        &state,
+        None,
+        String::new(),
+        redirect_url,
+        csrf_token,
+        bRequireCaptcha,
+    )
 }
 
 /// LoginController.delayResponse: every response (success or failure) is
@@ -129,12 +213,42 @@ pub async fn login(
     jar: CookieJar,
     CurrentUser(current_user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
     Form(form): Form<LoginForm>,
 ) -> Result<Response> {
     let redirect_url = safe_redirect_url(form.redirect_url.as_deref().unwrap_or(""));
     if current_user.is_some() {
         return Ok(found(&redirect_url));
     }
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
+    let bRequireCaptcha = bIpCaptchaRequired(&state, &sRemoteIp).await?
+        || state.login_attempts.bRequireForIp(&sRemoteIp)
+        || state.login_attempts.bRequireForUser(&form.nick);
+    if bRequireCaptcha
+        && let Err(sError) = crate::application::auth::sValidateCaptcha(
+            &state.config,
+            &state.http,
+            form.captcha_response.as_deref(),
+            &sRemoteIp,
+        )
+        .await
+    {
+        delay_response().await;
+        return render_login_page(
+            &state,
+            Some(sError),
+            form.nick,
+            redirect_url,
+            csrf_token,
+            true,
+        );
+    }
+
     let outcome = auth::verify_login(&state.pool, &form.nick, &form.passwd).await?;
     delay_response().await;
     let identity = match outcome {
@@ -146,44 +260,40 @@ pub async fn login(
             return Ok((jar, found(&sLocation)).into_response());
         }
         auth::LoginOutcome::NotActivated => {
-            return Ok(Html(
-                LoginTemplate {
-                    title: "Login",
-                    error: Some("Регистрация не завершена! Инструкция по активации отправлена на указанный при регистрации email.".to_owned()),
-                    nick: form.nick.clone(),
-                    login_action: format!(
-                        "{}/login_process",
-                        state.config.public_url.trim_end_matches('/')
-                    ),
-                    redirect_url,
-                    csrf_token,
-                }
-                .render()?,
-            )
-            .into_response());
+            state
+                .login_attempts
+                .vRecordFailedAttempt(&sRemoteIp, &form.nick);
+            return render_login_page(
+                &state,
+                Some("Регистрация не завершена! Инструкция по активации отправлена на указанный при регистрации email.".to_owned()),
+                form.nick,
+                redirect_url,
+                csrf_token,
+                true,
+            );
         }
         auth::LoginOutcome::Failed => {
-            return Ok(Html(
-                LoginTemplate {
-                    title: "Login",
-                    error: Some(
-                        "Ошибка авторизации. Неправильное имя пользователя, e-mail или пароль."
-                            .to_owned(),
-                    ),
-                    nick: form.nick.clone(),
-                    login_action: format!(
-                        "{}/login_process",
-                        state.config.public_url.trim_end_matches('/')
-                    ),
-                    redirect_url,
-                    csrf_token,
-                }
-                .render()?,
-            )
-            .into_response());
+            state
+                .login_attempts
+                .vRecordFailedAttempt(&sRemoteIp, &form.nick);
+            return render_login_page(
+                &state,
+                Some(
+                    "Ошибка авторизации. Неправильное имя пользователя, e-mail или пароль."
+                        .to_owned(),
+                ),
+                form.nick,
+                redirect_url,
+                csrf_token,
+                true,
+            );
         }
     };
-    let is_secure = crate::security::is_secure_request(&headers);
+    let is_secure = crate::security::is_secure_request(
+        &headers,
+        Some(stPeerAddress.ip()),
+        &state.config.trusted_proxy_cidrs,
+    );
     let token = auth::sMakeRememberMeCookieValue(&identity, &state.config.site_secret);
     let session_cookie = Cookie::build((crate::security::remember_me::COOKIE_NAME, token))
         .path("/")
@@ -235,17 +345,35 @@ pub async fn logout_all_sessions(
 
 pub async fn register_form(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    CurrentUser(current_user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
-) -> Result<Html<String>> {
-    Ok(Html(
-        RegisterTemplate {
-            title: "Регистрация",
-            error: None,
-            permit: make_register_permit(&state),
-            csrf_token,
-        }
-        .render()?,
-    ))
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
+) -> Result<Response> {
+    if let Some(stUser) = current_user {
+        return Ok(found(&format!(
+            "/people/{}/profile",
+            urlencoding::encode(&stUser.nick)
+        )));
+    }
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
+    if !bRegistrationAllowed(&state, &sRemoteIp).await? {
+        return Ok(no_register_response());
+    }
+    render_register_page(
+        &state,
+        None,
+        make_register_permit(&state),
+        csrf_token,
+        String::new(),
+        String::new(),
+        false,
+    )
 }
 
 #[derive(Deserialize)]
@@ -257,66 +385,65 @@ pub struct RegisterForm {
     pub password2: Option<String>,
     pub rules: Option<String>,
     pub permit: Option<String>,
+    #[serde(rename = "h-captcha-response")]
+    pub captcha_response: Option<String>,
 }
 
 pub async fn register(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
     Form(form): Form<RegisterForm>,
-) -> Result<impl IntoResponse> {
+) -> Result<Response> {
     if !check_register_permit(&state, form.permit.as_deref()) {
-        return Ok(Html("<h1>Регистрация временно недоступна</h1>".to_string()).into_response());
+        return Ok(no_register_response());
     }
+
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
 
     let nick = form.nick.trim().to_string();
     let email = form.email.unwrap_or_default().trim().to_lowercase();
     let password = form.password.or(form.passwd).unwrap_or_default();
     let password2 = form.password2.unwrap_or_default();
-
-    if nick.is_empty() {
-        return Err(AppError::BadRequest("не задан nick".into()));
-    }
-    if !crate::routes::legacy::valid_login_name_for_java(&nick) {
-        return Err(AppError::BadRequest("некорректное имя пользователя".into()));
-    }
-    if nick.len() > 19 {
-        return Err(AppError::BadRequest(
-            "слишком длинное имя пользователя".into(),
-        ));
-    }
-    if password.is_empty() || password2.is_empty() {
-        return Err(AppError::BadRequest("пароль не может быть пустым".into()));
-    }
-    if password.eq_ignore_ascii_case(&nick) {
-        return Err(AppError::BadRequest(
-            "пароль не может совпадать с логином".into(),
-        ));
-    }
-    if password != password2 {
-        return Err(AppError::BadRequest("введенные пароли не совпадают".into()));
-    }
-    if password.len() < 10 {
-        return Err(AppError::BadRequest(
-            "слишком короткий пароль, минимальная длина: 10".into(),
-        ));
-    }
-    if email.is_empty() {
-        return Err(AppError::BadRequest("Не указан e-mail".into()));
-    }
-    validate_registration_email(&state, &email).await?;
-    if form.rules.as_deref() != Some("okay") {
-        return Err(AppError::BadRequest("Вы не согласились с правилами".into()));
-    }
-    if user_exists_or_similar(&state, &nick).await? {
-        return Err(AppError::BadRequest(
-            "Это имя пользователя уже используется. Пожалуйста выберите другое имя.".into(),
-        ));
-    }
-    if email_in_use_for_active_or_recently_blocked_user(&state, &email).await? {
-        return Err(AppError::BadRequest("пользователь с таким e-mail уже зарегистрирован. Если вы забыли параметры своего аккаунта, воспользуйтесь формой восстановления пароля.".into()));
+    let bRulesChecked = form.rules.as_deref() == Some("okay");
+    if let Some(sError) = registration_error(
+        &state,
+        &nick,
+        &email,
+        &password,
+        &password2,
+        bRulesChecked,
+        form.captcha_response.as_deref(),
+        &sRemoteIp,
+    )
+    .await?
+    {
+        return render_register_page(
+            &state,
+            Some(sError),
+            form.permit.unwrap_or_default(),
+            csrf_token,
+            nick,
+            email,
+            bRulesChecked,
+        );
     }
 
     let hash =
         crate::security::password::hash(&password).map_err(|e| AppError::Anyhow(e.into()))?;
+    let sUserAgent = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|stValue| stValue.to_str().ok());
+    let sAcceptLanguage = headers
+        .get(axum::http::header::ACCEPT_LANGUAGE)
+        .and_then(|stValue| stValue.to_str().ok());
+    let mut tx = state.pool.begin().await?;
     let (id, regdate): (i32, chrono::DateTime<chrono::Utc>) = sqlx::query_as(
         r#"INSERT INTO users(id,nick,email,passwd,regdate,activated,score,max_score,canmod,candel,corrector,userinfo_markup)
            VALUES(nextval('s_uid')::int,$1,$2,$3,now(),false,45,45,false,false,false,'MARKDOWN')
@@ -325,17 +452,27 @@ pub async fn register(
     .bind(&nick)
     .bind(&email)
     .bind(hash)
-    .fetch_one(&state.pool)
+    .fetch_one(&mut *tx)
     .await?;
-
-    crate::audit::log_user_action(
-        &state.pool,
-        id,
-        id,
-        "register",
-        &[("email", email.as_str())],
-    )
-    .await?;
+    let iUserAgent: i32 = match sUserAgent {
+        Some(sValue) => {
+            sqlx::query_scalar("SELECT create_user_agent($1)")
+                .bind(sValue.chars().take(511).collect::<String>())
+                .fetch_one(&mut *tx)
+                .await?
+        }
+        None => 0,
+    };
+    let sUserAgentId = iUserAgent.to_string();
+    let mut vecInfo = vec![
+        ("ip", sRemoteIp.as_str()),
+        ("user_agent", sUserAgentId.as_str()),
+    ];
+    if let Some(sLanguage) = sAcceptLanguage {
+        vecInfo.push(("accept_lang", sLanguage));
+    }
+    crate::audit::log_user_action_tx(&mut tx, id, id, "register", &vecInfo).await?;
+    tx.commit().await?;
     cEmailService(&state)
         .vSendRegistration(&nick, &email, regdate.timestamp_millis(), true)
         .await?;
@@ -344,6 +481,105 @@ pub async fn register(
             .to_string(),
     )
     .into_response())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn registration_error(
+    state: &AppState,
+    nick: &str,
+    email: &str,
+    password: &str,
+    password2: &str,
+    rules_checked: bool,
+    captcha_response: Option<&str>,
+    remote_ip: &str,
+) -> Result<Option<String>> {
+    let sError = if nick.is_empty() {
+        Some("не задан nick")
+    } else if !crate::routes::legacy::valid_login_name_for_java(nick) {
+        Some("некорректное имя пользователя")
+    } else if nick.len() > 19 {
+        Some("слишком длинное имя пользователя")
+    } else if password.is_empty() || password2.is_empty() {
+        Some("пароль не может быть пустым")
+    } else if password.eq_ignore_ascii_case(nick) {
+        Some("пароль не может совпадать с логином")
+    } else if password != password2 {
+        Some("введенные пароли не совпадают")
+    } else if password.len() < 10 {
+        Some("слишком короткий пароль, минимальная длина: 10")
+    } else if email.is_empty() {
+        Some("Не указан e-mail")
+    } else {
+        None
+    };
+    if let Some(sError) = sError {
+        return Ok(Some(sError.to_owned()));
+    }
+    if let Err(stError) = validate_registration_email(state, email).await {
+        return match stError {
+            AppError::BadRequest(sMessage) => Ok(Some(sMessage)),
+            stOther => Err(stOther),
+        };
+    }
+    if !rules_checked {
+        return Ok(Some("Вы не согласились с правилами".to_owned()));
+    }
+    if let Err(sMessage) = crate::application::auth::sValidateCaptcha(
+        &state.config,
+        &state.http,
+        captcha_response,
+        remote_ip,
+    )
+    .await
+    {
+        return Ok(Some(sMessage));
+    }
+    if user_exists_or_similar(state, nick).await? {
+        return Ok(Some(
+            "Это имя пользователя уже используется. Пожалуйста выберите другое имя.".to_owned(),
+        ));
+    }
+    if email_in_use_for_active_or_recently_blocked_user(state, email).await? {
+        return Ok(Some("пользователь с таким e-mail уже зарегистрирован. Если вы забыли параметры своего аккаунта, воспользуйтесь формой восстановления пароля.".to_owned()));
+    }
+    Ok(None)
+}
+
+fn no_register_response() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Html(
+            r#"<div id="warning-body"><div id="warning-logo"><img src="/img/good-penguin.png" alt="good-penguin"></div><div id="warning-text"><p>Регистрация временно не доступна, попробуйте позже.</p></div></div><div id="warning-footer"></div>"#
+                .to_owned(),
+        ),
+    )
+        .into_response()
+}
+
+async fn bRegistrationAllowed(state: &AppState, sRemoteIp: &str) -> Result<bool> {
+    let bIpBlocked: bool = sqlx::query_scalar(
+        r#"SELECT EXISTS(
+             SELECT 1 FROM b_ips
+             WHERE ip=$1::inet AND (ban_date IS NULL OR ban_date>CURRENT_TIMESTAMP)
+           )"#,
+    )
+    .bind(sRemoteIp)
+    .fetch_one(&state.pool)
+    .await?;
+    if bIpBlocked {
+        return Ok(false);
+    }
+    let iUnactivated: i64 = sqlx::query_scalar(
+        r#"SELECT count(*) FROM users u JOIN user_log ul ON u.id=ul.userid
+           WHERE NOT u.activated AND NOT u.blocked
+             AND u.regdate>CURRENT_TIMESTAMP-interval '1 day'
+             AND ul.action='register'::user_log_action AND ul.info->'ip'=$1"#,
+    )
+    .bind(sRemoteIp)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(iUnactivated < 2)
 }
 
 fn make_register_permit(state: &AppState) -> String {
@@ -436,34 +672,105 @@ async fn email_in_use_for_active_or_recently_blocked_user(
     Ok(found.is_some())
 }
 
+#[derive(Template)]
+#[template(path = "lost_password.html")]
+struct StLostPasswordTemplate {
+    csrf_token: String,
+    email: String,
+    error: Option<String>,
+    require_captcha: bool,
+    captcha_site_key: String,
+}
+
+#[derive(Template)]
+#[template(path = "action_done.html")]
+struct StTopiclessActionDoneTemplate {
+    message: String,
+    big_message: Option<String>,
+    link: Option<String>,
+}
+
+fn render_lost_password_page(
+    state: &AppState,
+    csrf_token: String,
+    email: String,
+    error: Option<String>,
+    require_captcha: bool,
+) -> Result<Response> {
+    Ok(Html(
+        StLostPasswordTemplate {
+            csrf_token,
+            email,
+            error,
+            require_captcha,
+            captcha_site_key: state.config.captcha_public_key.clone().unwrap_or_default(),
+        }
+        .render()?,
+    )
+    .into_response())
+}
+
 pub async fn lost_password_form(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    CurrentUser(current_user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
-) -> Result<Html<String>> {
-    Ok(Html(format!(
-        r#"
-<h1>Восстановление пароля</h1>
-<form method="post" action="/lostpwd.jsp" class="form">
-  <input type="hidden" name="csrf" value="{csrf_token}">
-  <label>Email <input name="email" type="email" required></label>
-  <button type="submit">Отправить инструкцию</button>
-</form>
-"#
-    )))
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
+) -> Result<Response> {
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
+    let bRequireCaptcha = current_user.is_none() || bIpCaptchaRequired(&state, &sRemoteIp).await?;
+    render_lost_password_page(&state, csrf_token, String::new(), None, bRequireCaptcha)
 }
 
 #[derive(Deserialize)]
 pub struct LostPasswordForm {
     pub email: String,
+    #[serde(rename = "h-captcha-response")]
+    pub captcha_response: Option<String>,
 }
 
 pub async fn lost_password(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     CurrentUser(current_user): CurrentUser,
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
     Form(form): Form<LostPasswordForm>,
-) -> Result<Html<String>> {
+) -> Result<Response> {
     let email = form.email.trim().to_lowercase();
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
+    let bRequireCaptcha = current_user.is_none() || bIpCaptchaRequired(&state, &sRemoteIp).await?;
     if email.is_empty() {
-        return Err(AppError::BadRequest("email не задан".into()));
+        delay_response().await;
+        return render_lost_password_page(
+            &state,
+            csrf_token,
+            email,
+            Some("email не задан".into()),
+            bRequireCaptcha,
+        );
+    }
+    if bRequireCaptcha
+        && let Err(sError) = crate::application::auth::sValidateCaptcha(
+            &state.config,
+            &state.http,
+            form.captcha_response.as_deref(),
+            &sRemoteIp,
+        )
+        .await
+    {
+        delay_response().await;
+        return render_lost_password_page(&state, csrf_token, email, Some(sError), true);
     }
 
     let Some((id, nick, stored_email, blocked, activated, canmod, candel, anonymous)) =
@@ -476,16 +783,23 @@ pub async fn lost_password(
         .fetch_optional(&state.pool)
         .await?
     else {
-        return Err(AppError::BadRequest(
-            "Этот email не зарегистрирован!".into(),
-        ));
+        delay_response().await;
+        return render_lost_password_page(
+            &state,
+            csrf_token,
+            email,
+            Some("Этот email не зарегистрирован!".into()),
+            bRequireCaptcha,
+        );
     };
 
     if blocked.unwrap_or(false) || !activated || anonymous || candel {
+        delay_response().await;
         return Err(AppError::Forbidden);
     }
     let requester_is_moderator = current_user.as_ref().map(|u| u.canmod).unwrap_or(false);
     if canmod && !requester_is_moderator {
+        delay_response().await;
         return Err(AppError::Forbidden);
     }
     if !requester_is_moderator {
@@ -502,6 +816,7 @@ pub async fn lost_password(
         .fetch_one(&state.pool)
         .await?;
         if bRecentSelfRequest {
+            delay_response().await;
             return Err(AppError::Forbidden);
         }
     }
@@ -513,9 +828,22 @@ pub async fn lost_password(
         &stored_email,
         now.timestamp_millis(),
     );
-    cEmailService(&state)
+    if let Err(stError) = cEmailService(&state)
         .vSendPasswordReset(&nick, &stored_email, &reset_code)
-        .await?;
+        .await
+    {
+        delay_response().await;
+        return match stError {
+            AppError::BadRequest(sMessage) => render_lost_password_page(
+                &state,
+                csrf_token,
+                email,
+                Some(sMessage),
+                bRequireCaptcha,
+            ),
+            stOther => Err(stOther),
+        };
+    }
     let mut tx = state.pool.begin().await?;
     sqlx::query("UPDATE users SET lostpwd=$2 WHERE id=$1")
         .bind(id)
@@ -533,9 +861,16 @@ pub async fn lost_password(
     .await?;
     tx.commit().await?;
 
+    delay_response().await;
     Ok(Html(
-        "<h1>Инструкция по сбросу пароля была отправлена на ваш email</h1>".to_string(),
-    ))
+        StTopiclessActionDoneTemplate {
+            message: "Инструкция по сбросу пароля была отправлена на ваш email".into(),
+            big_message: None,
+            link: None,
+        }
+        .render()?,
+    )
+    .into_response())
 }
 
 #[derive(Deserialize)]
@@ -544,8 +879,25 @@ pub struct ResetPasswordCodeForm {
     pub code: String,
 }
 
+#[derive(Template)]
+#[template(path = "reset_password.html")]
+struct StResetPasswordTemplate {
+    csrf_token: String,
+    error: Option<String>,
+}
+
+pub(crate) fn render_reset_password_form(
+    csrf_token: String,
+    error: Option<String>,
+) -> Result<Html<String>> {
+    Ok(Html(
+        StResetPasswordTemplate { csrf_token, error }.render()?,
+    ))
+}
+
 pub async fn reset_password_with_code(
     State(state): State<AppState>,
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
     Form(form): Form<ResetPasswordCodeForm>,
 ) -> Result<Html<String>> {
     let Some((id, nick, email, lostpwd, blocked, activated, candel, anonymous)) = sqlx::query_as::<
@@ -569,7 +921,7 @@ pub async fn reset_password_with_code(
     .fetch_optional(&state.pool)
     .await?
     else {
-        return Err(AppError::NotFound);
+        return render_reset_password_form(csrf_token, Some("Пользователь не найден".into()));
     };
 
     if blocked.unwrap_or(false) || !activated || anonymous || candel {
@@ -578,9 +930,10 @@ pub async fn reset_password_with_code(
     if lostpwd <= chrono::DateTime::<chrono::Utc>::from(std::time::UNIX_EPOCH)
         || lostpwd + chrono::Duration::days(1) < chrono::Utc::now()
     {
-        return Err(AppError::BadRequest(
-            "Срок действия кода истёк (24 часа). Запросите сброс пароля повторно.".into(),
-        ));
+        return render_reset_password_form(
+            csrf_token,
+            Some("Срок действия кода истёк (24 часа). Запросите сброс пароля повторно.".into()),
+        );
     }
     if !crate::security::secret_tokens::verify_reset_code(
         &state.config.site_secret,
@@ -589,7 +942,8 @@ pub async fn reset_password_with_code(
         lostpwd.timestamp_millis(),
         form.code.trim(),
     ) {
-        return Err(AppError::BadRequest("Код не совпадает".into()));
+        tracing::warn!(nick = %nick, "password reset verification code does not match");
+        return render_reset_password_form(csrf_token, Some("Код не совпадает".into()));
     }
 
     let new_password = generate_java_like_password();
@@ -604,10 +958,14 @@ pub async fn reset_password_with_code(
     crate::audit::log_user_action_tx(&mut tx, id, id, "reset_password", &[]).await?;
     tx.commit().await?;
 
-    Ok(Html(format!(
-        "<h1>Установлен новый пароль</h1><p>Ваш новый пароль: <code>{}</code></p>",
-        html_escape::encode_text(&new_password)
-    )))
+    Ok(Html(
+        StTopiclessActionDoneTemplate {
+            message: "Установлен новый пароль".into(),
+            big_message: Some(format!("Ваш новый пароль: {new_password}")),
+            link: None,
+        }
+        .render()?,
+    ))
 }
 
 fn generate_java_like_password() -> String {

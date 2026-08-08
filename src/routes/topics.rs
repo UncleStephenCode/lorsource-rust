@@ -18,7 +18,7 @@ use askama::Template;
 use axum::{
     Form,
     extract::{ConnectInfo, FromRequest, Multipart, Path, Query, Request, State},
-    http::{Uri, header::CONTENT_TYPE},
+    http::{HeaderMap, StatusCode, Uri, header, header::CONTENT_TYPE},
     response::{Html, IntoResponse, Redirect, Response},
 };
 use serde::Deserialize;
@@ -118,6 +118,9 @@ struct TopicTemplate {
     comment_format_mode: String,
     comment_format_title: String,
     can_comment: bool,
+    anonymous_comment_form: bool,
+    require_comment_captcha: bool,
+    captcha_site_key: String,
     realtime_bootstrap_html: String,
 }
 
@@ -200,6 +203,7 @@ struct CommentView {
     html: String,
     reactions_html: String,
     show_reactions_link: bool,
+    can_edit: bool,
 }
 
 /// poll-form.tag rendered server-side: a topic's poll (if any), with vote
@@ -264,23 +268,6 @@ fn upload_image_url(path: &str) -> String {
     }
 }
 
-fn scaled_dimensions(width: i32, height: i32, max_side: i32) -> (i32, i32) {
-    if width <= 0 || height <= 0 || width.max(height) <= max_side {
-        return (width.max(1), height.max(1));
-    }
-    if width >= height {
-        (
-            max_side,
-            (i64::from(height) * i64::from(max_side) / i64::from(width)) as i32,
-        )
-    } else {
-        (
-            (i64::from(width) * i64::from(max_side) / i64::from(height)) as i32,
-            max_side,
-        )
-    }
-}
-
 pub(crate) async fn load_topic_images(
     state: &AppState,
     topic_id: i32,
@@ -299,27 +286,30 @@ pub(crate) async fn load_topic_images(
             state.config.upload_dir,
             original.trim_start_matches('/')
         );
-        let Some((width, height)) = tokio::task::spawn_blocking(move || {
-            image::image_dimensions(path)
-                .ok()
-                .map(|(width, height)| (width as i32, height as i32))
-        })
-        .await
-        .unwrap_or(None) else {
+        let pathMedium = format!("{}/images/{id}/1000px.jpg", state.config.upload_dir);
+        let Some((width, height, medium_width, medium_height)) =
+            tokio::task::spawn_blocking(move || {
+                let (iWidth, iHeight) = image::image_dimensions(path).ok()?;
+                let (iMediumWidth, iMediumHeight) = image::image_dimensions(pathMedium).ok()?;
+                Some((
+                    iWidth as i32,
+                    iHeight as i32,
+                    iMediumWidth as i32,
+                    iMediumHeight as i32,
+                ))
+            })
+            .await
+            .unwrap_or(None)
+        else {
             // ImageService.prepareImage logs and omits missing or corrupt
             // files instead of fabricating dimensions for them.
             continue;
         };
         let medium = format!("images/{id}/1000px.jpg");
-        let (medium_width, medium_height) = scaled_dimensions(width, height, 1000);
-        let mut srcset = [500, 1000, 1500, 2000]
+        let srcset = [500, 1000, 1500, 2000]
             .into_iter()
-            .filter(|size| *size < width)
             .map(|size| (format!("/images/{id}/{size}px.jpg"), size))
             .collect::<Vec<_>>();
-        if width <= 2000 {
-            srcset.push((upload_image_url(&original), width));
-        }
         prepared.push(TopicImageView {
             medium_url: upload_image_url(&medium),
             original_url: upload_image_url(&original),
@@ -447,9 +437,10 @@ mod image_view_tests {
             medium_width: 800,
             medium_height: 450,
             srcset: vec![
-                (format!("/gallery-uploads/{id}/thumbnail.jpg"), 200),
-                (format!("/gallery-uploads/{id}/medium.jpg"), 800),
-                (format!("/gallery-uploads/{id}/original.jpg"), 1920),
+                (format!("/images/{id}/500px.jpg"), 500),
+                (format!("/images/{id}/1000px.jpg"), 1000),
+                (format!("/images/{id}/1500px.jpg"), 1500),
+                (format!("/images/{id}/2000px.jpg"), 2000),
             ],
         }
     }
@@ -459,7 +450,8 @@ mod image_view_tests {
         let html = render_topic_images(&[image(1)], "Заголовок", false, true);
         assert!(html.contains("medium-image-container"));
         assert!(html.contains("(min-width: 47em) 40vw, 100vw"));
-        assert!(html.contains("thumbnail.jpg 200w"));
+        assert!(html.contains("500px.jpg 500w"));
+        assert!(html.contains("2000px.jpg 2000w"));
         assert!(html.contains("max-height: 70vh"));
     }
 
@@ -730,6 +722,7 @@ mod reactions_widget_tests {
 async fn load_all_reactions(
     state: &AppState,
     topic_id: i32,
+    optViewerId: Option<i32>,
 ) -> Result<Vec<(Option<i32>, String, i32, String, i32)>> {
     Ok(sqlx::query_as(
         r#"SELECT NULL::integer AS comment_id, item.value AS reaction,
@@ -738,15 +731,24 @@ async fn load_all_reactions(
            CROSS JOIN LATERAL jsonb_each_text(COALESCE(t.reactions,'{}'::jsonb)) item
            JOIN users u ON u.id=item.key::integer
            WHERE t.id=$1 AND item.key ~ '^[0-9]+$'
+             AND ($2::int IS NULL OR NOT EXISTS (
+               SELECT 1 FROM ignore_list il
+               WHERE il.userid=$2 AND il.ignored=item.key::integer
+             ))
            UNION ALL
            SELECT c.id AS comment_id, item.value AS reaction,
                   item.key::integer AS origin_user, u.nick, COALESCE(u.score,0)
            FROM comments c
            CROSS JOIN LATERAL jsonb_each_text(COALESCE(c.reactions,'{}'::jsonb)) item
            JOIN users u ON u.id=item.key::integer
-           WHERE c.topic=$1 AND item.key ~ '^[0-9]+$'"#,
+           WHERE c.topic=$1 AND item.key ~ '^[0-9]+$'
+             AND ($2::int IS NULL OR NOT EXISTS (
+               SELECT 1 FROM ignore_list il
+               WHERE il.userid=$2 AND il.ignored=item.key::integer
+             ))"#,
     )
     .bind(topic_id)
+    .bind(optViewerId)
     .fetch_all(&state.pool)
     .await?)
 }
@@ -862,6 +864,7 @@ struct TopicFormTemplate {
     image_allowed: bool,
     image_required: bool,
     additional_image_rows: Vec<()>,
+    uploaded_images: Vec<String>,
     form_title: String,
     form_msg: String,
     form_url: String,
@@ -872,6 +875,12 @@ struct TopicFormTemplate {
     add_info_html: Option<String>,
     format_mode: String,
     format_mode_title: String,
+    anonymous_form: bool,
+    form_nick: String,
+    require_captcha: bool,
+    captcha_site_key: String,
+    show_allow_anonymous: bool,
+    allow_anonymous: bool,
 }
 
 async fn user_format_mode(state: &AppState, user_id: i32) -> Result<(String, String, String)> {
@@ -897,7 +906,7 @@ async fn user_format_mode(state: &AppState, user_id: i32) -> Result<(String, Str
     Ok((mode, title, markup.to_string()))
 }
 
-fn markup_form_view(markup: &str) -> (String, String) {
+pub(crate) fn markup_form_view(markup: &str) -> (String, String) {
     match markup {
         "MARKDOWN" => ("markdown".into(), "Markdown".into()),
         "BBCODE_ULB" => ("ntobr".into(), "User line break".into()),
@@ -940,6 +949,11 @@ pub struct TopicForm {
     pub poll: Vec<String>,
     pub variant_id: Vec<i32>,
     pub multiselect: Option<String>,
+    pub nick: Option<String>,
+    pub password: Option<String>,
+    pub captcha_response: Option<String>,
+    pub allow_anonymous: Option<String>,
+    pub uploaded_images: Vec<String>,
 }
 
 /// `axum::Form` can't deserialize the repeated `poll`/`variant_id` keys into
@@ -1008,6 +1022,15 @@ fn parse_topic_form(pairs: &[(String, String)]) -> Result<TopicForm> {
         multiselect: get(pairs, "multiselect")
             .or_else(|| get(pairs, "multiSelect"))
             .map(str::to_string),
+        nick: get(pairs, "nick").map(str::to_string),
+        password: get(pairs, "password").map(str::to_string),
+        captcha_response: get(pairs, "h-captcha-response").map(str::to_string),
+        allow_anonymous: get(pairs, "allowAnonymous").map(str::to_string),
+        uploaded_images: parse_indexed_field(pairs, "uploadedImages")
+            .into_iter()
+            .map(|(_, sName)| sName)
+            .filter(|sName| !sName.trim().is_empty())
+            .collect(),
     })
 }
 
@@ -1439,28 +1462,28 @@ pub(crate) fn topic_posting_reason(restriction: i32, user: &Option<UserSummary>)
     }
 }
 
-/// The Java application can post as its dedicated anonymous user.  The Rust
-/// port does not have that account/session path yet, so its navigation must
-/// not advertise a link which inevitably ends in 403.
+/// Navigation-level posting hint. Anonymous posting is a real Java workflow:
+/// unrestricted groups must expose the add link even without a session. The
+/// request-IP checks remain in the `/add.jsp` handler where the client address
+/// is available.
 pub(crate) async fn posting_reason_for_port(
     state: &AppState,
     restriction: i32,
     user: &Option<UserSummary>,
 ) -> Result<Option<String>> {
-    let Some(current) = user else {
-        return Ok(Some("только для зарегистрированных".to_string()));
-    };
-    if current.blocked.unwrap_or(false) {
-        return Ok(Some("аккаунт заблокирован".to_string()));
-    }
-    let frozen_until: Option<chrono::DateTime<chrono::Utc>> =
-        sqlx::query_scalar("SELECT frozen_until FROM users WHERE id=$1")
-            .bind(current.id)
-            .fetch_optional(&state.pool)
-            .await?
-            .flatten();
-    if frozen_until.is_some_and(|until| until > chrono::Utc::now()) {
-        return Ok(Some("аккаунт заморожен".to_string()));
+    if let Some(current) = user {
+        if current.blocked.unwrap_or(false) {
+            return Ok(Some("аккаунт заблокирован".to_string()));
+        }
+        let frozen_until: Option<chrono::DateTime<chrono::Utc>> =
+            sqlx::query_scalar("SELECT frozen_until FROM users WHERE id=$1")
+                .bind(current.id)
+                .fetch_optional(&state.pool)
+                .await?
+                .flatten();
+        if frozen_until.is_some_and(|until| until > chrono::Utc::now()) {
+            return Ok(Some("аккаунт заморожен".to_string()));
+        }
     }
     Ok(topic_posting_reason(restriction, user))
 }
@@ -1669,10 +1692,49 @@ pub async fn view_all(
 #[derive(Deserialize)]
 pub struct ViewMessageQuery {
     msgid: i32,
+    page: Option<i32>,
+    lastmod: Option<i64>,
+    filter: Option<String>,
+    output: Option<String>,
 }
 
-pub async fn legacy_view_message(Query(q): Query<ViewMessageQuery>) -> Redirect {
-    Redirect::to(&format!("/jump-message.jsp?msgid={}", q.msgid))
+pub async fn legacy_view_message(
+    State(state): State<AppState>,
+    Query(q): Query<ViewMessageQuery>,
+) -> Result<Response> {
+    let topic = get_topic(&state, q.msgid).await?;
+    let mut target = topic.topic_url();
+    if let Some(page) = q.page {
+        target.push_str(&format!("/page{page}"));
+    }
+    let mut params = Vec::new();
+    if q.lastmod.is_some() {
+        let expired: bool = sqlx::query_scalar(
+            r#"SELECT NOT t.sticky
+                      AND COALESCE(t.commitdate,t.postdate) < CURRENT_TIMESTAMP-s.expire
+                 FROM topics t
+                 JOIN groups g ON g.id=t.groupid
+                 JOIN sections s ON s.id=g.section
+                WHERE t.id=$1"#,
+        )
+        .bind(topic.id)
+        .fetch_one(&state.pool)
+        .await?;
+        if !expired && let Some(lastmod) = topic.lastmod {
+            params.push(format!("lastmod={}", lastmod.timestamp_millis()));
+        }
+    }
+    if let Some(filter) = q.filter {
+        params.push(format!("filter={}", urlencoding::encode(&filter)));
+    }
+    if let Some(output) = q.output {
+        params.push(format!("output={}", urlencoding::encode(&output)));
+    }
+    if !params.is_empty() {
+        target.push('?');
+        target.push_str(&params.join("&"));
+    }
+    Ok((StatusCode::FOUND, [(header::LOCATION, target)]).into_response())
 }
 
 #[derive(Deserialize, Default)]
@@ -1689,13 +1751,21 @@ pub struct TopicViewQuery {
 
 pub async fn topic_page(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     uri: Uri,
     Path((group, id)): Path<(String, i32)>,
     Query(q): Query<TopicViewQuery>,
     CurrentUser(current_user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
 ) -> Result<Response> {
     let section = section_from_uri(&uri).unwrap_or("forum");
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
     render_topic_view(
         state,
         section,
@@ -1706,22 +1776,31 @@ pub async fn topic_page(
         q,
         current_user,
         csrf_token,
+        sRemoteIp,
     )
     .await
 }
 
 pub async fn topic_page_with_page(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     uri: Uri,
     Path((group, id, page_marker)): Path<(String, i32, String)>,
     CurrentUser(current_user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
 ) -> Result<Response> {
     let Some(page) = page_marker.strip_prefix("page") else {
         return Err(AppError::NotFound);
     };
     let page: i64 = page.parse().map_err(|_| AppError::NotFound)?;
     let section = section_from_uri(&uri).unwrap_or("forum");
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
     // Java's getMessagePage doesn't accept `cid`/`deleted`/`filter` at all -
     // only the base (page-less) route does.
     render_topic_view(
@@ -1734,18 +1813,27 @@ pub async fn topic_page_with_page(
         TopicViewQuery::default(),
         current_user,
         csrf_token,
+        sRemoteIp,
     )
     .await
 }
 
 pub async fn topic_thread(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     uri: Uri,
     Path((group, id, thread_root)): Path<(String, i32, i32)>,
     CurrentUser(current_user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
 ) -> Result<Response> {
     let section = section_from_uri(&uri).unwrap_or("forum");
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
     render_topic_view(
         state,
         section,
@@ -1756,6 +1844,7 @@ pub async fn topic_thread(
         TopicViewQuery::default(),
         current_user,
         csrf_token,
+        sRemoteIp,
     )
     .await
 }
@@ -1770,6 +1859,7 @@ pub async fn render_topic_page(
     page: i64,
     current_user: Option<UserSummary>,
     csrf_token: String,
+    sRemoteIp: String,
 ) -> Result<Response> {
     render_topic_view(
         state,
@@ -1781,11 +1871,12 @@ pub async fn render_topic_page(
         TopicViewQuery::default(),
         current_user,
         csrf_token,
+        sRemoteIp,
     )
     .await
 }
 
-async fn messages_per_page(state: &AppState, user: &Option<UserSummary>) -> i64 {
+pub(crate) async fn messages_per_page(state: &AppState, user: &Option<UserSummary>) -> i64 {
     match user {
         Some(u) => {
             let settings_text: Option<String> =
@@ -1814,6 +1905,7 @@ async fn render_topic_view(
     query: TopicViewQuery,
     current_user: Option<UserSummary>,
     csrf_token: String,
+    sRemoteIp: String,
 ) -> Result<Response> {
     let topic = get_topic(&state, id).await?;
     let is_moderator = current_user.as_ref().map(|u| u.canmod).unwrap_or(false);
@@ -1870,6 +1962,10 @@ async fn render_topic_view(
             .collect()
     };
     let iRealtimeLastCommentId = all_comments.last().map_or(0, |stComment| stComment.id);
+    let setCommentsWithReplies: std::collections::HashSet<i32> = all_comments
+        .iter()
+        .filter_map(|stComment| stComment.replyto)
+        .collect();
 
     // TopicController's hideSet: comments from ignored authors are dropped
     // from the rendered list (not just visually) unless `?filter=show`.
@@ -1957,7 +2053,12 @@ async fn render_topic_view(
         .unwrap_or(false),
         None => false,
     };
-    let all_reactions = load_all_reactions(&state, topic.id).await?;
+    let all_reactions = load_all_reactions(
+        &state,
+        topic.id,
+        current_user.as_ref().map(|stUser| stUser.id),
+    )
+    .await?;
     let current_user_id = current_user.as_ref().map(|u| u.id);
 
     let comments: Vec<CommentView> = page_comments
@@ -1985,11 +2086,21 @@ async fn render_topic_view(
                 allow_interact,
                 &csrf_token,
             );
+            let can_edit = current_user.as_ref().is_some_and(|stUser| {
+                stUser.id == item.author_id
+                    && stUser.score.unwrap_or(0) >= 45
+                    && (!matches!(item.markup.as_str(), "PLAIN") || stUser.candel)
+                    && !item.deleted
+                    && !topic_expired
+                    && !setCommentsWithReplies.contains(&item.id)
+                    && chrono::Utc::now() <= item.postdate + chrono::Duration::minutes(30)
+            });
             CommentView {
                 item,
                 html,
                 reactions_html: reactions.html,
                 show_reactions_link: reactions.show_menu_link,
+                can_edit,
             }
         })
         .collect();
@@ -2041,8 +2152,33 @@ async fn render_topic_view(
             "MARKDOWN".into(),
         ),
     };
-    let can_comment =
-        current_user.is_some() && !topic_expired && !topic.deleted && !comments_hidden;
+    let stPostingResolution = crate::application::auth::stResolvePostingIdentity(
+        &state,
+        current_user.as_ref(),
+        None,
+        None,
+    )
+    .await?;
+    let can_comment = !comments_hidden
+        && crate::routes::comments::optCommentActorError(
+            &state,
+            &stPostingResolution.stIdentity.stUser,
+            !stPostingResolution.stIdentity.bAuthorized,
+            &sRemoteIp,
+        )
+        .await?
+        .is_none()
+        && crate::routes::comments::check_comment_posting_allowed(
+            &state,
+            &stPostingResolution.stIdentity.stUser,
+            !stPostingResolution.stIdentity.bAuthorized,
+            topic.id,
+        )
+        .await
+        .is_ok();
+    let anonymous_comment_form = current_user.is_none();
+    let require_comment_captcha = anonymous_comment_form
+        || crate::routes::auth::bIpCaptchaRequired(&state, &sRemoteIp).await?;
     let realtime_bootstrap_html = sRealtimeTopicBootstrap(
         !topic_expired && !bHasNextPage,
         topic.id,
@@ -2071,6 +2207,9 @@ async fn render_topic_view(
             comment_format_mode,
             comment_format_title,
             can_comment,
+            anonymous_comment_form,
+            require_comment_captcha,
+            captcha_site_key: state.config.captcha_public_key.clone().unwrap_or_default(),
             realtime_bootstrap_html,
         }
         .render()?,
@@ -2113,7 +2252,7 @@ fn comment_subtree(comments: &[CommentItem], root: i32) -> Vec<CommentItem> {
 /// which page a comment lives on (among non-deleted comments) and redirects
 /// there with a `#comment-N` anchor; falls back to the deleted-comments view
 /// for a moderator if the comment isn't found live.
-async fn resolve_comment_jump(
+pub(crate) async fn resolve_comment_jump(
     state: &AppState,
     topic: &TopicDetail,
     cid: i32,
@@ -2134,7 +2273,7 @@ async fn resolve_comment_jump(
         } else {
             format!("{}#comment-{cid}", topic.topic_url())
         };
-        return Ok(Redirect::to(&url).into_response());
+        return Ok((StatusCode::FOUND, [(header::LOCATION, url)]).into_response());
     }
     if is_moderator {
         let exists_deleted: bool = sqlx::query_scalar(
@@ -2145,10 +2284,14 @@ async fn resolve_comment_jump(
         .fetch_one(&state.pool)
         .await?;
         if exists_deleted {
-            return Ok(
-                Redirect::to(&format!("{}?deleted=true#comment-{cid}", topic.topic_url()))
-                    .into_response(),
-            );
+            return Ok((
+                StatusCode::FOUND,
+                [(
+                    header::LOCATION,
+                    format!("{}?deleted=true#comment-{cid}", topic.topic_url()),
+                )],
+            )
+                .into_response());
         }
     }
     Err(AppError::NotFound)
@@ -2263,13 +2406,19 @@ struct TopicFormGroup {
     image_required: bool,
     image_allowed_by_section: bool,
     section_prefix: String,
+    premoderated: bool,
+    comments_restriction: i32,
 }
 
+type TyTopicFormGroupRow = (String, i32, bool, bool, bool, bool, String, bool, i32);
+
 async fn load_topic_form_group(state: &AppState, group_id: i32) -> Result<TopicFormGroup> {
-    let row: Option<(String, i32, bool, bool, bool, bool, String)> = sqlx::query_as(
+    let row: Option<TyTopicFormGroupRow> = sqlx::query_as(
         r#"SELECT g.title, s.id, s.havelink, COALESCE(s.vote,false), s.imagepost,
                   s.imageallowed,
-                  CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(s.name) END
+                  CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(s.name) END,
+                  s.moderate, GREATEST(COALESCE(g.restrict_comments,-9999),
+                    CASE WHEN s.id IN (1,2) THEN -9999 ELSE 45 END)
            FROM groups g JOIN sections s ON s.id=g.section WHERE g.id=$1"#,
     ).bind(group_id).fetch_optional(&state.pool).await?;
     let Some((
@@ -2280,6 +2429,8 @@ async fn load_topic_form_group(state: &AppState, group_id: i32) -> Result<TopicF
         image_required,
         image_allowed_by_section,
         section_prefix,
+        premoderated,
+        comments_restriction,
     )) = row
     else {
         return Err(AppError::NotFound);
@@ -2292,6 +2443,8 @@ async fn load_topic_form_group(state: &AppState, group_id: i32) -> Result<TopicF
         image_required,
         image_allowed_by_section,
         section_prefix,
+        premoderated,
+        comments_restriction,
     })
 }
 
@@ -2343,34 +2496,30 @@ fn topicLimitNotices(stInfo: StTopicLimitInfo) -> (Option<String>, Option<String
 
 pub async fn new_topic_form(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Query(q): Query<NewTopicQuery>,
     CurrentUser(user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
     ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
 ) -> Result<Response> {
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
     let selected_group = match q.group {
         Some(id) => id,
         None => return Ok(Redirect::to("/add-section.jsp").into_response()),
     };
-    // The Java flow can create a posting AnySession from the dedicated
-    // anonymous account after validating nick/password/captcha.  Until that
-    // complete flow is present, do not impersonate that account or create a
-    // topic with a fabricated user id.
-    let Some(stUser) = user.as_ref() else {
-        return Err(AppError::Forbidden);
-    };
-    let stPostingActor = stAuthenticatedPostingActor(stUser);
+    let stResolution =
+        crate::application::auth::stResolvePostingIdentity(&state, user.as_ref(), None, None)
+            .await?;
+    let stPostingActor = stPostingActor(&stResolution.stIdentity);
     let stPostingPermission = add_topic_service(&state)
-        .optCheckGroup(
-            selected_group,
-            stPostingActor,
-            &stPeerAddress.ip().to_string(),
-        )
+        .optCheckGroup(selected_group, stPostingActor, &sRemoteIp)
         .await?
         .ok_or(AppError::NotFound)?;
-    if !stPostingPermission.bPermitted() {
-        return Err(AppError::Forbidden);
-    }
     let group = load_topic_form_group(&state, selected_group).await?;
     let stTopicLimitInfo = state
         .topic_publish
@@ -2432,6 +2581,7 @@ pub async fn new_topic_form(
             } else {
                 Vec::new()
             },
+            uploaded_images: Vec::new(),
             form_title: String::new(),
             form_msg: String::new(),
             form_url: String::new(),
@@ -2442,15 +2592,24 @@ pub async fn new_topic_form(
             add_info_html,
             format_mode,
             format_mode_title,
+            anonymous_form: user.is_none(),
+            form_nick: "anonymous".into(),
+            require_captcha: user.is_none()
+                || crate::routes::auth::bIpCaptchaRequired(&state, &sRemoteIp).await?,
+            captcha_site_key: state.config.captcha_public_key.clone().unwrap_or_default(),
+            show_allow_anonymous: user.is_some()
+                && !group.premoderated
+                && group.comments_restriction < -50,
+            allow_anonymous: true,
         }
         .render()?,
     )
     .into_response())
 }
 
-/// AddTopicController.MaxMessageLength (anonymous posting isn't supported by
-/// Rust's session model, so only the registered-user limit applies).
+/// AddTopicController.MaxMessageLength / MaxMessageLengthAnonymous.
 const TOPIC_MAX_MESSAGE_LENGTH: usize = 65536;
+const TOPIC_MAX_MESSAGE_LENGTH_ANONYMOUS: usize = 8196;
 
 struct TopicUpload {
     bytes: bytes::Bytes,
@@ -2502,7 +2661,7 @@ async fn parse_topic_request(
     Ok((pairs, uploads))
 }
 
-fn validate_topic_form(form: &TopicForm, links_allowed: bool) -> Result<()> {
+fn validate_topic_form(form: &TopicForm, links_allowed: bool, bAnonymous: bool) -> Result<()> {
     let title = form.title.trim();
     if title.is_empty() {
         return Err(AppError::BadRequest(
@@ -2518,7 +2677,12 @@ fn validate_topic_form(form: &TopicForm, links_allowed: bool) -> Result<()> {
                 .into(),
         ));
     }
-    if form.msg.chars().count() > TOPIC_MAX_MESSAGE_LENGTH {
+    let iMaxMessageLength = if bAnonymous {
+        TOPIC_MAX_MESSAGE_LENGTH_ANONYMOUS
+    } else {
+        TOPIC_MAX_MESSAGE_LENGTH
+    };
+    if form.msg.chars().count() > iMaxMessageLength {
         return Err(AppError::BadRequest("Слишком большое сообщение".into()));
     }
     if links_allowed && let Some(url) = form.url.as_deref().filter(|value| !value.trim().is_empty())
@@ -2577,15 +2741,51 @@ fn validate_topic_image(data: &[u8]) -> Result<(image::DynamicImage, &'static st
     Ok((image, extension))
 }
 
+/// `ImageUtil.resizeImage(..., Scalr.Mode.FIT_TO_WIDTH, size)` creates every
+/// derivative at the requested width (portrait images may therefore be taller
+/// than `size`) and paints transparent pixels on white before JPEG encoding.
+fn vecEncodeTopicDerivative(stImage: &image::DynamicImage, iWidth: u32) -> Result<Vec<u8>> {
+    use image::GenericImageView;
+
+    let (iSourceWidth, iSourceHeight) = stImage.dimensions();
+    let iHeight = ((u64::from(iSourceHeight) * u64::from(iWidth) + u64::from(iSourceWidth) / 2)
+        / u64::from(iSourceWidth))
+    .max(1) as u32;
+    let stRgba = image::imageops::resize(
+        &stImage.to_rgba8(),
+        iWidth,
+        iHeight,
+        image::imageops::FilterType::Lanczos3,
+    );
+    let mut stRgb = image::RgbImage::new(iWidth, iHeight);
+    for (iX, iY, stPixel) in stRgba.enumerate_pixels() {
+        let iAlpha = u16::from(stPixel[3]);
+        let mut arrRgb = [0u8; 3];
+        for iChannel in 0..3 {
+            arrRgb[iChannel] =
+                ((u16::from(stPixel[iChannel]) * iAlpha + 255 * (255 - iAlpha) + 127) / 255) as u8;
+        }
+        stRgb.put_pixel(iX, iY, image::Rgb(arrRgb));
+    }
+
+    let mut vecEncoded = Vec::new();
+    image::DynamicImage::ImageRgb8(stRgb)
+        .write_to(
+            &mut std::io::Cursor::new(&mut vecEncoded),
+            image::ImageFormat::Jpeg,
+        )
+        .map_err(|stError| AppError::Anyhow(stError.into()))?;
+    Ok(vecEncoded)
+}
+
 async fn save_topic_upload(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     state: &AppState,
     topic_id: i32,
     upload: &TopicUpload,
+    stRollback: &mut StTopicUploadRollback,
 ) -> Result<()> {
-    use image::GenericImageView;
     let (image, extension) = validate_topic_image(&upload.bytes)?;
-    let (width, height) = image.dimensions();
     let image_id: i32 =
         sqlx::query_scalar("SELECT nextval(pg_get_serial_sequence('images','id'))::int")
             .fetch_one(&mut **tx)
@@ -2595,22 +2795,12 @@ async fn save_topic_upload(
     tokio::fs::create_dir_all(&directory)
         .await
         .map_err(|error| AppError::Anyhow(error.into()))?;
+    stRollback.vTrack(directory.clone());
     tokio::fs::write(format!("{directory}/original.{extension}"), &upload.bytes)
         .await
         .map_err(|error| AppError::Anyhow(error.into()))?;
     for size in [500u32, 1000, 1500, 2000] {
-        let scaled = if width.max(height) <= size {
-            image.clone()
-        } else {
-            image.resize(size, size, image::imageops::FilterType::Lanczos3)
-        };
-        let mut encoded = Vec::new();
-        scaled
-            .write_to(
-                &mut std::io::Cursor::new(&mut encoded),
-                image::ImageFormat::Jpeg,
-            )
-            .map_err(|error| AppError::Anyhow(error.into()))?;
+        let encoded = vecEncodeTopicDerivative(&image, size)?;
         tokio::fs::write(format!("{directory}/{size}px.jpg"), encoded)
             .await
             .map_err(|error| AppError::Anyhow(error.into()))?;
@@ -2624,7 +2814,226 @@ async fn save_topic_upload(
     Ok(())
 }
 
+fn vecTopicPreviewPaths(stState: &AppState, sName: &str) -> Vec<std::path::PathBuf> {
+    let stDirectory = std::path::Path::new(&stState.config.upload_dir).join("gallery/preview");
+    let sStem = sName.rsplit_once('.').map_or(sName, |(sStem, _)| sStem);
+    let mut vecPaths = vec![stDirectory.join(sName)];
+    vecPaths.extend(
+        [500u32, 1000, 1500, 2000].map(|iSize| stDirectory.join(format!("{sStem}-{iSize}px.jpg"))),
+    );
+    vecPaths
+}
+
+fn vecReusableTopicPreviews(stState: &AppState, iUserId: i32, vecNames: &[String]) -> Vec<String> {
+    let stPattern = regex::Regex::new(&format!(
+        r"^preview-{}-[\w-]+\.(?:jpg|png|gif)$",
+        regex::escape(&iUserId.to_string())
+    ))
+    .expect("static topic preview pattern");
+    vecNames
+        .iter()
+        .filter(|sName| stPattern.is_match(sName))
+        // ImageService.processUpload reuses a preview when its main file is
+        // present; saveImage will then validate/move every derivative.
+        .filter(|sName| vecTopicPreviewPaths(stState, sName)[0].is_file())
+        .cloned()
+        .collect()
+}
+
+async fn vecStageTopicPreviews(
+    stState: &AppState,
+    iUserId: i32,
+    vecUploads: &[TopicUpload],
+) -> Result<Vec<String>> {
+    let stDirectory = std::path::Path::new(&stState.config.upload_dir).join("gallery/preview");
+    tokio::fs::create_dir_all(&stDirectory)
+        .await
+        .map_err(|stError| AppError::Anyhow(stError.into()))?;
+    let mut vecCreatedNames = Vec::new();
+    for stUpload in vecUploads {
+        let (stImage, sExtension) = validate_topic_image(&stUpload.bytes)?;
+        let sName = format!(
+            "preview-{iUserId}-{}.{}",
+            uuid::Uuid::new_v4().simple(),
+            sExtension
+        );
+        let vecPaths = vecTopicPreviewPaths(stState, &sName);
+        let stResult: Result<String> = async {
+            tokio::fs::write(&vecPaths[0], &stUpload.bytes)
+                .await
+                .map_err(|stError| AppError::Anyhow(stError.into()))?;
+            for (stPath, iSize) in vecPaths.iter().skip(1).zip([500u32, 1000, 1500, 2000]) {
+                tokio::fs::write(stPath, vecEncodeTopicDerivative(&stImage, iSize)?)
+                    .await
+                    .map_err(|stError| AppError::Anyhow(stError.into()))?;
+            }
+            Ok(sName.clone())
+        }
+        .await;
+        match stResult {
+            Ok(sName) => vecCreatedNames.push(sName),
+            Err(stError) => {
+                vDeleteTopicPreview(stState, &sName).await;
+                for sName in &vecCreatedNames {
+                    vDeleteTopicPreview(stState, sName).await;
+                }
+                return Err(stError);
+            }
+        }
+    }
+    Ok(vecCreatedNames)
+}
+
+async fn save_topic_preview(
+    stTransaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    stState: &AppState,
+    iTopicId: i32,
+    sName: &str,
+    stRollback: &mut StTopicUploadRollback,
+) -> Result<()> {
+    let sExtension = sName
+        .rsplit_once('.')
+        .map(|(_, sExtension)| sExtension)
+        .ok_or_else(|| AppError::BadRequest("Некорректное имя preview изображения".into()))?;
+    let vecSourcePaths = vecTopicPreviewPaths(stState, sName);
+    if vecSourcePaths.iter().any(|stPath| !stPath.is_file()) {
+        return Err(AppError::BadRequest(
+            "Preview изображения истёк или повреждён".into(),
+        ));
+    }
+    let iImageId: i32 =
+        sqlx::query_scalar("SELECT nextval(pg_get_serial_sequence('images','id'))::int")
+            .fetch_one(&mut **stTransaction)
+            .await?;
+    let stDirectory = std::path::Path::new(&stState.config.upload_dir)
+        .join("images")
+        .join(iImageId.to_string());
+    tokio::fs::create_dir(&stDirectory)
+        .await
+        .map_err(|stError| AppError::Anyhow(stError.into()))?;
+    stRollback.vTrack(stDirectory.to_string_lossy().into_owned());
+    tokio::fs::copy(
+        &vecSourcePaths[0],
+        stDirectory.join(format!("original.{sExtension}")),
+    )
+    .await
+    .map_err(|stError| AppError::Anyhow(stError.into()))?;
+    for (stSource, iSize) in vecSourcePaths
+        .iter()
+        .skip(1)
+        .zip([500u32, 1000, 1500, 2000])
+    {
+        tokio::fs::copy(stSource, stDirectory.join(format!("{iSize}px.jpg")))
+            .await
+            .map_err(|stError| AppError::Anyhow(stError.into()))?;
+    }
+    sqlx::query("INSERT INTO images(id,topic,extension,main) VALUES($1,$2,$3,false)")
+        .bind(iImageId)
+        .bind(iTopicId)
+        .bind(sExtension)
+        .execute(&mut **stTransaction)
+        .await?;
+    Ok(())
+}
+
+async fn vDeleteTopicPreview(stState: &AppState, sName: &str) {
+    for stPath in vecTopicPreviewPaths(stState, sName) {
+        if let Err(stError) = tokio::fs::remove_file(&stPath).await
+            && stError.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(path = %stPath.display(), error = %stError, "failed to remove consumed topic preview");
+        }
+    }
+}
+
+/// Filesystem writes cannot participate in PostgreSQL transactions. Track
+/// every newly-created image directory and remove it if any later SQL, image
+/// or commit step fails, so a rejected topic/edit does not leak orphan media.
+struct StTopicUploadRollback {
+    vecDirectories: Vec<String>,
+    bCommitted: bool,
+}
+
+impl StTopicUploadRollback {
+    fn stNew() -> Self {
+        Self {
+            vecDirectories: Vec::new(),
+            bCommitted: false,
+        }
+    }
+
+    fn vTrack(&mut self, sDirectory: String) {
+        self.vecDirectories.push(sDirectory);
+    }
+
+    fn vCommit(&mut self) {
+        self.bCommitted = true;
+    }
+}
+
+impl Drop for StTopicUploadRollback {
+    fn drop(&mut self) {
+        if self.bCommitted {
+            return;
+        }
+        for sDirectory in self.vecDirectories.iter().rev() {
+            if let Err(stError) = std::fs::remove_dir_all(sDirectory)
+                && stError.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::error!(path = %sDirectory, error = %stError, "failed to remove rolled-back topic image directory");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod topic_image_processing_tests {
+    use super::*;
+    use image::GenericImageView;
+
+    #[test]
+    fn derivatives_fit_width_like_java_for_portrait_images() {
+        let stImage = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            400,
+            800,
+            image::Rgba([10, 20, 30, 255]),
+        ));
+        let vecJpeg = vecEncodeTopicDerivative(&stImage, 500).expect("encode derivative");
+        assert_eq!(
+            image::load_from_memory(&vecJpeg).unwrap().dimensions(),
+            (500, 1000)
+        );
+    }
+
+    #[test]
+    fn transparent_derivative_pixels_are_composited_on_white() {
+        let stImage = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            400,
+            400,
+            image::Rgba([0, 0, 0, 0]),
+        ));
+        let vecJpeg = vecEncodeTopicDerivative(&stImage, 500).expect("encode derivative");
+        let stDecoded = image::load_from_memory(&vecJpeg).unwrap().to_rgb8();
+        let stPixel = stDecoded.get_pixel(250, 250);
+        assert!(stPixel.0.into_iter().all(|iChannel| iChannel >= 250));
+    }
+
+    #[test]
+    fn failed_database_flow_removes_staged_image_directory() {
+        let pathDirectory =
+            std::env::temp_dir().join(format!("lorsource-topic-upload-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&pathDirectory).unwrap();
+        std::fs::write(pathDirectory.join("original.png"), b"test").unwrap();
+        {
+            let mut stRollback = StTopicUploadRollback::stNew();
+            stRollback.vTrack(pathDirectory.to_string_lossy().into_owned());
+        }
+        assert!(!pathDirectory.exists());
+    }
+}
+
 fn renderSubmittedAddTopicForm(
+    stState: &AppState,
     stGroup: &TopicFormGroup,
     stForm: &TopicForm,
     sCsrfToken: &str,
@@ -2636,6 +3045,8 @@ fn renderSubmittedAddTopicForm(
     stTopicLimitInfo: StTopicLimitInfo,
     stPublishPermission: &StAddTopicPermission,
     bPreview: bool,
+    bSessionAuthorized: bool,
+    bRequireCaptcha: bool,
 ) -> Result<Response> {
     let (optTopicLimitError, optTopicLimitInfo) = topicLimitNotices(stTopicLimitInfo);
     Ok(Html(
@@ -2667,6 +3078,7 @@ fn renderSubmittedAddTopicForm(
             } else {
                 Vec::new()
             },
+            uploaded_images: stForm.uploaded_images.clone(),
             form_title: stForm.title.clone(),
             form_msg: stForm.msg.clone(),
             form_url: stForm.url.clone().unwrap_or_default(),
@@ -2681,6 +3093,18 @@ fn renderSubmittedAddTopicForm(
             add_info_html: None,
             format_mode: sFormatMode.to_string(),
             format_mode_title: sFormatModeTitle.to_string(),
+            anonymous_form: !bSessionAuthorized,
+            form_nick: stForm.nick.clone().unwrap_or_else(|| "anonymous".into()),
+            require_captcha: bRequireCaptcha,
+            captcha_site_key: stState
+                .config
+                .captcha_public_key
+                .clone()
+                .unwrap_or_default(),
+            show_allow_anonymous: bSessionAuthorized
+                && !stGroup.premoderated
+                && stGroup.comments_restriction < -50,
+            allow_anonymous: stForm.allow_anonymous.is_some(),
         }
         .render()?,
     )
@@ -2694,16 +3118,64 @@ pub async fn create_topic(
     ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
     request: Request,
 ) -> Result<Response> {
-    let Some(user) = user else {
-        return Err(AppError::Forbidden);
-    };
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        request.headers(),
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
+    let sUserAgent = request
+        .headers()
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|stValue| stValue.to_str().ok())
+        .map(str::to_owned);
     let (pairs, uploads) = parse_topic_request(&state, request).await?;
-    let form = parse_topic_form(&pairs)?;
-    let (format_mode, format_mode_title, markup_id) = user_format_mode(&state, user.id).await?;
+    let mut form = parse_topic_form(&pairs)?;
     let group = load_topic_form_group(&state, form.group).await?;
-    let stPostingActor = stAuthenticatedPostingActor(&user);
+    let bSessionAuthorized = user.is_some();
+    let bShowAllowAnonymous =
+        bSessionAuthorized && !group.premoderated && group.comments_restriction < -50;
+    let bAllowAnonymous = !bShowAllowAnonymous || form.allow_anonymous.is_some();
+    let bRequireCaptcha =
+        !bSessionAuthorized || crate::routes::auth::bIpCaptchaRequired(&state, &sRemoteIp).await?;
+    let mut optFormError = None;
+    if form.preview.is_none()
+        && bRequireCaptcha
+        && let Err(sError) = crate::application::auth::sValidateCaptcha(
+            &state.config,
+            &state.http,
+            form.captcha_response.as_deref(),
+            &sRemoteIp,
+        )
+        .await
+    {
+        optFormError = Some(sError);
+    }
+    let stResolution = crate::application::auth::stResolvePostingIdentity(
+        &state,
+        user.as_ref(),
+        form.nick.as_deref(),
+        form.password.as_deref(),
+    )
+    .await?;
+    if optFormError.is_none() {
+        optFormError = stResolution.optError.clone();
+    }
+    let stPostingIdentity = stResolution.stIdentity;
+    // AuthUtil.postingUser deliberately does not change the site profile:
+    // credentialed public-form posts use Profile.DEFAULT, while a real HTTP
+    // session retains its selected markup mode.
+    let (format_mode, format_mode_title, markup_id) = match user.as_ref() {
+        Some(stUser) => user_format_mode(&state, stUser.id).await?,
+        None => (
+            crate::profile::DEFAULT_FORMAT_MODE.into(),
+            "Markdown".into(),
+            "MARKDOWN".into(),
+        ),
+    };
+    let stPostingActor = stPostingActor(&stPostingIdentity);
     let stPostingPermission = add_topic_service(&state)
-        .optCheckGroup(form.group, stPostingActor, &stPeerAddress.ip().to_string())
+        .optCheckGroup(form.group, stPostingActor, &sRemoteIp)
         .await?
         .ok_or(AppError::NotFound)?;
     let stTopicLimitInfo = state
@@ -2713,12 +3185,34 @@ pub async fn create_topic(
     let stPublishPermission = state
         .topic_publish
         .stCheckPublish(stPostingPermission.clone(), stTopicLimitInfo);
-    let upload_allowed = image_upload_allowed(&group, &Some(user.clone()));
+    let optUploadUser = stPostingIdentity
+        .bAuthorized
+        .then(|| stPostingIdentity.stUser.clone());
+    let upload_allowed = image_upload_allowed(&group, &optUploadUser);
+    if optFormError.is_some() {
+        return renderSubmittedAddTopicForm(
+            &state,
+            &group,
+            &form,
+            &csrf_token,
+            &format_mode,
+            &format_mode_title,
+            &markup_id,
+            upload_allowed,
+            optFormError,
+            stTopicLimitInfo,
+            &stPublishPermission,
+            form.preview.is_some(),
+            bSessionAuthorized,
+            bRequireCaptcha,
+        );
+    }
     if !stPostingPermission.bPermitted() {
         // AddTopicController.checkOrError puts the restriction into the
         // BindingResult and returns the populated form (HTTP 200), including
         // in preview mode.  It does not attempt the mutation.
         return renderSubmittedAddTopicForm(
+            &state,
             &group,
             &form,
             &csrf_token,
@@ -2733,6 +3227,8 @@ pub async fn create_topic(
             stTopicLimitInfo,
             &stPublishPermission,
             form.preview.is_some(),
+            bSessionAuthorized,
+            bRequireCaptcha,
         );
     }
     if form.preview.is_none()
@@ -2740,7 +3236,7 @@ pub async fn create_topic(
     {
         return Err(AppError::Forbidden);
     }
-    validate_topic_form(&form, group.links_allowed)?;
+    validate_topic_form(&form, group.links_allowed, !stPostingIdentity.bAuthorized)?;
     let is_draft = form.draft.is_some();
     let premoderated: bool = sqlx::query_scalar(
         "SELECT s.moderate FROM groups g JOIN sections s ON s.id=g.section WHERE g.id=$1",
@@ -2748,18 +3244,23 @@ pub async fn create_topic(
     .bind(form.group)
     .fetch_one(&state.pool)
     .await?;
-    if !uploads.is_empty() && !upload_allowed {
+    if (!uploads.is_empty() || !form.uploaded_images.is_empty()) && !upload_allowed {
         return Err(AppError::Forbidden);
     }
-    if group.image_required && uploads.is_empty() {
-        return Err(AppError::BadRequest("Изображение отсутствует".into()));
-    }
-    if uploads.len() > 4 {
+    form.uploaded_images =
+        vecReusableTopicPreviews(&state, stPostingIdentity.stUser.id, &form.uploaded_images);
+    if form.uploaded_images.len() + uploads.len() > 4 {
         return Err(AppError::BadRequest("Слишком много изображений".into()));
+    }
+    if group.image_required && form.uploaded_images.is_empty() && uploads.is_empty() {
+        return Err(AppError::BadRequest("Изображение отсутствует".into()));
     }
 
     if form.preview.is_some() {
+        form.uploaded_images
+            .extend(vecStageTopicPreviews(&state, stPostingIdentity.stUser.id, &uploads).await?);
         return renderSubmittedAddTopicForm(
+            &state,
             &group,
             &form,
             &csrf_token,
@@ -2771,6 +3272,8 @@ pub async fn create_topic(
             stTopicLimitInfo,
             &stPublishPermission,
             true,
+            bSessionAuthorized,
+            bRequireCaptcha,
         );
     }
 
@@ -2780,7 +3283,13 @@ pub async fn create_topic(
     // premoderated section or score>=200 (GroupPermissionService.canCreateTag).
     let tags = crate::routes::tags::parse_and_validate_tags(form.tags.as_deref().unwrap_or(""))
         .map_err(AppError::BadRequest)?;
-    crate::routes::tags::check_can_create_new_tags(&state, &tags, &user, premoderated).await?;
+    crate::routes::tags::check_can_create_new_tags(
+        &state,
+        &tags,
+        &stPostingIdentity.stUser,
+        premoderated,
+    )
+    .await?;
 
     // AddTopicController performs FloodProtector.AddTopic after all ordinary
     // validation and CSRF checks.  A draft is rate-limited too; only preview
@@ -2789,10 +3298,11 @@ pub async fn create_topic(
     // rejection consumes the same IP interval as it does in Java.
     if let Some(sRateError) = state
         .topic_publish
-        .optCheckAddTopicRate(stPostingActor, &stPeerAddress.ip().to_string())
+        .optCheckAddTopicRate(stPostingActor, &sRemoteIp)
         .await?
     {
         return renderSubmittedAddTopicForm(
+            &state,
             &group,
             &form,
             &csrf_token,
@@ -2804,11 +3314,14 @@ pub async fn create_topic(
             stTopicLimitInfo,
             &stPublishPermission,
             false,
+            bSessionAuthorized,
+            bRequireCaptcha,
         );
     }
 
     if !is_draft && !stPublishPermission.bPermitted() {
         return renderSubmittedAddTopicForm(
+            &state,
             &group,
             &form,
             &csrf_token,
@@ -2820,9 +3333,12 @@ pub async fn create_topic(
             stTopicLimitInfo,
             &stPublishPermission,
             false,
+            bSessionAuthorized,
+            bRequireCaptcha,
         );
     }
 
+    let mut stUploadRollback = StTopicUploadRollback::stNew();
     let mut tx = state.pool.begin().await?;
     let service = topic_service(&state);
     let id = service.iNextMessageId(&mut tx).await?;
@@ -2835,7 +3351,7 @@ pub async fn create_topic(
             StNewTopic {
                 iMsgId: id,
                 iGroupId: form.group,
-                iUserId: user.id,
+                iUserId: stPostingIdentity.stUser.id,
                 sTitle: form.title.trim(),
                 optUrl: group
                     .links_allowed
@@ -2848,6 +3364,9 @@ pub async fn create_topic(
                     .flatten()
                     .filter(|sValue| !sValue.trim().is_empty()),
                 bDraft: is_draft,
+                sPostIp: &sRemoteIp,
+                optUserAgent: sUserAgent.as_deref(),
+                bAllowAnonymous,
             },
         )
         .await?;
@@ -2868,13 +3387,33 @@ pub async fn create_topic(
         .await?;
     }
     for upload in &uploads {
-        save_topic_upload(&mut tx, &state, id, upload).await?;
+        save_topic_upload(&mut tx, &state, id, upload, &mut stUploadRollback).await?;
     }
+    for sPreview in &form.uploaded_images {
+        save_topic_preview(&mut tx, &state, id, sPreview, &mut stUploadRollback).await?;
+    }
+    let vecNotified = if !is_draft {
+        // TopicService.addMessage keeps notification rows in the same local
+        // transaction as the topic itself. A failure must not leave a topic
+        // committed without its matching REF/TAG bookkeeping.
+        notify_topic_users_tx(
+            &mut tx,
+            id,
+            stPostingIdentity.stUser.id,
+            &form.msg,
+            !premoderated,
+        )
+        .await?
+    } else {
+        Vec::new()
+    };
     tx.commit().await?;
+    stUploadRollback.vCommit();
+    for sPreview in &form.uploaded_images {
+        vDeleteTopicPreview(&state, sPreview).await;
+    }
     if !is_draft {
-        // TopicService.addMessage never emits events for drafts and suppresses
-        // TAG events (but not @mention REF events) in premoderated sections.
-        notify_topic_created(&state, id, user.id, &form.msg, !premoderated).await?;
+        state.realtime.vNotifyEvents(vecNotified.iter().copied());
     }
     crate::search_index::index_topic(&state, id, false).await;
     // Java shows a dedicated confirmation for protected sections because
@@ -2901,15 +3440,30 @@ struct ModeratedTopicTemplate {
 
 pub async fn edit_topic_form(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(q): Query<ViewMessageQuery>,
     CurrentUser(user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
-) -> Result<Html<String>> {
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
+) -> Result<Response> {
+    let Some(user) = user else {
+        return Ok(crate::routes::auth::login_redirect(&format!(
+            "/edit.jsp?msgid={}",
+            q.msgid
+        )));
+    };
     let topic = get_topic(&state, q.msgid).await?;
+    let stRules = load_topic_edit_rules(&state, q.msgid).await?;
+    check_topic_edit_preconditions(&state, &headers, stPeerAddress, &user, &topic).await?;
+    if !b_topic_content_editable(&topic, &stRules, &user)
+        && !b_topic_tags_editable(&topic, &stRules, &user)
+    {
+        return Err(AppError::Forbidden);
+    }
     let selected_group = topic.group_id;
     let group = load_topic_form_group(&state, selected_group).await?;
     let (format_mode, format_mode_title) = markup_form_view(&topic.markup);
-    let image_allowed = image_upload_allowed(&group, &user);
+    let image_allowed = image_upload_allowed(&group, &Some(user));
     let image_count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM images WHERE topic=$1 AND NOT deleted")
             .bind(q.msgid)
@@ -2965,6 +3519,7 @@ pub async fn edit_topic_form(
             } else {
                 Vec::new()
             },
+            uploaded_images: Vec::new(),
             form_title: topic.title.clone(),
             form_msg: topic.message.clone(),
             form_url: topic.url.clone().unwrap_or_default(),
@@ -2975,31 +3530,343 @@ pub async fn edit_topic_form(
             add_info_html: None,
             format_mode,
             format_mode_title,
+            anonymous_form: false,
+            form_nick: String::new(),
+            require_captcha: false,
+            captcha_site_key: String::new(),
+            show_allow_anonymous: false,
+            allow_anonymous: true,
         }
         .render()?,
-    ))
+    )
+    .into_response())
 }
 
-/// Simplified from EditTopicChecker.checkContentEdit/checkEditByAuthor:
-/// author (or moderator, unconditional bypass) may edit within a 14-day
-/// window from posting, or at any time while still a draft. The corrector
-/// role, premoderated-section/articles commitDate nuances, and the
-/// postscore==NO_COMMENTS lock aren't modeled by Rust's session yet - this
-/// intentionally errs toward Java's baseline author/moderator gate rather
-/// than leaving the endpoint wide open.
 const TOPIC_EDIT_WINDOW_DAYS: i64 = 14;
+
+struct TopicEditRules {
+    expired: bool,
+    postscore: i32,
+    commitdate: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+async fn load_topic_edit_rules(state: &AppState, topic_id: i32) -> Result<TopicEditRules> {
+    let (expired, postscore, commitdate): (
+        bool,
+        i32,
+        Option<chrono::DateTime<chrono::Utc>>,
+    ) = sqlx::query_as(
+        r#"SELECT NOT t.sticky AND COALESCE(t.commitdate,t.postdate) < CURRENT_TIMESTAMP-s.expire,
+                  COALESCE(t.postscore, -9999), t.commitdate
+           FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section
+           WHERE t.id=$1"#,
+    )
+    .bind(topic_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    Ok(TopicEditRules {
+        expired,
+        postscore,
+        commitdate,
+    })
+}
+
+async fn check_topic_edit_preconditions(
+    state: &AppState,
+    headers: &HeaderMap,
+    stPeerAddress: SocketAddr,
+    user: &UserSummary,
+    topic: &TopicDetail,
+) -> Result<()> {
+    if topic.deleted {
+        return Err(AppError::BadRequest(
+            "нельзя править удаленные топики".into(),
+        ));
+    }
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
+    if crate::routes::comments::optCommentActorError(state, user, false, &sRemoteIp)
+        .await?
+        .is_some()
+    {
+        return Err(AppError::Forbidden);
+    }
+    Ok(())
+}
+
+fn b_topic_editable_by_author(
+    topic: &TopicDetail,
+    rules: &TopicEditRules,
+    user: &UserSummary,
+) -> bool {
+    if topic.author_id != user.id {
+        return false;
+    }
+    if topic.draft {
+        return true;
+    }
+    if topic.moderate && topic.section_premoderated && topic.section_id != 6 {
+        return false;
+    }
+    if !topic.moderate && (topic.sticky || topic.section_premoderated) {
+        return true;
+    }
+    let dtBase = if topic.moderate && topic.section_id == 6 {
+        rules.commitdate.unwrap_or(topic.postdate)
+    } else {
+        topic.postdate
+    };
+    chrono::Utc::now() <= dtBase + chrono::Duration::days(TOPIC_EDIT_WINDOW_DAYS)
+}
+
+fn b_topic_content_editable(
+    topic: &TopicDetail,
+    rules: &TopicEditRules,
+    user: &UserSummary,
+) -> bool {
+    // UserPermissionService.legacyEditableFormats: only administrators may
+    // edit legacy raw-HTML (markup_type=PLAIN) messages.
+    if topic.markup == "PLAIN" && !user.candel {
+        return false;
+    }
+    if user.candel {
+        return true;
+    }
+    if rules.expired {
+        return false;
+    }
+    if user.canmod {
+        return true;
+    }
+    if rules.postscore == crate::domain::topic::posting::POSTSCORE_NO_COMMENTS {
+        return false;
+    }
+    if user.corrector && topic.section_premoderated {
+        return true;
+    }
+    b_topic_editable_by_author(topic, rules, user)
+}
+
+fn b_topic_tags_editable(topic: &TopicDetail, rules: &TopicEditRules, user: &UserSummary) -> bool {
+    user.candel || user.canmod || user.corrector || b_topic_editable_by_author(topic, rules, user)
+}
+
+#[cfg(test)]
+mod topic_edit_permission_tests {
+    use super::*;
+
+    fn st_user(i_id: i32, moderator: bool, administrator: bool, corrector: bool) -> UserSummary {
+        UserSummary {
+            id: i_id,
+            nick: format!("user{i_id}"),
+            name: None,
+            score: Some(100),
+            max_score: Some(100),
+            photo: None,
+            town: None,
+            regdate: None,
+            canmod: moderator,
+            candel: administrator,
+            corrector,
+            blocked: Some(false),
+            userinfo: None,
+        }
+    }
+
+    fn st_topic() -> TopicDetail {
+        TopicDetail {
+            id: 10,
+            title: "title".into(),
+            message: "body".into(),
+            markup: "MARKDOWN".into(),
+            url: None,
+            linktext: None,
+            postdate: chrono::Utc::now(),
+            lastmod: None,
+            author_id: 1,
+            author: "user1".into(),
+            group_id: 2,
+            group_title: "group".into(),
+            group_urlname: "group".into(),
+            section_id: 1,
+            section_name: "Новости".into(),
+            section_prefix: "news".into(),
+            section_premoderated: true,
+            comments: 0,
+            deleted: false,
+            sticky: false,
+            resolved: None,
+            tags: None,
+            draft: false,
+            moderate: false,
+        }
+    }
+
+    fn st_rules() -> TopicEditRules {
+        TopicEditRules {
+            expired: false,
+            postscore: crate::domain::topic::posting::POSTSCORE_UNRESTRICTED,
+            commitdate: None,
+        }
+    }
+
+    #[test]
+    fn moderator_cannot_edit_expired_content_but_administrator_can() {
+        let st_topic = st_topic();
+        let mut st_rules = st_rules();
+        st_rules.expired = true;
+        assert!(!b_topic_content_editable(
+            &st_topic,
+            &st_rules,
+            &st_user(2, true, false, false)
+        ));
+        assert!(b_topic_content_editable(
+            &st_topic,
+            &st_rules,
+            &st_user(2, true, true, false)
+        ));
+    }
+
+    #[test]
+    fn corrector_obeys_no_comments_lock_but_can_still_edit_tags() {
+        let st_topic = st_topic();
+        let mut st_rules = st_rules();
+        let st_corrector = st_user(2, false, false, true);
+        assert!(b_topic_content_editable(
+            &st_topic,
+            &st_rules,
+            &st_corrector
+        ));
+        st_rules.postscore = crate::domain::topic::posting::POSTSCORE_NO_COMMENTS;
+        assert!(!b_topic_content_editable(
+            &st_topic,
+            &st_rules,
+            &st_corrector
+        ));
+        assert!(b_topic_tags_editable(&st_topic, &st_rules, &st_corrector));
+    }
+
+    #[test]
+    fn author_cannot_edit_committed_premoderated_news() {
+        let mut st_topic = st_topic();
+        let st_author = st_user(1, false, false, false);
+        assert!(b_topic_content_editable(&st_topic, &st_rules(), &st_author));
+        st_topic.moderate = true;
+        assert!(!b_topic_content_editable(
+            &st_topic,
+            &st_rules(),
+            &st_author
+        ));
+    }
+
+    #[test]
+    fn only_administrator_can_edit_legacy_html_content() {
+        let mut st_topic = st_topic();
+        st_topic.markup = "PLAIN".into();
+        assert!(!b_topic_content_editable(
+            &st_topic,
+            &st_rules(),
+            &st_user(2, true, false, false)
+        ));
+        assert!(b_topic_content_editable(
+            &st_topic,
+            &st_rules(),
+            &st_user(2, true, true, false)
+        ));
+    }
+}
+
+#[derive(Clone)]
+struct TopicPollSnapshot {
+    id: i32,
+    multiselect: bool,
+    variants: Vec<(i32, String)>,
+}
+
+async fn load_topic_poll_snapshot(
+    state: &AppState,
+    topic_id: i32,
+) -> Result<Option<TopicPollSnapshot>> {
+    let Some((id, multiselect)): Option<(i32, bool)> =
+        sqlx::query_as("SELECT id,multiselect FROM polls WHERE topic=$1")
+            .bind(topic_id)
+            .fetch_optional(&state.pool)
+            .await?
+    else {
+        return Ok(None);
+    };
+    let variants = sqlx::query_as("SELECT id,label FROM polls_variants WHERE vote=$1 ORDER BY id")
+        .bind(id)
+        .fetch_all(&state.pool)
+        .await?;
+    Ok(Some(TopicPollSnapshot {
+        id,
+        multiselect,
+        variants,
+    }))
+}
+
+fn b_poll_modified(snapshot: Option<&TopicPollSnapshot>, form: &TopicForm) -> bool {
+    let bMultiselect = form.multiselect.is_some();
+    match snapshot {
+        None => form.poll.iter().any(|sLabel| !sLabel.trim().is_empty()),
+        Some(stPoll) => {
+            if stPoll.multiselect != bMultiselect {
+                return true;
+            }
+            form.variant_id
+                .iter()
+                .zip(form.poll.iter())
+                .any(|(iVariantId, sLabel)| {
+                    let sLabel = sLabel.trim();
+                    if *iVariantId == 0 {
+                        !sLabel.is_empty()
+                    } else {
+                        stPoll
+                            .variants
+                            .iter()
+                            .find(|(iId, _)| iId == iVariantId)
+                            .is_some_and(|(_, sOldLabel)| sOldLabel != sLabel)
+                    }
+                })
+        }
+    }
+}
+
+fn opt_poll_history_json(
+    topic_id: i32,
+    snapshot: Option<&TopicPollSnapshot>,
+) -> Option<serde_json::Value> {
+    snapshot.map(|stPoll| {
+        serde_json::json!({
+            "id": stPoll.id,
+            "topic": topic_id,
+            "multiSelect": stPoll.multiselect,
+            "variants": stPoll.variants.iter().map(|(iId, sLabel)| {
+                serde_json::json!({"id": iId, "label": sLabel})
+            }).collect::<Vec<_>>()
+        })
+    })
+}
 
 pub async fn edit_topic(
     State(state): State<AppState>,
+    headers: HeaderMap,
     CurrentUser(user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
     request: Request,
 ) -> Result<Response> {
     let Some(user) = user else {
         return Err(AppError::Forbidden);
     };
     let (pairs, uploads) = parse_topic_request(&state, request).await?;
-    let form = parse_topic_form(&pairs)?;
+    let mut form = parse_topic_form(&pairs)?;
     if crate::form::get(&pairs, "csrf").map(str::trim) != Some(csrf_token.trim()) {
         return Err(AppError::Forbidden);
     }
@@ -3008,43 +3875,26 @@ pub async fn edit_topic(
         .ok_or_else(|| AppError::BadRequest("missing topic id".into()))?;
     let meta = load_topic_delete_meta(&state, id).await?;
     let current_topic = get_topic(&state, id).await?;
+    let stRules = load_topic_edit_rules(&state, id).await?;
+    check_topic_edit_preconditions(&state, &headers, stPeerAddress, &user, &current_topic).await?;
     let group = load_topic_form_group(&state, current_topic.group_id).await?;
-    validate_topic_form(&form, group.links_allowed)?;
-    if meta.deleted {
-        return Err(AppError::BadRequest(
-            "нельзя править удаленные топики".into(),
-        ));
-    }
-    // EditTopicChecker.checkEditByAuthor: a draft is always editable by its
-    // author; a committed, premoderated (non-Articles) topic is
-    // *permanently* locked for the author, regardless of any deadline;
-    // otherwise the 14-day window applies, measured from `commitDate` for
-    // a committed Articles topic and from `postdate` everywhere else.
-    let is_articles = current_topic.section_prefix == "articles";
-    let permanently_locked = meta.commited && meta.premoderated && !is_articles;
-    let deadline_base = if meta.commited && is_articles {
-        meta.commitdate.unwrap_or(meta.postdate)
-    } else {
-        meta.postdate
-    };
-    let editable_by_author = meta.author_id == user.id
-        && (meta.draft
-            || (!permanently_locked
-                && chrono::Utc::now()
-                    <= deadline_base + chrono::Duration::days(TOPIC_EDIT_WINDOW_DAYS)));
-    if !user.canmod && !editable_by_author {
+    validate_topic_form(&form, group.links_allowed, false)?;
+    let bContentEditable = b_topic_content_editable(&current_topic, &stRules, &user);
+    let bTagsEditable = b_topic_tags_editable(&current_topic, &stRules, &user);
+    if !bContentEditable && !bTagsEditable {
         return Err(AppError::Forbidden);
     }
     let upload_allowed = image_upload_allowed(&group, &Some(user.clone()));
-    if !uploads.is_empty() && !upload_allowed {
+    if (!uploads.is_empty() || !form.uploaded_images.is_empty()) && !upload_allowed {
         return Err(AppError::Forbidden);
     }
+    form.uploaded_images = vecReusableTopicPreviews(&state, user.id, &form.uploaded_images);
     let additional_count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM images WHERE topic=$1 AND NOT deleted")
             .bind(id)
             .fetch_one(&state.pool)
             .await?;
-    if additional_count + uploads.len() as i64 > 4 {
+    if additional_count + uploads.len() as i64 + form.uploaded_images.len() as i64 > 4 {
         return Err(AppError::BadRequest("Слишком много изображений".into()));
     }
 
@@ -3053,7 +3903,52 @@ pub async fn edit_topic(
         .map_err(AppError::BadRequest)?;
     crate::routes::tags::check_can_create_new_tags(&state, &tags, &user, meta.premoderated).await?;
 
+    let bMessageModified = form.msg != current_topic.message;
+    let bTitleModified = form.title.trim() != current_topic.title;
+    let optNewUrl = group
+        .links_allowed
+        .then(|| form.url.as_deref().unwrap_or("").trim().to_owned())
+        .filter(|sValue| !sValue.is_empty());
+    let optNewLinkText = group
+        .links_allowed
+        .then(|| form.linktext.as_deref().unwrap_or("").trim().to_owned())
+        .filter(|sValue| !sValue.is_empty());
+    let bUrlModified =
+        optNewUrl.as_deref().unwrap_or("") != current_topic.url.as_deref().unwrap_or("").trim();
+    let bLinkTextModified = optNewLinkText.as_deref().unwrap_or("")
+        != current_topic.linktext.as_deref().unwrap_or("").trim();
+    let vecOldTags = current_topic.tags_vec();
+    let mut vecComparableOldTags = vecOldTags
+        .iter()
+        .map(|sTag| sTag.to_lowercase())
+        .collect::<Vec<_>>();
+    let mut vecComparableNewTags = tags
+        .iter()
+        .map(|sTag| sTag.to_lowercase())
+        .collect::<Vec<_>>();
+    vecComparableOldTags.sort_unstable();
+    vecComparableNewTags.sort_unstable();
+    let bTagsModified = vecComparableOldTags != vecComparableNewTags;
+    let optOldPoll = if meta.poll_allowed {
+        load_topic_poll_snapshot(&state, id).await?
+    } else {
+        None
+    };
+    let bPollModified = meta.poll_allowed && b_poll_modified(optOldPoll.as_ref(), &form);
+    let bContentModified = bMessageModified
+        || bTitleModified
+        || bUrlModified
+        || bLinkTextModified
+        || bPollModified
+        || !uploads.is_empty()
+        || !form.uploaded_images.is_empty();
+    if bContentModified && !bContentEditable {
+        return Err(AppError::Forbidden);
+    }
+
     if form.preview.is_some() {
+        form.uploaded_images
+            .extend(vecStageTopicPreviews(&state, user.id, &uploads).await?);
         let poll_variants = form
             .variant_id
             .iter()
@@ -3093,6 +3988,7 @@ pub async fn edit_topic(
                 } else {
                     Vec::new()
                 },
+                uploaded_images: form.uploaded_images.clone(),
                 form_title: form.title.clone(),
                 form_msg: form.msg.clone(),
                 form_url: form.url.clone().unwrap_or_default(),
@@ -3107,30 +4003,56 @@ pub async fn edit_topic(
                 add_info_html: None,
                 format_mode: markup_form_view(&current_topic.markup).0,
                 format_mode_title: markup_form_view(&current_topic.markup).1,
+                anonymous_form: false,
+                form_nick: String::new(),
+                require_captcha: false,
+                captcha_site_key: String::new(),
+                show_allow_anonymous: false,
+                allow_anonymous: true,
             }
             .render()?,
         )
         .into_response());
     }
 
+    let bModified = bContentModified || bTagsModified;
+    if !bModified {
+        return Err(AppError::BadRequest("Нет изменений".into()));
+    }
+    let vecOldImageIds: Vec<i32> = if uploads.is_empty() && form.uploaded_images.is_empty() {
+        Vec::new()
+    } else {
+        sqlx::query_scalar("SELECT id FROM images WHERE topic=$1 AND NOT deleted ORDER BY id")
+            .bind(id)
+            .fetch_all(&state.pool)
+            .await?
+    };
+
+    let mut stUploadRollback = StTopicUploadRollback::stNew();
     let mut tx = state.pool.begin().await?;
     let service = topic_service(&state);
-    service.vUpdateTopicMessage(&mut tx, id, &form.msg).await?;
-    service
-        .vUpdateTopicHeader(
-            &mut tx,
-            StEditTopic {
-                iMsgId: id,
-                sTitle: form.title.trim(),
-                optUrl: group.links_allowed.then_some(form.url).flatten(),
-                optLinkText: group.links_allowed.then_some(form.linktext).flatten(),
-            },
-        )
-        .await?;
-    service
-        .vReplaceTags(&mut tx, id, form.tags.as_deref())
-        .await?;
-    if meta.poll_allowed && !form.variant_id.is_empty() {
+    if bMessageModified {
+        service.vUpdateTopicMessage(&mut tx, id, &form.msg).await?;
+    }
+    if bTitleModified || bUrlModified || bLinkTextModified {
+        service
+            .vUpdateTopicHeader(
+                &mut tx,
+                StEditTopic {
+                    iMsgId: id,
+                    sTitle: form.title.trim(),
+                    optUrl: optNewUrl,
+                    optLinkText: optNewLinkText,
+                },
+            )
+            .await?;
+    }
+    if bTagsModified {
+        service
+            .vReplaceTags(&mut tx, id, form.tags.as_deref())
+            .await?;
+    }
+    if bPollModified {
         save_poll(
             &mut tx,
             id,
@@ -3141,9 +4063,63 @@ pub async fn edit_topic(
         .await?;
     }
     for upload in &uploads {
-        save_topic_upload(&mut tx, &state, id, upload).await?;
+        save_topic_upload(&mut tx, &state, id, upload, &mut stUploadRollback).await?;
     }
+    for sPreview in &form.uploaded_images {
+        save_topic_preview(&mut tx, &state, id, sPreview, &mut stUploadRollback).await?;
+    }
+    sqlx::query(
+        r#"INSERT INTO edit_info(
+             msgid,editor,oldmessage,oldtitle,oldtags,oldlinktext,oldurl,
+             object_type,oldpoll,oldaddimages
+           ) VALUES($1,$2,$3,$4,$5,$6,$7,'TOPIC'::edit_event_type,$8,$9)"#,
+    )
+    .bind(id)
+    .bind(user.id)
+    .bind(bMessageModified.then_some(current_topic.message.as_str()))
+    .bind(bTitleModified.then_some(current_topic.title.as_str()))
+    .bind(bTagsModified.then(|| vecOldTags.join(", ")))
+    .bind(
+        bLinkTextModified
+            .then_some(current_topic.linktext.as_deref())
+            .flatten(),
+    )
+    .bind(
+        bUrlModified
+            .then_some(current_topic.url.as_deref())
+            .flatten(),
+    )
+    .bind(
+        bPollModified
+            .then(|| opt_poll_history_json(id, optOldPoll.as_ref()))
+            .flatten()
+            .map(sqlx::types::Json),
+    )
+    .bind((!uploads.is_empty() || !form.uploaded_images.is_empty()).then_some(vecOldImageIds))
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("UPDATE topics SET lastmod=CURRENT_TIMESTAMP WHERE id=$1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    let vecNotified = if !current_topic.draft && !stRules.expired {
+        notify_topic_users_tx(
+            &mut tx,
+            id,
+            current_topic.author_id,
+            &form.msg,
+            !current_topic.section_premoderated,
+        )
+        .await?
+    } else {
+        Vec::new()
+    };
     tx.commit().await?;
+    stUploadRollback.vCommit();
+    for sPreview in &form.uploaded_images {
+        vDeleteTopicPreview(&state, sPreview).await;
+    }
+    state.realtime.vNotifyEvents(vecNotified.iter().copied());
     crate::search_index::index_topic(&state, id, false).await;
     Ok(Redirect::to(&format!("/jump-message.jsp?msgid={id}")).into_response())
 }
@@ -3161,11 +4137,29 @@ pub struct TopicActionForm {
 /// posting, and only while it has no comments. Moderators bypass this.
 const TOPIC_DELETE_WINDOW_HOURS: i64 = 72;
 
+fn b_topic_deletable(
+    meta: &TopicDeleteMeta,
+    user: &UserSummary,
+    dtNow: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    let bDeletableByAuthor = meta.author_id == user.id
+        && (meta.draft
+            || (!(meta.premoderated && meta.commited)
+                && meta.comment_count == 0
+                && dtNow <= meta.postdate + chrono::Duration::hours(TOPIC_DELETE_WINDOW_HOURS)));
+    if user.candel || bDeletableByAuthor {
+        true
+    } else if user.canmod {
+        !meta.premoderated || !meta.commited || dtNow <= meta.postdate + chrono::Duration::days(30)
+    } else {
+        false
+    }
+}
+
 struct TopicDeleteMeta {
     author_id: i32,
     deleted: bool,
     postdate: chrono::DateTime<chrono::Utc>,
-    commitdate: Option<chrono::DateTime<chrono::Utc>>,
     draft: bool,
     premoderated: bool,
     commited: bool,
@@ -3173,12 +4167,43 @@ struct TopicDeleteMeta {
     poll_allowed: bool,
 }
 
+#[derive(Template)]
+#[template(path = "action_done.html")]
+struct StTopicActionDoneTemplate {
+    message: String,
+    big_message: Option<String>,
+    link: Option<String>,
+}
+
+type TyTopicDeleteRow = (
+    i32,
+    bool,
+    chrono::DateTime<chrono::Utc>,
+    bool,
+    bool,
+    bool,
+    i64,
+    bool,
+);
+
+async fn b_user_slow_mode_restricted(state: &AppState, user: &UserSummary) -> Result<bool> {
+    let stActor = crate::domain::topic::posting::StAddTopicActor {
+        optUserId: Some(user.id),
+        bAnonymous: false,
+        bModerator: user.canmod,
+        bCorrector: user.corrector,
+        bBlocked: user.blocked.unwrap_or(false),
+        iScore: user.score.unwrap_or(0),
+    };
+    let cService = CAddTopicService::new(CAddTopicPgRepository::new(state.pool.clone()));
+    cService.bSlowModeRestricted(stActor).await
+}
+
 /// GroupPermissionService.canViewAllDeletedTopics: a listing-level "show me
 /// deleted topics too" gate, distinct from (and much looser than) the
 /// per-topic `ViewDeletedScore=200` in `check_topic_viewable` - any
 /// authorized, non-frozen user with score>=50 qualifies, not just
-/// moderators. No `SlowModeChecker` equivalent exists in this port, so
-/// that extra restriction is not modeled.
+/// moderators. Java additionally rejects users restricted by SlowModeChecker.
 pub(crate) async fn can_view_all_deleted_topics(
     state: &AppState,
     user: &Option<UserSummary>,
@@ -3198,15 +4223,20 @@ pub(crate) async fn can_view_all_deleted_topics(
             .fetch_optional(&state.pool)
             .await?
             .flatten();
-    Ok(!frozen_until
+    if frozen_until
         .map(|u| u > chrono::Utc::now())
-        .unwrap_or(false))
+        .unwrap_or(false)
+    {
+        return Ok(false);
+    }
+    Ok(!b_user_slow_mode_restricted(state, user).await?)
 }
 
 /// TopicPermissionService.allowViewAllDeletedComments: the `?deleted=`
 /// gate on a topic's own page - narrower than `can_view_all_deleted_topics`
 /// (score>=200, not 50) but *does* bypass for moderators, unlike that one.
-/// No `SlowModeChecker` equivalent exists in this port.
+/// SlowModeChecker is evaluated after the topic and score-loss gates, as in
+/// the Java service.
 pub(crate) async fn allow_view_all_deleted_comments(
     state: &AppState,
     topic_id: i32,
@@ -3256,13 +4286,13 @@ pub(crate) async fn allow_view_all_deleted_comments(
         return Ok(false);
     }
     let score_loss: i32 = sqlx::query_scalar(
-        r#"SELECT COALESCE((SELECT sum(bonus) FROM del_info JOIN comments ON comments.id=del_info.msgid
+        r#"SELECT COALESCE((SELECT sum(-bonus) FROM del_info JOIN comments ON comments.id=del_info.msgid
              WHERE bonus IS NOT NULL AND bonus<>0 AND comments.userid<>2 AND comments.deleted AND topic=$1), 0)::int"#,
     )
     .bind(topic_id)
     .fetch_one(&state.pool)
     .await?;
-    Ok(score_loss < 150)
+    Ok(score_loss < 150 && !b_user_slow_mode_restricted(state, user).await?)
 }
 
 /// TopicPermissionService.ViewDeletedScore/ViewAfterDeleteDays/TopicMaxWarnings.
@@ -3360,9 +4390,9 @@ pub(crate) async fn check_topic_viewable(
 }
 
 async fn load_topic_delete_meta(state: &AppState, msgid: i32) -> Result<TopicDeleteMeta> {
-    let row: (i32, bool, chrono::DateTime<chrono::Utc>, Option<chrono::DateTime<chrono::Utc>>, bool, bool, bool, i64, bool) = sqlx::query_as(
-        r#"SELECT t.userid, t.deleted, t.postdate, t.commitdate, COALESCE(t.draft,false), s.moderate,
-                  (t.commitdate IS NOT NULL), t.stat1::bigint, s.vote
+    let row: TyTopicDeleteRow = sqlx::query_as(
+        r#"SELECT t.userid, t.deleted, t.postdate, COALESCE(t.draft,false), s.moderate,
+                  t.moderate, t.stat1::bigint, s.vote
            FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section
            WHERE t.id=$1"#,
     )
@@ -3374,12 +4404,11 @@ async fn load_topic_delete_meta(state: &AppState, msgid: i32) -> Result<TopicDel
         author_id: row.0,
         deleted: row.1,
         postdate: row.2,
-        commitdate: row.3,
-        draft: row.4,
-        premoderated: row.5,
-        commited: row.6,
-        comment_count: row.7,
-        poll_allowed: row.8,
+        draft: row.3,
+        premoderated: row.4,
+        commited: row.5,
+        comment_count: row.6,
+        poll_allowed: row.7,
     })
 }
 
@@ -3387,58 +4416,57 @@ pub async fn delete_topic(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
     Form(form): Form<TopicActionForm>,
-) -> Result<Redirect> {
+) -> Result<Html<String>> {
     let Some(user) = user else {
         return Err(AppError::Forbidden);
     };
+    if form.bonus.is_some_and(|iBonus| !(0..=20).contains(&iBonus)) {
+        return Err(AppError::BadRequest("неправильный размер штрафа".into()));
+    }
     let meta = load_topic_delete_meta(&state, form.msgid).await?;
     if meta.deleted {
         return Err(AppError::BadRequest("сообщение уже удалено".into()));
     }
 
-    let deletable_by_author = meta.author_id == user.id
-        && (meta.draft
-            || (!(meta.premoderated && meta.commited)
-                && meta.comment_count == 0
-                && chrono::Utc::now()
-                    <= meta.postdate + chrono::Duration::hours(TOPIC_DELETE_WINDOW_HOURS)));
-    // GroupPermissionService.isDeletable: an administrator always passes;
-    // otherwise try the author path first, and only fall back to
-    // isDeletableByModerator (which itself refuses a committed
-    // premoderated topic more than a month old, admin-only past that
-    // point) when the author path fails and the actor is a moderator.
-    let deletable = if user.candel || deletable_by_author {
-        true
-    } else if user.canmod {
-        !meta.premoderated
-            || !meta.commited
-            || chrono::Utc::now() <= meta.postdate + chrono::Duration::days(30)
-    } else {
-        false
-    };
-    if !deletable {
+    if !b_topic_deletable(&meta, &user, chrono::Utc::now()) {
         return Err(AppError::Forbidden);
     }
 
-    let bonus = if user.canmod && user.id != meta.author_id && !meta.draft {
-        form.bonus.unwrap_or(0).clamp(0, 20)
+    let mut bonus = if user.canmod && user.id != meta.author_id && !meta.draft {
+        crate::routes::comments::iDeleteScoreDelta(form.bonus.unwrap_or(0))
     } else {
         0
     };
+    if bonus != 0 && meta.author_id != 2 {
+        let bAuthorFrozen: bool = sqlx::query_scalar(
+            "SELECT COALESCE(frozen_until > CURRENT_TIMESTAMP,false) FROM users WHERE id=$1",
+        )
+        .bind(meta.author_id)
+        .fetch_one(&state.pool)
+        .await?;
+        if bAuthorFrozen {
+            bonus = 0;
+        }
+    }
     let reason = form.reason.clone().unwrap_or_default();
 
-    topic_service(&state).vSetDeleted(form.msgid, true).await?;
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("UPDATE topics SET deleted=true,sticky=false WHERE id=$1 AND NOT deleted")
+        .bind(form.msgid)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("INSERT INTO del_info(msgid,delby,reason,deldate,bonus) VALUES($1,$2,$3,now(),$4) ON CONFLICT(msgid) DO UPDATE SET delby=EXCLUDED.delby, reason=EXCLUDED.reason, deldate=now(), bonus=EXCLUDED.bonus")
-        .bind(form.msgid).bind(user.id).bind(&reason).bind(bonus).execute(&state.pool).await?;
+        .bind(form.msgid).bind(user.id).bind(&reason).bind(bonus).execute(&mut *tx).await?;
     if bonus != 0 {
-        sqlx::query("UPDATE users SET score=GREATEST(score-$2,0) WHERE id=$1")
+        sqlx::query("UPDATE users SET score=GREATEST(score+$2,0) WHERE id=$1")
             .bind(meta.author_id)
             .bind(bonus)
-            .execute(&state.pool)
+            .execute(&mut *tx)
             .await?;
     }
-    crate::routes::comments::notify_deleted(
-        &state,
+    vDeleteTopicEventsTx(&mut tx, form.msgid).await?;
+    crate::routes::comments::vNotifyDeletedTx(
+        &mut tx,
         meta.author_id,
         user.id,
         Some(form.msgid),
@@ -3446,15 +4474,59 @@ pub async fn delete_topic(
         &reason,
     )
     .await?;
+    tx.commit().await?;
     crate::search_index::index_topic(&state, form.msgid, true).await;
-    Ok(Redirect::to("/"))
+    Ok(Html(
+        StTopicActionDoneTemplate {
+            message: "Сообщение удалено".into(),
+            big_message: None,
+            link: None,
+        }
+        .render()?,
+    ))
+}
+
+/// UserEventService.processTopicDeleted, kept in the write transaction just
+/// like DeleteService.deleteTopic in the original application.
+async fn vDeleteTopicEventsTx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    iTopicId: i32,
+) -> Result<()> {
+    let vecAffectedUsers: Vec<i32> = sqlx::query_scalar(
+        r#"SELECT DISTINCT userid FROM user_events
+           WHERE message_id=$1
+             AND type IN ('TAG','REF','REPLY','WATCH','REACTION','WARNING')"#,
+    )
+    .bind(iTopicId)
+    .fetch_all(&mut **tx)
+    .await?;
+    sqlx::query(
+        r#"DELETE FROM user_events
+           WHERE message_id=$1
+             AND type IN ('TAG','REF','REPLY','WATCH','REACTION','WARNING')"#,
+    )
+    .bind(iTopicId)
+    .execute(&mut **tx)
+    .await?;
+    if !vecAffectedUsers.is_empty() {
+        sqlx::query(
+            r#"UPDATE users SET unread_events=(
+                   SELECT count(*) FROM user_events e
+                   WHERE e.unread AND e.userid=users.id
+               ) WHERE id = ANY($1)"#,
+        )
+        .bind(&vecAffectedUsers)
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
 }
 
 pub async fn undelete_topic(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
     Form(form): Form<TopicActionForm>,
-) -> Result<Redirect> {
+) -> Result<Html<String>> {
     let Some(user) = user else {
         return Err(AppError::Forbidden);
     };
@@ -3462,39 +4534,42 @@ pub async fn undelete_topic(
         return Err(AppError::Forbidden);
     }
     let meta = load_topic_delete_meta(&state, form.msgid).await?;
-    if !meta.deleted {
-        return Err(AppError::BadRequest("сообщение не удалено".into()));
+    if !bTopicUndeletable(&state, &meta, &user, form.msgid).await? {
+        return Err(AppError::Forbidden);
     }
-    // GroupPermissionService.isUndeletable: an administrator can always
-    // undelete; a plain moderator only while the topic isn't expired, or -
-    // if it is - within 14 days of the deletion itself.
-    if !user.candel {
-        let expired = crate::routes::comments::is_topic_expired(&state, form.msgid).await?;
-        if expired {
-            let deldate: Option<chrono::DateTime<chrono::Utc>> =
-                sqlx::query_scalar("SELECT deldate FROM del_info WHERE msgid=$1")
-                    .bind(form.msgid)
-                    .fetch_optional(&state.pool)
-                    .await?
-                    .flatten();
-            let recently_deleted = deldate
-                .map(|d| d > chrono::Utc::now() - chrono::Duration::days(14))
-                .unwrap_or(false);
-            if !recently_deleted {
-                return Err(AppError::Forbidden);
-            }
-        }
+    let mut tx = state.pool.begin().await?;
+    let optBonus: Option<i32> =
+        sqlx::query_scalar("SELECT bonus FROM del_info WHERE msgid=$1 FOR UPDATE")
+            .bind(form.msgid)
+            .fetch_optional(&mut *tx)
+            .await?
+            .flatten();
+    if let Some(iBonus) = optBonus.filter(|iValue| *iValue != 0) {
+        sqlx::query("UPDATE users SET score=GREATEST(score-$2,0) WHERE id=$1")
+            .bind(meta.author_id)
+            .bind(iBonus)
+            .execute(&mut *tx)
+            .await?;
     }
-    topic_service(&state).vSetDeleted(form.msgid, false).await?;
+    sqlx::query("UPDATE topics SET deleted=false WHERE id=$1")
+        .bind(form.msgid)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("DELETE FROM del_info WHERE msgid=$1")
         .bind(form.msgid)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     crate::search_index::index_topic(&state, form.msgid, true).await;
-    // Java: `new ModelAndView(new RedirectView(topic.getLink))` - a topic
-    // (not a comment), so no ?cid= here.
     let topic = get_topic(&state, form.msgid).await?;
-    Ok(Redirect::to(&topic.topic_url()))
+    Ok(Html(
+        StTopicActionDoneTemplate {
+            message: "Сообщение восстановлено".into(),
+            big_message: None,
+            link: Some(topic.topic_url()),
+        }
+        .render()?,
+    ))
 }
 
 pub async fn resolve_topic_get(
@@ -3566,10 +4641,11 @@ fn add_topic_service(state: &AppState) -> CAddTopicService<CAddTopicPgRepository
     CAddTopicService::new(CAddTopicPgRepository::new(state.pool.clone()))
 }
 
-fn stAuthenticatedPostingActor(stUser: &UserSummary) -> StAddTopicActor {
+fn stPostingActor(stIdentity: &crate::application::auth::StPostingIdentity) -> StAddTopicActor {
+    let stUser = &stIdentity.stUser;
     StAddTopicActor {
         optUserId: Some(stUser.id),
-        bAnonymous: false,
+        bAnonymous: !stIdentity.bAuthorized,
         bModerator: stUser.canmod,
         bCorrector: stUser.corrector,
         bBlocked: stUser.blocked.unwrap_or(false),
@@ -3641,20 +4717,16 @@ async fn save_poll(
     Ok(())
 }
 
-/// TopicService.sendEvents: on topic creation, notify (a) users mentioned
-/// via @nick in the body (REF), and (b) users who favorited one of the
-/// topic's tags (TAG) - excluding anyone already notified via (a), matching
-/// Java's `tagUsers.filterNot(userRefIds.contains)`. Java also records
-/// `topic_users_notified` to suppress duplicate notifications across a
-/// later edit; this port doesn't re-run sendEvents on edit at all, so that
-/// bookkeeping table is skipped as unnecessary for now.
-async fn notify_topic_created(
-    state: &AppState,
+/// TopicService.sendEvents/UserEventDao.insertTopicNotification. This runs
+/// inside the topic write transaction and records `topic_users_notified`, so
+/// later edits do not emit duplicate mention or favorite-tag notifications.
+async fn notify_topic_users_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     topic_id: i32,
     author_id: i32,
     message: &str,
     bIncludeTagEvents: bool,
-) -> Result<()> {
+) -> Result<Vec<i32>> {
     let mentioned_nicks = markup::extract_mentions(message);
     let mut notified: Vec<i32> = if mentioned_nicks.is_empty() {
         vec![]
@@ -3662,20 +4734,32 @@ async fn notify_topic_created(
         sqlx::query_scalar(
             r#"SELECT u.id FROM users u
                WHERE lower(u.nick) = ANY($1) AND u.id <> $2
+                 AND NOT EXISTS (
+                     SELECT 1 FROM topic_users_notified tun
+                     WHERE tun.topic=$3 AND tun.userid=u.id
+                 )
                  AND NOT EXISTS (SELECT 1 FROM ignore_list il WHERE il.userid=u.id AND il.ignored=$2)"#,
         )
         .bind(mentioned_nicks.iter().map(|n| n.to_lowercase()).collect::<Vec<_>>())
         .bind(author_id)
-        .fetch_all(&state.pool)
+        .bind(topic_id)
+        .fetch_all(&mut **tx)
         .await?
     };
     for &mentioned_id in &notified {
+        sqlx::query(
+            "INSERT INTO topic_users_notified(topic,userid) VALUES($1,$2) ON CONFLICT DO NOTHING",
+        )
+        .bind(topic_id)
+        .bind(mentioned_id)
+        .execute(&mut **tx)
+        .await?;
         sqlx::query(
             "INSERT INTO user_events(userid,type,private,message_id) VALUES($1,'REF',false,$2)",
         )
         .bind(mentioned_id)
         .bind(topic_id)
-        .execute(&state.pool)
+        .execute(&mut **tx)
         .await?;
     }
 
@@ -3685,6 +4769,10 @@ async fn notify_topic_created(
                JOIN tags tg ON tg.tagid=ut.tag_id
                WHERE tg.msgid=$1 AND ut.is_favorite AND ut.user_id<>$2
                  AND NOT ut.user_id=ANY($3)
+                 AND NOT EXISTS (
+                     SELECT 1 FROM topic_users_notified tun
+                     WHERE tun.topic=$1 AND tun.userid=ut.user_id
+                 )
                  AND NOT EXISTS (
                      SELECT 1 FROM ignore_list il
                      WHERE il.userid=ut.user_id AND il.ignored=$2
@@ -3700,18 +4788,25 @@ async fn notify_topic_created(
         .bind(topic_id)
         .bind(author_id)
         .bind(&notified)
-        .fetch_all(&state.pool)
+        .fetch_all(&mut **tx)
         .await?
     } else {
         Vec::new()
     };
     for &tag_userid in &tag_favoriters {
         sqlx::query(
+            "INSERT INTO topic_users_notified(topic,userid) VALUES($1,$2) ON CONFLICT DO NOTHING",
+        )
+        .bind(topic_id)
+        .bind(tag_userid)
+        .execute(&mut **tx)
+        .await?;
+        sqlx::query(
             "INSERT INTO user_events(userid,type,private,message_id) VALUES($1,'TAG',false,$2)",
         )
         .bind(tag_userid)
         .bind(topic_id)
-        .execute(&state.pool)
+        .execute(&mut **tx)
         .await?;
     }
     notified.extend(tag_favoriters);
@@ -3721,11 +4816,10 @@ async fn notify_topic_created(
         notified.dedup();
         sqlx::query("UPDATE users SET unread_events=(SELECT count(*) FROM user_events e WHERE e.unread AND e.userid=users.id) WHERE id=ANY($1)")
             .bind(&notified)
-            .execute(&state.pool)
+            .execute(&mut **tx)
             .await?;
     }
-    state.realtime.vNotifyEvents(notified.iter().copied());
-    Ok(())
+    Ok(notified)
 }
 
 fn section_from_uri(uri: &Uri) -> Option<&'static str> {
@@ -3751,32 +4845,66 @@ fn section_title(section: &str) -> &'static str {
 }
 
 pub async fn delete_topic_form(
+    State(state): State<AppState>,
     Query(q): Query<ViewMessageQuery>,
     CurrentUser(user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
 ) -> Result<Html<String>> {
-    if user.is_none() {
+    let Some(user) = user else {
+        return Err(AppError::Forbidden);
+    };
+    let stMeta = load_topic_delete_meta(&state, q.msgid).await?;
+    if stMeta.deleted {
+        return Err(AppError::BadRequest("Сообщение уже удалено".into()));
+    }
+    if !b_topic_deletable(&stMeta, &user, chrono::Utc::now()) {
         return Err(AppError::Forbidden);
     }
+    let bExpired = crate::routes::comments::is_topic_expired(&state, q.msgid).await?;
+    let optAuthorScore = if user.canmod && !stMeta.premoderated && !stMeta.draft && !bExpired {
+        Some(
+            sqlx::query_scalar::<_, i32>("SELECT COALESCE(score,0) FROM users WHERE id=$1")
+                .bind(stMeta.author_id)
+                .fetch_one(&state.pool)
+                .await?,
+        )
+    } else {
+        None
+    };
+    let optBonus = optAuthorScore
+        .map(|iScore| {
+            format!(
+                r#"<div class="control-group"><label for="bonus-input">Штраф<br>score автора: {}</label><div class="controls"><input id="bonus-input" type="number" name="bonus" value="7" min="0" max="20"><span class="help-inline">(от 0 до 20)</span></div></div>"#,
+                iScore
+            )
+        })
+        .unwrap_or_default();
     Ok(Html(format!(
         r#"
-<h1>Удалить тему #{}</h1>
-<form method="post" action="/delete.jsp">
+<h1>Удаление сообщения</h1>
+<form method="post" action="/delete.jsp" class="form-horizontal">
   <input type="hidden" name="csrf" value="{csrf_token}">
-  <input type="hidden" name="msgid" value="{}">
-  <button type="submit">Удалить</button>
+  <div class="control-group"><label class="control-label" for="reason-input">Причина удаления</label><div class="controls"><input id="reason-input" type="text" name="reason"></div></div>
+  {optBonus}
+  <input type="hidden" name="msgid" value="{0}">
+  <div class="control-group"><div class="controls"><button type="submit" class="btn btn-danger">Удалить</button></div></div>
 </form>
 "#,
-        q.msgid, q.msgid
+        q.msgid
     )))
 }
 
 pub async fn undelete_topic_form(
+    State(state): State<AppState>,
     Query(q): Query<ViewMessageQuery>,
     CurrentUser(user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
 ) -> Result<Html<String>> {
-    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) {
+    let Some(user) = user else {
+        return Err(AppError::Forbidden);
+    };
+    let stMeta = load_topic_delete_meta(&state, q.msgid).await?;
+    if !bTopicUndeletable(&state, &stMeta, &user, q.msgid).await? {
         return Err(AppError::Forbidden);
     }
     Ok(Html(format!(
@@ -3790,6 +4918,31 @@ pub async fn undelete_topic_form(
 "#,
         q.msgid, q.msgid
     )))
+}
+
+/// GroupPermissionService.isUndeletable: an administrator can always restore
+/// a deleted topic; a plain moderator can do so while it is live, or for 14
+/// days after deletion if the topic has already expired.
+async fn bTopicUndeletable(
+    state: &AppState,
+    stMeta: &TopicDeleteMeta,
+    stUser: &UserSummary,
+    iTopicId: i32,
+) -> Result<bool> {
+    if !stMeta.deleted || !stUser.canmod {
+        return Ok(false);
+    }
+    if stUser.candel || !crate::routes::comments::is_topic_expired(state, iTopicId).await? {
+        return Ok(true);
+    }
+    let optDeleteDate: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT deldate FROM del_info WHERE msgid=$1")
+            .bind(iTopicId)
+            .fetch_optional(&state.pool)
+            .await?
+            .flatten();
+    Ok(optDeleteDate
+        .is_some_and(|dtValue| dtValue > chrono::Utc::now() - chrono::Duration::days(14)))
 }
 
 /// EditTopicChecker.checkCommit: moderators or correctors may commit a

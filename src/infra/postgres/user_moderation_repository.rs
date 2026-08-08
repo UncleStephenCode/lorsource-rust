@@ -167,8 +167,8 @@ impl TrUserModerationRepository for CUserModerationPgRepository {
                 let optOldUserpic: Option<String> =
                     sqlx::query_scalar("SELECT photo FROM users WHERE id=$1 FOR UPDATE")
                         .bind(iTargetUserId)
-                .fetch_one(&mut *oTransaction)
-                .await?;
+                        .fetch_one(&mut *oTransaction)
+                        .await?;
                 if let Some(sOldUserpic) = optOldUserpic {
                     if bScorePenalty {
                         sqlx::query("UPDATE users SET photo=NULL, score=score-10 WHERE id=$1")

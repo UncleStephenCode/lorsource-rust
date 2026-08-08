@@ -26,6 +26,12 @@ pub enum AppError {
 
 pub type Result<T> = std::result::Result<T, AppError>;
 
+#[derive(Debug, Clone)]
+pub struct StInternalErrorReport {
+    pub sType: String,
+    pub sDebug: String,
+}
+
 #[derive(Template)]
 #[template(path = "error.html")]
 struct ErrorTemplate<'a> {
@@ -69,6 +75,18 @@ impl AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, title, message) = self.response_parts();
+        let optReport =
+            (status == StatusCode::INTERNAL_SERVER_ERROR).then(|| StInternalErrorReport {
+                sType: match &self {
+                    AppError::Sqlx(_) => "sqlx::Error",
+                    AppError::Io(_) => "std::io::Error",
+                    AppError::Template(_) => "askama::Error",
+                    AppError::Anyhow(_) => "anyhow::Error",
+                    _ => "AppError",
+                }
+                .to_owned(),
+                sDebug: format!("{self:?}"),
+            });
         if status == StatusCode::INTERNAL_SERVER_ERROR {
             tracing::error!(error = ?self, "request failed with an internal error");
         }
@@ -79,7 +97,11 @@ impl IntoResponse for AppError {
         }
         .render()
         .unwrap_or_else(|_| format!("{} {}", status.as_u16(), title));
-        (status, Html(body)).into_response()
+        let mut stResponse = (status, Html(body)).into_response();
+        if let Some(stReport) = optReport {
+            stResponse.extensions_mut().insert(stReport);
+        }
+        stResponse
     }
 }
 

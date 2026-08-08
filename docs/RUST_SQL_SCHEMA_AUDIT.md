@@ -5,31 +5,31 @@ This is a conservative static identifier audit. It is not a semantic-parity clai
 ## Summary
 
 - Canonical schema: **33 tables / 214 columns**.
-- Rust SQL-bearing literals inspected: **423** (13 dynamic templates; 27 continuation fragments).
+- Rust SQL-bearing literals inspected: **522** (13 dynamic templates; 30 continuation fragments).
 - Queries with confirmed identifier/type violations: **0**.
 - Confirmed findings: **0**.
-- Queries requiring static-review caution: **37**.
+- Queries requiring static-review caution: **40**.
 - Intentional negative schema probes: **23** (reported separately, not failures).
 
 ## Runtime-critical SQL surfaces
 
 | Rank | Runtime surface | SQL-bearing literals | Invalid queries | Findings | Review |
 |---|---|---:|---:|---:|---:|
-| P0 | authentication/session | 17 | 0 | 0 | 0 |
-| P0 | comment create/render/moderation | 47 | 0 | 0 | 0 |
+| P0 | authentication/session | 23 | 0 | 0 | 0 |
+| P0 | comment create/render/moderation | 66 | 0 | 0 | 0 |
 | P0 | startup/schema compatibility | 7 | 0 | 0 | 0 |
-| P0 | topic create/list/detail | 41 | 0 | 0 | 1 |
-| P0 | topic persistence/list/detail | 21 | 0 | 0 | 0 |
-| P1 | PostgreSQL repository | 50 | 0 | 0 | 5 |
-| P1 | api routes | 45 | 0 | 0 | 10 |
+| P0 | topic create/list/detail | 60 | 0 | 0 | 1 |
+| P0 | topic persistence/list/detail | 22 | 0 | 0 | 0 |
+| P1 | PostgreSQL repository | 71 | 0 | 0 | 8 |
+| P1 | api routes | 48 | 0 | 0 | 10 |
 | P1 | groups routes | 8 | 0 | 0 | 5 |
-| P1 | legacy routes | 46 | 0 | 0 | 0 |
+| P1 | legacy routes | 49 | 0 | 0 | 0 |
 | P1 | search indexing | 7 | 0 | 0 | 0 |
 | P1 | tags routes | 34 | 0 | 0 | 0 |
-| P1 | topic browser flow | 25 | 0 | 0 | 5 |
+| P1 | topic browser flow | 26 | 0 | 0 | 5 |
 | P1 | users routes | 42 | 0 | 0 | 11 |
-| P2 | moderation/admin | 30 | 0 | 0 | 0 |
-| P2 | supporting runtime | 3 | 0 | 0 | 0 |
+| P2 | moderation/admin | 18 | 0 | 0 | 0 |
+| P2 | supporting runtime | 41 | 0 | 0 | 0 |
 
 ## Confirmed findings, runtime-ranked
 

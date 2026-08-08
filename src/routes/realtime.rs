@@ -1,4 +1,4 @@
-use std::{borrow::Cow, time::Duration};
+use std::time::Duration;
 
 use axum::{
     extract::{
@@ -9,6 +9,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use axum_extra::extract::cookie::CookieJar;
+use futures_util::SinkExt;
 use tokio::time::Instant;
 
 use crate::{
@@ -156,7 +157,7 @@ async fn bSendClose(wsSocket: &mut WebSocket, iCode: u16, sReason: &'static str)
     wsSocket
         .send(Message::Close(Some(CloseFrame {
             code: iCode,
-            reason: Cow::Borrowed(sReason),
+            reason: sReason.into(),
         })))
         .await
         .is_ok()
@@ -229,7 +230,7 @@ async fn vHandleSocket(stState: AppState, mut wsSocket: WebSocket, optUserId: Op
                             .bShouldDeliverComment(optUserId, iCommentId)
                             .await
                         {
-                            Ok(true) => Some(Message::Text(format!("comment {iCommentId}"))),
+                            Ok(true) => Some(Message::Text(format!("comment {iCommentId}").into())),
                             Ok(false) => None,
                             Err(stError) => {
                                 tracing::warn!(
@@ -243,7 +244,7 @@ async fn vHandleSocket(stState: AppState, mut wsSocket: WebSocket, optUserId: Op
                         }
                     }
                     EnRealtimeDelivery::EventsRefresh => {
-                        Some(Message::Text("events-refresh".to_string()))
+                        Some(Message::Text("events-refresh".into()))
                     }
                 };
                 if let Some(stMessage) = optMessage
@@ -254,7 +255,7 @@ async fn vHandleSocket(stState: AppState, mut wsSocket: WebSocket, optUserId: Op
                 }
             }
             _ = tmPing.tick() => {
-                if let Err(stError) = wsSocket.send(Message::Ping(Vec::new())).await {
+                if let Err(stError) = wsSocket.send(Message::Ping(Vec::new().into())).await {
                     tracing::debug!(error = %stError, "failed to send WebSocket keepalive");
                     break;
                 }
@@ -299,6 +300,18 @@ mod tests {
                 cookie_secret: "unused-test-secret".to_string(),
                 site_secret: "unused-test-secret".to_string(),
                 opensearch_url: None,
+                captcha_public_key: None,
+                captcha_private_key: None,
+                captcha_verify_url: "https://hcaptcha.com/siteverify".to_owned(),
+                admin_email: None,
+                smtp_host: "localhost".to_owned(),
+                smtp_port: 25,
+                smtp_helo_name: "localhost".to_owned(),
+                telegram_token: None,
+                fallback_proxy_url: None,
+                enable_background_jobs: false,
+                clean_old_userpics: false,
+                trusted_proxy_cidrs: Vec::new(),
                 page_size: 30,
                 enable_hsts: false,
                 enable_dev_bypasses: false,

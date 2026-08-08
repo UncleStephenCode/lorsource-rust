@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Информация о пользователе {{ profile.nick }}{% endblock %}
+{% block head_extra %}<script src="/js/lor/user-heatmap.js" defer></script>{% endblock %}
 {% block content %}
 {% if is_owner %}
 <nav>
@@ -169,7 +170,7 @@
 {% endif %}
 
 <h2>Статистика</h2>
-<div id="cal-heatmap" class="cal-heatmap-stub">Календарь активности совместим с endpoint `?year-stats`; визуализация D3 будет подключена отдельным слоем.</div>
+<div id="cal-heatmap" data-stats-url="{{ year_stats_url }}" data-search-user="{{ year_stats_user }}"></div>
 {% match stats.first_topic %}{% when Some with (v) %}<b>Первая созданная тема:</b> {{ v }}<br>{% when None %}{% endmatch %}
 {% match stats.last_topic %}{% when Some with (v) %}<b>Последняя созданная тема:</b> {{ v }}<br>{% when None %}{% endmatch %}
 {% match stats.first_comment %}{% when Some with (v) %}<b>Первый комментарий:</b> {{ v }}<br>{% when None %}{% endmatch %}

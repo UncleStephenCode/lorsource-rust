@@ -49,7 +49,7 @@
     <div class="msg-container"><div class="msg_body">
       <div class="msg-text">{% if c.item.deleted %}[комментарий удалён]{% else %}{{ c.html|safe }}{% endif %}</div>
       <div class="sign"><a href="/people/{{ c.item.author }}/profile">{{ c.item.author }}</a><br>{{ c.item.postdate }}</div>
-      {% if !c.item.deleted %}<div class="reply"><ul><li><a href="/add_comment.jsp?topic={{ topic.id }}&replyto={{ c.item.id }}">Ответить</a></li>{% if !thread_mode %}<li><a href="/{{ topic.section_prefix }}/{{ topic.group_urlname }}/{{ topic.id }}/thread/{{ c.item.id }}">Показать ответы</a></li>{% endif %}<li><a href="{{ topic.topic_url() }}?cid={{ c.item.id }}">Ссылка</a></li>{% if c.show_reactions_link %}<li><a class="reaction-show" href="/reactions?topic={{ topic.id }}&comment={{ c.item.id }}">Реакции</a></li>{% endif %}</ul></div>{{ c.reactions_html|safe }}{% endif %}
+      {% if !c.item.deleted %}<div class="reply"><ul><li><a href="/add_comment.jsp?topic={{ topic.id }}&replyto={{ c.item.id }}">Ответить</a></li>{% if c.can_edit %}<li><a href="/edit_comment?topic={{ topic.id }}&amp;original={{ c.item.id }}">Изменить</a></li>{% endif %}{% if !thread_mode %}<li><a href="/{{ topic.section_prefix }}/{{ topic.group_urlname }}/{{ topic.id }}/thread/{{ c.item.id }}">Показать ответы</a></li>{% endif %}<li><a href="{{ topic.topic_url() }}?cid={{ c.item.id }}">Ссылка</a></li>{% if c.show_reactions_link %}<li><a class="reaction-show" href="/reactions?topic={{ topic.id }}&comment={{ c.item.id }}">Реакции</a></li>{% endif %}</ul></div>{{ c.reactions_html|safe }}{% endif %}
     </div></div>
   </article>
   {% endfor %}
@@ -64,8 +64,10 @@
 {% if can_comment %}<div id="comment-form-container" style="display:none">
 <form id="commentForm" method="post" action="/add_comment.jsp">
   <input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="topic" value="{{ topic.id }}"><input type="hidden" name="replyto" value="0">
+  {% if anonymous_comment_form %}<div class="control-group"><label for="nick">Имя</label><input id="nick" name="nick" type="text" value="anonymous"></div><div class="control-group"><label for="password">Пароль:</label><input id="password" name="password" type="password"></div>{% endif %}
   <div class="warning-block" id="author-readonly-note"></div>
   <div class="control-group" data-format-mode="{{ comment_format_mode }}"><div class="markup-tabs"><ul class="markup-tabs__nav"><li class="markup-tabs__tab active" data-tab="editor">{{ comment_format_title }}</li></ul><div class="markup-tabs__content"><div class="markup-tabs__panel active" data-panel="editor"><textarea id="msg" name="msg" required></textarea></div></div></div></div>
+  {% if require_comment_captcha %}<div class="help-block"><script src="https://js.hcaptcha.com/1/api.js" async defer></script><div class="h-captcha" data-sitekey="{{ captcha_site_key }}"></div></div>{% endif %}
   <div class="form-actions"><button class="btn btn-primary" type="submit">Поместить</button><button class="btn btn-default" type="submit" name="preview">Предпросмотр</button><button class="btn btn-default" type="reset" id="cancelButton">Отменить</button><div class="help-block">Используйте Ctrl-Enter для размещения комментария</div></div>
 </form></div>{% endif %}
 {% endblock %}

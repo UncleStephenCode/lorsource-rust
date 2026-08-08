@@ -78,7 +78,7 @@ python3 compat/test_http_compat.py
 - добавление/редактирование/удаление комментариев в dev-режиме;
 - теги и страницы тегов;
 - профили пользователей;
-- поиск по PostgreSQL FTS;
+- поиск через OpenSearch с персистентной очередью индексации;
 - RSS;
 - boxlet endpoints;
 - healthcheck и Docker-окружение;
@@ -92,13 +92,15 @@ python3 compat/test_http_compat.py
 - модельный слой совместимости `src/models_compat.rs`;
 - auth/security scaffold с BCrypt и signed session cookies;
 - канонический Java/Liquibase bootstrap и fail-closed проверка схемы;
-- HTTP smoke compatibility tests.
+- HTTP smoke и dual-runtime compatibility tests с JSON evidence-отчётом.
+- guarded stateful posting/reaction/gallery и usermod/warning HTTP+DB
+  regressions, которые CI и cutover gate запускают на disposable-БД.
 
 ## Важное ограничение
 
 Исходный проект большой. Этот архив — рабочий Rust-порт ядра, маршрутов и схемы совместимости, пригодный как основа для дальнейшего переноса, но **не production-ready замена исходного Scala/Spring приложения**.
 
-Сейчас все извлечённые URL-формы объявлены в Rust-router, и явных `legacy::not_implemented` маршрутов больше нет. SMTP-доставка activation/change-email/password-reset писем совместима с локальным MTA Java-приложения; детали описаны в `docs/EMAIL_COMPATIBILITY.md`. Это всё ещё не означает production parity: captcha/anonymous posting, administrator exception mail, поисковый reindex backend и полный image pipeline пока реализованы не полностью.
+Сейчас все извлечённые URL-формы объявлены в Rust-router, и явных `legacy::not_implemented` маршрутов больше нет. SMTP-доставка activation/change-email/password-reset писем и асинхронных administrator exception reports совместима с локальным MTA Java-приложения; детали описаны в `docs/EMAIL_COMPATIBILITY.md`. OpenSearch reindex выполняет оригинальное помесячное разбиение, а write-события проходят через персистентный filesystem spool с retry после рестарта. Перенесены Java-планировщики статистики, тегов, событий, рейтинга, чёрных списков, Telegram и очистки старых файлов. Gallery поддерживает preview/reuse и трёхдневную очистку временных файлов. Это всё ещё не означает production parity: остаются live-проверка production storage/CDN и внешних адаптеров, а также обязательная репетиция на клоне реальной Java-БД и хранилища медиа.
 
 ## База данных
 
@@ -144,6 +146,7 @@ compat/legacy-rust-db/ offline historical Rust SQL (never executed)
 - `docs/COMPATIBILITY_TESTS.md`
 - `docs/DEMO_DB_COMPARISON.md`
 - `docs/DATABASE_COMPATIBILITY.md`
+- `docs/PRODUCTION_CUTOVER.md`
 - `docs/FUNCTIONAL_COMPARISON_JAVA_RUST.md`
 - `docs/CURRENT_JAVA_COMPATIBILITY.md`
 - `docs/CURRENT_SOURCE_TABLE_COVERAGE.md`
@@ -169,10 +172,10 @@ See `docs/PARITY_AUDIT_V8.md` and `docs/DEVCONTAINER_PORT.md`.
 
 ## Architecture refactor v9
 
-This archive contains the v9 architectural refactor: Rust 2024 / Rust 1.97 toolchain, domain/application/infra split, Hungarian-style identifiers in the new domain/service/repository layer, and PostgreSQL repositories for the forum/topic core flows. See `docs/ARCHITECTURE_REFACTOR_V9.md` and `docs/generated/architecture_report_v9.json`.
+This archive contains the v9 architectural refactor: Rust 2024 / Rust 1.97 toolchain, Axum 0.8, domain/application/infra split, Hungarian-style identifiers in the new domain/service/repository layer, and PostgreSQL repositories for the forum/topic core flows. Dynamic routes use Axum 0.8's `{parameter}` syntax. See `docs/ARCHITECTURE_REFACTOR_V9.md` and `docs/generated/architecture_report_v9.json`.
 
 ### Profile and theme parity
 
-The Rust port includes a whois-like `/people/{nick}/profile` page and Java-compatible profile settings in `/people/{nick}/settings`. The settings are stored in `user_settings.settings` using the same keys as the Java `DefaultProfile`: `style`, `format.mode`, `topics`, `messages`, `photos`, `hideAdsense`, `mainGallery`, `avatar`, `trackerMode`, `oldTracker`, `reactionNotification`.
+The Rust port includes a whois-like `/people/{nick}/profile` page and Java-compatible profile settings in `/people/{nick}/settings`. The settings are stored in `user_settings.settings` using the same keys as the Java `DefaultProfile`: `style`, `format.mode`, `topics`, `messages`, `photos`, `hideAdsense`, `mainGallery`, `avatar`, `trackerMode`, `oldTracker`, `oldNotifications`, `reactionNotification`.
 
 Original webapp assets from the Java project are served under `/img`, `/font`, `/js`, `/black`, `/tango`, `/white2`, `/waltz`, `/zomg_ponies` and `/adv`. Supported theme IDs are `tango`, `tango-light`, `tango-auto`, `black`, `white2`, `waltz`, and `zomg_ponies`.

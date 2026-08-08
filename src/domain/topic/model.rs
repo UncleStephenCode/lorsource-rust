@@ -79,6 +79,12 @@ pub struct StTopicDetail {
     pub moderate: bool,
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct StRssContext {
+    pub sSectionName: String,
+    pub optGroupTitle: Option<String>,
+}
+
 impl StTopicDetail {
     pub fn sTopicUrl(&self) -> String {
         format!(

@@ -27,7 +27,7 @@ pub(crate) fn filter_db_type(filter: &str) -> Option<&'static str> {
     }
 }
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub(crate) struct NotificationEvent {
     pub id: i32,
     pub event_date: chrono::DateTime<chrono::Utc>,
@@ -37,11 +37,26 @@ pub(crate) struct NotificationEvent {
     pub unread: bool,
     pub event_type: String,
     pub section_prefix: String,
+    pub section_name: String,
     pub group_urlname: String,
+    pub origin_nick: Option<String>,
+    pub author_nick: String,
+    pub event_message: Option<String>,
+    pub closed_warning: bool,
+    pub bonus: Option<i32>,
+    pub tags: Vec<String>,
+    /// Reaction currently stored on the target. `None` means that an old,
+    /// already-read event outlived a subsequently removed reaction.
+    pub reaction: Option<String>,
 }
 
 impl NotificationEvent {
     pub(crate) fn link(&self) -> String {
+        if self.event_type == "DEL"
+            && let Some(iCommentId) = self.cid
+        {
+            return format!("/view-deleted?id={iCommentId}#comment-{iCommentId}");
+        }
         let anchor = self.cid.map(|id| format!("?cid={id}")).unwrap_or_default();
         format!(
             "/{}/{}/{}{anchor}",
@@ -65,9 +80,24 @@ pub(crate) async fn fetch_events(
     Ok(sqlx::query_as::<_, NotificationEvent>(
         r#"SELECT e.id, e.event_date, t.title AS subj, t.id AS msgid, e.comment_id AS cid, e.unread, e.type::text AS event_type,
                   CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(s.name) END AS section_prefix,
-                  g.urlname AS group_urlname
+                  s.name AS section_name, g.urlname AS group_urlname, ou.nick AS origin_nick,
+                  COALESCE(ou.nick,cu.nick,tu.nick) AS author_nick,
+                  e.message AS event_message,
+                  mw.closed_by IS NOT NULL AS closed_warning,
+                  CASE WHEN e.type='DEL'::event_type THEN di.bonus ELSE NULL END AS bonus,
+                  ARRAY(SELECT tv.value FROM tags tg JOIN tags_values tv ON tv.id=tg.tagid
+                        WHERE tg.msgid=t.id ORDER BY tv.value LIMIT 3) AS tags,
+                  CASE WHEN e.type='REACTION'::event_type AND e.origin_user IS NOT NULL
+                       THEN COALESCE(c.reactions,t.reactions)->>(e.origin_user::text)
+                       ELSE NULL END AS reaction
            FROM user_events e
            JOIN topics t ON t.id=e.message_id
+           LEFT JOIN comments c ON c.id=e.comment_id
+           LEFT JOIN users ou ON ou.id=e.origin_user
+           LEFT JOIN users cu ON cu.id=c.userid
+           JOIN users tu ON tu.id=t.userid
+           LEFT JOIN message_warnings mw ON mw.id=e.warning_id
+           LEFT JOIN del_info di ON di.msgid=CASE WHEN e.comment_id IS NOT NULL THEN e.comment_id ELSE e.message_id END
            JOIN groups g ON g.id=t.groupid
            JOIN sections s ON s.id=g.section
            WHERE e.userid=$1 AND ($2::text IS NULL OR e.type::text=$2) AND ($3 OR NOT e.private)
@@ -80,6 +110,162 @@ pub(crate) async fn fetch_events(
     .bind(offset)
     .fetch_all(&state.pool)
     .await?)
+}
+
+#[derive(Debug, Clone)]
+struct StPreparedNotification {
+    stEvent: NotificationEvent,
+    iLastId: i32,
+    iCount: usize,
+    vecReactions: Vec<(String, String)>,
+    vecAuthors: Vec<String>,
+}
+
+impl StPreparedNotification {
+    fn stFromEvent(stEvent: NotificationEvent) -> Self {
+        let vecReactions = match (&stEvent.reaction, &stEvent.origin_nick) {
+            (Some(sReaction), Some(sNick)) if stEvent.event_type == "REACTION" => {
+                vec![(sReaction.clone(), sNick.clone())]
+            }
+            _ => Vec::new(),
+        };
+        let iLastId = stEvent.id;
+        Self {
+            vecAuthors: vec![stEvent.author_nick.clone()],
+            stEvent,
+            iLastId,
+            iCount: 1,
+            vecReactions,
+        }
+    }
+}
+
+/// UserEventPrepareService.prepareGrouped. Events arrive newest first, while
+/// the Scala implementation uses foldRight and therefore builds groups from
+/// oldest to newest before sorting the prepared result by display date.
+fn vecPrepareNotifications(
+    vecEvents: Vec<NotificationEvent>,
+    bNewDesign: bool,
+) -> Vec<StPreparedNotification> {
+    let mut vecPrepared: Vec<StPreparedNotification> = Vec::new();
+
+    for stEvent in vecEvents.into_iter().rev() {
+        if stEvent.event_type == "WATCH" {
+            if let Some(stExisting) = vecPrepared.iter_mut().find(|stExisting| {
+                stExisting.stEvent.event_type == "WATCH"
+                    && stExisting.stEvent.msgid == stEvent.msgid
+                    && stExisting.stEvent.unread == stEvent.unread
+            }) {
+                stExisting.iCount += 1;
+                stExisting.iLastId = stEvent.id;
+                if !stExisting.vecAuthors.contains(&stEvent.author_nick) {
+                    stExisting.vecAuthors.push(stEvent.author_nick.clone());
+                    stExisting.vecAuthors.sort();
+                }
+                if !stEvent.unread {
+                    stExisting.stEvent.event_date = stEvent.event_date;
+                    stExisting.stEvent.cid = stEvent.cid;
+                }
+                continue;
+            }
+        } else if bNewDesign && stEvent.event_type == "REACTION" {
+            let optSimilar = vecPrepared.iter().position(|stExisting| {
+                stExisting.stEvent.event_type == "REACTION"
+                    && stExisting.stEvent.msgid == stEvent.msgid
+                    && stExisting.stEvent.cid == stEvent.cid
+                    && stExisting.stEvent.unread == stEvent.unread
+                    && (stEvent.event_date - stExisting.stEvent.event_date)
+                        .num_seconds()
+                        .abs()
+                        < 30 * 60
+            });
+            let optLastSimilar = vecPrepared.len().checked_sub(1).filter(|iIndex| {
+                let stExisting = &vecPrepared[*iIndex];
+                stExisting.stEvent.event_type == "REACTION"
+                    && stExisting.stEvent.msgid == stEvent.msgid
+                    && stExisting.stEvent.cid == stEvent.cid
+                    && stExisting.stEvent.unread == stEvent.unread
+            });
+            if let Some(iIndex) = optSimilar.or(optLastSimilar) {
+                let stExisting = &mut vecPrepared[iIndex];
+                if let (Some(sReaction), Some(sNick)) =
+                    (stEvent.reaction.as_ref(), stEvent.origin_nick.as_ref())
+                {
+                    stExisting
+                        .vecReactions
+                        .push((sReaction.clone(), sNick.clone()));
+                }
+                stExisting.iLastId = stEvent.id;
+                continue;
+            }
+        }
+
+        vecPrepared.push(StPreparedNotification::stFromEvent(stEvent));
+    }
+
+    vecPrepared.sort_by_key(|stPrepared| std::cmp::Reverse(stPrepared.stEvent.event_date));
+    vecPrepared
+}
+
+fn bNotificationIsCurrent(stEvent: &NotificationEvent) -> bool {
+    stEvent.event_type != "REACTION" || stEvent.reaction.is_some()
+}
+
+fn sNotificationIcon(sEventType: &str) -> &'static str {
+    match sEventType {
+        "DEL" => {
+            "<img src=\"/img/del.png\" alt=\"[X]\" title=\"Сообщение удалено\" width=\"15\" height=\"15\">"
+        }
+        "REPLY" => "<i class=\"icon-reply icon-reply-color\" title=\"Ответ\"></i>",
+        "REF" => "<span title=\"Упоминание\">@️</span>",
+        "TAG" => "<i class=\"icon-tag icon-tag-color\" title=\"Избранный тег\"></i>",
+        "WARNING" => "<span title=\"Уведомление модератора\">⚠️</span>",
+        _ => "",
+    }
+}
+
+fn sNotificationTags(stEvent: &NotificationEvent) -> String {
+    stEvent
+        .tags
+        .iter()
+        .map(|sTag| {
+            format!(
+                "<span class=\"tag\">{}</span>",
+                html_escape::encode_text(sTag)
+            )
+        })
+        .collect()
+}
+
+fn sNotificationDetails(stEvent: &NotificationEvent) -> String {
+    let sMessage = html_escape::encode_text(stEvent.event_message.as_deref().unwrap_or(""));
+    match stEvent.event_type.as_str() {
+        "DEL" => format!("{sMessage} ({})", stEvent.bonus.unwrap_or(0)),
+        "WARNING" if stEvent.closed_warning => format!("<s>{sMessage}</s>"),
+        "WARNING" => sMessage.into_owned(),
+        _ => String::new(),
+    }
+}
+
+fn sNotificationAuthor(sNick: &str) -> String {
+    format!(
+        "<a href=\"/people/{}/profile\">{}</a>",
+        urlencoding::encode(sNick),
+        html_escape::encode_text(sNick)
+    )
+}
+
+fn sUnreadDescription(iUnreadCount: i32) -> String {
+    let sNoun = if iUnreadCount == 1 || (iUnreadCount > 20 && iUnreadCount % 10 == 1) {
+        "непрочитанное уведомление"
+    } else if matches!(iUnreadCount, 2 | 3)
+        || (iUnreadCount > 20 && matches!(iUnreadCount % 10, 2 | 3))
+    {
+        "непрочитанных уведомления"
+    } else {
+        "непрочитанных уведомлений"
+    };
+    format!("У вас {iUnreadCount} {sNoun}")
 }
 
 #[derive(Deserialize)]
@@ -95,7 +281,8 @@ pub async fn notifications(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
     Query(q): Query<NotificationsQuery>,
-) -> Result<Html<String>> {
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+) -> Result<axum::response::Response> {
     let Some(user) = user else {
         return Err(AppError::Forbidden);
     };
@@ -110,13 +297,36 @@ pub async fn notifications(
     };
     let db_type = filter_db_type(&filter);
     let offset = q.offset.unwrap_or(0).max(0);
-    let limit = 20i64;
+    let settings_text: Option<String> =
+        sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
+            .bind(user.id)
+            .fetch_optional(&state.pool)
+            .await?
+            .flatten();
+    let stSettings = crate::profile::ProfileSettings::from_hstore_text(settings_text);
+    let iPageSize = i64::from(stSettings.topics.max(1));
 
-    let events = fetch_events(&state, user.id, db_type, true, limit + 1, offset).await?;
-
-    let has_more = events.len() as i64 > limit;
-    let events: Vec<_> = events.into_iter().take(limit as usize).collect();
-    let top_id = events.iter().map(|e| e.id).max();
+    // Java deliberately loads the retained event window first, removes stale
+    // reaction rows, groups it, and only then applies the display offset.
+    let vecEvents = fetch_events(&state, user.id, db_type, true, 4000, 0).await?;
+    let vecEvents: Vec<_> = vecEvents
+        .into_iter()
+        .filter(bNotificationIsCurrent)
+        .collect();
+    let vecPrepared = vecPrepareNotifications(vecEvents, !stSettings.old_notifications);
+    let optTopId = vecPrepared.iter().map(|stEvent| stEvent.iLastId).max();
+    let vecPage: Vec<_> = vecPrepared
+        .into_iter()
+        .skip(offset as usize)
+        .take(iPageSize as usize)
+        .collect();
+    // This intentionally mirrors the original JSP model, which treats a
+    // completely full page as having a possible next page.
+    let bHasMore = vecPage.len() as i64 == iPageSize;
+    let iUnreadCount: i32 = sqlx::query_scalar("SELECT unread_events FROM users WHERE id=$1")
+        .bind(user.id)
+        .fetch_one(&state.pool)
+        .await?;
 
     let mut html = format!(
         "<h1>Уведомления {}</h1>",
@@ -127,6 +337,7 @@ pub async fn notifications(
         ("все", "all"),
         ("ответы", "answers"),
         ("отслеживаемое", "favorites"),
+        ("удалённые", "deleted"),
         ("упоминания", "reference"),
         ("теги", "tag"),
         ("реакции", "reaction"),
@@ -143,36 +354,160 @@ pub async fn notifications(
     }
     html.push_str("</nav>");
 
-    if let Some(top_id) = top_id {
+    if iUnreadCount > 0 {
         html.push_str(&format!(
-            "<form method=\"post\" action=\"/notifications\"><input type=\"hidden\" name=\"topId\" value=\"{top_id}\"><button type=\"submit\">Отметить всё прочитанным</button></form>"
+            "<div id=\"counter_block\" class=\"infoblock\" data-unread-count=\"{iUnreadCount}\"><span id=\"counter_text\">{}</span>",
+            sUnreadDescription(iUnreadCount)
         ));
     }
-
-    html.push_str("<ul class=\"notifications-list\">");
-    for e in &events {
-        let unread_class = if e.unread { " class=\"unread\"" } else { "" };
+    if iUnreadCount > 0
+        && let Some(top_id) = optTopId
+    {
         html.push_str(&format!(
-            "<li{unread_class}><a href=\"{link}\">{subj}</a> <small>{date} · {etype}</small></li>",
-            link = e.link(),
-            subj = html_escape::encode_text(&e.subj),
-            date = e.event_date,
-            etype = html_escape::encode_text(&e.event_type),
+            "<form id=\"reset_form\" method=\"post\" action=\"/notifications\" style=\"display:inline\"><input type=\"hidden\" name=\"csrf\" value=\"{csrf_token}\"><input type=\"hidden\" name=\"topId\" value=\"{top_id}\"><button type=\"submit\">Сбросить все</button></form>",
+            csrf_token = html_escape::encode_double_quoted_attribute(&csrf_token),
+        ));
+        if stSettings.old_notifications {
+            // show-replies.jsp resets unread state immediately after the old
+            // page loads; keep the same browser-side side effect without
+            // requiring the original jQuery helper.
+            html.push_str(
+                "<script>document.addEventListener('DOMContentLoaded',function(){var f=document.getElementById('reset_form');if(!f)return;fetch('/notifications-reset',{method:'POST',body:new URLSearchParams(new FormData(f))}).then(function(r){if(r.ok)f.style.display='none';});});</script>",
+            );
+        }
+    }
+    if iUnreadCount > 0 {
+        html.push_str("</div>");
+    }
+
+    if stSettings.old_notifications {
+        html.push_str("<div class=\"forum\"><table class=\"message-table\" width=\"100%\">");
+        for stPrepared in &vecPage {
+            let stEvent = &stPrepared.stEvent;
+            let sReaction = stPrepared
+                .vecReactions
+                .first()
+                .map(|(sReaction, _)| sReaction.as_str())
+                .unwrap_or_default();
+            let sIcon = if stEvent.event_type == "REACTION" {
+                html_escape::encode_text(sReaction).into_owned()
+            } else {
+                sNotificationIcon(&stEvent.event_type).to_owned()
+            };
+            let sTags = sNotificationTags(stEvent);
+            let sDetails = sNotificationDetails(stEvent);
+            let sDetails = if !sDetails.is_empty() {
+                format!("<br>{sDetails}")
+            } else {
+                String::new()
+            };
+            let sUnreadMark = if stEvent.unread { "•" } else { "" };
+            let sAuthorOrCount = if stPrepared.iCount > 1 {
+                format!("<i class=\"icon-comment\"></i> {}", stPrepared.iCount)
+            } else {
+                sNotificationAuthor(&stEvent.author_nick)
+            };
+            html.push_str(&format!(
+                "<tr><td align=\"center\">{icon}</td><td><a href=\"{link}\" class=\"event-unread-{unread}\">{tags}{subj}</a> ({section}){details} {unread_mark}</td><td title=\"{authors}\">{date}, {author_or_count}</td></tr>",
+                icon = sIcon,
+                link = html_escape::encode_double_quoted_attribute(&stEvent.link()),
+                unread = stEvent.unread,
+                tags = sTags,
+                subj = html_escape::encode_text(&stEvent.subj),
+                section = html_escape::encode_text(&stEvent.section_name),
+                details = sDetails,
+                unread_mark = sUnreadMark,
+                authors = html_escape::encode_double_quoted_attribute(&stPrepared.vecAuthors.join(", ")),
+                date = stEvent.event_date,
+                author_or_count = sAuthorOrCount,
+            ));
+        }
+        html.push_str("</table></div>");
+    } else {
+        html.push_str("<div class=\"notifications\">");
+        for stPrepared in &vecPage {
+            let stEvent = &stPrepared.stEvent;
+            let sUnreadClass = if stEvent.unread {
+                "event-unread-true"
+            } else {
+                "event-unread-false"
+            };
+            let iUnreadDelta = stPrepared.iCount.max(stPrepared.vecReactions.len());
+            html.push_str(&format!(
+                "<form action=\"/notifications-click\" method=\"post\"><input type=\"hidden\" name=\"csrf\" value=\"{csrf}\"><input type=\"hidden\" name=\"firstId\" value=\"{first}\"><input type=\"hidden\" name=\"lastId\" value=\"{last}\"><button type=\"submit\" class=\"{unread} notifications-item\" data-unread-delta=\"{delta}\"><div class=\"notifications-type\"><p>{icon}</p></div><div class=\"notifications-title\"><p>{comment_icon}{subj} ({section})</p></div>",
+                csrf = html_escape::encode_double_quoted_attribute(&csrf_token),
+                first = stEvent.id,
+                last = stPrepared.iLastId,
+                unread = sUnreadClass,
+                delta = iUnreadDelta,
+                icon = sNotificationIcon(&stEvent.event_type),
+                comment_icon = stEvent.cid.map(|_| "<i class=\"icon-comment\"></i>").unwrap_or(""),
+                subj = html_escape::encode_text(&stEvent.subj),
+                section = html_escape::encode_text(&stEvent.section_name),
+            ));
+            if !stPrepared.vecReactions.is_empty() {
+                html.push_str(
+                    "<div class=\"notifications-reactions\"><p><span class=\"reactions\">",
+                );
+                for (sReaction, sNick) in &stPrepared.vecReactions {
+                    html.push_str(&format!(
+                        "<span class=\"reaction\">{} {}</span>",
+                        html_escape::encode_text(sReaction),
+                        html_escape::encode_text(sNick),
+                    ));
+                }
+                html.push_str("</span></p></div>");
+            } else if stPrepared.iCount > 1 {
+                html.push_str(&format!(
+                    "<div title=\"{}\" class=\"notifications-number\"><p><i class=\"icon-comment\"></i> {}</p></div>",
+                    html_escape::encode_double_quoted_attribute(&stPrepared.vecAuthors.join(", ")),
+                    stPrepared.iCount,
+                ));
+            } else {
+                let sDetails = if stEvent.event_type == "TAG" {
+                    sNotificationTags(stEvent)
+                } else {
+                    sNotificationDetails(stEvent)
+                };
+                html.push_str(&format!(
+                    "<div class=\"notifications-details\"><p>{sDetails}</p></div><div class=\"notifications-who-when\"><p>{}, {}</p></div>",
+                    sNotificationAuthor(&stEvent.author_nick),
+                    stEvent.event_date,
+                ));
+            }
+            if !stPrepared.vecReactions.is_empty() || stPrepared.iCount > 1 {
+                html.push_str(&format!(
+                    "<div class=\"notifications-when\"><p>{}</p></div>",
+                    stEvent.event_date
+                ));
+            }
+            html.push_str("</button></form>");
+        }
+        html.push_str("</div>");
+    }
+    if vecPage.is_empty() {
+        html.push_str("<p class=\"muted\">Нет уведомлений</p>");
+    }
+
+    if offset > 0 {
+        html.push_str(&format!(
+            "<a href=\"/notifications?filter={filter}&offset={}\">← предыдущие</a> ",
+            offset - iPageSize
         ));
     }
-    if events.is_empty() {
-        html.push_str("<li class=\"muted\">Нет уведомлений</li>");
-    }
-    html.push_str("</ul>");
-
-    if has_more {
+    if bHasMore {
         html.push_str(&format!(
             "<a href=\"/notifications?filter={filter}&offset={}\">Далее »</a>",
-            offset + limit
+            offset + iPageSize
         ));
     }
 
-    Ok(Html(html))
+    let mut stResponse = Html(html).into_response();
+    stResponse.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(stResponse)
 }
 
 #[derive(Deserialize)]
@@ -317,14 +652,8 @@ fn tracker_filter_group_clause(filter: &str) -> String {
     }
 }
 
-/// Simplified from GroupListDao.getTrackerTopics: real topic tracker
-/// semantics (filter by TrackerFilterEnum, default to the viewer's saved
-/// trackerMode, sorted by most recent activity in the last 7 days) - the
-/// previous handler filtered by *section name* instead, an unrelated
-/// concept, and never read the user's saved preference at all. The exact
-/// ignore-list-aware last-comment subquery from Java isn't replicated here;
-/// this orders by COALESCE(lastmod, postdate) as a practical proxy for
-/// "most recent activity".
+/// GroupListDao.getTrackerTopics, including topic-author, ignored-tag and
+/// branch-author filtering for the last visible comment.
 pub async fn tracker(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
@@ -384,12 +713,41 @@ pub async fn tracker(
            JOIN users u ON u.id=t.userid
            JOIN groups g ON g.id=t.groupid
            JOIN sections s ON s.id=g.section
+           LEFT JOIN LATERAL (
+             SELECT c.postdate
+             FROM comments c
+             WHERE c.topic=t.id AND NOT c.deleted
+               AND ($3::int IS NULL OR NOT EXISTS (
+                 SELECT ignored FROM ignore_list WHERE userid=$3
+                 INTERSECT SELECT get_branch_authors(c.id)
+               ))
+             ORDER BY c.postdate DESC
+             LIMIT 1
+           ) lc ON t.postscore IS DISTINCT FROM 10002
            WHERE NOT t.draft AND NOT t.deleted
              AND COALESCE(t.lastmod, t.postdate) > now() - interval '7 days'
+             AND ($3::int IS NULL OR t.userid NOT IN (
+               SELECT ignored FROM ignore_list WHERE userid=$3
+             ))
+             AND ($3::int IS NULL OR NOT (
+               EXISTS (
+                 SELECT 1 FROM tags tg
+                 JOIN user_tags ignored_tag ON ignored_tag.tag_id=tg.tagid
+                 WHERE tg.msgid=t.id AND ignored_tag.user_id=$3
+                   AND NOT ignored_tag.is_favorite
+               )
+               AND NOT EXISTS (
+                 SELECT 1 FROM tags tg
+                 JOIN user_tags favorite_tag ON favorite_tag.tag_id=tg.tagid
+                 WHERE tg.msgid=t.id AND favorite_tag.user_id=$3
+                   AND favorite_tag.is_favorite
+               )
+             ))
+             AND GREATEST(t.postdate,COALESCE(lc.postdate,t.postdate)) > now() - interval '7 days'
              {uncommitted}
              {open_warnings}
              {group_clause}
-           ORDER BY COALESCE(t.lastmod, t.postdate) DESC
+           ORDER BY GREATEST(t.postdate,COALESCE(lc.postdate,t.postdate)) DESC
            OFFSET $1 LIMIT $2"#,
         uncommitted = tracker_commit_visibility_clause(show_uncommitted),
         // TopicPermissionService's noHidden clause: only applied to
@@ -405,6 +763,7 @@ pub async fn tracker(
     let topics = sqlx::query_as::<_, TopicSummary>(&sql)
         .bind(offset)
         .bind(limit)
+        .bind(user.as_ref().map(|stUser| stUser.id))
         .fetch_all(&state.pool)
         .await?;
 
@@ -631,16 +990,47 @@ pub async fn reactions_get(
         }
     }
 
-    let rows = sqlx::query_as::<_, (i32, String, String, chrono::DateTime<chrono::Utc>)>(
-        r#"SELECT rl.origin_user, u.nick, rl.reaction, rl.set_date
-           FROM reactions_log rl JOIN users u ON u.id=rl.origin_user
-           WHERE rl.topic_id=$1 AND (($2::int IS NULL AND rl.comment_id IS NULL) OR rl.comment_id=$2)
-           ORDER BY rl.set_date"#,
-    )
-    .bind(topic_id)
-    .bind(comment_id)
-    .fetch_all(&state.pool)
-    .await?;
+    let iViewerId = user.as_ref().expect("authorized above").id;
+    let rows: Vec<(i32, String, String, Option<chrono::DateTime<chrono::Utc>>)> =
+        if let Some(iCommentId) = comment_id {
+            sqlx::query_as(
+                r#"SELECT u.id,u.nick,item.value,rl.set_date
+                   FROM comments c
+                   CROSS JOIN LATERAL jsonb_each_text(COALESCE(c.reactions,'{}'::jsonb)) item
+                   JOIN users u ON u.id=item.key::integer
+                   LEFT JOIN reactions_log rl
+                     ON rl.origin_user=u.id AND rl.topic_id=c.topic AND rl.comment_id=c.id
+                   WHERE c.id=$1 AND item.key ~ '^[0-9]+$'
+                     AND NOT EXISTS (
+                       SELECT 1 FROM ignore_list il
+                       WHERE il.userid=$2 AND il.ignored=u.id
+                     )
+                   ORDER BY COALESCE(rl.set_date,'epoch'::timestamptz)"#,
+            )
+            .bind(iCommentId)
+            .bind(iViewerId)
+            .fetch_all(&state.pool)
+            .await?
+        } else {
+            sqlx::query_as(
+                r#"SELECT u.id,u.nick,item.value,rl.set_date
+                   FROM topics t
+                   CROSS JOIN LATERAL jsonb_each_text(COALESCE(t.reactions,'{}'::jsonb)) item
+                   JOIN users u ON u.id=item.key::integer
+                   LEFT JOIN reactions_log rl
+                     ON rl.origin_user=u.id AND rl.topic_id=t.id AND rl.comment_id IS NULL
+                   WHERE t.id=$1 AND item.key ~ '^[0-9]+$'
+                     AND NOT EXISTS (
+                       SELECT 1 FROM ignore_list il
+                       WHERE il.userid=$2 AND il.ignored=u.id
+                     )
+                   ORDER BY COALESCE(rl.set_date,'epoch'::timestamptz)"#,
+            )
+            .bind(topic_id)
+            .bind(iViewerId)
+            .fetch_all(&state.pool)
+            .await?
+        };
 
     let mut html = format!(
         "<h1>Реакции</h1><p><a href=\"{link}\">Перейти к {}</a></p><ul>",
@@ -650,9 +1040,12 @@ pub async fn reactions_get(
             "теме"
         }
     );
-    for (_uid, nick, reaction, date) in &rows {
+    for (_uid, nick, reaction, optDate) in &rows {
+        let sDate = optDate
+            .map(|dtValue| dtValue.to_string())
+            .unwrap_or_default();
         html.push_str(&format!(
-            "<li>{} <b>{}</b> · {date}</li>",
+            "<li>{} <b>{}</b> · {sDate}</li>",
             html_escape::encode_text(reaction),
             html_escape::encode_text(nick),
         ));
@@ -1058,9 +1451,134 @@ pub async fn vote(
 #[cfg(test)]
 mod moderation_semantics_tests {
     use super::{
-        TRACKER_PUBLIC_TOPICS_CLAUSE, UNCOMMITTED_COUNTS_SQL, VOTE_TOPIC_SQL,
-        tracker_commit_visibility_clause,
+        NotificationEvent, TRACKER_PUBLIC_TOPICS_CLAUSE, UNCOMMITTED_COUNTS_SQL, VOTE_TOPIC_SQL,
+        bNotificationIsCurrent, sNotificationDetails, sUnreadDescription,
+        tracker_commit_visibility_clause, vecPrepareNotifications,
     };
+
+    fn stNotification(
+        iId: i32,
+        iSeconds: i64,
+        sType: &str,
+        iTopicId: i32,
+        optCommentId: Option<i32>,
+        bUnread: bool,
+        optReaction: Option<&str>,
+        optNick: Option<&str>,
+    ) -> NotificationEvent {
+        NotificationEvent {
+            id: iId,
+            event_date: chrono::DateTime::from_timestamp(iSeconds, 0).unwrap(),
+            subj: "topic".into(),
+            msgid: iTopicId,
+            cid: optCommentId,
+            unread: bUnread,
+            event_type: sType.into(),
+            section_prefix: "forum".into(),
+            section_name: "Форум".into(),
+            group_urlname: "test".into(),
+            origin_nick: optNick.map(str::to_owned),
+            author_nick: optNick.unwrap_or("author").to_owned(),
+            event_message: None,
+            closed_warning: false,
+            bonus: None,
+            tags: vec!["linux".into()],
+            reaction: optReaction.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn removed_reaction_event_is_hidden_only_from_the_main_notification_view() {
+        let stRemoved = stNotification(1, 1, "REACTION", 10, None, false, None, Some("alice"));
+        let stReply = stNotification(2, 2, "REPLY", 10, None, true, None, None);
+
+        assert!(!bNotificationIsCurrent(&stRemoved));
+        assert!(bNotificationIsCurrent(&stReply));
+    }
+
+    #[test]
+    fn new_notification_design_groups_reactions_by_target_and_read_state() {
+        let vecEvents = vec![
+            stNotification(3, 30, "REACTION", 20, None, true, Some("🔥"), Some("carol")),
+            stNotification(
+                2,
+                20,
+                "REACTION",
+                10,
+                Some(7),
+                true,
+                Some("🎉"),
+                Some("bob"),
+            ),
+            stNotification(
+                1,
+                10,
+                "REACTION",
+                10,
+                Some(7),
+                true,
+                Some("👍"),
+                Some("alice"),
+            ),
+        ];
+
+        let vecPrepared = vecPrepareNotifications(vecEvents, true);
+
+        assert_eq!(vecPrepared.len(), 2);
+        let stGrouped = vecPrepared
+            .iter()
+            .find(|stItem| stItem.stEvent.msgid == 10)
+            .unwrap();
+        assert_eq!(stGrouped.stEvent.id, 1);
+        assert_eq!(stGrouped.iLastId, 2);
+        assert_eq!(
+            stGrouped.vecReactions,
+            vec![("👍".into(), "alice".into()), ("🎉".into(), "bob".into())]
+        );
+    }
+
+    #[test]
+    fn old_notification_design_keeps_reactions_as_separate_rows() {
+        let vecEvents = vec![
+            stNotification(2, 20, "REACTION", 10, None, true, Some("🎉"), Some("bob")),
+            stNotification(1, 10, "REACTION", 10, None, true, Some("👍"), Some("alice")),
+        ];
+
+        assert_eq!(vecPrepareNotifications(vecEvents, false).len(), 2);
+    }
+
+    #[test]
+    fn deleted_comment_uses_original_dedicated_view() {
+        let stEvent = stNotification(1, 1, "DEL", 10, Some(77), true, None, None);
+        assert_eq!(stEvent.link(), "/view-deleted?id=77#comment-77");
+    }
+
+    #[test]
+    fn warning_and_delete_details_preserve_payload_and_closed_state() {
+        let mut stWarning = stNotification(1, 1, "WARNING", 10, None, true, None, None);
+        stWarning.event_message = Some("[Нарушение правил] 4.1".into());
+        stWarning.closed_warning = true;
+        assert_eq!(
+            sNotificationDetails(&stWarning),
+            "<s>[Нарушение правил] 4.1</s>"
+        );
+
+        let mut stDeleted = stNotification(2, 2, "DEL", 10, Some(77), true, None, None);
+        stDeleted.event_message = Some("Офтопик <script>".into());
+        stDeleted.bonus = Some(-2);
+        assert_eq!(
+            sNotificationDetails(&stDeleted),
+            "Офтопик &lt;script&gt; (-2)"
+        );
+    }
+
+    #[test]
+    fn unread_counter_uses_original_russian_forms() {
+        assert_eq!(sUnreadDescription(1), "У вас 1 непрочитанное уведомление");
+        assert_eq!(sUnreadDescription(3), "У вас 3 непрочитанных уведомления");
+        assert_eq!(sUnreadDescription(12), "У вас 12 непрочитанных уведомлений");
+        assert_eq!(sUnreadDescription(21), "У вас 21 непрочитанное уведомление");
+    }
 
     #[test]
     fn tracker_hides_only_uncommitted_premoderated_topics() {

@@ -18,10 +18,12 @@ compat/java-db       canonical Java demo + Liquibase bootstrap and validation
 
 Порт не владеет параллельной схемой: он запускается только на текущей Java/Liquibase схеме и проверяет её без изменений. Подробнее: `docs/DATABASE_COMPATIBILITY.md`.
 
-## Следующие шаги для полного production-переноса
+## Оставшиеся production-gates
 
-1. Перенести password verifier под bcrypt-поле из миграции `2026-06-16-bcrypt-passwd.xml`.
-2. Перенести права `GroupPermissionService`, `TopicPermissionService`, `UserPermissionService` в отдельный модуль `src/rights`.
-3. Добавить event bus/notifications для `user_events`.
-4. Перенести image upload/gallery storage.
-5. Покрыть маршруты интеграционными тестами через `tower::ServiceExt`.
+Bcrypt/сессии, права, `user_events`, image/gallery storage и
+миграционно-критичные HTTP/DB сценарии уже реализованы.
+Текущий блокер релиза — не отсутствующий код, а повторяемая
+репетиция на клоне актуальной Java-БД и media storage с реальной
+production-топологией SMTP, OpenSearch, GeoIP, blacklist feeds и Telegram.
+Исполняемый порядок и fail-closed gate описаны в
+`docs/PRODUCTION_CUTOVER.md` и `scripts/run-cutover-gate.sh`.

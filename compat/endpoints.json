@@ -4,7 +4,10 @@
     "method": "GET",
     "old": "/",
     "new": "/",
-    "compare": true
+    "compare": true,
+    "new_expected_status": 200,
+    "new_expected_content_type": "text/html",
+    "new_body_contains": ["id=\"hd\"", "id=\"bd\"", "id=\"ft\""]
   },
   {
     "name": "legacy index",
@@ -28,6 +31,13 @@
     "compare": true
   },
   {
+    "name": "forum index trailing slash",
+    "method": "GET",
+    "old": "/forum/",
+    "new": "/forum/",
+    "compare": true
+  },
+  {
     "name": "forum group",
     "method": "GET",
     "old": "/forum/general",
@@ -38,52 +48,88 @@
   {
     "name": "news",
     "method": "GET",
+    "old": "/news/",
+    "new": "/news/",
+    "compare": true
+  },
+  {
+    "name": "news without canonical slash",
+    "method": "GET",
     "old": "/news",
     "new": "/news",
-    "compare": true
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 404
   },
   {
     "name": "articles",
     "method": "GET",
+    "old": "/articles/",
+    "new": "/articles/",
+    "compare": true
+  },
+  {
+    "name": "articles without canonical slash",
+    "method": "GET",
     "old": "/articles",
     "new": "/articles",
-    "compare": true
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 404
   },
   {
     "name": "gallery",
     "method": "GET",
+    "old": "/gallery/",
+    "new": "/gallery/",
+    "compare": true
+  },
+  {
+    "name": "gallery without canonical slash",
+    "method": "GET",
     "old": "/gallery",
     "new": "/gallery",
-    "compare": true
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 404
   },
   {
     "name": "polls",
     "method": "GET",
+    "old": "/polls/",
+    "new": "/polls/",
+    "compare": true
+  },
+  {
+    "name": "polls without canonical slash",
+    "method": "GET",
     "old": "/polls",
     "new": "/polls",
-    "compare": true
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 404
   },
   {
     "name": "topic page",
     "method": "GET",
-    "old": "/news/opensource/100",
-    "new": "/news/opensource/100",
+    "old": "/news/opensource/1927836",
+    "new": "/news/opensource/1927836",
     "compare": true,
     "requires_seed": true
   },
   {
     "name": "topic page old jsp",
     "method": "GET",
-    "old": "/view-message.jsp?msgid=100",
-    "new": "/view-message.jsp?msgid=100",
+    "old": "/view-message.jsp?msgid=1927836",
+    "new": "/view-message.jsp?msgid=1927836",
     "compare": true,
     "requires_seed": true
   },
   {
     "name": "jump comment",
     "method": "GET",
-    "old": "/jump-message.jsp?msgid=102",
-    "new": "/jump-message.jsp?msgid=102",
+    "old": "/jump-message.jsp?msgid=1927836&cid=1927856",
+    "new": "/jump-message.jsp?msgid=1927836&cid=1927856",
     "compare": true,
     "requires_seed": true
   },
@@ -104,39 +150,55 @@
   {
     "name": "tag page",
     "method": "GET",
-    "old": "/tag/rust",
-    "new": "/tag/rust",
+    "old": "/tag/3d",
+    "new": "/tag/3d",
     "compare": true,
     "requires_seed": true
   },
   {
     "name": "user profile",
     "method": "GET",
-    "old": "/people/unclestephen",
-    "new": "/people/unclestephen",
+    "old": "/people/maxcom",
+    "new": "/people/maxcom",
+    "compare": true,
+    "requires_seed": true
+  },
+  {
+    "name": "user canonical profile subpage",
+    "method": "GET",
+    "old": "/people/maxcom/profile",
+    "new": "/people/maxcom/profile",
+    "compare": true,
+    "requires_seed": true
+  },
+  {
+    "name": "user settings redirects anonymous to login",
+    "method": "GET",
+    "old": "/people/maxcom/settings",
+    "new": "/people/maxcom/settings",
     "compare": true,
     "requires_seed": true
   },
   {
     "name": "whois jsp",
     "method": "GET",
-    "old": "/whois.jsp?nick=unclestephen",
-    "new": "/whois.jsp?nick=unclestephen",
+    "old": "/whois.jsp?nick=maxcom",
+    "new": "/whois.jsp?nick=maxcom",
     "compare": true,
     "requires_seed": true
   },
   {
     "name": "rss",
     "method": "GET",
-    "old": "/rss",
-    "new": "/rss",
+    "old": "/rss.jsp",
+    "new": "/rss.jsp",
     "compare": true
   },
   {
     "name": "section rss",
     "method": "GET",
-    "old": "/section-rss.jsp?section=news",
-    "new": "/section-rss.jsp?section=news",
+    "old": "/section-rss.jsp?section=1",
+    "new": "/section-rss.jsp?section=1",
     "compare": true
   },
   {
@@ -147,11 +209,38 @@
     "compare": true
   },
   {
+    "name": "tracker",
+    "method": "GET",
+    "old": "/tracker",
+    "new": "/tracker",
+    "compare": true,
+    "new_expected_status": 200,
+    "new_expected_content_type": "text/html",
+    "new_body_contains": ["<h1>Активные топики</h1>"]
+  },
+  {
+    "name": "tracker trailing slash",
+    "method": "GET",
+    "old": "/tracker/",
+    "new": "/tracker/",
+    "compare": true
+  },
+  {
+    "name": "tracker legacy jsp",
+    "method": "GET",
+    "old": "/tracker.jsp",
+    "new": "/tracker.jsp",
+    "compare": true
+  },
+  {
     "name": "login form",
     "method": "GET",
     "old": "/login.jsp",
     "new": "/login.jsp",
-    "compare": true
+    "compare": true,
+    "new_expected_status": 200,
+    "new_expected_content_type": "text/html",
+    "new_body_contains": ["name=\"csrf\"", "name=\"redirectUrl\"", "name=\"nick\"", "name=\"passwd\""]
   },
   {
     "name": "register form",
@@ -168,6 +257,16 @@
     "compare": true
   },
   {
+    "name": "forum rules canonical document",
+    "method": "GET",
+    "old": "/help/rules.md",
+    "new": "/help/rules.md",
+    "compare": true,
+    "new_expected_status": 200,
+    "new_expected_content_type": "text/html",
+    "new_body_contains": ["Правила написания и модерирования комментариев"]
+  },
+  {
     "name": "activation form",
     "method": "GET",
     "old": "/activate",
@@ -177,15 +276,15 @@
   {
     "name": "reactions summary",
     "method": "GET",
-    "old": "/reactions?topic=100",
-    "new": "/reactions?topic=100",
+    "old": "/reactions?topic=1927836",
+    "new": "/reactions?topic=1927836",
     "compare": false
   },
   {
     "name": "legacy group redirect",
     "method": "GET",
-    "old": "/group.jsp?group=1",
-    "new": "/group.jsp?group=1",
+    "old": "/group.jsp?group=2",
+    "new": "/group.jsp?group=2",
     "compare": false
   },
   {
@@ -200,7 +299,23 @@
     "method": "POST",
     "old": "/markup/preview",
     "new": "/markup/preview",
-    "compare": false
+    "data": "text=**compat-preview**&markup=markdown",
+    "compare": false,
+    "new_expected_status": 200,
+    "new_expected_content_type": "application/json",
+    "new_body_contains": ["compat-preview", "strong"]
+  },
+  {
+    "name": "markup preview rejects missing csrf",
+    "method": "POST",
+    "old": "/markup/preview",
+    "new": "/markup/preview",
+    "data": "text=csrf-negative&markup=markdown",
+    "csrf_mode": "omit",
+    "compare": false,
+    "new_expected_status": 403,
+    "new_expected_content_type": "text/plain",
+    "new_body_contains": ["CSRF"]
   },
   {
     "name": "check login availability",
@@ -210,7 +325,7 @@
     "compare": false
   },
   {
-    "name": "known but unported warnings",
+    "name": "warning form requires auth",
     "method": "GET",
     "old": "/post-warning",
     "new": "/post-warning",
@@ -267,8 +382,8 @@
   {
     "name": "jump seed topic",
     "method": "GET",
-    "old": "/jump-message.jsp?msgid=100",
-    "new": "/jump-message.jsp?msgid=100",
+    "old": "/jump-message.jsp?msgid=1927836",
+    "new": "/jump-message.jsp?msgid=1927836",
     "compare": false,
     "requires_seed": true
   }

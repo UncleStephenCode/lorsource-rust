@@ -10,6 +10,8 @@ use crate::{
     models::UserSummary,
 };
 
+pub mod statistics;
+
 const I_CORRECTOR_SCORE: i32 = 200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,9 +110,9 @@ where
                     // The Java parameter is optional, but the canonical
                     // `ban_info.reason NOT NULL` constraint makes omission
                     // fail and rolls back the transaction.
-                    sReason: stCommand.optReason.ok_or_else(|| {
-                        AppError::Anyhow(anyhow::anyhow!("ban reason is NULL"))
-                    })?,
+                    sReason: stCommand
+                        .optReason
+                        .ok_or_else(|| AppError::Anyhow(anyhow::anyhow!("ban reason is NULL")))?,
                 }
             }
             EnUserModAction::Unblock => {
@@ -222,9 +224,9 @@ where
                 EnUserModerationMutation::BlockAndDelete {
                     iTargetUserId,
                     iModeratorId,
-                    sReason: stCommand.optReason.ok_or_else(|| {
-                        AppError::Anyhow(anyhow::anyhow!("ban reason is NULL"))
-                    })?,
+                    sReason: stCommand
+                        .optReason
+                        .ok_or_else(|| AppError::Anyhow(anyhow::anyhow!("ban reason is NULL")))?,
                 }
             }
         };

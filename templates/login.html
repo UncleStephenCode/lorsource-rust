@@ -8,6 +8,7 @@
   <input type="hidden" name="redirectUrl" value="{{ redirect_url }}">
   <label>Имя/email:<br><input name="nick" value="{{ nick }}" size="40" autofocus autocapitalize="off"></label>
   <label>Пароль:<br><input name="passwd" type="password" size="40"></label>
+  {% if require_captcha %}<script src="https://js.hcaptcha.com/1/api.js" async defer></script><div class="h-captcha" data-sitekey="{{ captcha_site_key }}"></div>{% endif %}
   <div class="form-actions"><button type="submit" class="btn btn-primary">Вход</button></div>
 </form>
 <div style="font-size: smaller">(<a href="/register.jsp">Регистрация</a> | <a href="/lostpwd.jsp">Получить забытый пароль</a>)</div>

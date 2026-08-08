@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}{{ message }}{% endblock %}
+{% block content %}
+<p>{{ message }}</p>
+{% match big_message %}{% when Some with (details) %}<p>{{ details }}</p>{% when None %}<p></p>{% endmatch %}
+<nav>
+  <a class="btn btn-primary" href="{{ link }}">Назад в топик</a>
+  <a class="btn btn-default" href="/people/{{ author_nick }}/profile">Профиль {{ author_nick }}</a>
+  <a class="btn btn-default" href="/sameip.jsp?ip={{ ip }}">Поиск по IP</a>
+  <a class="btn btn-default" href="/sameip.jsp?ip={{ ip }}&amp;ua={{ user_agent_id }}&amp;mask=0">Поиск по User-Agent</a>
+</nav>
+{% endblock %}

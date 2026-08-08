@@ -33,6 +33,7 @@ pub struct StProfileSettings {
     pub avatar: String,
     pub tracker_mode: String,
     pub old_tracker: bool,
+    pub old_notifications: bool,
     pub reaction_notification: bool,
 }
 
@@ -100,6 +101,7 @@ impl Default for StProfileSettings {
             avatar: DEFAULT_AVATAR.to_string(),
             tracker_mode: DEFAULT_TRACKER_MODE.to_string(),
             old_tracker: false,
+            old_notifications: false,
             reaction_notification: true,
         }
     }
@@ -149,6 +151,9 @@ impl StProfileSettings {
         }
         if let Some(value) = map.get("oldTracker") {
             settings.old_tracker = parse_bool(value);
+        }
+        if let Some(value) = map.get("oldNotifications") {
+            settings.old_notifications = parse_bool(value);
         }
         if let Some(value) = map.get("reactionNotification") {
             settings.reaction_notification = parse_bool(value);
@@ -211,6 +216,7 @@ impl StProfileSettings {
         settings.hide_adsense = form.contains_key("hideAdsense");
         settings.main_gallery = form.contains_key("mainGallery");
         settings.old_tracker = form.contains_key("oldTracker");
+        settings.old_notifications = form.contains_key("oldNotifications");
         settings.reaction_notification = form.contains_key("reactionNotification");
         settings.tracker_mode = form
             .get("trackerMode")
@@ -234,6 +240,7 @@ impl StProfileSettings {
                 "avatar".into(),
                 "trackerMode".into(),
                 "oldTracker".into(),
+                "oldNotifications".into(),
                 "reactionNotification".into(),
             ],
             vec![
@@ -247,6 +254,7 @@ impl StProfileSettings {
                 self.avatar.clone(),
                 self.tracker_mode.clone(),
                 self.old_tracker.to_string(),
+                self.old_notifications.to_string(),
                 self.reaction_notification.to_string(),
             ],
         )
@@ -421,4 +429,25 @@ pub fn userpic_url(
         return None;
     }
     email.map(|email| gravatar_url(email, avatar_mode, 150))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_notifications_round_trips_the_java_profile_key() {
+        let stSettings = ProfileSettings::from_hstore_text(Some(
+            r#""oldNotifications"=>"true", "reactionNotification"=>"false""#.into(),
+        ));
+        assert!(stSettings.old_notifications);
+        assert!(!stSettings.reaction_notification);
+
+        let (vecKeys, vecValues) = stSettings.to_hstore_arrays();
+        let iIndex = vecKeys
+            .iter()
+            .position(|sKey| sKey == "oldNotifications")
+            .unwrap();
+        assert_eq!(vecValues[iIndex], "true");
+    }
 }

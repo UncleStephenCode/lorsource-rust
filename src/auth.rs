@@ -5,7 +5,6 @@ use crate::{
     state::AppState,
 };
 use axum::{
-    async_trait,
     extract::{FromRef, FromRequestParts},
     http::request::Parts,
 };
@@ -17,7 +16,6 @@ const SESSION_MAX_AGE_SECONDS: i64 = 365 * 24 * 60 * 60;
 #[derive(Debug, Clone)]
 pub struct CurrentUser(pub Option<UserSummary>);
 
-#[async_trait]
 impl<S> FromRequestParts<S> for CurrentUser
 where
     AppState: FromRef<S>,
@@ -55,6 +53,25 @@ where
         .bind(user_id)
         .fetch_optional(&app.pool)
         .await?;
+        if user.is_some() {
+            // LastLoginInterceptor/UserDao.updateLastlogin(force=false): keep
+            // activity fresh without rewriting the row more than once/hour.
+            sqlx::query(
+                "UPDATE users SET lastlogin=CURRENT_TIMESTAMP \
+                 WHERE id=$1 AND CURRENT_TIMESTAMP-lastlogin > interval '1 hour'",
+            )
+            .bind(user_id)
+            .execute(&app.pool)
+            .await?;
+        }
+        if let (Some(stContext), Some(stUser)) = (
+            parts
+                .extensions
+                .get::<crate::exception_report::StExceptionRequestContext>(),
+            user.as_ref(),
+        ) {
+            stContext.vSetCurrentNick(&stUser.nick);
+        }
         Ok(CurrentUser(user))
     }
 }

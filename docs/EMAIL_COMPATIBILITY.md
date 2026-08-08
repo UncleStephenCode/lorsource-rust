@@ -10,6 +10,17 @@ Implemented flows:
 - new-account activation mail;
 - changed-email activation mail;
 - password-reset code mail.
+- asynchronous internal-error reports to `ADMIN_EMAIL`; Cookie headers are
+  omitted, duplicate storms are limited like Java (first four reports in a
+  five-minute window, always report a new error type), and a high-rate type
+  summary is sent when the window resets.
+
+Exception reports use a Java/Pekko-compatible unbounded actor mailbox, so a
+storm is counted by the rate limiter instead of being silently dropped at a
+queue capacity. Authenticated reports include `Current user`, and the complete
+reporter-to-SMTP path is exercised against a local SMTP sink. Messages include
+Date and Message-ID headers; invalid `SMTP_HELO_NAME` values are rejected before
+opening a connection.
 
 The activation/reset HMAC inputs and the user-visible mail text follow the
 current Java `EmailService`. Password-reset codes are never rendered into the
@@ -22,9 +33,8 @@ already committed before Java sends its activation message, so Rust preserves
 that ordering too: a failed registration email leaves the unactivated account
 available for an operational resend/recovery workflow.
 
-Still to port:
+Still to port/operate:
 
-- the asynchronous administrator exception-report mailbox/actor;
 - explicit resend UI and delivery observability;
 - a container-local development MTA (production should point at the existing
   MTA instead of silently discarding mail).

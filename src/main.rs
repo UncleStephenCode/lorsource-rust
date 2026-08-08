@@ -7,6 +7,7 @@ mod csrf;
 mod db;
 mod domain;
 mod error;
+mod exception_report;
 mod form;
 mod infra;
 mod markup;
@@ -43,6 +44,11 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = Config::from_env();
+    config
+        .vValidateForEnvironment(
+            &std::env::var("LOR_ENV").unwrap_or_else(|_| "development".to_owned()),
+        )
+        .context("invalid runtime configuration")?;
     let pool = db::connect(&config.database_url).await?;
     db::verify_schema(&pool).await?;
 
@@ -50,11 +56,22 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to create upload photos directory")?;
     std::fs::create_dir_all(format!("{}/gallery", config.upload_dir))
         .context("failed to create upload gallery directory")?;
+    std::fs::create_dir_all(format!("{}/gallery/preview", config.upload_dir))
+        .context("failed to create gallery preview directory")?;
     std::fs::create_dir_all(format!("{}/images", config.upload_dir))
         .context("failed to create upload images directory")?;
+    for sQueueDirectory in ["pending", "processing", "failed"] {
+        std::fs::create_dir_all(format!(
+            "{}/search-queue/{sQueueDirectory}",
+            config.upload_dir
+        ))
+        .context("failed to create durable search queue directory")?;
+    }
 
     let state = AppState::new(config.clone(), pool);
     search_index::ensure_index(&state).await;
+    let (oShutdownSender, oShutdownReceiver) = tokio::sync::watch::channel(false);
+    let vecBackgroundJobs = bootstrap::background::vecSpawn(state.clone(), oShutdownReceiver);
     let app = Router::new()
         .merge(routes::router())
         .route("/healthz", get(routes::healthz))
@@ -109,6 +126,10 @@ async fn main() -> anyhow::Result<()> {
         .fallback(routes::not_found)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
+            exception_report::apply,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
             security_headers::apply,
         ))
         .layer(axum::middleware::from_fn_with_state(
@@ -124,7 +145,7 @@ async fn main() -> anyhow::Result<()> {
         // This is the outermost application middleware, matching web.xml where
         // UrlRewriteFilter runs before Spring Security and DispatcherServlet.
         .layer(axum::middleware::from_fn(routes::legacy_redirects::apply))
-        .with_state(state);
+        .with_state(state.clone());
 
     let addr: SocketAddr = format!("{}:{}", config.host, config.port)
         .parse()
@@ -139,6 +160,47 @@ async fn main() -> anyhow::Result<()> {
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
+    .with_graceful_shutdown(vShutdownSignal(oShutdownSender))
     .await?;
+    for mut stJob in vecBackgroundJobs {
+        if tokio::time::timeout(std::time::Duration::from_secs(15), &mut stJob)
+            .await
+            .is_err()
+        {
+            stJob.abort();
+        }
+    }
+    state.pool.close().await;
     Ok(())
+}
+
+async fn vShutdownSignal(oShutdown: tokio::sync::watch::Sender<bool>) {
+    let oCtrlC = async {
+        if let Err(stError) = tokio::signal::ctrl_c().await {
+            tracing::error!(error = %stError, "failed to install Ctrl-C signal handler");
+        }
+    };
+
+    #[cfg(unix)]
+    let oTerminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut oSignal) => {
+                oSignal.recv().await;
+            }
+            Err(stError) => {
+                tracing::error!(error = %stError, "failed to install SIGTERM signal handler");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+
+    #[cfg(not(unix))]
+    let oTerminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = oCtrlC => {}
+        () = oTerminate => {}
+    }
+    let _ = oShutdown.send(true);
+    tracing::info!("shutdown signal received; draining HTTP connections");
 }

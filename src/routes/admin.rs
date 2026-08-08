@@ -1,8 +1,17 @@
 use crate::{
-    application::email_domain_block::CEmailDomainBlockService,
+    application::{
+        email_domain_block::CEmailDomainBlockService,
+        geo_location::CGeoLocationService,
+        warning::{
+            CWarningService, EnCreateWarningOutcome, StCreateWarningCommand, StWarningPresentation,
+        },
+    },
     auth::CurrentUser,
     error::{AppError, Result},
-    infra::postgres::email_domain_block_repository::CEmailDomainBlockPgRepository,
+    infra::postgres::{
+        email_domain_block_repository::CEmailDomainBlockPgRepository,
+        warning_repository::CWarningPgRepository,
+    },
     state::AppState,
 };
 use askama::Template;
@@ -227,16 +236,25 @@ pub struct GeoIpQuery {
 }
 
 async fn geoip(
+    State(stState): State<AppState>,
     CurrentUser(user): CurrentUser,
     Query(q): Query<GeoIpQuery>,
 ) -> Result<Json<serde_json::Value>> {
     require_moderator(&user)?;
-    let parsed: std::net::IpAddr =
-        q.ip.parse()
-            .map_err(|_| AppError::BadRequest("Некорректный IP".into()))?;
-    Ok(Json(
-        json!({"ip": parsed.to_string(), "country": null, "city": null, "source": "not configured"}),
-    ))
+    let cService = CGeoLocationService::new(stState.http.clone());
+    let stLocation = match cService.stGetLocation(&q.ip).await {
+        Ok(stLocation) => stLocation,
+        Err(sError) => {
+            tracing::warn!(ip = %q.ip, error = %sError, "IP geolocation request failed");
+            return Ok(Json(json!({"error": sError})));
+        }
+    };
+    Ok(Json(json!({
+        "country": stLocation.optCountry.unwrap_or_default(),
+        "region": stLocation.optRegion.unwrap_or_default(),
+        "city": stLocation.optCity.unwrap_or_default(),
+        "org": stLocation.optOrganization.unwrap_or_default(),
+    })))
 }
 
 #[derive(Deserialize)]
@@ -244,17 +262,42 @@ pub struct ReindexForm {
     pub action: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnSearchReindexAction {
+    All,
+    Current,
+}
+
+fn enSearchReindexAction(optAction: Option<&str>) -> Result<EnSearchReindexAction> {
+    match optAction {
+        Some("all") => Ok(EnSearchReindexAction::All),
+        Some("current") => Ok(EnSearchReindexAction::Current),
+        // Spring has two parameter-conditioned POST mappings. A missing or
+        // different action matches neither controller method and is a 404.
+        _ => Err(AppError::NotFound),
+    }
+}
+
+#[derive(Template)]
+#[template(path = "search_reindex.html")]
+struct StSearchReindexTemplate {
+    csrf_token: String,
+}
+
+#[derive(Template)]
+#[template(path = "action_done.html")]
+struct StActionDoneTemplate {
+    message: String,
+    big_message: Option<String>,
+    link: Option<String>,
+}
+
 async fn search_reindex_form(
     CurrentUser(user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
 ) -> Result<Html<String>> {
     require_admin(&user)?;
-    Ok(Html(format!(
-        r#"
-<h1>Переиндексация поиска</h1>
-<form method="post" action="/admin/search-reindex"><input type="hidden" name="csrf" value="{csrf_token}"><button name="action" value="current">Текущий месяц</button><button name="action" value="all">Всё</button></form>
-"#
-    )))
+    Ok(Html(StSearchReindexTemplate { csrf_token }.render()?))
 }
 
 async fn search_reindex(
@@ -263,17 +306,27 @@ async fn search_reindex(
     Form(form): Form<ReindexForm>,
 ) -> Result<Html<String>> {
     require_admin(&user)?;
-    let action = form.action.unwrap_or_else(|| "current".to_string());
-    match crate::search_index::reindex_all(&state).await {
-        Ok((topics, comments)) => Ok(Html(format!(
-            "<h1>Переиндексация завершена</h1><p>action={}</p><p>Тем: {topics}, комментариев: {comments}</p>",
-            html_escape::encode_text(&action),
-        ))),
-        Err(e) => Ok(Html(format!(
-            "<h1>Переиндексация не выполнена</h1><p class=\"error\">{}</p>",
-            html_escape::encode_text(&e),
-        ))),
-    }
+    let sMessage = match enSearchReindexAction(form.action.as_deref())? {
+        EnSearchReindexAction::All => {
+            crate::search_index::vScheduleAllReindex(state)
+                .await
+                .map_err(|stError| AppError::Anyhow(anyhow::anyhow!(stError)))?;
+            "Scheduled reindex"
+        }
+        EnSearchReindexAction::Current => {
+            crate::search_index::vScheduleCurrentReindex(state);
+            "Scheduled reindex last 3 month"
+        }
+    };
+
+    Ok(Html(
+        StActionDoneTemplate {
+            message: sMessage.to_string(),
+            big_message: None,
+            link: None,
+        }
+        .render()?,
+    ))
 }
 
 #[derive(Deserialize)]
@@ -922,9 +975,7 @@ async fn usermod(
     RawQuery(optRawQuery): RawQuery,
     Form(mapForm): Form<HashMap<String, String>>,
 ) -> Result<Response> {
-    use crate::application::user::{
-        CUserModerationService, EnUserModOutcome, StUserModCommand,
-    };
+    use crate::application::user::{CUserModerationService, EnUserModOutcome, StUserModCommand};
     use crate::infra::postgres::user_moderation_repository::CUserModerationPgRepository;
 
     let (enAction, form) = stUserModForm(optRawQuery.as_deref(), &mapForm)?;
@@ -983,13 +1034,36 @@ async fn usermod(
 
 #[cfg(test)]
 mod usermod_tests {
-    use super::{stJavaFormEncode, stProfileRedirect, stUserModForm, usermod_get};
+    use super::{
+        EnSearchReindexAction, enSearchReindexAction, sJavaFormEncode, stProfileRedirect,
+        stUserModForm, usermod_get,
+    };
     use crate::{application::user::EnUserModAction, error::AppError};
     use axum::{
         http::{StatusCode, header},
         response::IntoResponse,
     };
     use std::collections::HashMap;
+
+    #[test]
+    fn search_reindex_actions_match_spring_parameter_conditionals() {
+        assert_eq!(
+            enSearchReindexAction(Some("all")).expect("all action"),
+            EnSearchReindexAction::All
+        );
+        assert_eq!(
+            enSearchReindexAction(Some("current")).expect("current action"),
+            EnSearchReindexAction::Current
+        );
+        assert!(matches!(
+            enSearchReindexAction(None),
+            Err(AppError::NotFound)
+        ));
+        assert!(matches!(
+            enSearchReindexAction(Some("ALL")),
+            Err(AppError::NotFound)
+        ));
+    }
 
     #[test]
     fn request_parameters_accept_query_and_form_with_query_precedence() {
@@ -1024,16 +1098,18 @@ mod usermod_tests {
             stUserModForm(Some("action=freeze&id=8&reason=x"), &HashMap::new()),
             Err(AppError::NotFound)
         ));
-        assert!(stUserModForm(
-            Some("action=freeze&id=8&reason=&shift=%D1%87%D0%B0%D1%81"),
-            &HashMap::new()
-        )
-        .is_ok());
+        assert!(
+            stUserModForm(
+                Some("action=freeze&id=8&reason=&shift=%D1%87%D0%B0%D1%81"),
+                &HashMap::new()
+            )
+            .is_ok()
+        );
     }
 
     #[test]
     fn profile_redirect_is_java_302_with_form_encoded_nick_and_nocache() {
-        assert_eq!(stJavaFormEncode("a b+v"), "a+b%2Bv");
+        assert_eq!(sJavaFormEncode("a b+v"), "a+b%2Bv");
         let stResponse = stProfileRedirect("a b+v");
         assert_eq!(stResponse.status(), StatusCode::FOUND);
         let sLocation = stResponse
@@ -1057,30 +1133,103 @@ mod usermod_tests {
 pub struct WarningQuery {
     pub topic: Option<i32>,
     pub comment: Option<i32>,
-    pub user: Option<i32>,
+}
+
+const VEC_WARNING_RULE_TYPES: &[&str] = &[
+    "3.1 Дубль",
+    "3.2 Неверная кодировка",
+    "3.3 Некорректное форматирование",
+    "3.4 Пустое сообщение",
+    "4.1 Офтопик",
+    "4.2 Вызывающе неверная информация",
+    "4.3 Провокация flame",
+    "4.4 Обсуждение действий модераторов",
+    "4.5 Тестовые сообщения",
+    "4.6 Спам",
+    "4.7 Флуд",
+    "4.8 Дискуссия не на русском языке",
+    "4.9 Офтопик-лист, п. ",
+    "5.1 Нецензурные выражения",
+    "5.2 Оскорбление участников дискуссии",
+    "5.3 Национальные/политические/религиозные споры",
+    "5.4 Личная переписка",
+    "5.5 Преднамеренное нарушение правил русского языка",
+    "6 Нарушение copyright",
+    "6.2 Warez",
+    "7.1 Ответ на некорректное сообщение",
+    "7.2 Чрезмерно исправленное сообщение",
+];
+
+fn sWarningForm(
+    stPresentation: &StWarningPresentation,
+    iTopicId: i32,
+    optCommentId: Option<i32>,
+    sCsrfToken: &str,
+) -> String {
+    let vecTypes = &stPresentation.vecTypes;
+    let sTypeField = if vecTypes.len() == 1 {
+        "<input type=\"hidden\" name=\"warningType\" value=\"rule\">".to_owned()
+    } else {
+        let mut sOptions = String::new();
+        for enType in vecTypes {
+            let sType = enType.sId();
+            let sName = enType.sName();
+            sOptions.push_str(&format!("<option value=\"{sType}\">{sName}</option>"));
+        }
+        format!(
+            "<label>Проблема <select id=\"warning-select\" name=\"warningType\">{sOptions}</select></label>"
+        )
+    };
+    let mut sRuleOptions = "<option value=\"\"></option>".to_owned();
+    for sRule in VEC_WARNING_RULE_TYPES {
+        let sEscaped = html_escape::encode_double_quoted_attribute(sRule);
+        sRuleOptions.push_str(&format!("<option value=\"{sEscaped}\">{sEscaped}</option>"));
+    }
+    let sError = stPresentation
+        .optError
+        .map(|sValue| {
+            format!(
+                "<div class=\"error\">{}</div>",
+                html_escape::encode_text(sValue)
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        r#"<h1>Уведомить модераторов</h1>
+<form method="post" action="/post-warning" class="form-horizontal">
+<input type="hidden" name="csrf" value="{sCsrfToken}">
+<input type="hidden" name="topic" value="{iTopicId}">
+<input type="hidden" name="comment" value="{sCommentId}">
+{sTypeField}
+<label>Пункт правил <select id="rule-select" name="ruleType">{sRuleOptions}</select></label>
+<label>Комментарий <textarea id="reason-input" name="text" maxlength="256"></textarea></label>
+{sError}
+<button type="submit">Уведомить</button>
+</form>
+<p><a href="{sTopicUrl}">Вернуться к сообщению</a></p>"#,
+        sCommentId = optCommentId
+            .map(|iValue| iValue.to_string())
+            .unwrap_or_default(),
+        sTopicUrl = stPresentation.stContext.sTopicUrl,
+    )
 }
 
 async fn post_warning_form(
+    State(stState): State<AppState>,
     CurrentUser(user): CurrentUser,
     Query(q): Query<WarningQuery>,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
 ) -> Result<Html<String>> {
-    require_moderator(&user)?;
-    Ok(Html(format!(
-        r#"
-<h1>Предупреждение</h1>
-<form method="post" action="/post-warning" class="form">
-  <input type="hidden" name="csrf" value="{csrf_token}">
-  <input type="hidden" name="topic" value="{}">
-  <input type="hidden" name="comment" value="{}">
-  <input type="hidden" name="user" value="{}">
-  <label>Причина <textarea name="reason" required></textarea></label>
-  <button type="submit">Выдать предупреждение</button>
-</form>
-"#,
-        q.topic.map(|v| v.to_string()).unwrap_or_default(),
-        q.comment.map(|v| v.to_string()).unwrap_or_default(),
-        q.user.map(|v| v.to_string()).unwrap_or_default()
+    let stUser = user.as_ref().ok_or(AppError::Forbidden)?;
+    let iTopicId = q.topic.ok_or(AppError::NotFound)?;
+    let optCommentId = q.comment.filter(|iValue| *iValue != 0);
+    let cService = CWarningService::new(CWarningPgRepository::new(stState.pool.clone()));
+    let stPresentation = cService.stPrepare(stUser, iTopicId, optCommentId).await?;
+    Ok(Html(sWarningForm(
+        &stPresentation,
+        iTopicId,
+        optCommentId,
+        &csrf_token,
     )))
 }
 
@@ -1088,110 +1237,54 @@ async fn post_warning_form(
 pub struct WarningForm {
     pub topic: Option<i32>,
     pub comment: Option<i32>,
-    pub user: Option<i32>,
     pub reason: Option<String>,
     pub text: Option<String>,
+    #[serde(alias = "warningType")]
     pub warning_type: Option<String>,
+    #[serde(alias = "ruleType")]
+    pub rule_type: Option<String>,
 }
 
 async fn post_warning(
-    State(state): State<AppState>,
+    State(stState): State<AppState>,
     CurrentUser(user): CurrentUser,
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
     Form(form): Form<WarningForm>,
-) -> Result<Redirect> {
-    let moderator = require_moderator(&user)?;
-    let target_user = if let Some(user_id) = form.user {
-        user_id
-    } else if let Some(comment_id) = form.comment {
-        sqlx::query_scalar("SELECT userid FROM comments WHERE id=$1")
-            .bind(comment_id)
-            .fetch_optional(&state.pool)
-            .await?
-            .ok_or(AppError::NotFound)?
-    } else if let Some(topic_id) = form.topic {
-        sqlx::query_scalar("SELECT userid FROM topics WHERE id=$1")
-            .bind(topic_id)
-            .fetch_optional(&state.pool)
-            .await?
-            .ok_or(AppError::NotFound)?
-    } else {
-        return Err(AppError::BadRequest("target is required".into()));
-    };
-    let message = form
-        .text
-        .or(form.reason)
-        .unwrap_or_else(|| "warning".to_string());
-    let warning_type = form.warning_type.unwrap_or_else(|| "rule".to_string());
-    let warning_type = match warning_type.as_str() {
-        "rule" | "tag" | "spelling" | "group" => warning_type,
-        _ => "rule".to_string(),
-    };
-    let topic_id = if let Some(topic_id) = form.topic {
-        topic_id
-    } else if let Some(comment_id) = form.comment {
-        sqlx::query_scalar("SELECT topic FROM comments WHERE id=$1")
-            .bind(comment_id)
-            .fetch_one(&state.pool)
-            .await?
-    } else {
-        return Err(AppError::BadRequest("topic or comment is required".into()));
-    };
-    let warning_id: i32 = sqlx::query_scalar(
-        "INSERT INTO message_warnings(topic,comment,author,message,warning_type) VALUES($1,$2,$3,$4,$5::warning_type) RETURNING id",
-    )
-        .bind(topic_id).bind(form.comment).bind(moderator.id).bind(&message).bind(&warning_type).fetch_one(&state.pool).await?;
-
-    // WarningService.postWarning/UserEventService.addWarningEvent: notify
-    // moderators always, plus correctors too for tag/spelling warnings
-    // (those are the two types correctors are expected to police).
-    let notify_correctors_too = matches!(warning_type.as_str(), "tag" | "spelling");
-    let recipients: Vec<i32> =
-        sqlx::query_scalar("SELECT id FROM users WHERE canmod OR ($1 AND corrector)")
-            .bind(notify_correctors_too)
-            .fetch_all(&state.pool)
-            .await?;
-    let event_message = format!("[{warning_type}] {message}");
-    for recipient in &recipients {
-        sqlx::query(
-            r#"INSERT INTO user_events(userid,type,private,message_id,comment_id,message,origin_user,warning_id)
-               VALUES($1,'WARNING',true,$2,$3,$4,$5,$6)"#,
+) -> Result<Response> {
+    let stUser = user.as_ref().ok_or(AppError::Forbidden)?;
+    let iTopicId = form.topic.ok_or(AppError::NotFound)?;
+    let optCommentId = form.comment.filter(|iValue| *iValue != 0);
+    let cService = CWarningService::new(CWarningPgRepository::new(stState.pool.clone()));
+    match cService
+        .enCreate(
+            stUser,
+            StCreateWarningCommand {
+                iTopicId,
+                optCommentId,
+                optReason: form.reason,
+                optText: form.text,
+                optWarningType: form.warning_type,
+                optRuleType: form.rule_type,
+            },
         )
-        .bind(recipient)
-        .bind(topic_id)
-        .bind(form.comment)
-        .bind(&event_message)
-        .bind(moderator.id)
-        .bind(warning_id)
-        .execute(&state.pool)
-        .await?;
-    }
-    if !recipients.is_empty() {
-        sqlx::query("UPDATE users SET unread_events=(SELECT count(*) FROM user_events e WHERE e.unread AND e.userid=users.id) WHERE id=ANY($1)")
-            .bind(&recipients)
-            .execute(&state.pool)
-            .await?;
-    }
-
-    if form.comment.is_none() {
-        sqlx::query(
-            r#"UPDATE topics SET open_warnings=(
-                SELECT count(DISTINCT mw.author) FROM message_warnings mw
-                WHERE mw.topic=topics.id AND mw.comment IS NULL AND mw.closed_by IS NULL AND mw.warning_type='rule'
-            ) WHERE id=$1"#,
+        .await?
+    {
+        EnCreateWarningOutcome::Validation(stPresentation) => Ok(Html(sWarningForm(
+            &stPresentation,
+            iTopicId,
+            optCommentId,
+            &csrf_token,
+        ))
+        .into_response()),
+        EnCreateWarningOutcome::Created { sLink } => Ok(Html(
+            StActionDoneTemplate {
+                message: "Уведомление отправлено".to_owned(),
+                big_message: None,
+                link: Some(sLink),
+            }
+            .render()?,
         )
-        .bind(topic_id)
-        .execute(&state.pool)
-        .await?;
-        Ok(Redirect::to(&format!("/jump-message.jsp?msgid={topic_id}")))
-    } else {
-        let nick: String = sqlx::query_scalar("SELECT nick FROM users WHERE id=$1")
-            .bind(target_user)
-            .fetch_one(&state.pool)
-            .await?;
-        Ok(Redirect::to(&format!(
-            "/people/{}/profile",
-            urlencoding::encode(&nick)
-        )))
+        .into_response()),
     }
 }
 
@@ -1201,26 +1294,68 @@ pub struct ClearWarningForm {
 }
 
 async fn clear_warning(
-    State(state): State<AppState>,
+    State(stState): State<AppState>,
     CurrentUser(user): CurrentUser,
     Form(form): Form<ClearWarningForm>,
-) -> Result<Redirect> {
-    let moderator = require_moderator(&user)?;
-    let topic_id: i32 = sqlx::query_scalar("SELECT topic FROM message_warnings WHERE id=$1")
-        .bind(form.id)
-        .fetch_optional(&state.pool)
-        .await?
-        .ok_or(AppError::NotFound)?;
-    sqlx::query("UPDATE message_warnings SET closed_by=$2, closed_when=now() WHERE id=$1 AND closed_by IS NULL")
-        .bind(form.id).bind(moderator.id).execute(&state.pool).await?;
-    sqlx::query(
-        r#"UPDATE topics SET open_warnings=(
-            SELECT count(DISTINCT mw.author) FROM message_warnings mw
-            WHERE mw.topic=topics.id AND mw.comment IS NULL AND mw.closed_by IS NULL AND mw.warning_type='rule'
-        ) WHERE id=$1"#,
-    )
-    .bind(topic_id)
-    .execute(&state.pool)
-    .await?;
-    Ok(Redirect::to(&format!("/jump-message.jsp?msgid={topic_id}")))
+) -> Result<Response> {
+    let stActor = user.as_ref().ok_or(AppError::Forbidden)?;
+    let cService = CWarningService::new(CWarningPgRepository::new(stState.pool.clone()));
+    let sLink = cService.sClear(stActor, form.id).await?;
+    Ok((StatusCode::FOUND, [(header::LOCATION, sLink)]).into_response())
+}
+
+#[cfg(test)]
+mod warning_tests {
+    use super::sWarningForm;
+    use crate::{
+        application::warning::{StWarningContext, StWarningPresentation, vecWarningTypes},
+        domain::warning::model::EnWarningType,
+    };
+
+    fn stPresentation(bPremoderated: bool) -> StWarningPresentation {
+        StWarningPresentation {
+            stContext: StWarningContext {
+                bPremoderated,
+                sTopicUrl: "/forum/general/42".to_owned(),
+                optEligibilityError: None,
+            },
+            vecTypes: vecWarningTypes(bPremoderated, None),
+            optError: None,
+        }
+    }
+
+    #[test]
+    fn warning_types_follow_comment_and_section_rules() {
+        assert_eq!(vecWarningTypes(false, Some(7)), [EnWarningType::Rule]);
+        assert_eq!(
+            vecWarningTypes(false, None),
+            [
+                EnWarningType::Rule,
+                EnWarningType::Tag,
+                EnWarningType::Group
+            ]
+        );
+        assert_eq!(
+            vecWarningTypes(true, None),
+            [
+                EnWarningType::Rule,
+                EnWarningType::Spelling,
+                EnWarningType::Tag,
+                EnWarningType::Group
+            ]
+        );
+    }
+
+    #[test]
+    fn warning_form_uses_original_java_bean_names_and_zero_comment_shape() {
+        let mut stPresentation = stPresentation(false);
+        stPresentation.optError = Some("ошибка");
+        let sHtml = sWarningForm(&stPresentation, 42, None, "csrf-value");
+        assert!(sHtml.contains("name=\"warningType\""));
+        assert!(sHtml.contains("name=\"ruleType\""));
+        assert!(sHtml.contains("name=\"text\""));
+        assert!(sHtml.contains("name=\"comment\" value=\"\""));
+        assert!(sHtml.contains("maxlength=\"256\""));
+        assert!(sHtml.contains("ошибка"));
+    }
 }

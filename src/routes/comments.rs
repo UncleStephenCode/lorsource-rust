@@ -7,32 +7,41 @@ use crate::{
 use askama::Template;
 use axum::{
     Form,
-    extract::{Path, Query, State},
-    response::{Html, Redirect},
+    extract::{ConnectInfo, Path, Query, State},
+    http::{HeaderMap, StatusCode, header},
+    response::{Html, IntoResponse, Redirect, Response},
 };
 use serde::Deserialize;
+use std::net::SocketAddr;
 
 #[derive(Deserialize)]
 pub struct JumpQuery {
     pub msgid: i32,
+    pub page: Option<i32>,
+    pub cid: Option<i32>,
 }
 
 pub async fn jump_message(
     State(state): State<AppState>,
     Query(q): Query<JumpQuery>,
-) -> Result<Redirect> {
-    if let Some((section, group, topic_id, comment_id)) =
-        locate_topic_or_comment(&state, q.msgid).await?
-    {
-        let anchor = comment_id
-            .map(|id| format!("#comment-{id}"))
-            .unwrap_or_default();
-        Ok(Redirect::to(&format!(
-            "/{section}/{group}/{topic_id}{anchor}"
-        )))
-    } else {
-        Err(AppError::NotFound)
+    CurrentUser(user): CurrentUser,
+) -> Result<Response> {
+    let topic = crate::routes::topics::get_topic(&state, q.msgid).await?;
+    if let Some(cid) = q.cid {
+        return crate::routes::topics::resolve_comment_jump(
+            &state,
+            &topic,
+            cid,
+            user.as_ref().is_some_and(|stUser| stUser.canmod),
+            &user,
+        )
+        .await;
     }
+    let target = match q.page {
+        Some(page) => format!("{}/page{page}", topic.topic_url()),
+        None => topic.topic_url(),
+    };
+    Ok((StatusCode::FOUND, [(header::LOCATION, target)]).into_response())
 }
 
 #[derive(Deserialize)]
@@ -41,6 +50,12 @@ pub struct CommentForm {
     pub replyto: Option<i32>,
     pub title: Option<String>,
     pub msg: String,
+    pub nick: Option<String>,
+    pub password: Option<String>,
+    pub preview: Option<String>,
+    #[serde(rename = "h-captcha-response")]
+    pub captcha_response: Option<String>,
+    pub csrf: Option<String>,
 }
 
 #[derive(Template)]
@@ -53,6 +68,49 @@ struct CommentFormTemplate {
     csrf_token: String,
     format_mode: String,
     format_title: String,
+    form_error: Option<String>,
+    preview_html: Option<String>,
+    form_msg: String,
+    form_title: String,
+    anonymous_form: bool,
+    form_nick: String,
+    require_captcha: bool,
+    captcha_site_key: String,
+}
+
+async fn render_comment_form(
+    state: &AppState,
+    form: &CommentForm,
+    csrf_token: String,
+    format_mode: String,
+    format_title: String,
+    form_error: Option<String>,
+    preview_html: Option<String>,
+    anonymous_form: bool,
+    require_captcha: bool,
+) -> Result<Html<String>> {
+    let topic = crate::routes::topics::get_topic(state, form.topic).await?;
+    let topic_url = topic.topic_url();
+    Ok(Html(
+        CommentFormTemplate {
+            topic_id: topic.id,
+            topic_title: topic.title,
+            topic_url,
+            replyto: form.replyto.filter(|id| *id > 0),
+            csrf_token,
+            format_mode,
+            format_title,
+            form_error,
+            preview_html,
+            form_msg: form.msg.clone(),
+            form_title: form.title.clone().unwrap_or_default(),
+            anonymous_form,
+            form_nick: form.nick.clone().unwrap_or_else(|| "anonymous".into()),
+            require_captcha,
+            captcha_site_key: state.config.captcha_public_key.clone().unwrap_or_default(),
+        }
+        .render()?,
+    ))
 }
 
 async fn comment_format(state: &AppState, user_id: i32) -> Result<(String, String, String)> {
@@ -80,12 +138,29 @@ async fn comment_format(state: &AppState, user_id: i32) -> Result<(String, Strin
 
 pub async fn add_comment_form(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(q): Query<CommentFormQuery>,
     CurrentUser(user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
 ) -> Result<Html<String>> {
-    let topic = crate::routes::topics::get_topic(&state, q.topic).await?;
-    let (format_mode, format_title, _) = match user {
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
+    let stResolution =
+        crate::application::auth::stResolvePostingIdentity(&state, user.as_ref(), None, None)
+            .await?;
+    check_comment_posting_allowed(
+        &state,
+        &stResolution.stIdentity.stUser,
+        !stResolution.stIdentity.bAuthorized,
+        q.topic,
+    )
+    .await?;
+    let (format_mode, format_title, _) = match &user {
         Some(user) => comment_format(&state, user.id).await?,
         None => (
             crate::profile::DEFAULT_FORMAT_MODE.into(),
@@ -93,19 +168,30 @@ pub async fn add_comment_form(
             "MARKDOWN".into(),
         ),
     };
-    let topic_url = topic.topic_url();
-    Ok(Html(
-        CommentFormTemplate {
-            topic_id: topic.id,
-            topic_title: topic.title,
-            topic_url,
-            replyto: q.replyto.filter(|id| *id > 0),
-            csrf_token,
-            format_mode,
-            format_title,
-        }
-        .render()?,
-    ))
+    let bRequireCaptcha =
+        user.is_none() || crate::routes::auth::bIpCaptchaRequired(&state, &sRemoteIp).await?;
+    render_comment_form(
+        &state,
+        &CommentForm {
+            topic: q.topic,
+            replyto: q.replyto,
+            title: None,
+            msg: String::new(),
+            nick: None,
+            password: None,
+            preview: None,
+            captcha_response: None,
+            csrf: None,
+        },
+        csrf_token,
+        format_mode,
+        format_title,
+        None,
+        None,
+        user.is_none(),
+        bRequireCaptcha,
+    )
+    .await
 }
 
 #[derive(Deserialize)]
@@ -129,33 +215,347 @@ async fn comment_link(state: &AppState, comment_id: i32) -> Result<String> {
 
 pub async fn add_comment(
     State(state): State<AppState>,
+    headers: HeaderMap,
     CurrentUser(user): CurrentUser,
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
     Form(form): Form<CommentForm>,
-) -> Result<Redirect> {
-    let Some(user) = user else {
-        return Err(AppError::Forbidden);
+) -> Result<Response> {
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
+    let bSessionAuthorized = user.is_some();
+    let bRequireCaptcha =
+        !bSessionAuthorized || crate::routes::auth::bIpCaptchaRequired(&state, &sRemoteIp).await?;
+    let (format_mode, format_title, markup) = match user.as_ref() {
+        Some(stUser) => comment_format(&state, stUser.id).await?,
+        None => (
+            crate::profile::DEFAULT_FORMAT_MODE.into(),
+            "Markdown".into(),
+            "MARKDOWN".into(),
+        ),
     };
-    check_comment_posting_allowed(&state, &user, form.topic).await?;
-    let (_, _, markup) = comment_format(&state, user.id).await?;
-    let id = insert_comment(&state, user.id, form, &markup).await?;
-    Ok(Redirect::to(&comment_link(&state, id).await?))
+    let mut optError = None;
+    if form.preview.is_none()
+        && bRequireCaptcha
+        && let Err(sError) = crate::application::auth::sValidateCaptcha(
+            &state.config,
+            &state.http,
+            form.captcha_response.as_deref(),
+            &sRemoteIp,
+        )
+        .await
+    {
+        optError = Some(sError);
+    }
+    if form.preview.is_none()
+        && form.csrf.as_deref().map(str::trim) != Some(csrf_token.trim())
+        && optError.is_none()
+    {
+        optError = Some("Неправильный код защиты CSRF. Возможно сессия устарела".into());
+    }
+    let stResolution = crate::application::auth::stResolvePostingIdentity(
+        &state,
+        user.as_ref(),
+        form.nick.as_deref(),
+        form.password.as_deref(),
+    )
+    .await?;
+    if optError.is_none() {
+        optError = stResolution.optError.clone();
+    }
+    let stIdentity = stResolution.stIdentity;
+    if optError.is_none()
+        && let Some(sError) = optCommentActorError(
+            &state,
+            &stIdentity.stUser,
+            !stIdentity.bAuthorized,
+            &sRemoteIp,
+        )
+        .await?
+    {
+        optError = Some(sError);
+    }
+    if optError.is_none() && form.preview.is_none() {
+        let iThreshold =
+            iCommentRateThresholdSeconds(&state, &stIdentity.stUser, !stIdentity.bAuthorized)
+                .await?;
+        optError = state.comment_flood.optCheck(&sRemoteIp, iThreshold).await;
+    }
+    if optError.is_none()
+        && let Err(stError) = check_comment_posting_allowed(
+            &state,
+            &stIdentity.stUser,
+            !stIdentity.bAuthorized,
+            form.topic,
+        )
+        .await
+    {
+        optError = Some(sCommentFormError(stError)?);
+    }
+    if optError.is_none() {
+        optError = optCommentBodyError(&form.msg, !stIdentity.bAuthorized);
+    }
+    let optPreview = form
+        .preview
+        .as_ref()
+        .map(|_| markup::render_message_with_markup(&form.msg, Some(&markup), None));
+    if form.preview.is_some() || optError.is_some() {
+        return Ok(render_comment_form(
+            &state,
+            &form,
+            csrf_token,
+            format_mode,
+            format_title,
+            optError,
+            optPreview,
+            !bSessionAuthorized,
+            bRequireCaptcha,
+        )
+        .await?
+        .into_response());
+    }
+    let sUserAgent = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|stValue| stValue.to_str().ok());
+    let id = insert_comment(
+        &state,
+        stIdentity.stUser.id,
+        !stIdentity.bAuthorized,
+        stIdentity.stUser.score.unwrap_or(0) >= 0,
+        &form,
+        &markup,
+        &sRemoteIp,
+        sUserAgent,
+    )
+    .await?;
+    Ok(Redirect::to(&comment_link(&state, id).await?).into_response())
 }
 
 pub async fn add_comment_ajax(
     State(state): State<AppState>,
+    headers: HeaderMap,
     CurrentUser(user): CurrentUser,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
     Form(form): Form<CommentForm>,
 ) -> Result<axum::Json<serde_json::Value>> {
-    let Some(user) = user else {
-        return Err(AppError::Forbidden);
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
+    let bRequireCaptcha =
+        user.is_none() || crate::routes::auth::bIpCaptchaRequired(&state, &sRemoteIp).await?;
+    let (_, _, markup) = match user.as_ref() {
+        Some(stUser) => comment_format(&state, stUser.id).await?,
+        None => (
+            crate::profile::DEFAULT_FORMAT_MODE.into(),
+            "Markdown".into(),
+            "MARKDOWN".into(),
+        ),
     };
-    check_comment_posting_allowed(&state, &user, form.topic).await?;
-    let (_, _, markup) = comment_format(&state, user.id).await?;
-    let id = insert_comment(&state, user.id, form, &markup).await?;
+    let mut vecErrors = Vec::new();
+    if form.preview.is_none()
+        && bRequireCaptcha
+        && let Err(sError) = crate::application::auth::sValidateCaptcha(
+            &state.config,
+            &state.http,
+            form.captcha_response.as_deref(),
+            &sRemoteIp,
+        )
+        .await
+    {
+        vecErrors.push(sError);
+    }
+    let stResolution = crate::application::auth::stResolvePostingIdentity(
+        &state,
+        user.as_ref(),
+        form.nick.as_deref(),
+        form.password.as_deref(),
+    )
+    .await?;
+    if let Some(sError) = stResolution.optError {
+        vecErrors.push(sError);
+    }
+    let stIdentity = stResolution.stIdentity;
+    if let Some(sError) = optCommentActorError(
+        &state,
+        &stIdentity.stUser,
+        !stIdentity.bAuthorized,
+        &sRemoteIp,
+    )
+    .await?
+    {
+        vecErrors.push(sError);
+    }
+    if vecErrors.is_empty() && form.preview.is_none() {
+        let iThreshold =
+            iCommentRateThresholdSeconds(&state, &stIdentity.stUser, !stIdentity.bAuthorized)
+                .await?;
+        if let Some(sError) = state.comment_flood.optCheck(&sRemoteIp, iThreshold).await {
+            vecErrors.push(sError);
+        }
+    }
+    if let Err(stError) = check_comment_posting_allowed(
+        &state,
+        &stIdentity.stUser,
+        !stIdentity.bAuthorized,
+        form.topic,
+    )
+    .await
+    {
+        vecErrors.push(sCommentFormError(stError)?);
+    }
+    if let Some(sError) = optCommentBodyError(&form.msg, !stIdentity.bAuthorized) {
+        vecErrors.push(sError);
+    }
+    if form.preview.is_some() || !vecErrors.is_empty() {
+        return Ok(axum::Json(serde_json::json!({
+            "errors": vecErrors,
+            "preview": markup::render_message_with_markup(&form.msg, Some(&markup), None),
+        })));
+    }
+    let sUserAgent = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|stValue| stValue.to_str().ok());
+    let id = insert_comment(
+        &state,
+        stIdentity.stUser.id,
+        !stIdentity.bAuthorized,
+        stIdentity.stUser.score.unwrap_or(0) >= 0,
+        &form,
+        &markup,
+        &sRemoteIp,
+        sUserAgent,
+    )
+    .await?;
     let url = comment_link(&state, id).await?;
-    Ok(axum::Json(
-        serde_json::json!({"id": id, "ok": true, "url": url}),
+    Ok(axum::Json(serde_json::json!({"url": url})))
+}
+
+fn sCommentFormError(stError: AppError) -> Result<String> {
+    match stError {
+        AppError::BadRequest(sMessage) | AppError::TooManyRequests(sMessage) => Ok(sMessage),
+        AppError::Forbidden => Ok("Это сообщение нельзя комментировать".into()),
+        stOther => Err(stOther),
+    }
+}
+
+fn optCommentBodyError(sMessage: &str, bAnonymous: bool) -> Option<String> {
+    if sMessage.trim().is_empty() {
+        Some("комментарий не может быть пустым".into())
+    } else if sMessage.chars().count()
+        > if bAnonymous {
+            COMMENT_MAX_LENGTH_ANONYMOUS
+        } else {
+            COMMENT_MAX_LENGTH
+        }
+    {
+        Some("Слишком большое сообщение".into())
+    } else {
+        None
+    }
+}
+
+pub(crate) async fn optCommentActorError(
+    state: &AppState,
+    user: &crate::models::UserSummary,
+    bAnonymous: bool,
+    sRemoteIp: &str,
+) -> Result<Option<String>> {
+    let optIpBlock: Option<(bool, bool)> = sqlx::query_as(
+        r#"SELECT ban_date IS NULL OR ban_date > CURRENT_TIMESTAMP,
+                  COALESCE(allow_posting,false)
+           FROM b_ips WHERE ip=$1::inet"#,
+    )
+    .bind(sRemoteIp)
+    .fetch_optional(&state.pool)
+    .await?;
+    if let Some((true, bAllowRegisteredPosting)) = optIpBlock {
+        if bAnonymous {
+            return Ok(Some(
+                "анонимный постинг с этого IP адреса заблокирован".to_owned(),
+            ));
+        }
+        if user.blocked.unwrap_or(false) || user.score.unwrap_or(0) < 50 {
+            return Ok(Some(
+                "постинг с этого IP адреса ограничен для пользователей с score < 50".to_owned(),
+            ));
+        }
+        if !bAllowRegisteredPosting {
+            return Ok(Some("постинг с этого IP адреса заблокирован".to_owned()));
+        }
+    }
+
+    let bFrozen: bool = sqlx::query_scalar(
+        "SELECT COALESCE(frozen_until > CURRENT_TIMESTAMP,false) FROM users WHERE id=$1",
+    )
+    .bind(user.id)
+    .fetch_one(&state.pool)
+    .await?;
+    if user.blocked.unwrap_or(false) || bFrozen {
+        return Ok(Some("установлен режим только для чтения".to_owned()));
+    }
+    Ok(None)
+}
+
+async fn iCommentRateThresholdSeconds(
+    state: &AppState,
+    user: &crate::models::UserSummary,
+    bAnonymous: bool,
+) -> Result<u64> {
+    if bAnonymous {
+        return Ok(iCommentThresholdSeconds(true, 0, None, 0));
+    }
+    let optFrozenUntil: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT frozen_until FROM users WHERE id=$1")
+            .bind(user.id)
+            .fetch_one(&state.pool)
+            .await?;
+    let iRecentScoreLoss: i64 = sqlx::query_scalar(
+        r#"SELECT COALESCE(abs(sum(di.bonus)),0)::bigint FROM del_info di
+           WHERE di.deldate > CURRENT_TIMESTAMP - interval '3 days'
+             AND di.msgid IN (
+               SELECT id FROM comments WHERE userid=$1
+               UNION ALL
+               SELECT id FROM topics WHERE userid=$1
+             )"#,
+    )
+    .bind(user.id)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(iCommentThresholdSeconds(
+        false,
+        user.score.unwrap_or(0),
+        optFrozenUntil,
+        iRecentScoreLoss,
     ))
+}
+
+fn iCommentThresholdSeconds(
+    bAnonymous: bool,
+    iScore: i32,
+    optFrozenUntil: Option<chrono::DateTime<chrono::Utc>>,
+    iRecentScoreLoss: i64,
+) -> u64 {
+    if bAnonymous {
+        return 30;
+    }
+    let bSlowMode = iScore < 35
+        || optFrozenUntil
+            .is_some_and(|dtValue| dtValue > chrono::Utc::now() - chrono::Duration::days(3))
+        || iRecentScoreLoss >= 30;
+    if bSlowMode {
+        5 * 60
+    } else if iScore >= 100 {
+        3
+    } else {
+        30
+    }
 }
 
 /// Section.getCommentPostscore: Forum/News are unrestricted by section;
@@ -183,17 +583,18 @@ type TyCommentPostingRow = (
     i32,
     i32,
     i32,
+    bool,
 );
 
 /// TopicPermissionService.isCommentsAllowedByUser + checkCommentsAllowed:
 /// combines topic state (deleted/expired/draft), user state
 /// (blocked/frozen), and a postscore computed as the *max* across six
-/// independent restriction sources - matches Java's `getPostscore` exactly
-/// except `getAllowAnonymousPostscore` (no anonymous-posting model here,
-/// so that source is always POSTSCORE_UNRESTRICTED).
-async fn check_comment_posting_allowed(
+/// independent restriction sources, including `allow_anonymous`, matching
+/// Java's `getPostscore` calculation.
+pub(crate) async fn check_comment_posting_allowed(
     state: &AppState,
     user: &crate::models::UserSummary,
+    bAnonymous: bool,
     topic_id: i32,
 ) -> Result<()> {
     let row: Option<TyCommentPostingRow> = sqlx::query_as(
@@ -201,7 +602,7 @@ async fn check_comment_posting_allowed(
                   NOT t.sticky AND COALESCE(t.commitdate,t.postdate) < now() - s.expire AS expired,
                   t.postdate, t.commitdate, t.sticky, COALESCE(t.postscore, -9999),
                   g.restrict_comments, s.id AS section_id,
-                  t.stat1 AS comment_count, t.open_warnings
+                  t.stat1 AS comment_count, t.open_warnings, t.allow_anonymous
            FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section
            WHERE t.id=$1"#,
     )
@@ -220,6 +621,7 @@ async fn check_comment_posting_allowed(
         section_id,
         comment_count,
         open_warnings,
+        allow_anonymous,
     )) = row
     else {
         return Err(AppError::NotFound);
@@ -264,13 +666,10 @@ async fn check_comment_posting_allowed(
     } else {
         -9999
     };
-    // DeleteInfoDao.scoreLoss sums `-bonus` because Java stores the penalty
-    // as a non-positive score *delta*; this port's `del_info.bonus` is the
-    // opposite sign (a positive "points removed" count, see every INSERT
-    // INTO del_info in topics.rs/comments.rs/admin.rs), so summing `bonus`
-    // directly gives the same positive "loss" total.
+    // DeleteInfoDao.scoreLoss stores score deltas as non-positive values and
+    // returns their absolute sum.
     let score_loss: i32 = sqlx::query_scalar(
-        r#"SELECT COALESCE((SELECT sum(bonus) FROM del_info JOIN comments ON comments.id=del_info.msgid
+        r#"SELECT COALESCE((SELECT sum(-bonus) FROM del_info JOIN comments ON comments.id=del_info.msgid
              WHERE bonus IS NOT NULL AND bonus<>0 AND comments.userid<>2 AND comments.deleted AND topic=$1), 0)::int"#,
     )
     .bind(topic_id)
@@ -300,6 +699,7 @@ async fn check_comment_posting_allowed(
         comment_count_restriction,
         score_loss_postscore,
         open_warnings_postscore,
+        if allow_anonymous { -9999 } else { -50 },
     ]
     .into_iter()
     .max()
@@ -317,6 +717,9 @@ async fn check_comment_posting_allowed(
     }
     if postscore == POSTSCORE_UNRESTRICTED {
         return Ok(());
+    }
+    if bAnonymous {
+        return Err(AppError::Forbidden);
     }
     if user.canmod {
         return Ok(());
@@ -350,15 +753,170 @@ pub async fn comment_message(Query(q): Query<CommentFormQuery>) -> Redirect {
     Redirect::to(&format!("/add_comment.jsp?topic={}", q.topic))
 }
 
-pub async fn edit_comment_form() -> Result<&'static str> {
-    Ok("Редактирование комментариев реализовано как POST /edit_comment")
+#[derive(Deserialize)]
+pub struct EditCommentQuery {
+    pub topic: Option<i32>,
+    pub original: Option<i32>,
+    pub msgid: Option<i32>,
+}
+
+#[derive(Template)]
+#[template(path = "edit_comment.html")]
+struct EditCommentTemplate {
+    comment_id: i32,
+    topic_id: i32,
+    topic_url: String,
+    postdate: chrono::DateTime<chrono::Utc>,
+    deadline: chrono::DateTime<chrono::Utc>,
+    title: String,
+    msg: String,
+    format_mode: String,
+    format_title: String,
+    csrf_token: String,
+    form_error: Option<String>,
+    preview_html: Option<String>,
+    require_captcha: bool,
+    captcha_site_key: String,
+}
+
+type TyEditableCommentRow = (
+    i32,
+    i32,
+    String,
+    String,
+    String,
+    bool,
+    chrono::DateTime<chrono::Utc>,
+    bool,
+);
+
+async fn stEditableComment(
+    state: &AppState,
+    user: &crate::models::UserSummary,
+    comment_id: i32,
+) -> Result<TyEditableCommentRow> {
+    let row: TyEditableCommentRow = sqlx::query_as(
+        r#"SELECT c.topic, c.userid, c.title, m.message, m.markup::text,
+                  c.deleted, c.postdate,
+                  EXISTS(SELECT 1 FROM comments r WHERE r.replyto=c.id AND NOT r.deleted)
+           FROM comments c JOIN msgbase m ON m.id=c.id WHERE c.id=$1"#,
+    )
+    .bind(comment_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    let (topic_id, author_id, _, _, _, deleted, postdate, has_replies) = &row;
+    let topic_deleted: bool = sqlx::query_scalar("SELECT deleted FROM topics WHERE id=$1")
+        .bind(topic_id)
+        .fetch_one(&state.pool)
+        .await?;
+    if *deleted || topic_deleted {
+        return Err(AppError::BadRequest("тема или комментарий удалены".into()));
+    }
+    if is_topic_expired(state, *topic_id).await? {
+        return Err(AppError::BadRequest("сообщение уже устарело".into()));
+    }
+    if user.id != *author_id {
+        return Err(AppError::Forbidden);
+    }
+    if *has_replies {
+        return Err(AppError::BadRequest(
+            "редактирование комментариев с ответами запрещено".into(),
+        ));
+    }
+    if user.score.unwrap_or(0) < COMMENT_EDIT_MIN_SCORE {
+        return Err(AppError::Forbidden);
+    }
+    if row.4 == "PLAIN" && !user.candel {
+        return Err(AppError::BadRequest(
+            "Вы не можете редактировать тексты данного формата".into(),
+        ));
+    }
+    if chrono::Utc::now() > *postdate + chrono::Duration::minutes(COMMENT_EDIT_WINDOW_MINUTES) {
+        return Err(AppError::BadRequest("истек срок редактирования".into()));
+    }
+    Ok(row)
+}
+
+pub async fn edit_comment_form(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<EditCommentQuery>,
+    CurrentUser(user): CurrentUser,
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
+) -> Result<Response> {
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
+    let Some(user) = user else {
+        return Ok(crate::routes::auth::login_redirect(&format!(
+            "/edit_comment?{}",
+            serde_urlencoded::to_string([
+                ("topic", query.topic.unwrap_or_default()),
+                (
+                    "original",
+                    query.original.or(query.msgid).unwrap_or_default(),
+                ),
+            ])
+            .unwrap_or_default()
+        )));
+    };
+    let comment_id = query
+        .original
+        .or(query.msgid)
+        .ok_or_else(|| AppError::BadRequest("Комментарий не задан".into()))?;
+    let row = stEditableComment(&state, &user, comment_id).await?;
+    if query.topic.is_some_and(|topic_id| topic_id != row.0) {
+        return Err(AppError::BadRequest("тема не совпадает".into()));
+    }
+    let topic = crate::routes::topics::get_topic(&state, row.0).await?;
+    if check_comment_posting_allowed(&state, &user, false, row.0)
+        .await
+        .is_err()
+    {
+        return Ok(
+            Redirect::to(&format!("{}?cid={comment_id}", topic.topic_url())).into_response(),
+        );
+    }
+    let (format_mode, format_title) = crate::routes::topics::markup_form_view(&row.4);
+    let require_captcha = crate::routes::auth::bIpCaptchaRequired(&state, &sRemoteIp).await?;
+    Ok(Html(
+        EditCommentTemplate {
+            comment_id,
+            topic_id: row.0,
+            topic_url: topic.topic_url(),
+            postdate: row.6,
+            deadline: row.6 + chrono::Duration::minutes(COMMENT_EDIT_WINDOW_MINUTES),
+            title: row.2,
+            msg: row.3,
+            format_mode,
+            format_title,
+            csrf_token,
+            form_error: None,
+            preview_html: None,
+            require_captcha,
+            captcha_site_key: state.config.captcha_public_key.clone().unwrap_or_default(),
+        }
+        .render()?,
+    )
+    .into_response())
 }
 
 #[derive(Deserialize)]
 pub struct EditCommentForm {
+    #[serde(alias = "original")]
     pub msgid: i32,
+    pub topic: Option<i32>,
     pub msg: String,
     pub title: Option<String>,
+    pub preview: Option<String>,
+    #[serde(rename = "h-captcha-response")]
+    pub captcha_response: Option<String>,
+    pub csrf: Option<String>,
 }
 
 /// Default upstream config (config.properties.dist): comments are editable
@@ -385,65 +943,173 @@ pub(crate) async fn is_topic_expired(state: &AppState, topic_id: i32) -> Result<
 
 pub async fn edit_comment(
     State(state): State<AppState>,
+    headers: HeaderMap,
     CurrentUser(user): CurrentUser,
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
     Form(form): Form<EditCommentForm>,
-) -> Result<Redirect> {
+) -> Result<Response> {
     let Some(user) = user else {
         return Err(AppError::Forbidden);
     };
-    let row: (i32, i32, bool, chrono::DateTime<chrono::Utc>, bool) = sqlx::query_as(
-        r#"SELECT c.topic, c.userid, c.deleted, c.postdate,
-                  EXISTS(SELECT 1 FROM comments r WHERE r.replyto=c.id AND NOT r.deleted) AS has_replies
-           FROM comments c WHERE c.id=$1"#,
+    let row = stEditableComment(&state, &user, form.msgid).await?;
+    let topic_id = row.0;
+    if form.topic.is_some_and(|iTopicId| iTopicId != topic_id) {
+        return Err(AppError::BadRequest("тема не совпадает".into()));
+    }
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
     )
-    .bind(form.msgid)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
-    let (topic_id, author_id, deleted, postdate, has_replies) = row;
-    let topic_deleted: bool = sqlx::query_scalar("SELECT deleted FROM topics WHERE id=$1")
-        .bind(topic_id)
-        .fetch_one(&state.pool)
-        .await?;
+    .to_string();
+    let bRequireCaptcha = crate::routes::auth::bIpCaptchaRequired(&state, &sRemoteIp).await?;
+    let mut optError = optCommentBodyError(&form.msg, false);
+    if optError.is_none()
+        && let Some(sError) = optCommentActorError(&state, &user, false, &sRemoteIp).await?
+    {
+        optError = Some(sError);
+    }
+    if form.preview.is_none()
+        && form.csrf.as_deref().map(str::trim) != Some(csrf_token.trim())
+        && optError.is_none()
+    {
+        optError = Some("Неправильный код защиты CSRF. Возможно сессия устарела".into());
+    }
+    if form.preview.is_none()
+        && bRequireCaptcha
+        && let Err(sError) = crate::application::auth::sValidateCaptcha(
+            &state.config,
+            &state.http,
+            form.captcha_response.as_deref(),
+            &sRemoteIp,
+        )
+        .await
+        && optError.is_none()
+    {
+        optError = Some(sError);
+    }
+    if optError.is_none()
+        && let Err(stError) = check_comment_posting_allowed(&state, &user, false, topic_id).await
+    {
+        optError = Some(sCommentFormError(stError)?);
+    }
+    let (format_mode, format_title) = crate::routes::topics::markup_form_view(&row.4);
+    let topic = crate::routes::topics::get_topic(&state, topic_id).await?;
+    if form.preview.is_some() || optError.is_some() {
+        return Ok(Html(
+            EditCommentTemplate {
+                comment_id: form.msgid,
+                topic_id,
+                topic_url: topic.topic_url(),
+                postdate: row.6,
+                deadline: row.6 + chrono::Duration::minutes(COMMENT_EDIT_WINDOW_MINUTES),
+                title: form.title.clone().unwrap_or_default(),
+                msg: form.msg.clone(),
+                format_mode,
+                format_title,
+                csrf_token,
+                form_error: optError,
+                preview_html: form
+                    .preview
+                    .as_ref()
+                    .map(|_| markup::render_message_with_markup(&form.msg, Some(&row.4), None)),
+                require_captcha: bRequireCaptcha,
+                captcha_site_key: state.config.captcha_public_key.clone().unwrap_or_default(),
+            }
+            .render()?,
+        )
+        .into_response());
+    }
 
-    if deleted || topic_deleted {
-        return Err(AppError::BadRequest("тема или комментарий удалены".into()));
-    }
-    // TopicPermissionService.checkCommentsAllowed, also enforced for edits
-    // via isCommentEditableNow: an expired topic can't be commented on OR
-    // have its comments edited, by anyone (moderators included).
-    if is_topic_expired(&state, topic_id).await? {
-        return Err(AppError::BadRequest("сообщение уже устарело".into()));
-    }
-    if user.id != author_id {
-        return Err(AppError::Forbidden);
-    }
-    if has_replies {
-        return Err(AppError::BadRequest(
-            "редактирование комментариев с ответами запрещено".into(),
-        ));
-    }
-    if user.score.unwrap_or(0) < COMMENT_EDIT_MIN_SCORE {
-        return Err(AppError::Forbidden);
-    }
-    if chrono::Utc::now() > postdate + chrono::Duration::minutes(COMMENT_EDIT_WINDOW_MINUTES) {
-        return Err(AppError::BadRequest("истек срок редактирования".into()));
-    }
-
+    let sNewTitle = form.title.unwrap_or_default();
+    let optOldMessage = (row.3 != form.msg).then_some(row.3.as_str());
+    let optOldTitle = (row.2 != sNewTitle).then_some(row.2.as_str());
+    let setOldMentions = markup::extract_mentions(&row.3)
+        .into_iter()
+        .map(|sNick| sNick.to_lowercase())
+        .collect::<std::collections::HashSet<_>>();
+    let vecNewMentions = markup::extract_mentions(&form.msg)
+        .into_iter()
+        .map(|sNick| sNick.to_lowercase())
+        .filter(|sNick| !setOldMentions.contains(sNick))
+        .collect::<Vec<_>>();
+    let mut tx = state.pool.begin().await?;
     sqlx::query("UPDATE msgbase SET message=$2 WHERE id=$1")
         .bind(form.msgid)
         .bind(&form.msg)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
-    if let Some(title) = form.title {
-        sqlx::query("UPDATE comments SET title=$2 WHERE id=$1")
+    sqlx::query("UPDATE comments SET title=$2 WHERE id=$1")
+        .bind(form.msgid)
+        .bind(&sNewTitle)
+        .execute(&mut *tx)
+        .await?;
+    if optOldMessage.is_some() || optOldTitle.is_some() {
+        sqlx::query(
+            r#"INSERT INTO edit_info(msgid,editor,oldmessage,oldtitle,object_type)
+               VALUES($1,$2,$3,$4,'COMMENT'::edit_event_type)"#,
+        )
+        .bind(form.msgid)
+        .bind(user.id)
+        .bind(optOldMessage)
+        .bind(optOldTitle)
+        .execute(&mut *tx)
+        .await?;
+        let iEditCount: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM edit_info WHERE msgid=$1 AND object_type='COMMENT'::edit_event_type",
+        )
+        .bind(form.msgid)
+        .fetch_one(&mut *tx)
+        .await?;
+        sqlx::query("UPDATE comments SET editor_id=$2,edit_date=now(),edit_count=$3 WHERE id=$1")
             .bind(form.msgid)
-            .bind(title)
-            .execute(&state.pool)
+            .bind(user.id)
+            .bind(iEditCount.min(i64::from(i32::MAX)) as i32)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("UPDATE topics SET lastmod=now() WHERE id=$1")
+            .bind(topic_id)
+            .execute(&mut *tx)
             .await?;
     }
+    let mut vecNotified = if user.score.unwrap_or(0) >= 0 && !vecNewMentions.is_empty() {
+        sqlx::query_scalar(
+            r#"SELECT u.id FROM users u
+               WHERE lower(u.nick)=ANY($1) AND u.id<>$2
+                 AND NOT EXISTS (
+                   SELECT 1 FROM ignore_list il WHERE il.userid=u.id AND il.ignored=$2
+                 )"#,
+        )
+        .bind(&vecNewMentions)
+        .bind(user.id)
+        .fetch_all(&mut *tx)
+        .await?
+    } else {
+        Vec::new()
+    };
+    for iUserId in &vecNotified {
+        sqlx::query(
+            "INSERT INTO user_events(userid,type,private,message_id,comment_id) VALUES($1,'REF',false,$2,$3)",
+        )
+        .bind(iUserId)
+        .bind(topic_id)
+        .bind(form.msgid)
+        .execute(&mut *tx)
+        .await?;
+    }
+    if !vecNotified.is_empty() {
+        vecNotified.sort_unstable();
+        vecNotified.dedup();
+        sqlx::query("UPDATE users SET unread_events=(SELECT count(*) FROM user_events e WHERE e.unread AND e.userid=users.id) WHERE id=ANY($1)")
+            .bind(&vecNotified)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    state.realtime.vNotifyEvents(vecNotified.iter().copied());
     crate::search_index::index_comment(&state, form.msgid).await;
-    Ok(Redirect::to(&comment_link(&state, form.msgid).await?))
+    Ok(Redirect::to(&comment_link(&state, form.msgid).await?).into_response())
 }
 
 pub async fn delete_comment_form(
@@ -455,13 +1121,41 @@ pub async fn delete_comment_form(
     let Some(user) = user else {
         return Err(AppError::Forbidden);
     };
-    let row: (i32, String, String) = sqlx::query_as(
-        "SELECT c.topic, c.title, u.nick FROM comments c JOIN users u ON u.id=c.userid WHERE c.id=$1",
+    let row: (
+        i32,
+        String,
+        String,
+        i32,
+        bool,
+        chrono::DateTime<chrono::Utc>,
+        bool,
+    ) = sqlx::query_as(
+        r#"SELECT c.topic,c.title,u.nick,c.userid,c.deleted,c.postdate,
+                  EXISTS(SELECT 1 FROM comments r WHERE r.replyto=c.id AND NOT r.deleted)
+           FROM comments c JOIN users u ON u.id=c.userid WHERE c.id=$1"#,
     )
     .bind(q.msgid)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
+    if row.4 {
+        return Err(AppError::BadRequest("комментарий уже удален".into()));
+    }
+    let bTopicDeleted: bool = sqlx::query_scalar("SELECT deleted FROM topics WHERE id=$1")
+        .bind(row.0)
+        .fetch_one(&state.pool)
+        .await?;
+    if bTopicDeleted {
+        return Err(AppError::Forbidden);
+    }
+    let bDeletable = user.canmod
+        || (user.id == row.3
+            && !row.6
+            && !is_topic_expired(&state, row.0).await?
+            && chrono::Utc::now() <= row.5 + chrono::Duration::hours(COMMENT_DELETE_WINDOW_HOURS));
+    if !bDeletable {
+        return Err(AppError::Forbidden);
+    }
     // DeleteCommentController.deleteComments: only a moderator may set
     // `bonus`/`delete_replys` - a plain author sees just the reason field.
     let mod_fields = if user.canmod {
@@ -491,11 +1185,30 @@ pub async fn delete_comment_form(
 }
 
 pub async fn undelete_comment_form(
+    State(state): State<AppState>,
     Query(q): Query<JumpQuery>,
     CurrentUser(user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
 ) -> Result<Html<String>> {
     if !user.as_ref().map(|u| u.canmod).unwrap_or(false) {
+        return Err(AppError::Forbidden);
+    }
+    let stPermissionRow: Option<(i32, i32, bool, bool, Option<i32>)> = sqlx::query_as(
+        r#"SELECT c.topic,c.userid,c.deleted,t.deleted,di.delby
+           FROM comments c JOIN topics t ON t.id=c.topic
+           LEFT JOIN del_info di ON di.msgid=c.id WHERE c.id=$1"#,
+    )
+    .bind(q.msgid)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((iTopicId, iAuthorId, bDeleted, bTopicDeleted, optDeletedBy)) = stPermissionRow else {
+        return Err(AppError::NotFound);
+    };
+    if bTopicDeleted
+        || !bDeleted
+        || is_topic_expired(&state, iTopicId).await?
+        || optDeletedBy == Some(iAuthorId)
+    {
         return Err(AppError::Forbidden);
     }
     Ok(Html(format!(
@@ -519,19 +1232,40 @@ pub struct CommentAction {
     pub delete_replys: Option<String>,
 }
 
+#[derive(Template)]
+#[template(path = "action_done.html")]
+struct StCommentActionDoneTemplate {
+    message: String,
+    big_message: Option<String>,
+    link: Option<String>,
+}
+
+#[derive(Template)]
+#[template(path = "comment_deleted_by_moderator.html")]
+struct StCommentDeletedByModeratorTemplate {
+    message: String,
+    big_message: Option<String>,
+    link: String,
+    author_nick: String,
+    ip: String,
+    user_agent_id: i32,
+}
+
+pub(crate) fn iDeleteScoreDelta(iPenalty: i32) -> i32 {
+    -iPenalty.clamp(0, 20)
+}
+
 /// DeleteReasons.replyBonusAndReason: when the root comment's penalty was
 /// more than a token amount (>2 points), decay the same penalty down the
 /// reply tree - direct children lose 2, grandchildren 1, anything deeper 0.
-/// Returned as a positive "points removed" count, matching this port's
-/// `del_info.bonus` sign convention (Java stores the negative score delta
-/// instead - see the `score_loss` query above for the same flip).
+/// Returned as the same non-positive score delta persisted by Java.
 fn reply_bonus_and_reason(drop_score: bool, depth: i32) -> (i32, &'static str) {
     if !drop_score {
         return (0, "7.1 Ответ на некорректное сообщение (авто)");
     }
     match depth {
-        0 => (2, "7.1 Ответ на некорректное сообщение (авто, уровень 0)"),
-        1 => (1, "7.1 Ответ на некорректное сообщение (авто, уровень 1)"),
+        0 => (-2, "7.1 Ответ на некорректное сообщение (авто, уровень 0)"),
+        1 => (-1, "7.1 Ответ на некорректное сообщение (авто, уровень 1)"),
         _ => (0, "7.1 Ответ на некорректное сообщение (авто, уровень >1)"),
     }
 }
@@ -571,10 +1305,13 @@ pub async fn delete_comment(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
     Form(form): Form<CommentAction>,
-) -> Result<Redirect> {
+) -> Result<Html<String>> {
     let Some(user) = user else {
         return Err(AppError::Forbidden);
     };
+    if form.bonus.is_some_and(|iBonus| !(0..=20).contains(&iBonus)) {
+        return Err(AppError::BadRequest("неправильный размер штрафа".into()));
+    }
     let row: (i32, i32, bool, chrono::DateTime<chrono::Utc>, bool) = sqlx::query_as(
         r#"SELECT c.topic, c.userid, c.deleted, c.postdate,
                   EXISTS(SELECT 1 FROM comments r WHERE r.replyto=c.id AND NOT r.deleted) AS has_replies
@@ -606,8 +1343,23 @@ pub async fn delete_comment(
         return Err(AppError::Forbidden);
     }
 
+    let optModeratorContext: Option<(String, Option<String>, i32)> =
+        if user.canmod && user.id != author_id {
+            Some(
+                sqlx::query_as(
+                    r#"SELECT u.nick, host(c.postip), COALESCE(c.ua_id,0)
+                       FROM comments c JOIN users u ON u.id=c.userid WHERE c.id=$1"#,
+                )
+                .bind(form.msgid)
+                .fetch_one(&state.pool)
+                .await?,
+            )
+        } else {
+            None
+        };
+
     let requested_bonus = if user.canmod && user.id != author_id {
-        form.bonus.unwrap_or(0).clamp(0, 20)
+        iDeleteScoreDelta(form.bonus.unwrap_or(0))
     } else {
         0
     };
@@ -618,10 +1370,11 @@ pub async fn delete_comment(
     // walks the still-live reply subtree, decaying the same penalty by
     // depth (see reply_bonus_and_reason), and skips reply notifications
     // when the topic has expired (matching notifyReplys = !topic.expired).
-    let mut deleted_count = 1;
+    let mut vecDeletedReplies: Vec<(i32, i32, i32, &'static str)> = Vec::new();
+    let mut bNotifyReplies = false;
     if user.canmod && form.delete_replys.is_some() {
-        let drop_score = bonus > 2;
-        let topic_expired = is_topic_expired(&state, topic_id).await?;
+        let drop_score = bonus < -2;
+        bNotifyReplies = !is_topic_expired(&state, topic_id).await?;
         let replies: Vec<(i32, i32, i32)> = sqlx::query_as(
             r#"WITH RECURSIVE subtree AS (
                  SELECT id, userid, 0 AS depth FROM comments WHERE replyto=$1 AND NOT deleted
@@ -636,46 +1389,46 @@ pub async fn delete_comment(
         for (reply_id, reply_author, depth) in &replies {
             let (reply_bonus, reply_reason) = reply_bonus_and_reason(drop_score, *depth);
             let reply_bonus = effective_delete_bonus(&state, *reply_author, reply_bonus).await?;
-            sqlx::query("UPDATE comments SET deleted=true WHERE id=$1")
-                .bind(reply_id)
-                .execute(&state.pool)
-                .await?;
-            sqlx::query("INSERT INTO del_info(msgid,delby,reason,deldate,bonus) VALUES($1,$2,$3,now(),$4) ON CONFLICT(msgid) DO UPDATE SET delby=EXCLUDED.delby, reason=EXCLUDED.reason, deldate=now(), bonus=EXCLUDED.bonus")
-                .bind(reply_id).bind(user.id).bind(reply_reason).bind(reply_bonus).execute(&state.pool).await?;
-            if reply_bonus != 0 {
-                sqlx::query("UPDATE users SET score=GREATEST(score-$2,0) WHERE id=$1")
-                    .bind(reply_author)
-                    .bind(reply_bonus)
-                    .execute(&state.pool)
-                    .await?;
-            }
-            if !topic_expired {
-                notify_deleted(
-                    &state,
-                    *reply_author,
-                    user.id,
-                    Some(topic_id),
-                    Some(*reply_id),
-                    reply_reason,
-                )
-                .await?;
-            }
-            crate::search_index::index_comment(&state, *reply_id).await;
+            vecDeletedReplies.push((*reply_id, *reply_author, reply_bonus, reply_reason));
         }
-        deleted_count += replies.len() as i32;
     }
 
-    sqlx::query("UPDATE comments SET deleted=true WHERE id=$1")
+    let mut tx = state.pool.begin().await?;
+    let stRootUpdate = sqlx::query("UPDATE comments SET deleted=true WHERE id=$1 AND NOT deleted")
         .bind(form.msgid)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
+    if stRootUpdate.rows_affected() == 0 {
+        return Err(AppError::BadRequest("комментарий уже удален".into()));
+    }
+    let mut vecCommittedReplies = Vec::new();
+    for (reply_id, reply_author, reply_bonus, reply_reason) in vecDeletedReplies {
+        let stReplyUpdate =
+            sqlx::query("UPDATE comments SET deleted=true WHERE id=$1 AND NOT deleted")
+                .bind(reply_id)
+                .execute(&mut *tx)
+                .await?;
+        if stReplyUpdate.rows_affected() > 0 {
+            sqlx::query("INSERT INTO del_info(msgid,delby,reason,deldate,bonus) VALUES($1,$2,$3,now(),$4) ON CONFLICT(msgid) DO UPDATE SET delby=EXCLUDED.delby, reason=EXCLUDED.reason, deldate=now(), bonus=EXCLUDED.bonus")
+                .bind(reply_id).bind(user.id).bind(reply_reason).bind(reply_bonus).execute(&mut *tx).await?;
+            if reply_bonus != 0 {
+                sqlx::query("UPDATE users SET score=GREATEST(score+$2,0) WHERE id=$1")
+                    .bind(reply_author)
+                    .bind(reply_bonus)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            vecCommittedReplies.push((reply_id, reply_author, reply_reason));
+        }
+    }
+
     sqlx::query("INSERT INTO del_info(msgid,delby,reason,deldate,bonus) VALUES($1,$2,$3,now(),$4) ON CONFLICT(msgid) DO UPDATE SET delby=EXCLUDED.delby, reason=EXCLUDED.reason, deldate=now(), bonus=EXCLUDED.bonus")
-        .bind(form.msgid).bind(user.id).bind(&reason).bind(bonus).execute(&state.pool).await?;
+        .bind(form.msgid).bind(user.id).bind(&reason).bind(bonus).execute(&mut *tx).await?;
     if bonus != 0 {
-        sqlx::query("UPDATE users SET score=GREATEST(score-$2,0) WHERE id=$1")
+        sqlx::query("UPDATE users SET score=GREATEST(score+$2,0) WHERE id=$1")
             .bind(author_id)
             .bind(bonus)
-            .execute(&state.pool)
+            .execute(&mut *tx)
             .await?;
     }
     // CommentDao.deleteComment: unlike an insert, deletion has no DB
@@ -683,15 +1436,32 @@ pub async fn delete_comment(
     // so it never exceeds the (now smaller) live comment count.
     sqlx::query("UPDATE topics SET stat1=stat1-$2, lastmod=now() WHERE id=$1")
         .bind(topic_id)
-        .bind(deleted_count)
-        .execute(&state.pool)
+        .bind(1 + vecCommittedReplies.len() as i32)
+        .execute(&mut *tx)
         .await?;
     sqlx::query("UPDATE topics SET stat3=stat1 WHERE id=$1 AND stat3>stat1")
         .bind(topic_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
-    notify_deleted(
-        &state,
+    let vecDeletedCommentIds = std::iter::once(form.msgid)
+        .chain(vecCommittedReplies.iter().map(|stReply| stReply.0))
+        .collect::<Vec<_>>();
+    vDeleteCommentEventsTx(&mut tx, &vecDeletedCommentIds).await?;
+    for (reply_id, reply_author, reply_reason) in &vecCommittedReplies {
+        if bNotifyReplies {
+            vNotifyDeletedTx(
+                &mut tx,
+                *reply_author,
+                user.id,
+                Some(topic_id),
+                Some(*reply_id),
+                reply_reason,
+            )
+            .await?;
+        }
+    }
+    vNotifyDeletedTx(
+        &mut tx,
         author_id,
         user.id,
         Some(topic_id),
@@ -699,8 +1469,55 @@ pub async fn delete_comment(
         &reason,
     )
     .await?;
+    tx.commit().await?;
+    for (reply_id, _, _) in vecCommittedReplies {
+        crate::search_index::index_comment(&state, reply_id).await;
+    }
     crate::search_index::index_comment(&state, form.msgid).await;
-    Ok(Redirect::to(&comment_link(&state, form.msgid).await?))
+    let optNextCommentId: Option<i32> = sqlx::query_scalar(
+        "SELECT min(id) FROM comments WHERE topic=$1 AND NOT deleted AND id >= $2",
+    )
+    .bind(topic_id)
+    .bind(form.msgid)
+    .fetch_one(&state.pool)
+    .await?;
+    let sNextLink = if let Some(iNextCommentId) = optNextCommentId {
+        comment_link(&state, iNextCommentId).await?
+    } else {
+        crate::routes::topics::get_topic(&state, topic_id)
+            .await?
+            .topic_url()
+    };
+    let sBigMessage = Some(format!(
+        "Удаленные комментарии: {}",
+        vecDeletedCommentIds
+            .iter()
+            .map(i32::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+    if let Some((sAuthorNick, sIp, iUserAgentId)) = optModeratorContext {
+        Ok(Html(
+            StCommentDeletedByModeratorTemplate {
+                message: "Удалено успешно".into(),
+                big_message: sBigMessage,
+                link: sNextLink,
+                author_nick: sAuthorNick,
+                ip: sIp.unwrap_or_default(),
+                user_agent_id: iUserAgentId,
+            }
+            .render()?,
+        ))
+    } else {
+        Ok(Html(
+            StCommentActionDoneTemplate {
+                message: "Удалено успешно".into(),
+                big_message: sBigMessage,
+                link: Some(sNextLink),
+            }
+            .render()?,
+        ))
+    }
 }
 
 /// UserEventService.insertTopicDeleteNotification/insertCommentDeleteNotification:
@@ -709,8 +1526,8 @@ pub async fn delete_comment(
 /// currently frozen.
 pub(crate) const ANONYMOUS_USER_ID: i32 = 2;
 
-pub(crate) async fn notify_deleted(
-    state: &AppState,
+pub(crate) async fn vNotifyDeletedTx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     author_id: i32,
     deleted_by: i32,
     topic_id: Option<i32>,
@@ -723,7 +1540,7 @@ pub(crate) async fn notify_deleted(
     let frozen_until: Option<chrono::DateTime<chrono::Utc>> =
         sqlx::query_scalar("SELECT frozen_until FROM users WHERE id=$1")
             .bind(author_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(&mut **tx)
             .await?
             .flatten();
     if frozen_until
@@ -737,12 +1554,52 @@ pub(crate) async fn notify_deleted(
         .bind(topic_id)
         .bind(comment_id)
         .bind(reason)
-        .execute(&state.pool)
+        .execute(&mut **tx)
         .await?;
     sqlx::query("UPDATE users SET unread_events=(SELECT count(*) FROM user_events e WHERE e.unread AND e.userid=users.id) WHERE id=$1")
         .bind(author_id)
-        .execute(&state.pool)
+        .execute(&mut **tx)
         .await?;
+    Ok(())
+}
+
+/// UserEventService.processCommentsDeleted: remove notifications whose target
+/// disappeared and recalculate every affected user's cached unread counter in
+/// the same transaction as the comment deletion.
+async fn vDeleteCommentEventsTx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    vecCommentIds: &[i32],
+) -> Result<()> {
+    if vecCommentIds.is_empty() {
+        return Ok(());
+    }
+    let vecAffectedUsers: Vec<i32> = sqlx::query_scalar(
+        r#"SELECT DISTINCT userid FROM user_events
+           WHERE comment_id = ANY($1)
+             AND type IN ('REPLY','WATCH','REF','REACTION','WARNING')"#,
+    )
+    .bind(vecCommentIds)
+    .fetch_all(&mut **tx)
+    .await?;
+    sqlx::query(
+        r#"DELETE FROM user_events
+           WHERE comment_id = ANY($1)
+             AND type IN ('REPLY','WATCH','REF','REACTION','WARNING')"#,
+    )
+    .bind(vecCommentIds)
+    .execute(&mut **tx)
+    .await?;
+    if !vecAffectedUsers.is_empty() {
+        sqlx::query(
+            r#"UPDATE users SET unread_events=(
+                   SELECT count(*) FROM user_events e
+                   WHERE e.unread AND e.userid=users.id
+               ) WHERE id = ANY($1)"#,
+        )
+        .bind(&vecAffectedUsers)
+        .execute(&mut **tx)
+        .await?;
+    }
     Ok(())
 }
 
@@ -764,7 +1621,7 @@ pub async fn undelete_comment(
         .ok_or(AppError::NotFound)?;
     let (topic_id, deleted) = row;
     if !deleted {
-        return Err(AppError::BadRequest("комментарий не удален".into()));
+        return Err(AppError::Forbidden);
     }
     let topic_deleted: bool = sqlx::query_scalar("SELECT deleted FROM topics WHERE id=$1")
         .bind(topic_id)
@@ -785,74 +1642,59 @@ pub async fn undelete_comment(
         .bind(form.msgid)
         .fetch_one(&state.pool)
         .await?;
-    let delby: Option<i32> = sqlx::query_scalar("SELECT delby FROM del_info WHERE msgid=$1")
-        .bind(form.msgid)
-        .fetch_optional(&state.pool)
-        .await?;
-    if delby == Some(author_id) {
+    let mut tx = state.pool.begin().await?;
+    let stDeleteInfo: Option<(i32, Option<i32>)> =
+        sqlx::query_as("SELECT delby, bonus FROM del_info WHERE msgid=$1 FOR UPDATE")
+            .bind(form.msgid)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if stDeleteInfo.as_ref().map(|stValue| stValue.0) == Some(author_id) {
         return Err(AppError::Forbidden);
     }
 
+    if let Some(iBonus) = stDeleteInfo
+        .and_then(|stValue| stValue.1)
+        .filter(|iValue| *iValue != 0)
+    {
+        sqlx::query("UPDATE users SET score=GREATEST(score-$2,0) WHERE id=$1")
+            .bind(author_id)
+            .bind(iBonus)
+            .execute(&mut *tx)
+            .await?;
+    }
     sqlx::query("UPDATE comments SET deleted=false WHERE id=$1")
         .bind(form.msgid)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
     sqlx::query("DELETE FROM del_info WHERE msgid=$1")
         .bind(form.msgid)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
+    sqlx::query("UPDATE topics SET lastmod=CURRENT_TIMESTAMP WHERE id=$1")
+        .bind(topic_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
     crate::search_index::index_comment(&state, form.msgid).await;
     Ok(Redirect::to(&comment_link(&state, form.msgid).await?))
 }
 
-/// CommentCreateService.getCommentBody: 4096 chars for anonymous, 8192 for
-/// registered users - this port has no anonymous-posting model, so only
-/// the higher registered-user cap applies.
 const COMMENT_MAX_LENGTH: usize = 8192;
+const COMMENT_MAX_LENGTH_ANONYMOUS: usize = 4096;
 
 async fn insert_comment(
     state: &AppState,
     user_id: i32,
-    form: CommentForm,
+    bAnonymous: bool,
+    bUserCastAllowed: bool,
+    form: &CommentForm,
     markup: &str,
+    sRemoteIp: &str,
+    optUserAgent: Option<&str>,
 ) -> Result<i32> {
-    if form.msg.trim().is_empty() {
-        return Err(AppError::BadRequest(
-            "комментарий не может быть пустым".into(),
-        ));
+    if let Some(sError) = optCommentBodyError(&form.msg, bAnonymous) {
+        return Err(AppError::BadRequest(sError));
     }
-    if form.msg.chars().count() > COMMENT_MAX_LENGTH {
-        return Err(AppError::BadRequest("Слишком большое сообщение".into()));
-    }
-    // FloodProtector.AddComment: minimum interval since the user's last
-    // comment, not a count-per-window - Java keys this by IP with a
-    // slow-mode-restricted tier this port doesn't model (no
-    // SlowModeChecker), so only the score>=100 "trusted" vs. default
-    // tiers apply, keyed by user instead of IP (no anonymous posting here
-    // to guard against).
-    let score: i32 = sqlx::query_scalar("SELECT COALESCE(score,0) FROM users WHERE id=$1")
-        .bind(user_id)
-        .fetch_one(&state.pool)
-        .await?;
-    let threshold = if score >= 100 {
-        chrono::Duration::seconds(3)
-    } else {
-        chrono::Duration::seconds(30)
-    };
-    let last_comment: Option<chrono::DateTime<chrono::Utc>> =
-        sqlx::query_scalar("SELECT max(postdate) FROM comments WHERE userid=$1")
-            .bind(user_id)
-            .fetch_one(&state.pool)
-            .await?;
-    if let Some(last) = last_comment
-        && chrono::Utc::now() < last + threshold
-    {
-        return Err(AppError::BadRequest(format!(
-            "Следующее сообщение может быть записано не менее чем через {} секунд после предыдущего",
-            threshold.num_seconds()
-        )));
-    }
-
     // The original inline form uses replyto=0 for a top-level comment;
     // PostgreSQL expects NULL because comments.replyto is a foreign key.
     let replyto = form.replyto.filter(|id| *id > 0);
@@ -866,14 +1708,23 @@ async fn insert_comment(
         .bind(markup)
         .execute(&mut *tx)
         .await?;
+    let optUserAgent = optUserAgent.map(|sValue| {
+        let mut iEnd = sValue.len().min(511);
+        while !sValue.is_char_boundary(iEnd) {
+            iEnd -= 1;
+        }
+        &sValue[..iEnd]
+    });
     sqlx::query(
-        "INSERT INTO comments(id, topic, userid, title, postdate, replyto) VALUES($1,$2,$3,$4,now(),$5)",
+        "INSERT INTO comments(id, topic, userid, title, postdate, replyto, postip, ua_id) VALUES($1,$2,$3,$4,now(),$5,$6::inet,create_user_agent($7))",
     )
     .bind(id)
     .bind(form.topic)
     .bind(user_id)
-    .bind(form.title.unwrap_or_else(|| "Комментарий".into()))
+    .bind(form.title.clone().unwrap_or_default())
     .bind(replyto)
+    .bind(sRemoteIp)
+    .bind(optUserAgent)
     .execute(&mut *tx)
     .await?;
     // topics.stat1/stat3 and groups.stat3 are now kept in sync by the
@@ -895,7 +1746,7 @@ async fn insert_comment(
                 .await?
     {
         parent_author = Some(parent_userid);
-        if parent_userid != user_id {
+        if parent_userid != user_id && parent_userid != 2 {
             let ignored: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM ignore_list WHERE userid=$1 AND ignored=$2)",
             )
@@ -915,16 +1766,38 @@ async fn insert_comment(
         }
     }
 
-    let watchers: Vec<i32> = sqlx::query_scalar(
-        r#"SELECT m.userid FROM memories m
-           WHERE m.topic=$1 AND m.watch AND m.userid<>$2 AND m.userid<>COALESCE($3,0)
-             AND NOT EXISTS (SELECT 1 FROM ignore_list il WHERE il.userid=m.userid AND il.ignored=$2)"#,
-    )
-    .bind(form.topic)
-    .bind(user_id)
-    .bind(parent_author)
-    .fetch_all(&mut *tx)
-    .await?;
+    let watchers: Vec<i32> = if let Some(iParentAuthor) = parent_author {
+        // For a reply, Java suppresses WATCH when the watcher ignores any
+        // author in the new comment's branch, not only the immediate author.
+        sqlx::query_scalar(
+            r#"SELECT m.userid FROM memories m
+               WHERE m.topic=$1 AND m.watch AND m.userid<>$2 AND m.userid<>$3 AND m.userid<>2
+                 AND NOT EXISTS (
+                   SELECT 1 FROM ignore_list il
+                   WHERE il.userid=m.userid
+                     AND il.ignored IN (SELECT get_branch_authors($4))
+                 )"#,
+        )
+        .bind(form.topic)
+        .bind(user_id)
+        .bind(iParentAuthor)
+        .bind(id)
+        .fetch_all(&mut *tx)
+        .await?
+    } else {
+        sqlx::query_scalar(
+            r#"SELECT m.userid FROM memories m
+               WHERE m.topic=$1 AND m.watch AND m.userid<>$2 AND m.userid<>2
+                 AND NOT EXISTS (
+                   SELECT 1 FROM ignore_list il
+                   WHERE il.userid=m.userid AND il.ignored=$2
+                 )"#,
+        )
+        .bind(form.topic)
+        .bind(user_id)
+        .fetch_all(&mut *tx)
+        .await?
+    };
     for watcher in &watchers {
         sqlx::query("INSERT INTO user_events(userid,type,private,message_id,comment_id) VALUES($1,'WATCH',false,$2,$3)")
             .bind(watcher)
@@ -939,7 +1812,7 @@ async fn insert_comment(
     // the raw comment text, skipping the commenter and anyone mentioned who
     // has the commenter on their ignore list.
     let mentioned_nicks = markup::extract_mentions(&form.msg);
-    if !mentioned_nicks.is_empty() {
+    if bUserCastAllowed && !mentioned_nicks.is_empty() {
         let mentioned_ids: Vec<i32> = sqlx::query_scalar(
             r#"SELECT u.id FROM users u
                WHERE lower(u.nick) = ANY($1) AND u.id <> $2
@@ -1035,4 +1908,29 @@ pub async fn deleted_comments_by_user(
         ));
     }
     Ok(Html(html))
+}
+
+#[cfg(test)]
+mod deletion_semantics_tests {
+    use super::{iCommentThresholdSeconds, iDeleteScoreDelta, reply_bonus_and_reason};
+
+    #[test]
+    fn moderator_penalty_is_persisted_as_java_score_delta() {
+        assert_eq!(iDeleteScoreDelta(-1), 0);
+        assert_eq!(iDeleteScoreDelta(0), 0);
+        assert_eq!(iDeleteScoreDelta(7), -7);
+        assert_eq!(iDeleteScoreDelta(99), -20);
+        assert_eq!(reply_bonus_and_reason(true, 0).0, -2);
+        assert_eq!(reply_bonus_and_reason(true, 1).0, -1);
+        assert_eq!(reply_bonus_and_reason(true, 2).0, 0);
+    }
+
+    #[test]
+    fn comment_flood_thresholds_include_slow_mode() {
+        assert_eq!(iCommentThresholdSeconds(true, 500, None, 0), 30);
+        assert_eq!(iCommentThresholdSeconds(false, 34, None, 0), 300);
+        assert_eq!(iCommentThresholdSeconds(false, 99, None, 0), 30);
+        assert_eq!(iCommentThresholdSeconds(false, 100, None, 0), 3);
+        assert_eq!(iCommentThresholdSeconds(false, 500, None, 30), 300);
+    }
 }

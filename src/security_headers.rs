@@ -17,11 +17,12 @@
 //!   an explicit opt-in rather than silently on.
 use crate::state::AppState;
 use axum::{
-    extract::{Request, State},
+    extract::{ConnectInfo, Request, State},
     http::{HeaderName, HeaderValue, Uri},
     middleware::Next,
     response::Response,
 };
+use std::net::SocketAddr;
 
 fn optOrigin(sUrl: &str) -> Option<String> {
     let stUri = sUrl.parse::<Uri>().ok()?;
@@ -30,22 +31,35 @@ fn optOrigin(sUrl: &str) -> Option<String> {
     Some(format!("{sScheme}://{stAuthority}"))
 }
 
-fn sContentSecurityPolicy(sWsUrl: &str) -> String {
+fn sContentSecurityPolicy(sPublicUrl: &str, sWsUrl: &str) -> String {
+    let sSecureOrigin = optOrigin(sPublicUrl)
+        .map(|sOrigin| format!(" {sOrigin}"))
+        .unwrap_or_default();
     let sWebSocketOrigin = optOrigin(sWsUrl)
         .map(|sOrigin| format!(" {sOrigin}"))
         .unwrap_or_default();
     format!(
         "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; \
-         form-action 'self'; manifest-src 'self'; \
-         script-src 'self' 'unsafe-inline'; \
-         style-src 'self' 'unsafe-inline'; \
-         img-src 'self' data: https://secure.gravatar.com; font-src 'self'; \
-         connect-src 'self'{sWebSocketOrigin}; frame-src 'self'"
+         form-action 'self'{sSecureOrigin}; manifest-src 'self'; \
+         script-src 'self' 'unsafe-inline' https://hcaptcha.com https://*.hcaptcha.com; \
+         style-src 'self' 'unsafe-inline' https://hcaptcha.com https://*.hcaptcha.com; \
+         img-src 'self' data: https://images.ping-admin.ru https://cdn.jsdelivr.net \
+         https://secure.gravatar.com; font-src 'self'; \
+         connect-src 'self' https://hcaptcha.com https://*.hcaptcha.com{sWebSocketOrigin}; \
+         frame-src 'self' https://hcaptcha.com https://*.hcaptcha.com"
     )
 }
 
 pub async fn apply(State(state): State<AppState>, req: Request, next: Next) -> Response {
-    let is_secure = crate::security::is_secure_request(req.headers());
+    let optPeerIp = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|stInfo| stInfo.0.ip());
+    let is_secure = crate::security::is_secure_request(
+        req.headers(),
+        optPeerIp,
+        &state.config.trusted_proxy_cidrs,
+    );
 
     let mut response = next.run(req).await;
     let headers = response.headers_mut();
@@ -58,7 +72,15 @@ pub async fn apply(State(state): State<AppState>, req: Request, next: Next) -> R
         HeaderName::from_static("x-frame-options"),
         HeaderValue::from_static("SAMEORIGIN"),
     );
-    let sCsp = sContentSecurityPolicy(&state.config.ws_url);
+    // CommonContextFilter marks every response private. Preserve an explicit
+    // handler policy (for example no-store), otherwise add the Java default.
+    if !headers.contains_key(axum::http::header::CACHE_CONTROL) {
+        headers.insert(
+            axum::http::header::CACHE_CONTROL,
+            HeaderValue::from_static("private"),
+        );
+    }
+    let sCsp = sContentSecurityPolicy(&state.config.public_url, &state.config.ws_url);
     if let Ok(stCsp) = HeaderValue::from_str(&sCsp) {
         headers.insert(HeaderName::from_static("content-security-policy"), stCsp);
     }
@@ -83,14 +105,19 @@ mod tests {
             optOrigin("wss://realtime.example:8443/socket-prefix/"),
             Some("wss://realtime.example:8443".to_string())
         );
-        let sCsp = sContentSecurityPolicy("wss://realtime.example:8443/socket-prefix/");
-        assert!(sCsp.contains("connect-src 'self' wss://realtime.example:8443;"));
+        let sCsp = sContentSecurityPolicy(
+            "https://www.example.org/",
+            "wss://realtime.example:8443/socket-prefix/",
+        );
+        assert!(sCsp.contains("wss://realtime.example:8443;"));
+        assert!(sCsp.contains("form-action 'self' https://www.example.org;"));
+        assert!(sCsp.contains("https://*.hcaptcha.com"));
         assert!(!sCsp.contains("socket-prefix"));
     }
 
     #[test]
     fn invalid_websocket_url_does_not_weaken_connect_src() {
-        let sCsp = sContentSecurityPolicy("not a URL");
-        assert!(sCsp.contains("connect-src 'self';"));
+        let sCsp = sContentSecurityPolicy("not a URL", "not a URL");
+        assert!(sCsp.contains("connect-src 'self' https://hcaptcha.com"));
     }
 }

@@ -112,7 +112,9 @@ def main() -> None:
         args.json.write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     if args.csv:
         with args.csv.open("w", newline="", encoding="utf-8") as fh:
-            writer = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
+            writer = csv.DictWriter(
+                fh, fieldnames=list(rows[0].keys()), lineterminator="\n"
+            )
             writer.writeheader(); writer.writerows(rows)
     if args.md:
         declared = sum(1 for r in rows if r["status"] == "method-declared")

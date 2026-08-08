@@ -3,7 +3,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::domain::comment::model::StCommentItem;
 use crate::domain::topic::{
-    model::{StTopicDetail, StTopicSummary},
+    model::{StRssContext, StTopicDetail, StTopicSummary},
     repository::{StEditTopic, StNewTopic, TrTopicRepository},
 };
 use crate::error::{AppError, Result};
@@ -36,6 +36,37 @@ impl TrTopicRepository for CTopicPgRepository {
             .fetch_all(&self.oPool)
             .await?;
         Ok(vecRows)
+    }
+
+    async fn stRssContext(&self, iSectionId: i32, iGroupId: i32) -> Result<StRssContext> {
+        sqlx::query_as::<_, StRssContext>(
+            r#"SELECT s.name AS "sSectionName",
+                      g.title AS "optGroupTitle"
+                 FROM sections s
+                 LEFT JOIN groups g ON g.id=$2 AND g.section=s.id
+                WHERE s.id=$1 AND ($2=0 OR g.id IS NOT NULL)"#,
+        )
+        .bind(iSectionId)
+        .bind(iGroupId)
+        .fetch_optional(&self.oPool)
+        .await?
+        .ok_or(AppError::NotFound)
+    }
+
+    async fn vecListRssTopics(
+        &self,
+        iSectionId: i32,
+        iGroupId: i32,
+        bNoTalks: bool,
+        bTech: bool,
+    ) -> Result<Vec<StTopicSummary>> {
+        Ok(sqlx::query_as::<_, StTopicSummary>(S_LIST_RSS_TOPICS_SQL)
+            .bind(iSectionId)
+            .bind(iGroupId)
+            .bind(bNoTalks)
+            .bind(bTech)
+            .fetch_all(&self.oPool)
+            .await?)
     }
 
     async fn stGetTopic(&self, iTopicId: i32) -> Result<StTopicDetail> {
@@ -80,8 +111,11 @@ impl TrTopicRepository for CTopicPgRepository {
         stNewTopic: StNewTopic<'_>,
     ) -> Result<()> {
         sqlx::query(
-            r#"INSERT INTO topics(id, groupid, userid, title, url, postdate, linktext, stat1, stat3, lastmod, moderate, draft)
-               VALUES ($1,$2,$3,$4,$5,now(),$6,0,0,now(),false,$7)"#,
+            r#"INSERT INTO topics(id, groupid, userid, title, url, postdate, linktext,
+                                  stat1, stat3, lastmod, moderate, draft, postip, ua_id,
+                                  allow_anonymous)
+               VALUES ($1,$2,$3,$4,$5,now(),$6,0,0,now(),false,$7,$8::inet,
+                       create_user_agent($9),$10)"#,
         )
         .bind(stNewTopic.iMsgId)
         .bind(stNewTopic.iGroupId)
@@ -90,6 +124,15 @@ impl TrTopicRepository for CTopicPgRepository {
         .bind(stNewTopic.optUrl)
         .bind(stNewTopic.optLinkText)
         .bind(stNewTopic.bDraft)
+        .bind(stNewTopic.sPostIp)
+        .bind(stNewTopic.optUserAgent.map(|sValue| {
+            let mut iEnd = sValue.len().min(511);
+            while !sValue.is_char_boundary(iEnd) {
+                iEnd -= 1;
+            }
+            &sValue[..iEnd]
+        }))
+        .bind(stNewTopic.bAllowAnonymous)
         .execute(&mut **txPg)
         .await?;
         Ok(())
@@ -210,15 +253,6 @@ impl TrTopicRepository for CTopicPgRepository {
         Ok(())
     }
 
-    async fn vSetDeleted(&self, iTopicId: i32, bDeleted: bool) -> Result<()> {
-        sqlx::query("UPDATE topics SET deleted=$2 WHERE id=$1")
-            .bind(iTopicId)
-            .bind(bDeleted)
-            .execute(&self.oPool)
-            .await?;
-        Ok(())
-    }
-
     async fn optResolveMeta(&self, iTopicId: i32) -> Result<Option<(i32, bool)>> {
         Ok(sqlx::query_as::<_, (i32, bool)>(
             "SELECT t.userid, g.resolvable FROM topics t JOIN groups g ON g.id=t.groupid WHERE t.id=$1",
@@ -291,6 +325,35 @@ WHERE ($1::text IS NULL OR CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN
   AND (t.moderate OR NOT s.moderate)
 ORDER BY t.sticky DESC, COALESCE(t.lastmod,t.postdate) DESC
 OFFSET $3 LIMIT $4
+"#;
+
+const S_LIST_RSS_TOPICS_SQL: &str = r#"
+SELECT t.id, t.title, t.url,
+       CASE WHEN s.moderate THEN t.commitdate ELSE t.postdate END AS postdate,
+       t.lastmod, u.id AS author_id, u.nick AS author,
+       g.id AS group_id, g.title AS group_title, g.urlname AS group_urlname,
+       s.id AS section_id, s.name AS section_name,
+       CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery'
+            WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(s.name) END AS section_prefix,
+       t.stat1 AS comments, t.deleted, t.sticky, t.resolved,
+       (SELECT string_agg(tv.value, ',' ORDER BY tv.value)
+          FROM tags tg JOIN tags_values tv ON tv.id=tg.tagid
+         WHERE tg.msgid=t.id) AS tags
+FROM topics t
+JOIN users u ON u.id=t.userid
+JOIN groups g ON g.id=t.groupid
+JOIN sections s ON s.id=g.section
+WHERE s.id=$1
+  AND ($2=0 OR g.id=$2)
+  AND NOT t.deleted
+  AND NOT t.draft
+  AND t.open_warnings <= 2
+  AND ((s.moderate AND t.commitdate IS NOT NULL) OR NOT s.moderate)
+  AND CASE WHEN s.moderate THEN t.commitdate ELSE t.postdate END >= now() - interval '3 months'
+  AND (NOT $3 OR t.groupid<>8404)
+  AND (NOT $4 OR t.groupid NOT IN (8404,4068,9326,19405))
+ORDER BY CASE WHEN s.moderate THEN t.commitdate ELSE t.postdate END DESC
+LIMIT 30
 "#;
 
 const S_GET_TOPIC_SQL: &str = r#"

@@ -9,7 +9,7 @@ use crate::{
 use askama::Template;
 use axum::{
     Form, Json,
-    extract::{Multipart, Path, Query, State},
+    extract::{ConnectInfo, Multipart, Path, Query, State},
     http::{StatusCode, Uri},
     response::{Html, IntoResponse, Redirect, Response},
 };
@@ -17,6 +17,7 @@ use axum_extra::extract::cookie::{Cookie, CookieJar};
 use image::GenericImageView;
 use serde::Deserialize;
 use serde_json::json;
+use std::net::SocketAddr;
 
 pub async fn error_403() -> AppError {
     AppError::Forbidden
@@ -736,32 +737,201 @@ fn render_replies_feed(
     }
 }
 
+#[derive(Deserialize)]
+pub struct StViewDeletedQuery {
+    pub id: i32,
+}
+
+struct StPreparedDeletedComment {
+    stComment: CommentItem,
+    optDeleteInfo: Option<(String, String)>,
+}
+
+async fn optLoadComment(stState: &AppState, iCommentId: i32) -> Result<Option<CommentItem>> {
+    Ok(sqlx::query_as::<_, CommentItem>(
+        r#"SELECT c.id, c.topic, c.replyto, c.title, m.message, m.markup::text AS markup,
+                  c.postdate, u.id AS author_id, u.nick AS author, c.deleted
+           FROM comments c JOIN msgbase m ON m.id=c.id JOIN users u ON u.id=c.userid
+           WHERE c.id=$1"#,
+    )
+    .bind(iCommentId)
+    .fetch_optional(&stState.pool)
+    .await?)
+}
+
+async fn optLoadDeleteInfo(
+    stState: &AppState,
+    iCommentId: i32,
+) -> Result<Option<(String, String)>> {
+    Ok(sqlx::query_as(
+        r#"SELECT u.nick,di.reason FROM del_info di JOIN users u ON u.id=di.delby
+           WHERE di.msgid=$1"#,
+    )
+    .bind(iCommentId)
+    .fetch_optional(&stState.pool)
+    .await?)
+}
+
+fn sRenderDeletedComment(stPrepared: &StPreparedDeletedComment) -> String {
+    let stComment = &stPrepared.stComment;
+    let sDeleteInfo = if stComment.deleted {
+        stPrepared
+            .optDeleteInfo
+            .as_ref()
+            .map(|(sNick, sReason)| {
+                format!(
+                    " {} по причине: {}",
+                    html_escape::encode_text(sNick),
+                    html_escape::encode_text(sReason)
+                )
+            })
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let sDeletedTitle = if stComment.deleted {
+        format!("<div class=\"title\"><strong>Сообщение удалено{sDeleteInfo}</strong></div>")
+    } else {
+        String::new()
+    };
+    let sTitle = if !stComment.title.trim().is_empty() {
+        format!("<h1>{}</h1>", html_escape::encode_text(&stComment.title))
+    } else {
+        String::new()
+    };
+    format!(
+        "<article class=\"msg\" id=\"comment-{id}\">{deleted_title}<div class=\"msg-container\"><div class=\"msg_body\"><div class=\"msg-text\">{title}{body}</div><div class=\"sign\"><a href=\"/people/{author_url}/profile\">{author}</a>, {date}</div></div></div></article>",
+        id = stComment.id,
+        deleted_title = sDeletedTitle,
+        title = sTitle,
+        body =
+            markup::render_message_with_markup(&stComment.message, Some(&stComment.markup), None),
+        author_url = urlencoding::encode(&stComment.author),
+        author = html_escape::encode_text(&stComment.author),
+        date = stComment.postdate,
+    )
+}
+
+fn bCanViewDeletedComment(
+    bCanViewAll: bool,
+    iViewerId: i32,
+    iAuthorId: i32,
+    bViewerFrozen: bool,
+    dtDeleted: chrono::DateTime<chrono::Utc>,
+    dtNow: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    bCanViewAll
+        || (iViewerId == iAuthorId
+            && !bViewerFrozen
+            && dtDeleted > dtNow - chrono::Duration::days(14))
+}
+
 pub async fn view_deleted(
-    State(state): State<AppState>,
-    CurrentUser(user): CurrentUser,
+    State(stState): State<AppState>,
+    CurrentUser(optUser): CurrentUser,
+    Query(stQuery): Query<StViewDeletedQuery>,
 ) -> Result<Html<String>> {
-    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) {
+    let stUser = optUser.as_ref().ok_or(AppError::Forbidden)?;
+    let stComment = optLoadComment(&stState, stQuery.id)
+        .await?
+        .filter(|stComment| stComment.deleted)
+        .ok_or(AppError::NotFound)?;
+    let optDeleteRow: Option<(chrono::DateTime<chrono::Utc>, String, String)> = sqlx::query_as(
+        r#"SELECT di.deldate,u.nick,di.reason FROM del_info di JOIN users u ON u.id=di.delby
+           WHERE di.msgid=$1"#,
+    )
+    .bind(stComment.id)
+    .fetch_optional(&stState.pool)
+    .await?;
+    let Some((dtDeleted, sDeletedBy, sDeleteReason)) = optDeleteRow else {
+        return Err(AppError::NotFound);
+    };
+
+    let bCanViewAll =
+        crate::routes::topics::allow_view_all_deleted_comments(&stState, stComment.topic, &optUser)
+            .await?;
+    let bFrozen: bool = sqlx::query_scalar(
+        "SELECT COALESCE(frozen_until>CURRENT_TIMESTAMP,false) FROM users WHERE id=$1",
+    )
+    .bind(stUser.id)
+    .fetch_one(&stState.pool)
+    .await?;
+    if !bCanViewDeletedComment(
+        bCanViewAll,
+        stUser.id,
+        stComment.author_id,
+        bFrozen,
+        dtDeleted,
+        chrono::Utc::now(),
+    ) {
         return Err(AppError::Forbidden);
     }
-    let comments = sqlx::query_as::<_, CommentItem>(
-        r#"SELECT c.id, c.topic, c.replyto, c.title, m.message, m.markup::text AS markup, c.postdate, u.id AS author_id, u.nick AS author, c.deleted
-           FROM comments c JOIN msgbase m ON m.id=c.id JOIN users u ON u.id=c.userid
-           WHERE c.deleted ORDER BY c.postdate DESC LIMIT 100"#,
+
+    let (sTopicUrl, iPostScore): (String, i32) = sqlx::query_as(
+        r#"SELECT '/'||(CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery'
+                    WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(s.name) END)
+                  ||'/'||g.urlname||'/'||t.id, COALESCE(t.postscore,-9999)
+           FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section
+           WHERE t.id=$1"#,
     )
-    .fetch_all(&state.pool)
-    .await?;
-    let mut html = "<h1>Удалённые комментарии</h1>".to_string();
-    for c in comments {
-        html.push_str(&format!(
-            "<article id=\"comment-{}\"><h3>{}</h3><p>{} · topic #{}</p><div>{}</div></article>",
-            c.id,
-            html_escape::encode_text(&c.title),
-            html_escape::encode_text(&c.author),
-            c.topic,
-            markup::render_message_with_markup(&c.message, Some(&c.markup), None)
-        ));
+    .bind(stComment.topic)
+    .fetch_optional(&stState.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let mut vecChain = Vec::new();
+    if iPostScore != 10002 {
+        let mut optParentId = stComment.replyto.filter(|iValue| *iValue != 0);
+        while let Some(iParentId) = optParentId {
+            let stParent = optLoadComment(&stState, iParentId)
+                .await?
+                .ok_or(AppError::NotFound)?;
+            let optDeleteInfo = if stParent.deleted {
+                optLoadDeleteInfo(&stState, stParent.id).await?
+            } else {
+                None
+            };
+            let bContinue = stParent.deleted
+                && optDeleteInfo
+                    .as_ref()
+                    .is_some_and(|(_, sReason)| sReason.starts_with("7.1 "));
+            optParentId = bContinue
+                .then_some(stParent.replyto)
+                .flatten()
+                .filter(|iValue| *iValue != 0);
+            vecChain.push(StPreparedDeletedComment {
+                stComment: stParent,
+                optDeleteInfo,
+            });
+            if !bContinue {
+                break;
+            }
+        }
+        vecChain.reverse();
     }
-    Ok(Html(html))
+
+    let sBackLink = if stUser.canmod {
+        format!("{sTopicUrl}?cid={}", stComment.id)
+    } else {
+        sTopicUrl
+    };
+    let mut sHtml = format!(
+        "<h1>Просмотр удаленного комментария</h1><nav><a class=\"btn btn-default\" href=\"{}\">Перейти в топик</a></nav><div class=\"messages\">",
+        html_escape::encode_double_quoted_attribute(&sBackLink)
+    );
+    for stParent in &vecChain {
+        sHtml.push_str("<h2>Ответ на:</h2>");
+        sHtml.push_str(&sRenderDeletedComment(stParent));
+    }
+    if !vecChain.is_empty() {
+        sHtml.push_str("<h2>Удаленный комментарий:</h2>");
+    }
+    sHtml.push_str(&sRenderDeletedComment(&StPreparedDeletedComment {
+        stComment,
+        optDeleteInfo: Some((sDeletedBy, sDeleteReason)),
+    }));
+    sHtml.push_str("</div>");
+    Ok(Html(sHtml))
 }
 
 #[derive(Deserialize)]
@@ -772,7 +942,19 @@ pub struct NotificationsClickForm {
     pub last_id: i32,
 }
 
-async fn topic_link(state: &AppState, topic_id: i32, comment_id: Option<i32>) -> Result<String> {
+async fn topic_link(
+    state: &AppState,
+    topic_id: i32,
+    comment_id: Option<i32>,
+    event_type: &str,
+) -> Result<String> {
+    if event_type == "DEL"
+        && let Some(iCommentId) = comment_id
+    {
+        return Ok(format!(
+            "/view-deleted?id={iCommentId}#comment-{iCommentId}"
+        ));
+    }
     let prefix: Option<(String, String)> = sqlx::query_as(
         r#"SELECT CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(s.name) END,
                   g.urlname
@@ -790,53 +972,210 @@ async fn topic_link(state: &AppState, topic_id: i32, comment_id: Option<i32>) ->
     Ok(format!("/{section}/{group}/{topic_id}{anchor}"))
 }
 
-/// Simplified from UserEventController.processClickNotifications: verifies
-/// both events belong to the current user, marks the id range read, and
-/// returns the link to the first event's topic/comment. The FAVORITES/
-/// REACTION grouped-range validation (isValidClickRange) isn't replicated -
-/// out of scope for a first pass, tracked as a follow-up.
+#[derive(Debug)]
+struct StNotificationClickEvent {
+    user_id: i32,
+    unread: bool,
+    event_type: String,
+    topic_id: Option<i32>,
+    comment_id: Option<i32>,
+}
+
+type TyNotificationClickRow = (i32, bool, String, Option<i32>, Option<i32>);
+
+fn bValidNotificationClickRange(
+    first_id: i32,
+    first: &StNotificationClickEvent,
+    last_id: i32,
+    last: &StNotificationClickEvent,
+) -> bool {
+    if first_id > last_id || first.unread != last.unread {
+        return false;
+    }
+    match last.event_type.as_str() {
+        "WATCH" => first.event_type == "WATCH" && first.topic_id == last.topic_id,
+        "REACTION" => {
+            first.event_type == "REACTION"
+                && first.topic_id == last.topic_id
+                && first.comment_id == last.comment_id
+        }
+        _ => first_id == last_id && first.event_type == last.event_type,
+    }
+}
+
+#[cfg(test)]
+mod notification_click_tests {
+    use super::*;
+
+    fn stEvent(sType: &str, iTopicId: i32, optCommentId: Option<i32>) -> StNotificationClickEvent {
+        StNotificationClickEvent {
+            user_id: 1,
+            unread: true,
+            event_type: sType.into(),
+            topic_id: Some(iTopicId),
+            comment_id: optCommentId,
+        }
+    }
+
+    #[test]
+    fn watch_range_requires_same_topic_and_order() {
+        let stFirst = stEvent("WATCH", 10, Some(1));
+        let stLast = stEvent("WATCH", 10, Some(9));
+        assert!(bValidNotificationClickRange(2, &stFirst, 5, &stLast));
+        assert!(!bValidNotificationClickRange(5, &stFirst, 2, &stLast));
+        assert!(!bValidNotificationClickRange(
+            2,
+            &stFirst,
+            5,
+            &stEvent("WATCH", 11, None)
+        ));
+    }
+
+    #[test]
+    fn reaction_range_requires_same_topic_and_comment() {
+        let stFirst = stEvent("REACTION", 10, Some(7));
+        assert!(bValidNotificationClickRange(
+            2,
+            &stFirst,
+            5,
+            &stEvent("REACTION", 10, Some(7))
+        ));
+        assert!(!bValidNotificationClickRange(
+            2,
+            &stFirst,
+            5,
+            &stEvent("REACTION", 10, Some(8))
+        ));
+    }
+
+    #[test]
+    fn ordinary_event_must_be_a_single_matching_event() {
+        let stEvent = stEvent("REF", 10, None);
+        assert!(bValidNotificationClickRange(2, &stEvent, 2, &stEvent));
+        assert!(!bValidNotificationClickRange(2, &stEvent, 3, &stEvent));
+    }
+
+    #[test]
+    fn deleted_comment_visibility_matches_java_owner_window_and_global_gate() {
+        let dtNow = chrono::Utc::now();
+        assert!(bCanViewDeletedComment(
+            true,
+            9,
+            10,
+            true,
+            dtNow - chrono::Duration::days(30),
+            dtNow,
+        ));
+        assert!(bCanViewDeletedComment(
+            false,
+            9,
+            9,
+            false,
+            dtNow - chrono::Duration::days(13),
+            dtNow,
+        ));
+        assert!(!bCanViewDeletedComment(
+            false,
+            9,
+            9,
+            true,
+            dtNow - chrono::Duration::days(1),
+            dtNow,
+        ));
+        assert!(!bCanViewDeletedComment(
+            false,
+            9,
+            9,
+            false,
+            dtNow - chrono::Duration::days(14),
+            dtNow,
+        ));
+        assert!(!bCanViewDeletedComment(
+            false,
+            9,
+            10,
+            false,
+            dtNow - chrono::Duration::days(1),
+            dtNow,
+        ));
+    }
+}
+
 async fn process_notifications_click(
     state: &AppState,
     user_id: i32,
     form: &NotificationsClickForm,
 ) -> Result<String> {
-    let first: Option<(i32,)> = sqlx::query_as("SELECT userid FROM user_events WHERE id=$1")
-        .bind(form.first_id)
-        .fetch_optional(&state.pool)
-        .await?;
-    let last: Option<(i32, bool, i32, Option<i32>)> = sqlx::query_as(
-        "SELECT userid, unread, message_id, comment_id FROM user_events WHERE id=$1",
+    let optFirst: Option<TyNotificationClickRow> = sqlx::query_as(
+        "SELECT userid,unread,type::text,message_id,comment_id FROM user_events WHERE id=$1",
+    )
+    .bind(form.first_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let optLast: Option<TyNotificationClickRow> = sqlx::query_as(
+        "SELECT userid,unread,type::text,message_id,comment_id FROM user_events WHERE id=$1",
     )
     .bind(form.last_id)
     .fetch_optional(&state.pool)
     .await?;
 
-    let (Some((first_owner,)), Some((last_owner, last_unread, _, _))) = (first, last) else {
+    let (Some(stFirstRow), Some(stLastRow)) = (optFirst, optLast) else {
         return Ok("/notifications".to_string());
     };
-    if user_id != first_owner || user_id != last_owner {
+    let stFirst = StNotificationClickEvent {
+        user_id: stFirstRow.0,
+        unread: stFirstRow.1,
+        event_type: stFirstRow.2,
+        topic_id: stFirstRow.3,
+        comment_id: stFirstRow.4,
+    };
+    let stLast = StNotificationClickEvent {
+        user_id: stLastRow.0,
+        unread: stLastRow.1,
+        event_type: stLastRow.2,
+        topic_id: stLastRow.3,
+        comment_id: stLastRow.4,
+    };
+    if user_id != stFirst.user_id || user_id != stLast.user_id {
         return Err(AppError::Forbidden);
     }
 
-    if last_unread {
-        let (lo, hi) = (
-            form.first_id.min(form.last_id),
-            form.first_id.max(form.last_id),
-        );
-        sqlx::query("UPDATE user_events SET unread=false WHERE userid=$1 AND unread AND id BETWEEN $2 AND $3")
-            .bind(user_id).bind(lo).bind(hi).execute(&state.pool).await?;
+    if stLast.unread {
+        if !bValidNotificationClickRange(form.first_id, &stFirst, form.last_id, &stLast) {
+            return Err(AppError::BadRequest(
+                "invalid notification click range".into(),
+            ));
+        }
+        let mut tx = state.pool.begin().await?;
+        match stLast.event_type.as_str() {
+            "WATCH" => {
+                sqlx::query("UPDATE user_events SET unread=false WHERE userid=$1 AND unread AND type='WATCH'::event_type AND message_id=$2")
+                    .bind(user_id).bind(stLast.topic_id).execute(&mut *tx).await?;
+            }
+            "REACTION" => {
+                sqlx::query("UPDATE user_events SET unread=false WHERE userid=$1 AND unread AND type='REACTION'::event_type AND id BETWEEN $2 AND $3 AND message_id IS NOT DISTINCT FROM $4 AND comment_id IS NOT DISTINCT FROM $5")
+                    .bind(user_id).bind(form.first_id).bind(form.last_id).bind(stLast.topic_id).bind(stLast.comment_id).execute(&mut *tx).await?;
+            }
+            _ => {
+                sqlx::query(
+                    "UPDATE user_events SET unread=false WHERE userid=$1 AND unread AND id=$2",
+                )
+                .bind(user_id)
+                .bind(form.last_id)
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
         sqlx::query("UPDATE users SET unread_events=(SELECT count(*) FROM user_events e WHERE e.unread AND e.userid=users.id) WHERE id=$1")
-            .bind(user_id).execute(&state.pool).await?;
+            .bind(user_id).execute(&mut *tx).await?;
+        tx.commit().await?;
         state.realtime.vNotifyEvents([user_id]);
     }
 
-    let first_target: Option<(i32, Option<i32>)> =
-        sqlx::query_as("SELECT message_id, comment_id FROM user_events WHERE id=$1")
-            .bind(form.first_id)
-            .fetch_optional(&state.pool)
-            .await?;
-    match first_target {
-        Some((topic_id, comment_id)) => topic_link(state, topic_id, comment_id).await,
+    match stFirst.topic_id {
+        Some(iTopicId) => {
+            topic_link(state, iTopicId, stFirst.comment_id, &stFirst.event_type).await
+        }
         None => Ok("/notifications".to_string()),
     }
 }
@@ -845,12 +1184,12 @@ pub async fn notifications_click(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
     Form(form): Form<NotificationsClickForm>,
-) -> Result<Redirect> {
+) -> Result<Response> {
     let Some(user) = user else {
         return Err(AppError::Forbidden);
     };
     let url = process_notifications_click(&state, user.id, &form).await?;
-    Ok(Redirect::to(&url))
+    Ok((StatusCode::FOUND, [(axum::http::header::LOCATION, url)]).into_response())
 }
 
 pub async fn notifications_click_ajax(
@@ -898,6 +1237,7 @@ pub async fn activate_post(
     jar: CookieJar,
     CurrentUser(current_user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
     Form(form): Form<ActivationForm>,
 ) -> Result<impl IntoResponse> {
     if form.action.is_some() {
@@ -988,7 +1328,11 @@ pub async fn activate_post(
             crate::security::remember_me::VALIDITY_SECONDS,
         ))
         .http_only(true)
-        .secure(crate::security::is_secure_request(&headers))
+        .secure(crate::security::is_secure_request(
+            &headers,
+            Some(stPeerAddress.ip()),
+            &state.config.trusted_proxy_cidrs,
+        ))
         .build();
         return Ok((jar.add(cookie), Redirect::to("/")).into_response());
     }
@@ -1080,7 +1424,10 @@ fn verify_activation_code(
     )
 }
 
-pub async fn addphoto_form(CurrentUser(user): CurrentUser) -> Result<Html<String>> {
+pub async fn addphoto_form(
+    CurrentUser(user): CurrentUser,
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+) -> Result<Html<String>> {
     let Some(user) = user else {
         return Err(AppError::Forbidden);
     };
@@ -1088,11 +1435,13 @@ pub async fn addphoto_form(CurrentUser(user): CurrentUser) -> Result<Html<String
         r#"
 <h1>Загрузить userpic для {nick}</h1>
 <form method="post" action="/addphoto.jsp" enctype="multipart/form-data" class="form">
+  <input type="hidden" name="csrf" value="{csrf_token}">
   <label>Файл PNG/JPEG/WEBP, 50–300 px, до 100 KiB <input type="file" name="file" accept="image/png,image/jpeg,image/webp" required></label>
   <button type="submit">Загрузить</button>
 </form>
 "#,
-        nick = html_escape::encode_text(&user.nick)
+        nick = html_escape::encode_text(&user.nick),
+        csrf_token = html_escape::encode_double_quoted_attribute(&csrf_token),
     )))
 }
 
@@ -1342,14 +1691,22 @@ pub fn valid_login_name_for_java(nick: &str) -> bool {
 
 pub async fn forum_page_or_archive(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Path((group, id_or_year, page_or_month)): Path<(String, String, String)>,
     Query(q): Query<PagerQuery>,
     CurrentUser(current_user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
 ) -> Result<axum::response::Response> {
     if let Some(page) = page_or_month.strip_prefix("page") {
         let page: i64 = page.parse().map_err(|_| AppError::NotFound)?;
         let id: i32 = id_or_year.parse().map_err(|_| AppError::NotFound)?;
+        let sRemoteIp = crate::security::stClientIp(
+            stPeerAddress.ip(),
+            &headers,
+            &state.config.trusted_proxy_cidrs,
+        )
+        .to_string();
         return crate::routes::topics::render_topic_page(
             state,
             "forum",
@@ -1358,6 +1715,7 @@ pub async fn forum_page_or_archive(
             page,
             current_user,
             csrf_token,
+            sRemoteIp,
         )
         .await;
     }
@@ -1779,15 +2137,5 @@ pub async fn remove_userpic(
 pub async fn reset_password_form(
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
 ) -> Result<Html<String>> {
-    Ok(Html(format!(
-        r#"
-<h1>Сбросить пароль</h1>
-<form method="post" action="/reset-password" class="form">
-<input type="hidden" name="csrf" value="{csrf_token}">
-<label>Ник <input name="nick" required></label>
-<label>Код из письма <input name="code" required></label>
-<button type="submit">Сбросить пароль</button>
-</form>
-"#
-    )))
+    crate::routes::auth::render_reset_password_form(csrf_token, None)
 }
