@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Добавить комментарий{% endblock %}
+{% block content %}
+<h1>Добавить комментарий</h1>
+<p><a href="{{ topic_url }}">{{ topic_title }}</a></p>
+<p class="help-block">Комментарий должен соответствовать <a href="/help/rules.md">правилам</a> сайта.</p>
+<div id="comment-form-container">
+<form method="post" action="/add_comment.jsp" class="form wide" id="commentForm">
+  <input type="hidden" name="csrf" value="{{ csrf_token }}">
+  <input type="hidden" name="topic" value="{{ topic_id }}">
+  {% match replyto %}{% when Some with (id) %}<input type="hidden" name="replyto" value="{{ id }}">{% when None %}<input type="hidden" name="replyto" value="0">{% endmatch %}
+  <div class="control-group" data-format-mode="{{ format_mode }}"><div class="markup-tabs"><ul class="markup-tabs__nav"><li class="markup-tabs__tab active" data-tab="editor">{{ format_title }}</li></ul><div class="markup-tabs__content"><div class="markup-tabs__panel active" data-panel="editor"><textarea id="msg" name="msg" required autofocus></textarea></div></div></div></div>
+  <div class="form-actions"><button class="btn btn-primary" type="submit">Поместить</button><button class="btn btn-default" type="submit" name="preview">Предпросмотр</button><a class="btn btn-default" href="{{ topic_url }}">Отменить</a><div class="help-block">Используйте Ctrl-Enter для размещения комментария</div></div>
+</form>
+</div>
+{% endblock %}

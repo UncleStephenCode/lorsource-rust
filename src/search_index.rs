@@ -202,11 +202,6 @@ async fn put_doc(state: &AppState, base: &str, id: i32, doc: &MessageIndexDocume
     }
 }
 
-pub async fn delete_doc(state: &AppState, id: i32) {
-    let Some(base) = base_url(state) else { return };
-    let _ = state.http.delete(format!("{base}/{INDEX}/_doc/{id}")).send().await;
-}
-
 /// `/admin/search-reindex`: rebuild the whole index from Postgres.
 pub async fn reindex_all(state: &AppState) -> Result<(u64, u64), String> {
     let Some(_) = base_url(state) else { return Err("OPENSEARCH_URL is not configured".into()) };

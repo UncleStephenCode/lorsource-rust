@@ -6,8 +6,6 @@
 
 pub mod comment;
 pub mod common;
-pub mod compat;
-pub mod event;
 pub mod forum;
 pub mod tag;
 pub mod topic;

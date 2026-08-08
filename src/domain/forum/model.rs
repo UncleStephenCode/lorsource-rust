@@ -1,20 +1,6 @@
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
-pub struct StSection {
-    pub id: i32,
-    pub name: String,
-    pub title: String,
-    pub url_prefix: String,
-    pub moderate: bool,
-    pub imagepost: bool,
-    pub preformat: bool,
-    pub havelink: bool,
-    pub vote: Option<bool>,
-    pub add_info: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct StGroup {
     pub id: i32,
     pub title: String,

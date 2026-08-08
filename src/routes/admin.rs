@@ -463,7 +463,6 @@ pub struct UserModForm {
     pub id: i32,
     pub action: String,
     pub reason: Option<String>,
-    pub delta: Option<i32>,
     pub shift: Option<String>,
 }
 

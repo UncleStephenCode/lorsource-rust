@@ -5,13 +5,10 @@
 //! existing route/templates surface stable while the port is refactored module by
 //! module.
 
-pub type Section = crate::domain::forum::model::StSection;
 pub type Group = crate::domain::forum::model::StGroup;
 pub type UserSummary = crate::domain::user::model::StUserSummary;
 pub type TopicSummary = crate::domain::topic::model::StTopicSummary;
 pub type TopicDetail = crate::domain::topic::model::StTopicDetail;
 pub type CommentItem = crate::domain::comment::model::StCommentItem;
 pub type TagItem = crate::domain::tag::model::StTagItem;
-pub type EventItem = crate::domain::event::model::StEventItem;
 pub type PagerQuery = crate::domain::common::model::StPagerQuery;
-pub type SearchQuery = crate::domain::common::model::StSearchQuery;

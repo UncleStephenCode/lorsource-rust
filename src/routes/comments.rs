@@ -1,5 +1,6 @@
 use crate::{auth::CurrentUser, error::{AppError, Result}, markup, state::AppState};
 use axum::{extract::{Path, Query, State}, response::{Html, Redirect}, Form};
+use askama::Template;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -22,22 +23,50 @@ pub struct CommentForm {
     pub msg: String,
 }
 
+#[derive(Template)]
+#[template(path = "comment_form.html")]
+struct CommentFormTemplate {
+    topic_id: i32,
+    topic_title: String,
+    topic_url: String,
+    replyto: Option<i32>,
+    csrf_token: String,
+    format_mode: String,
+    format_title: String,
+}
 
-pub async fn add_comment_form(State(state): State<AppState>, Query(q): Query<CommentFormQuery>, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
+async fn comment_format(state: &AppState, user_id: i32) -> Result<(String, String, String)> {
+    let settings_text: Option<String> = sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
+        .bind(user_id).fetch_optional(&state.pool).await?.flatten();
+    let mode = crate::profile::ProfileSettings::from_hstore_text(settings_text).format_mode;
+    let title = crate::profile::FORMAT_MODES.iter().find(|(id, _, _)| *id == mode)
+        .map(|(_, title, _)| *title).unwrap_or("Markdown").to_string();
+    let markup = match mode.as_str() {
+        "markdown" => "MARKDOWN",
+        "ntobr" => "BBCODE_ULB",
+        "plain" => "PLAIN",
+        _ => "BBCODE_TEX",
+    };
+    Ok((mode, title, markup.to_string()))
+}
+
+
+pub async fn add_comment_form(State(state): State<AppState>, Query(q): Query<CommentFormQuery>, CurrentUser(user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     let topic = crate::routes::topics::get_topic(&state, q.topic).await?;
-    let reply_input = q.replyto.map(|id| format!(r#"<input type="hidden" name="replyto" value="{id}">"#)).unwrap_or_default();
-    Ok(Html(format!(r#"
-<h1>Добавить комментарий</h1>
-<p><a href="{url}">{title}</a></p>
-<form method="post" action="/add_comment.jsp" class="form wide">
-  <input type="hidden" name="csrf" value="{csrf_token}">
-  <input type="hidden" name="topic" value="{topic_id}">
-  {reply_input}
-  <label>Заголовок <input name="title" value="Комментарий"></label>
-  <label>Комментарий <textarea name="msg" rows="12" required></textarea></label>
-  <button type="submit">Отправить</button>
-</form>
-"#, url = topic.topic_url(), title = html_escape::encode_text(&topic.title), topic_id = topic.id)))
+    let (format_mode, format_title, _) = match user {
+        Some(user) => comment_format(&state, user.id).await?,
+        None => (crate::profile::DEFAULT_FORMAT_MODE.into(), "Markdown".into(), "MARKDOWN".into()),
+    };
+    let topic_url = topic.topic_url();
+    Ok(Html(CommentFormTemplate {
+        topic_id: topic.id,
+        topic_title: topic.title,
+        topic_url,
+        replyto: q.replyto.filter(|id| *id > 0),
+        csrf_token,
+        format_mode,
+        format_title,
+    }.render()?))
 }
 
 #[derive(Deserialize)]
@@ -60,14 +89,16 @@ async fn comment_link(state: &AppState, comment_id: i32) -> Result<String> {
 pub async fn add_comment(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<CommentForm>) -> Result<Redirect> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
     check_comment_posting_allowed(&state, &user, form.topic).await?;
-    let id = insert_comment(&state, user.id, form).await?;
+    let (_, _, markup) = comment_format(&state, user.id).await?;
+    let id = insert_comment(&state, user.id, form, &markup).await?;
     Ok(Redirect::to(&comment_link(&state, id).await?))
 }
 
 pub async fn add_comment_ajax(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<CommentForm>) -> Result<axum::Json<serde_json::Value>> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
     check_comment_posting_allowed(&state, &user, form.topic).await?;
-    let id = insert_comment(&state, user.id, form).await?;
+    let (_, _, markup) = comment_format(&state, user.id).await?;
+    let id = insert_comment(&state, user.id, form, &markup).await?;
     let url = comment_link(&state, id).await?;
     Ok(axum::Json(serde_json::json!({"id": id, "ok": true, "url": url})))
 }
@@ -75,7 +106,7 @@ pub async fn add_comment_ajax(State(state): State<AppState>, CurrentUser(user): 
 /// Section.getCommentPostscore: Forum/News are unrestricted by section;
 /// Articles/Gallery/Polls/anything else default to a registered-with-score
 /// floor. Section ids per db/migrations/0002_seed.sql (1=Новости, 2=Форум,
-/// 3=Галерея, 4=Статьи, 5=Опросы).
+/// 3=Галерея, 5=Опросы, 6=Статьи).
 fn section_comment_postscore(section_id: i32) -> i32 {
     match section_id {
         1 | 2 => -9999,
@@ -192,8 +223,8 @@ async fn check_comment_posting_allowed(state: &AppState, user: &crate::models::U
     }
 }
 
-pub async fn comment_message(Query(q): Query<JumpQuery>) -> Redirect {
-    Redirect::to(&format!("/jump-message.jsp?msgid={}", q.msgid))
+pub async fn comment_message(Query(q): Query<CommentFormQuery>) -> Redirect {
+    Redirect::to(&format!("/add_comment.jsp?topic={}", q.topic))
 }
 
 pub async fn edit_comment_form() -> Result<&'static str> {
@@ -510,7 +541,7 @@ pub async fn undelete_comment(State(state): State<AppState>, CurrentUser(user): 
 /// the higher registered-user cap applies.
 const COMMENT_MAX_LENGTH: usize = 8192;
 
-async fn insert_comment(state: &AppState, user_id: i32, form: CommentForm) -> Result<i32> {
+async fn insert_comment(state: &AppState, user_id: i32, form: CommentForm, markup: &str) -> Result<i32> {
     if form.msg.trim().is_empty() {
         return Err(AppError::BadRequest("комментарий не может быть пустым".into()));
     }
@@ -532,9 +563,13 @@ async fn insert_comment(state: &AppState, user_id: i32, form: CommentForm) -> Re
         }
     }
 
+    // The original inline form uses replyto=0 for a top-level comment;
+    // PostgreSQL expects NULL because comments.replyto is a foreign key.
+    let replyto = form.replyto.filter(|id| *id > 0);
     let mut tx = state.pool.begin().await?;
     let id: i32 = sqlx::query_scalar("SELECT nextval('s_msgid')::int").fetch_one(&mut *tx).await?;
-    sqlx::query("INSERT INTO msgbase(id, message, bbcode) VALUES($1,$2,true)").bind(id).bind(&form.msg).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO msgbase(id, message, bbcode, markup) VALUES($1,$2,$3,$4)")
+        .bind(id).bind(&form.msg).bind(markup != "MARKDOWN").bind(markup).execute(&mut *tx).await?;
     sqlx::query(
         "INSERT INTO comments(id, topic, userid, title, postdate, replyto) VALUES($1,$2,$3,$4,now(),$5)",
     )
@@ -542,7 +577,7 @@ async fn insert_comment(state: &AppState, user_id: i32, form: CommentForm) -> Re
     .bind(form.topic)
     .bind(user_id)
     .bind(form.title.unwrap_or_else(|| "Комментарий".into()))
-    .bind(form.replyto)
+    .bind(replyto)
     .execute(&mut *tx)
     .await?;
     // topics.stat1/stat3 and groups.stat3 are now kept in sync by the
@@ -556,7 +591,7 @@ async fn insert_comment(state: &AppState, user_id: i32, form: CommentForm) -> Re
     let mut notified: Vec<i32> = Vec::new();
 
     let mut parent_author: Option<i32> = None;
-    if let Some(replyto) = form.replyto {
+    if let Some(replyto) = replyto {
         if let Some(parent_userid) = sqlx::query_scalar::<_, i32>("SELECT userid FROM comments WHERE id=$1")
             .bind(replyto)
             .fetch_optional(&mut *tx)
@@ -664,7 +699,7 @@ async fn locate_topic_or_comment(state: &AppState, msgid: i32) -> Result<Option<
 pub async fn deleted_comments_by_user(State(state): State<AppState>, Path(nick): Path<String>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
     if !user.as_ref().map(|u| u.canmod).unwrap_or(false) { return Err(AppError::Forbidden); }
     let comments = sqlx::query_as::<_, crate::models::CommentItem>(
-        r#"SELECT c.id, c.topic, c.replyto, c.title, m.message, c.postdate, u.id AS author_id, u.nick AS author, c.deleted
+        r#"SELECT c.id, c.topic, c.replyto, c.title, m.message, m.bbcode, m.markup, c.postdate, u.id AS author_id, u.nick AS author, c.deleted
            FROM comments c
            JOIN msgbase m ON m.id=c.id
            JOIN users u ON u.id=c.userid
@@ -677,7 +712,8 @@ pub async fn deleted_comments_by_user(State(state): State<AppState>, Path(nick):
     let mut html = format!("<h1>Удалённые комментарии {}</h1>", html_escape::encode_text(&nick));
     for c in comments {
         html.push_str(&format!("<article id=\"comment-{}\"><h3>{}</h3><p>topic #{} · {}</p><div>{}</div></article>",
-            c.id, html_escape::encode_text(&c.title), c.topic, c.postdate, markup::render_message(&c.message, Some(true))));
+            c.id, html_escape::encode_text(&c.title), c.topic, c.postdate,
+            markup::render_message_with_markup(&c.message, Some(&c.markup), c.bbcode)));
     }
     Ok(Html(html))
 }

@@ -44,7 +44,6 @@ struct TagPageTemplate {
     show_ignore_button: bool,
     show_unignore_button: bool,
     show_delete: bool,
-    current_user: Option<crate::models::UserSummary>,
     csrf_token: String,
     favorites_count: i64,
     ignored_count: i64,
@@ -246,7 +245,6 @@ pub async fn tag_page(State(state): State<AppState>, Path(tag): Path<String>, Cu
         show_ignore_button,
         show_unignore_button,
         show_delete: is_moderator,
-        current_user: user,
         csrf_token,
         favorites_count,
         ignored_count,
@@ -305,22 +303,21 @@ pub(crate) fn parse_and_validate_tags(raw: &str) -> std::result::Result<Vec<Stri
     Ok(good)
 }
 
-/// GroupPermissionService.canCreateTag: outside a premoderated section, a
-/// user needs score>=200 to mint a brand-new tag; inside one, any
-/// authenticated (non-anonymous) user may. Checked only against tags that
-/// don't already exist (TagService.getNewTags) - applying an existing tag
-/// never requires this.
+/// GroupPermissionService.canCreateTag plus the port's role separation:
+/// outside a premoderated section an ordinary user needs score>=200 to mint
+/// a brand-new tag; inside one, any authenticated user may. A moderator
+/// (`canmod`) may create tags regardless of score, while the narrower
+/// corrector role deliberately gets no moderator bypass. Checked only against
+/// tags that don't already exist (TagService.getNewTags) - applying an
+/// existing tag never requires this.
 pub(crate) async fn check_can_create_new_tags(state: &AppState, tags: &[String], user: &crate::models::UserSummary, section_premoderated: bool) -> Result<()> {
-    if section_premoderated {
-        return Ok(());
-    }
-    if user.score.unwrap_or(0) >= CREATE_TAG_SCORE {
+    if can_create_tag_by_role(user.canmod, user.score.unwrap_or(0), section_premoderated) {
         return Ok(());
     }
     let mut new_tags = Vec::new();
     for tag in tags {
         let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM tags_values WHERE lower(value)=lower($1)) OR EXISTS(SELECT 1 FROM tags_synonyms WHERE lower(value)=lower($1))",
+            "SELECT EXISTS(SELECT 1 FROM tags_values WHERE lower(value)=lower($1) AND counter>0) OR EXISTS(SELECT 1 FROM tags_synonyms WHERE lower(value)=lower($1))",
         )
         .bind(tag)
         .fetch_one(&state.pool)
@@ -333,6 +330,28 @@ pub(crate) async fn check_can_create_new_tags(state: &AppState, tags: &[String],
         Ok(())
     } else {
         Err(AppError::BadRequest(format!("Вы не можете создавать новые теги ({})", new_tags.join(", "))))
+    }
+}
+
+fn can_create_tag_by_role(canmod: bool, score: i32, section_premoderated: bool) -> bool {
+    section_premoderated || canmod || score >= CREATE_TAG_SCORE
+}
+
+#[cfg(test)]
+mod create_tag_permission_tests {
+    use super::*;
+
+    #[test]
+    fn comma_and_pipe_separated_tags_remain_individual() {
+        assert_eq!(parse_tags("Rust, Linux | PostgreSQL, rust"), ["rust", "linux", "postgresql"]);
+    }
+
+    #[test]
+    fn moderators_do_not_need_the_score_threshold() {
+        assert!(can_create_tag_by_role(true, 0, false));
+        assert!(!can_create_tag_by_role(false, CREATE_TAG_SCORE - 1, false));
+        assert!(can_create_tag_by_role(false, CREATE_TAG_SCORE, false));
+        assert!(can_create_tag_by_role(false, 0, true));
     }
 }
 
@@ -375,8 +394,6 @@ pub struct TagChangeForm {
     pub old_tag_name: String,
     #[serde(rename = "tagName")]
     pub tag_name: String,
-    #[serde(rename = "firstLetter")]
-    pub first_letter: Option<String>,
 }
 
 pub async fn change_tag(State(state): State<AppState>, CurrentUser(user): CurrentUser, Form(form): Form<TagChangeForm>) -> Result<Redirect> {

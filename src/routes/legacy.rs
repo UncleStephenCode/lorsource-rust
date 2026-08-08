@@ -18,10 +18,6 @@ use image::GenericImageView;
 use serde::Deserialize;
 use serde_json::json;
 
-pub async fn gone() -> impl IntoResponse {
-    (StatusCode::GONE, Html("Legacy endpoint is no longer available."))
-}
-
 pub async fn error_403() -> AppError { AppError::Forbidden }
 pub async fn error_404() -> AppError { AppError::NotFound }
 
@@ -36,7 +32,6 @@ struct LegacyIndexTemplate {
     topics: Vec<TopicSummary>,
     news: Vec<crate::routes::topics::NewsTopicView>,
     pager: Pager,
-    current_user: Option<crate::models::UserSummary>,
     main_page: bool,
     tracker_layout: bool,
     navigation: Option<crate::routes::topics::TopicListNavigation>,
@@ -130,7 +125,13 @@ pub async fn markup_preview(CurrentUser(user): CurrentUser, Form(form): Form<Pre
     if text.chars().count() > 65_536 {
         return Json(json!({"error": "Слишком длинный текст"}));
     }
-    let html = markup::render_message(&text, Some(markup_id != "markdown"));
+    let stored_markup = match markup_id {
+        "markdown" => "MARKDOWN",
+        "ntobr" => "BBCODE_ULB",
+        "lorcode" => "BBCODE_TEX",
+        _ => "PLAIN",
+    };
+    let html = markup::render_message_with_markup(&text, Some(stored_markup), None);
     Json(json!({"html": html}))
 }
 
@@ -178,12 +179,19 @@ fn help_page_title(page: &str) -> Option<&'static str> {
     }
 }
 
+#[derive(Template)]
+#[template(path = "help.html")]
+struct HelpTemplate {
+    title: &'static str,
+    html: String,
+}
+
 pub async fn help_page(State(state): State<AppState>, Path(page): Path<String>) -> Result<Html<String>> {
     let Some(title) = help_page_title(&page) else { return Err(AppError::NotFound); };
     let path = format!("{}/help/{page}", state.config.static_dir);
     let source = tokio::fs::read_to_string(&path).await.map_err(|_| AppError::NotFound)?;
     let html = markup::render_message(&source, Some(false));
-    Ok(Html(format!("<h1>{}</h1>{html}", html_escape::encode_text(title))))
+    Ok(Html(HelpTemplate { title, html }.render()?))
 }
 
 const MONTH_NAMES: [&str; 12] = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
@@ -204,7 +212,6 @@ pub(crate) struct ArchiveIndexTemplate {
 
 pub(crate) struct ArchiveMonthLink {
     pub(crate) year: i32,
-    pub(crate) month: i32,
     pub(crate) month_name: &'static str,
     pub(crate) count: i64,
     pub(crate) url: String,
@@ -239,7 +246,7 @@ pub async fn archive_section(State(state): State<AppState>, uri: Uri, CurrentUse
     let section = section_from_uri(&uri).unwrap_or("news");
     let section_name = match section { "news" => "Новости", "forum" => "Форум", "gallery" => "Галерея", "articles" => "Статьи", "polls" => "Опросы", _ => "Темы" };
     let rows = list_archive_year_months(&state, Some(section), None).await?;
-    let months = rows.into_iter().map(|(y, m, c)| ArchiveMonthLink { year: y, month: m, month_name: month_name(m), count: c, url: format!("/{section}/archive/{y}/{m}") }).collect();
+    let months = rows.into_iter().map(|(y, m, c)| ArchiveMonthLink { year: y, month_name: month_name(m), count: c, url: format!("/{section}/archive/{y}/{m}") }).collect();
     Ok(Html(ArchiveIndexTemplate {
         title: format!("{section_name} - Архив"),
         heading: section_name.to_string(),
@@ -267,7 +274,7 @@ async fn render_archive(
     year: Option<i32>,
     month: Option<i32>,
     q: PagerQuery,
-    current_user: Option<crate::models::UserSummary>,
+    _current_user: Option<crate::models::UserSummary>,
 ) -> Result<Html<String>> {
     let pager = Pager::new(q.offset.unwrap_or(0), state.config.page_size);
     let topics = list_archive_topics(&state, section, group.as_deref(), year, month, pager.offset, pager.limit).await?;
@@ -278,7 +285,7 @@ async fn render_archive(
         (Some(sec), _, _, _) => format!("Архив: {sec}"),
         _ => "Архив".to_string(),
     };
-    Ok(Html(LegacyIndexTemplate { title, topics, news, pager, current_user, main_page: false, tracker_layout: false, navigation: None }.render()?))
+    Ok(Html(LegacyIndexTemplate { title, topics, news, pager, main_page: false, tracker_layout: false, navigation: None }.render()?))
 }
 
 async fn list_archive_topics(state: &AppState, section: Option<&str>, group: Option<&str>, year: Option<i32>, month: Option<i32>, offset: i64, limit: i64) -> Result<Vec<TopicSummary>> {
@@ -484,7 +491,7 @@ pub async fn view_deleted(State(state): State<AppState>, CurrentUser(user): Curr
         return Err(AppError::Forbidden);
     }
     let comments = sqlx::query_as::<_, CommentItem>(
-        r#"SELECT c.id, c.topic, c.replyto, c.title, m.message, c.postdate, u.id AS author_id, u.nick AS author, c.deleted
+        r#"SELECT c.id, c.topic, c.replyto, c.title, m.message, m.bbcode, m.markup, c.postdate, u.id AS author_id, u.nick AS author, c.deleted
            FROM comments c JOIN msgbase m ON m.id=c.id JOIN users u ON u.id=c.userid
            WHERE c.deleted ORDER BY c.postdate DESC LIMIT 100"#,
     )
@@ -494,7 +501,7 @@ pub async fn view_deleted(State(state): State<AppState>, CurrentUser(user): Curr
     for c in comments {
         html.push_str(&format!("<article id=\"comment-{}\"><h3>{}</h3><p>{} · topic #{}</p><div>{}</div></article>",
             c.id, html_escape::encode_text(&c.title), html_escape::encode_text(&c.author), c.topic,
-            markup::render_message(&c.message, Some(true))));
+            markup::render_message_with_markup(&c.message, Some(&c.markup), c.bbcode)));
     }
     Ok(Html(html))
 }
@@ -685,9 +692,13 @@ fn verify_activation_code(state: &AppState, nick: &str, email: &str, regdate: Op
         return true;
     }
     let Some(regdate) = regdate else { return false; };
-    let payload = format!("{nick}:{email}:{}:activate", regdate.and_utc().timestamp_millis());
-    let expected = crate::security::hmac_sha256_hex(&state.config.site_secret, &payload);
-    crate::security::verify_hash(&expected, supplied)
+    crate::security::secret_tokens::verify_activation_code(
+        &state.config.site_secret,
+        nick,
+        email,
+        regdate.and_utc().timestamp_millis(),
+        supplied,
+    )
 }
 
 pub async fn addphoto_form(CurrentUser(user): CurrentUser) -> Result<Html<String>> {
@@ -752,163 +763,6 @@ fn validate_userpic_bytes(data: &[u8]) -> Result<&'static str> {
         return Err(AppError::BadRequest("Сбой загрузки изображения: недопустимые размеры фотографии".into()));
     }
     Ok(extension)
-}
-
-/// Image.MaxFileSize/MinDimension/MaxDimension (Java uses a 4-size srcset
-/// instead - this port's `images` table has concrete original/medium/
-/// thumbnail columns, so three fixed sizes are stored instead of Java's
-/// dynamic srcset).
-const GALLERY_MAX_FILE_SIZE: usize = 8 * 1024 * 1024;
-const GALLERY_MIN_DIMENSION: u32 = 400;
-const GALLERY_MAX_DIMENSION: u32 = 5120;
-const GALLERY_SIZES: [(&str, u32); 3] = [("original", 2000), ("medium", 800), ("thumbnail", 200)];
-
-#[derive(Deserialize)]
-pub struct AddPhotoTopicQuery {
-    pub msgid: i32,
-}
-
-/// Loads (author_id, section.imagepost) for a topic, or 404s. Both the GET
-/// form and the POST handler need this same author/section check.
-async fn topic_for_photo_upload(state: &AppState, msgid: i32) -> Result<(i32, bool, String, String)> {
-    sqlx::query_as(
-        r#"SELECT t.userid, s.imagepost,
-                  CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END,
-                  g.urlname
-           FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section WHERE t.id=$1"#,
-    )
-    .bind(msgid)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)
-}
-
-/// No `csrf` hidden field, matching `addphoto_form`'s existing precedent:
-/// a multipart POST body isn't inspected by the CSRF middleware (see
-/// `src/csrf.rs`), so a token here would be decorative.
-pub async fn addphoto_topic_form(State(state): State<AppState>, Query(q): Query<AddPhotoTopicQuery>, CurrentUser(user): CurrentUser) -> Result<Html<String>> {
-    let Some(user) = user else { return Err(AppError::Forbidden); };
-    let (author_id, imagepost, _section_prefix, _group_urlname) = topic_for_photo_upload(&state, q.msgid).await?;
-    if !imagepost {
-        return Err(AppError::BadRequest("этот раздел не поддерживает изображения".into()));
-    }
-    if !user.canmod && user.id != author_id {
-        return Err(AppError::Forbidden);
-    }
-    Ok(Html(format!(r#"
-<h1>Загрузить изображение</h1>
-<form method="post" action="/addphoto-topic.jsp" enctype="multipart/form-data" class="form">
-  <input type="hidden" name="msgid" value="{}">
-  <label>Файл PNG/JPEG/WEBP, {}-{} px, до {} МиБ <input type="file" name="file" accept="image/png,image/jpeg,image/webp" required></label>
-  <button type="submit">Загрузить</button>
-</form>
-"#, q.msgid, GALLERY_MIN_DIMENSION, GALLERY_MAX_DIMENSION, GALLERY_MAX_FILE_SIZE / 1024 / 1024)))
-}
-
-fn validate_gallery_image_bytes(data: &[u8]) -> Result<image::DynamicImage> {
-    if data.is_empty() {
-        return Err(AppError::BadRequest("изображение не задано".into()));
-    }
-    if data.len() > GALLERY_MAX_FILE_SIZE {
-        return Err(AppError::BadRequest("Сбой загрузки изображения: слишком большой файл".into()));
-    }
-    let format = image::guess_format(data).map_err(|_| AppError::BadRequest("Сбой загрузки изображения: неизвестный формат".into()))?;
-    if !matches!(format, image::ImageFormat::Png | image::ImageFormat::Jpeg | image::ImageFormat::WebP) {
-        return Err(AppError::BadRequest("Сбой загрузки изображения: неподдерживаемый или потенциально анимированный формат".into()));
-    }
-    let img = image::load_from_memory_with_format(data, format).map_err(|e| AppError::BadRequest(format!("Сбой загрузки изображения: {e}")))?;
-    let (width, height) = img.dimensions();
-    if width < GALLERY_MIN_DIMENSION || height < GALLERY_MIN_DIMENSION {
-        return Err(AppError::BadRequest("Сбой загрузки изображения: изображение слишком маленькое".into()));
-    }
-    if width > GALLERY_MAX_DIMENSION || height > GALLERY_MAX_DIMENSION {
-        return Err(AppError::BadRequest("Сбой загрузки изображения: изображение слишком большое".into()));
-    }
-    Ok(img)
-}
-
-/// Never upscales - `resize` bounds by `max_side` on the longer dimension,
-/// but an image already smaller than that is returned as-is.
-fn resize_capped(img: &image::DynamicImage, max_side: u32) -> image::DynamicImage {
-    let (w, h) = img.dimensions();
-    if w.max(h) <= max_side {
-        img.clone()
-    } else {
-        img.resize(max_side, max_side, image::imageops::FilterType::Lanczos3)
-    }
-}
-
-fn encode_jpeg(img: &image::DynamicImage) -> Result<Vec<u8>> {
-    let mut buf = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Jpeg)
-        .map_err(|e| AppError::Anyhow(e.into()))?;
-    Ok(buf)
-}
-
-/// ImageService.saveImage: only the single "main" gallery image is
-/// supported (Java also allows several additional images per topic - not
-/// implemented here). Sets `topics.image` only if it isn't already set, so
-/// re-uploading doesn't silently orphan the previous main image's row.
-pub async fn upload_topic_photo(State(state): State<AppState>, CurrentUser(user): CurrentUser, mut multipart: Multipart) -> Result<Redirect> {
-    let Some(user) = user else { return Err(AppError::Forbidden); };
-    let mut msgid: Option<i32> = None;
-    let mut upload: Option<bytes::Bytes> = None;
-    while let Some(field) = multipart.next_field().await.map_err(|e| AppError::BadRequest(format!("ошибка multipart: {e}")))? {
-        match field.name() {
-            Some("msgid") => {
-                let text = field.text().await.map_err(|e| AppError::BadRequest(format!("ошибка чтения msgid: {e}")))?;
-                msgid = text.trim().parse().ok();
-            }
-            Some("file") => {
-                upload = Some(field.bytes().await.map_err(|e| AppError::BadRequest(format!("ошибка чтения файла: {e}")))?);
-            }
-            _ => {}
-        }
-    }
-    let msgid = msgid.ok_or_else(|| AppError::BadRequest("missing msgid".into()))?;
-    let bytes = upload.ok_or_else(|| AppError::BadRequest("изображение не задано".into()))?;
-
-    let (author_id, imagepost, section_prefix, group_urlname) = topic_for_photo_upload(&state, msgid).await?;
-    if !imagepost {
-        return Err(AppError::BadRequest("этот раздел не поддерживает изображения".into()));
-    }
-    if !user.canmod && user.id != author_id {
-        return Err(AppError::Forbidden);
-    }
-
-    let img = validate_gallery_image_bytes(&bytes)?;
-    let (width, height) = img.dimensions();
-
-    let image_id: i32 = sqlx::query_scalar("SELECT nextval('images_id_seq')::int").fetch_one(&state.pool).await?;
-    let dir = format!("{}/gallery/{image_id}", state.config.upload_dir);
-    tokio::fs::create_dir_all(&dir).await.map_err(|e| AppError::Anyhow(e.into()))?;
-    for (name, max_side) in GALLERY_SIZES {
-        let resized = resize_capped(&img, max_side);
-        let jpeg = encode_jpeg(&resized)?;
-        tokio::fs::write(format!("{dir}/{name}.jpg"), &jpeg).await.map_err(|e| AppError::Anyhow(e.into()))?;
-    }
-
-    sqlx::query(
-        "INSERT INTO images(id, userid, topic, original, medium, thumbnail, width, height, primary_image) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true)",
-    )
-    .bind(image_id)
-    .bind(user.id)
-    .bind(msgid)
-    .bind(format!("{image_id}/original.jpg"))
-    .bind(format!("{image_id}/medium.jpg"))
-    .bind(format!("{image_id}/thumbnail.jpg"))
-    .bind(width as i32)
-    .bind(height as i32)
-    .execute(&state.pool)
-    .await?;
-
-    sqlx::query("UPDATE topics SET image=$1, lastmod=now() WHERE id=$2 AND image IS NULL")
-        .bind(image_id)
-        .bind(msgid)
-        .execute(&state.pool)
-        .await?;
-
-    Ok(Redirect::to(&format!("/{section_prefix}/{group_urlname}/{msgid}")))
 }
 
 #[derive(Deserialize)]
@@ -1054,7 +908,6 @@ pub struct MemoryForm {
     pub msgid: Option<i32>,
     pub watch: Option<bool>,
     pub id: Option<i32>,
-    pub add: Option<String>,
     pub remove: Option<String>,
 }
 
@@ -1113,7 +966,6 @@ pub struct UserTagForm {
     pub tag: Option<String>,
     #[serde(rename = "tagName")]
     pub tag_name: Option<String>,
-    pub add: Option<String>,
     pub del: Option<String>,
 }
 
@@ -1178,7 +1030,6 @@ async fn save_or_delete_user_tag(state: AppState, user: Option<crate::models::Us
 pub struct IgnoreUserForm {
     pub id: Option<i32>,
     pub nick: Option<String>,
-    pub add: Option<String>,
     pub del: Option<String>,
 }
 

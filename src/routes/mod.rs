@@ -12,7 +12,7 @@ pub mod users;
 
 use crate::{error::AppError, state::AppState};
 use askama::Template;
-use axum::{http::StatusCode, response::{Html, IntoResponse, Redirect, Response}, routing::{get, post}, Router};
+use axum::{extract::DefaultBodyLimit, http::StatusCode, response::{Html, IntoResponse, Redirect, Response}, routing::{get, post}, Router};
 use serde_json::json;
 
 pub fn router() -> Router<AppState> {
@@ -51,9 +51,9 @@ pub fn router() -> Router<AppState> {
         .route("/view-all.jsp", get(topics::view_all))
         .route("/view-message.jsp", get(topics::legacy_view_message))
         .route("/jump-message.jsp", get(comments::jump_message))
-        .route("/add.jsp", get(topics::new_topic_form).post(topics::create_topic))
+        .route("/add.jsp", get(topics::new_topic_form).post(topics::create_topic).layer(DefaultBodyLimit::max(34 * 1024 * 1024)))
         .route("/add-section.jsp", get(topics::choose_topic_section))
-        .route("/edit.jsp", get(topics::edit_topic_form).post(topics::edit_topic))
+        .route("/edit.jsp", get(topics::edit_topic_form).post(topics::edit_topic).layer(DefaultBodyLimit::max(34 * 1024 * 1024)))
         .route("/delete.jsp", get(topics::delete_topic_form).post(topics::delete_topic))
         .route("/undelete", get(topics::undelete_topic_form).post(topics::undelete_topic))
         .route("/resolve.jsp", get(topics::resolve_topic_get).post(topics::resolve_topic))
@@ -82,7 +82,7 @@ pub fn router() -> Router<AppState> {
         // Java's LoginController only maps POST for the actual clearing
         // action (a bare `<a href>` GET would be a CSRF-able logout) - the
         // base.html top-nav link now submits a POST form to match.
-        .route("/logout", post(auth::logout))
+        .route("/logout", get(auth::logout_link).post(auth::logout))
         .route("/register.jsp", get(auth::register_form).post(auth::register))
         .route("/lostpwd.jsp", get(auth::lost_password_form).post(auth::lost_password))
         .route("/notifications", get(api::notifications).post(api::notifications_mark_read))
@@ -103,7 +103,6 @@ pub fn router() -> Router<AppState> {
         .route("/activate", get(legacy::activate_form).post(legacy::activate_post))
         .route("/activate.jsp", get(legacy::activate_form).post(legacy::activate_post))
         .route("/addphoto.jsp", get(legacy::addphoto_form).post(legacy::upload_userpic))
-        .route("/addphoto-topic.jsp", get(legacy::addphoto_topic_form).post(legacy::upload_topic_photo))
         .route("/articles/archive", get(legacy::archive_section))
         .route("/commit.jsp", get(topics::commit_topic_form).post(topics::commit_topic))
         .route("/delete_image", get(legacy::delete_image_form).post(legacy::delete_image))
@@ -114,7 +113,7 @@ pub fn router() -> Router<AppState> {
         .route("/group-lastmod.jsp", get(legacy::group_lastmod_jsp))
         .route("/group.jsp", get(legacy::group_jsp))
         .route("/help/:page", get(legacy::help_page))
-        .route("/logout_all_sessions", post(auth::logout))
+        .route("/logout_all_sessions", get(auth::logout_link).post(auth::logout_all_sessions))
         .route("/markup/preview", post(legacy::markup_preview))
         .route("/memories.jsp", post(legacy::memories))
         .route("/mt.jsp", get(topics::move_topic_form).post(topics::move_topic))

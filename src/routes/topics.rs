@@ -1,6 +1,6 @@
 use crate::{auth::CurrentUser, application::topic::CTopicService, domain::topic::repository::{StEditTopic, StNewTopic}, error::{AppError, Result}, infra::postgres::topic_repository::CTopicPgRepository, markup, models::{CommentItem, Group, PagerQuery, TagItem, TopicDetail, TopicSummary, UserSummary}, pagination::Pager, state::AppState};
 use askama::Template;
-use axum::{extract::{Path, Query, State}, http::Uri, response::{Html, IntoResponse, Redirect, Response}, Form};
+use axum::{extract::{FromRequest, Multipart, Path, Query, Request, State}, http::{header::CONTENT_TYPE, Uri}, response::{Html, IntoResponse, Redirect, Response}, Form};
 use serde::Deserialize;
 
 #[derive(Template)]
@@ -10,7 +10,6 @@ struct IndexTemplate {
     topics: Vec<TopicSummary>,
     news: Vec<NewsTopicView>,
     pager: Pager,
-    current_user: Option<crate::models::UserSummary>,
     main_page: bool,
     tracker_layout: bool,
     navigation: Option<TopicListNavigation>,
@@ -31,8 +30,18 @@ struct MainPageTemplate {
     poll: Option<TopicSummary>,
     articles: Vec<TopicSummary>,
     top_topics: Vec<TopicSummary>,
-    gallery: Vec<TopicSummary>,
+    gallery: Vec<GalleryBoxItem>,
     tags: Vec<TagItem>,
+    show_gallery_on_main: bool,
+}
+
+struct GalleryBoxItem {
+    topic: TopicSummary,
+    image_url: String,
+    image_srcset: String,
+    image_width: i32,
+    image_height: i32,
+    image_padding_percent: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -66,7 +75,6 @@ struct TopicTemplate {
     topic: TopicDetail,
     topic_html: String,
     comments: Vec<CommentView>,
-    current_user: Option<UserSummary>,
     /// Non-empty only outside thread/deleted mode, when there's more than
     /// one page of comments (TopicController.buildPages).
     pages: Vec<CommentPageLink>,
@@ -81,14 +89,14 @@ struct TopicTemplate {
     /// `unfilteredCount`, used to render "N скрыто, показать".
     filtered_count: usize,
     unfiltered_count: usize,
-    filter_show: bool,
     csrf_token: String,
     poll: Option<PollView>,
     images_html: String,
-    /// Shown to the author/moderator of an imagepost (gallery) topic that
-    /// has no main image yet.
-    show_add_image_link: bool,
     topic_reactions_html: String,
+    topic_show_reactions_link: bool,
+    comment_format_mode: String,
+    comment_format_title: String,
+    can_comment: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +104,7 @@ struct CommentView {
     item: CommentItem,
     html: String,
     reactions_html: String,
+    show_reactions_link: bool,
 }
 
 /// poll-form.tag rendered server-side: a topic's poll (if any), with vote
@@ -110,8 +119,11 @@ struct PollView {
     multiselect: bool,
     variants: Vec<PollVariantView>,
     total_votes: i32,
-    user_voted: bool,
+    total_people: i64,
     can_vote: bool,
+    show_results: bool,
+    pending: bool,
+    authorized: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -120,17 +132,19 @@ struct PollVariantView {
     label: String,
     votes: i32,
     pct: i32,
+    progress_pct: i32,
+    user_voted: bool,
 }
 
 /// PreparedImage-compatible view of any image attached to a topic.
 pub(crate) struct TopicImageView {
     pub(crate) medium_url: String,
     pub(crate) original_url: String,
-    thumbnail_url: Option<String>,
     pub(crate) width: i32,
     pub(crate) height: i32,
     medium_width: i32,
     medium_height: i32,
+    srcset: Vec<(String, i32)>,
 }
 
 #[derive(Debug, Clone)]
@@ -148,6 +162,8 @@ fn upload_image_url(path: &str) -> String {
         path.to_string()
     } else if path.starts_with("images/") {
         format!("/{path}")
+    } else if let Some(path) = path.strip_prefix("gallery/") {
+        format!("/gallery-uploads/{path}")
     } else {
         format!("/gallery-uploads/{path}")
     }
@@ -165,41 +181,53 @@ fn scaled_dimensions(width: i32, height: i32, max_side: i32) -> (i32, i32) {
 }
 
 pub(crate) async fn load_topic_images(state: &AppState, topic_id: i32) -> Result<Vec<TopicImageView>> {
-    let rows: Vec<(i32, Option<String>, Option<String>, Option<String>, Option<i32>, Option<i32>)> = sqlx::query_as(
-        "SELECT id, medium, original, thumbnail, width, height FROM images WHERE topic=$1 AND NOT deleted ORDER BY primary_image DESC, id",
+    let rows: Vec<(i32, Option<String>, Option<String>, Option<i32>, Option<i32>, Option<String>)> = sqlx::query_as(
+        "SELECT id, medium, original, width, height, extension FROM images WHERE topic=$1 AND NOT deleted ORDER BY (COALESCE(primary_image,false) OR COALESCE(main,false)) DESC, id",
     )
     .bind(topic_id)
     .fetch_all(&state.pool)
     .await?;
-    Ok(rows.into_iter().filter_map(|(id, medium, original, thumbnail, width, height)| {
-        let original = original?;
-        let width = width.unwrap_or(1000).max(1);
-        let height = height.unwrap_or(1000).max(1);
-        let (medium_width, medium_height) = scaled_dimensions(width, height, 800);
-        let _ = id;
-        Some(TopicImageView {
-            medium_url: upload_image_url(medium.as_deref().unwrap_or(&original)),
+    let mut prepared = Vec::with_capacity(rows.len());
+    for (id, medium, original, stored_width, stored_height, extension) in rows {
+        let original = original.or_else(|| extension.as_ref().map(|extension| format!("images/{id}/original.{extension}")));
+        let Some(original) = original else { continue; };
+        let dimensions = if stored_width.is_none() || stored_height.is_none() {
+            let path = format!("{}/{}", state.config.upload_dir, original.trim_start_matches('/'));
+            tokio::task::spawn_blocking(move || image::image_dimensions(path).ok()).await.unwrap_or(None)
+        } else {
+            None
+        };
+        let width = stored_width.or_else(|| dimensions.map(|value| value.0 as i32)).unwrap_or(1000).max(1);
+        let height = stored_height.or_else(|| dimensions.map(|value| value.1 as i32)).unwrap_or(1000).max(1);
+        let medium = medium.unwrap_or_else(|| format!("images/{id}/1000px.jpg"));
+        let (medium_width, medium_height) = scaled_dimensions(width, height, 1000);
+        let srcset = if original.starts_with("images/") {
+            let mut values = [500, 1000, 1500, 2000].into_iter()
+                .filter(|size| width > 2000 || *size < width)
+                .map(|size| (format!("/images/{id}/{size}px.jpg"), size))
+                .collect::<Vec<_>>();
+            if width <= 2000 {
+                values.push((upload_image_url(&original), width));
+            }
+            values
+        } else {
+            vec![(upload_image_url(&medium), medium_width), (upload_image_url(&original), width)]
+        };
+        prepared.push(TopicImageView {
+            medium_url: upload_image_url(&medium),
             original_url: upload_image_url(&original),
-            thumbnail_url: thumbnail.as_deref().map(upload_image_url),
             width,
             height,
             medium_width,
             medium_height,
-        })
-    }).collect())
+            srcset,
+        });
+    }
+    Ok(prepared)
 }
 
 fn image_srcset(image: &TopicImageView) -> String {
-    let mut entries = Vec::new();
-    if let Some(thumbnail) = &image.thumbnail_url {
-        let (width, _) = scaled_dimensions(image.width, image.height, 200);
-        entries.push(format!("{thumbnail} {width}w"));
-    }
-    entries.push(format!("{} {}w", image.medium_url, image.medium_width));
-    if image.original_url != image.medium_url {
-        entries.push(format!("{} {}w", image.original_url, image.width));
-    }
-    entries.join(", ")
+    image.srcset.iter().map(|(url, width)| format!("{url} {width}w")).collect::<Vec<_>>().join(", ")
 }
 
 pub(crate) fn topic_image_srcset(image: &TopicImageView) -> String {
@@ -272,11 +300,15 @@ mod image_view_tests {
         TopicImageView {
             medium_url: format!("/gallery-uploads/{id}/medium.jpg"),
             original_url: format!("/gallery-uploads/{id}/original.jpg"),
-            thumbnail_url: Some(format!("/gallery-uploads/{id}/thumbnail.jpg")),
             width: 1920,
             height: 1080,
             medium_width: 800,
             medium_height: 450,
+            srcset: vec![
+                (format!("/gallery-uploads/{id}/thumbnail.jpg"), 200),
+                (format!("/gallery-uploads/{id}/medium.jpg"), 800),
+                (format!("/gallery-uploads/{id}/original.jpg"), 1920),
+            ],
         }
     }
 
@@ -303,20 +335,21 @@ mod image_view_tests {
 pub(crate) async fn prepare_news_topics(state: &AppState, topics: Vec<TopicSummary>, show_group: bool) -> Result<Vec<NewsTopicView>> {
     let mut prepared = Vec::with_capacity(topics.len());
     for topic in topics {
-        let row: Option<(String, Option<bool>, Option<String>, Option<String>)> = sqlx::query_as(
-            "SELECT m.message, m.bbcode, t.linktext, g.image FROM msgbase m JOIN topics t ON t.id=m.id JOIN groups g ON g.id=t.groupid WHERE m.id=$1",
+        let row: Option<(String, Option<bool>, String, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT m.message, m.bbcode, m.markup, t.linktext, g.image FROM msgbase m JOIN topics t ON t.id=m.id JOIN groups g ON g.id=t.groupid WHERE m.id=$1",
         )
         .bind(topic.id)
         .fetch_optional(&state.pool)
         .await?;
-        let (message, bbcode, linktext, group_image) = row.unwrap_or_else(|| (String::new(), Some(true), None, None));
+        let (message, bbcode, message_markup, linktext, group_image) = row
+            .unwrap_or_else(|| (String::new(), Some(true), "BBCODE_TEX".into(), None, None));
         let images = load_topic_images(state, topic.id).await?;
         let images_html = render_topic_images(&images, &topic.title, topic.section_prefix == "gallery", true);
         let group_image_url = group_image.map(|path| {
             if path.starts_with('/') { format!("/tango{path}") } else { format!("/tango/{path}") }
         });
         prepared.push(NewsTopicView {
-            topic_html: markup::render_message(&message, bbcode),
+            topic_html: markup::render_message_with_markup(&message, Some(&message_markup), bbcode),
             images_html,
             group_image_url,
             linktext: linktext.filter(|value| !value.is_empty()).unwrap_or_else(|| "Подробности".to_string()),
@@ -338,19 +371,16 @@ fn reactions_allow_interact(current_user: &Option<UserSummary>, frozen: bool, to
     }
 }
 
-/// reactions.tag rendered server-side as a raw HTML fragment (consistent
-/// with this port's other hand-built widgets, e.g. `/notifications`) -
-/// non-zero reactions are always shown, all-zero ones collapse behind a
-/// "»" toggle (or the whole widget is hidden if every reaction is at zero).
-/// reactions.tag's exact nesting turns out to leave brand-new content (zero
-/// reactions ever) with no discoverable way to add the first one at all:
-/// the outer div gets `class="zero-reactions"` (CSS `display: none`) purely
-/// from `emptyMap`, and the only two things that could reveal it - the "?"
-/// full-log link and the "»" collapse toggle - are *both* separately gated
-/// on `not emptyMap` too. Reproducing that literally would make this port's
-/// inline widget just as unreachable for every new post, which defeats the
-/// point of adding it, so this renders every button whenever the viewer may
-/// interact (no zero-count collapsing) instead of replicating that gate.
+/// Server-rendered equivalent of `reactions.tag`.  A widget with no existing
+/// reactions is hidden as a whole; the message menu receives a separate
+/// "Реакции" link which reveals it.  Once at least one reaction exists, only
+/// non-zero buttons are visible and the zero-count choices live behind `»`.
+#[derive(Debug, Clone)]
+struct ReactionsWidget {
+    html: String,
+    show_menu_link: bool,
+}
+
 fn render_reactions_widget(
     topic_id: i32,
     comment_id: Option<i32>,
@@ -358,7 +388,7 @@ fn render_reactions_widget(
     current_user_id: Option<i32>,
     allow_interact: bool,
     csrf_token: &str,
-) -> String {
+) -> ReactionsWidget {
     let is_anonymous = current_user_id.is_none();
     let anon_class = if is_anonymous { " reaction-anonymous" } else { "" };
     let disabled = if allow_interact { "" } else { " disabled" };
@@ -376,64 +406,162 @@ fn render_reactions_widget(
         buttons.push(Btn { emoji: emoji.to_string(), count, clicked, tooltip });
     }
 
+    // PreparedReactions uses a TreeMap, so preserve the original UTF-16
+    // string order rather than the declaration order of REACTIONS.
+    buttons.sort_by_key(|button| button.emoji.encode_utf16().collect::<Vec<_>>());
+
+    let has_reactions = buttons.iter().any(|button| button.count > 0);
+    let outer_class = if has_reactions { "reactions" } else { "reactions zero-reactions" };
+
     let mut html = format!(
-        "<div class=\"reactions\"><form class=\"reactions-form\" action=\"/reactions\" method=\"post\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><input type=\"hidden\" name=\"topic\" value=\"{topic_id}\">",
-        html_escape::encode_text(csrf_token),
+        "<div class=\"{outer_class}\"><form class=\"reactions-form\" action=\"/reactions\" method=\"post\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><input type=\"hidden\" name=\"topic\" value=\"{topic_id}\">",
+        html_escape::encode_double_quoted_attribute(csrf_token),
     );
     if let Some(cid) = comment_id {
         html.push_str(&format!("<input type=\"hidden\" name=\"comment\" value=\"{cid}\">"));
     }
-    for b in &buttons {
-        if b.count == 0 && !allow_interact {
-            // A viewer who can't react at all (anonymous, the target's own
-            // author, ...) only sees reactions someone has actually left.
-            continue;
-        }
+    for b in buttons.iter().filter(|button| button.count > 0) {
         let value = format!("{}-{}", b.emoji, !b.clicked);
         let clicked_class = if b.clicked { " btn-primary" } else { "" };
         html.push_str(&format!(
             "<button name=\"reaction\" value=\"{}\" class=\"reaction{clicked_class}{anon_class}\" title=\"{}\"{disabled}>{} <span class=\"reaction-count\">{}</span></button>",
-            html_escape::encode_text(&value), html_escape::encode_text(&b.tooltip), html_escape::encode_text(&b.emoji), b.count,
+            html_escape::encode_double_quoted_attribute(&value),
+            html_escape::encode_double_quoted_attribute(&b.tooltip),
+            html_escape::encode_text(&b.emoji),
+            b.count,
         ));
     }
+    if has_reactions && current_user_id.is_some() {
+        let comment_query = comment_id.map(|id| format!("&comment={id}")).unwrap_or_default();
+        html.push_str(&format!(
+            "<a class=\"reaction reaction-show-list\" href=\"/reactions?topic={topic_id}{comment_query}\">?</a>",
+        ));
+    }
+    if allow_interact && buttons.iter().any(|button| button.count == 0) {
+        if has_reactions {
+            let comment_query = comment_id.map(|id| format!("&comment={id}")).unwrap_or_default();
+            html.push_str(&format!(
+                "<a class=\"reaction reaction-show\" href=\"/reactions?topic={topic_id}{comment_query}\">&raquo;</a><span class=\"zero-reactions\">",
+            ));
+        }
+        for b in buttons.iter().filter(|button| button.count == 0) {
+            html.push_str(&format!(
+                "<button name=\"reaction\" value=\"{}-true\" class=\"reaction{anon_class}\" title=\"{}\">{} <span class=\"reaction-count\">0</span></button>",
+                html_escape::encode_double_quoted_attribute(&b.emoji),
+                html_escape::encode_double_quoted_attribute(&b.tooltip),
+                html_escape::encode_text(&b.emoji),
+            ));
+        }
+        if has_reactions {
+            html.push_str("</span>");
+        }
+    }
     html.push_str("</form></div>");
-    html
+    ReactionsWidget {
+        html,
+        show_menu_link: !has_reactions && allow_interact,
+    }
+}
+
+#[cfg(test)]
+mod reactions_widget_tests {
+    use super::*;
+
+    #[test]
+    fn empty_reactions_are_hidden_and_revealed_from_the_message_menu() {
+        let widget = render_reactions_widget(42, None, &[], Some(7), true, "token");
+
+        assert!(widget.show_menu_link);
+        assert!(widget.html.starts_with("<div class=\"reactions zero-reactions\">"));
+        assert!(!widget.html.contains("class=\"reaction reaction-show\""));
+        assert!(widget.html.contains("name=\"reaction\""));
+        assert!(widget.html.contains("<span class=\"reaction-count\">0</span>"));
+    }
+
+    #[test]
+    fn existing_reactions_show_counts_and_collapse_zero_choices() {
+        let rows = vec![
+            ("👍".to_string(), 10, "alice".to_string(), 100),
+            ("🎉".to_string(), 11, "bob".to_string(), 50),
+        ];
+        let widget = render_reactions_widget(42, Some(9), &rows, Some(10), true, "token");
+
+        assert!(!widget.show_menu_link);
+        assert!(widget.html.starts_with("<div class=\"reactions\">"));
+        assert!(widget.html.contains("href=\"/reactions?topic=42&comment=9\">?</a>"));
+        assert!(widget.html.contains("class=\"reaction reaction-show\""));
+        assert!(widget.html.contains("<span class=\"zero-reactions\">"));
+        assert!(widget.html.find("🎉").unwrap() < widget.html.find("👍").unwrap());
+    }
+
+    #[test]
+    fn anonymous_empty_widget_has_no_reveal_link_or_buttons() {
+        let widget = render_reactions_widget(42, None, &[], None, false, "token");
+
+        assert!(!widget.show_menu_link);
+        assert!(widget.html.starts_with("<div class=\"reactions zero-reactions\">"));
+        assert!(!widget.html.contains("name=\"reaction\""));
+    }
 }
 
 /// All reactions for the topic in one query (topic-level rows have
 /// `comment_id IS NULL`), so per-comment widgets don't each hit the DB.
+/// The JSON maps on topics/comments are the authoritative state in Java;
+/// reactions_log is only an audit/date source and can be incomplete in an
+/// imported database.
 async fn load_all_reactions(state: &AppState, topic_id: i32) -> Result<Vec<(Option<i32>, String, i32, String, i32)>> {
     Ok(sqlx::query_as(
-        r#"SELECT rl.comment_id, rl.reaction, rl.origin_user, u.nick, COALESCE(u.score,0)
-           FROM reactions_log rl JOIN users u ON u.id=rl.origin_user
-           WHERE rl.topic_id=$1"#,
+        r#"SELECT NULL::integer AS comment_id, item.value AS reaction,
+                  item.key::integer AS origin_user, u.nick, COALESCE(u.score,0)
+           FROM topics t
+           CROSS JOIN LATERAL jsonb_each_text(COALESCE(t.reactions,'{}'::jsonb)) item
+           JOIN users u ON u.id=item.key::integer
+           WHERE t.id=$1 AND item.key ~ '^[0-9]+$'
+           UNION ALL
+           SELECT c.id AS comment_id, item.value AS reaction,
+                  item.key::integer AS origin_user, u.nick, COALESCE(u.score,0)
+           FROM comments c
+           CROSS JOIN LATERAL jsonb_each_text(COALESCE(c.reactions,'{}'::jsonb)) item
+           JOIN users u ON u.id=item.key::integer
+           WHERE c.topic=$1 AND item.key ~ '^[0-9]+$'"#,
     )
     .bind(topic_id)
     .fetch_all(&state.pool)
     .await?)
 }
 
-async fn load_poll_view(state: &AppState, topic_id: i32, deleted: bool, current_user: &Option<UserSummary>) -> Result<Option<PollView>> {
+async fn load_poll_view(state: &AppState, topic_id: i32, deleted: bool, pending: bool, expired: bool, results_requested: bool, current_user: &Option<UserSummary>) -> Result<Option<PollView>> {
     let Some((poll_id, multiselect)): Option<(i32, bool)> = sqlx::query_as("SELECT id, multiselect FROM polls WHERE topic=$1").bind(topic_id).fetch_optional(&state.pool).await? else {
         return Ok(None);
     };
-    let rows: Vec<(i32, String, i32)> = sqlx::query_as("SELECT id, label, votes FROM polls_variants WHERE vote=$1 ORDER BY id").bind(poll_id).fetch_all(&state.pool).await?;
-    let total_votes: i32 = rows.iter().map(|(_, _, v)| *v).sum();
-    let variants = rows.into_iter().map(|(id, label, votes)| PollVariantView {
+    let current_user_id = current_user.as_ref().map(|user| user.id).unwrap_or(0);
+    let mut rows: Vec<(i32, String, i32, bool)> = sqlx::query_as(
+        "SELECT v.id,v.label,v.votes,EXISTS(SELECT 1 FROM vote_users u WHERE u.vote=v.vote AND u.variant_id=v.id AND u.userid=$2) FROM polls_variants v WHERE v.vote=$1 ORDER BY v.id",
+    ).bind(poll_id).bind(current_user_id).fetch_all(&state.pool).await?;
+    let total_votes: i32 = rows.iter().map(|(_, _, votes, _)| *votes).sum();
+    let total_people: i64 = sqlx::query_scalar("SELECT count(DISTINCT userid) FROM vote_users WHERE vote=$1").bind(poll_id).fetch_one(&state.pool).await?;
+    let user_voted = rows.iter().any(|row| row.3);
+    let show_results = !pending && (results_requested || user_voted || expired);
+    if show_results { rows.sort_by_key(|(id, _, votes, _)| (std::cmp::Reverse(*votes), *id)); }
+    let divisor = if total_people > 0 { total_people as i32 } else { total_votes };
+    let max_votes = rows.iter().map(|row| row.2).max().unwrap_or(0);
+    let variants = rows.into_iter().map(|(id, label, votes, selected)| PollVariantView {
         id, label, votes,
-        pct: if total_votes > 0 { (votes * 100) / total_votes } else { 0 },
+        pct: if divisor > 0 { ((100.0 * f64::from(votes) / f64::from(divisor)).round()) as i32 } else { 0 },
+        progress_pct: if max_votes > 0 { ((320 * votes / max_votes) / 16) * 16 * 100 / 320 } else { 0 },
+        user_voted: selected,
     }).collect();
-    let user_voted = match current_user {
-        Some(u) => sqlx::query_scalar::<_, i64>("SELECT count(*) FROM vote_users WHERE vote=$1 AND userid=$2").bind(poll_id).bind(u.id).fetch_one(&state.pool).await? > 0,
-        None => false,
-    };
+    let authorized = current_user.is_some();
     Ok(Some(PollView {
         voteid: poll_id,
         multiselect,
         variants,
         total_votes,
-        user_voted,
-        can_vote: current_user.is_some() && !user_voted && !deleted,
+        total_people,
+        can_vote: authorized && !user_voted && !deleted && !pending && !expired,
+        show_results,
+        pending,
+        authorized,
     }))
 }
 
@@ -442,17 +570,57 @@ async fn load_poll_view(state: &AppState, topic_id: i32, deleted: bool, current_
 struct TopicFormTemplate {
     title: String,
     action: String,
-    topic: Option<TopicDetail>,
-    groups: Vec<crate::models::Group>,
+    topic_id: Option<i32>,
     csrf_token: String,
     /// Existing (id, label) poll variants - empty for a brand-new topic.
     poll_variants: Vec<(i32, String)>,
     /// Number of blank "add new variant" rows to render: `Poll.MaxPollSize`
     /// (15) for a new topic, `EditTopicRequest.newPoll`'s size (3) for edit.
-    poll_new_rows: Vec<()>,
+    poll_new_rows: Vec<String>,
     poll_multiselect: bool,
     selected_group: i32,
-    initial_tags: String,
+    is_edit: bool,
+    links_allowed: bool,
+    poll_allowed: bool,
+    image_allowed: bool,
+    image_required: bool,
+    additional_image_rows: Vec<()>,
+    form_title: String,
+    form_msg: String,
+    form_url: String,
+    form_linktext: String,
+    form_tags: String,
+    preview_html: Option<String>,
+    noinfo: bool,
+    add_info_html: Option<String>,
+    format_mode: String,
+    format_mode_title: String,
+}
+
+async fn user_format_mode(state: &AppState, user_id: i32) -> Result<(String, String, String)> {
+    let settings_text: Option<String> = sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
+        .bind(user_id).fetch_optional(&state.pool).await?.flatten();
+    let mode = crate::profile::ProfileSettings::from_hstore_text(settings_text).format_mode;
+    let title = crate::profile::FORMAT_MODES.iter().find(|(id, _, _)| *id == mode)
+        .map(|(_, title, _)| *title).unwrap_or("Markdown").to_string();
+    let markup = match mode.as_str() {
+        "markdown" => "MARKDOWN",
+        "ntobr" => "BBCODE_ULB",
+        "plain" => "PLAIN",
+        _ => "BBCODE_TEX",
+    };
+    Ok((mode, title, markup.to_string()))
+}
+
+fn markup_form_view(markup: &str, bbcode: Option<bool>) -> (String, String) {
+    match markup {
+        "MARKDOWN" => ("markdown".into(), "Markdown".into()),
+        "BBCODE_ULB" => ("ntobr".into(), "User line break".into()),
+        "PLAIN" => ("plain".into(), "HTML".into()),
+        "BBCODE_TEX" | "LORCODE" => ("lorcode".into(), "LORCODE".into()),
+        _ if bbcode == Some(false) => ("markdown".into(), "Markdown".into()),
+        _ => ("lorcode".into(), "LORCODE".into()),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -483,12 +651,8 @@ pub struct TopicForm {
     pub linktext: Option<String>,
     pub tags: Option<String>,
     pub draft: Option<String>,
-    /// Poll variant labels, positionally paired with `variant_id` - matches
-    /// Java's AddTopicRequest.poll (create, all ids implicitly 0/new) and
-    /// EditTopicRequest.poll+newPoll (edit: real ids for existing variants,
-    /// 0 for new ones), just flattened into two parallel repeated-field
-    /// vectors instead of a bracket-indexed map, since serde_urlencoded has
-    /// no map/array-index syntax.
+    pub preview: Option<String>,
+    pub noinfo: Option<String>,
     pub poll: Vec<String>,
     pub variant_id: Vec<i32>,
     pub multiselect: Option<String>,
@@ -497,33 +661,140 @@ pub struct TopicForm {
 /// `axum::Form` can't deserialize the repeated `poll`/`variant_id` keys into
 /// `Vec` fields (see `crate::form`), so this form is parsed from the raw
 /// body by hand instead.
+fn parse_indexed_field(pairs: &[(String, String)], prefix: &str) -> Vec<(i32, String)> {
+    let start = format!("{prefix}[");
+    let mut values: Vec<(i32, String)> = pairs.iter().filter_map(|(key, value)| {
+        key.strip_prefix(&start)?.strip_suffix(']')?.parse().ok().map(|index| (index, value.clone()))
+    }).collect();
+    values.sort_by_key(|(index, _)| *index);
+    values
+}
+
 fn parse_topic_form(pairs: &[(String, String)]) -> Result<TopicForm> {
     use crate::form::{get, get_all};
+    let indexed_poll = parse_indexed_field(pairs, "poll");
+    let new_poll = parse_indexed_field(pairs, "newPoll");
+    let (poll, variant_id) = if !indexed_poll.is_empty() || !new_poll.is_empty() {
+        let mut ids = indexed_poll.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+        let mut labels = indexed_poll.into_iter().map(|(_, label)| label).collect::<Vec<_>>();
+        ids.extend(std::iter::repeat_n(0, new_poll.len()));
+        labels.extend(new_poll.into_iter().map(|(_, label)| label));
+        (labels, ids)
+    } else {
+        // Accept the first Rust port's flattened fields as a compatibility
+        // fallback, while every generated form uses Java's indexed names.
+        (
+            get_all(pairs, "poll").into_iter().map(str::to_string).collect(),
+            get_all(pairs, "variant_id").into_iter().filter_map(|s| s.parse().ok()).collect(),
+        )
+    };
     Ok(TopicForm {
-        id: get(pairs, "id").and_then(|v| v.parse().ok()),
-        group: get(pairs, "group").and_then(|v| v.parse().ok()).ok_or_else(|| AppError::BadRequest("missing group".into()))?,
+        id: get(pairs, "msgid").or_else(|| get(pairs, "id")).and_then(|v| v.parse().ok()),
+        group: get(pairs, "group").and_then(|v| v.parse().ok()).unwrap_or(0),
         title: get(pairs, "title").unwrap_or("").to_string(),
         msg: get(pairs, "msg").unwrap_or("").to_string(),
         url: get(pairs, "url").map(|s| s.to_string()),
         linktext: get(pairs, "linktext").map(|s| s.to_string()),
         tags: get(pairs, "tags").map(|s| s.to_string()),
         draft: get(pairs, "draft").map(|s| s.to_string()),
-        poll: get_all(pairs, "poll").into_iter().map(|s| s.to_string()).collect(),
-        variant_id: get_all(pairs, "variant_id").into_iter().filter_map(|s| s.parse().ok()).collect(),
-        multiselect: get(pairs, "multiselect").map(|s| s.to_string()),
+        preview: get(pairs, "preview").map(str::to_string),
+        noinfo: get(pairs, "noinfo").map(str::to_string),
+        poll,
+        variant_id,
+        multiselect: get(pairs, "multiselect").or_else(|| get(pairs, "multiSelect")).map(str::to_string),
     })
+}
+
+#[cfg(test)]
+mod topic_form_contract_tests {
+    use super::*;
+
+    fn pairs(values: &[(&str, &str)]) -> Vec<(String, String)> {
+        values.iter().map(|(key, value)| ((*key).to_string(), (*value).to_string())).collect()
+    }
+
+    #[test]
+    fn parses_java_add_topic_poll_contract() {
+        let form = parse_topic_form(&pairs(&[
+            ("group", "19387"), ("title", "Опрос"), ("msg", "Текст"), ("tags", "lor"),
+            ("poll[1]", "Второй"), ("poll[0]", "Первый"), ("multiSelect", "true"),
+        ])).unwrap();
+        assert_eq!(form.group, 19387);
+        assert_eq!(form.poll, ["Первый", "Второй"]);
+        assert_eq!(form.variant_id, [0, 1]);
+        assert!(form.multiselect.is_some());
+    }
+
+    #[test]
+    fn parses_java_edit_topic_poll_contract_without_group() {
+        let form = parse_topic_form(&pairs(&[
+            ("msgid", "42"), ("title", "Опрос"), ("msg", "Текст"), ("tags", "lor"),
+            ("poll[17]", "Существующий"), ("newPoll[0]", "Новый"), ("multiselect", "on"),
+        ])).unwrap();
+        assert_eq!(form.id, Some(42));
+        assert_eq!(form.group, 0);
+        assert_eq!(form.poll, ["Существующий", "Новый"]);
+        assert_eq!(form.variant_id, [17, 0]);
+        assert!(form.multiselect.is_some());
+    }
+
+    #[test]
+    fn accepts_legacy_flattened_rust_fields_during_transition() {
+        let form = parse_topic_form(&pairs(&[
+            ("group", "8"), ("title", "Опрос"), ("msg", "Текст"), ("tags", "lor"),
+            ("variant_id", "12"), ("poll", "Да"), ("variant_id", "0"), ("poll", "Нет"),
+        ])).unwrap();
+        assert_eq!(form.poll, ["Да", "Нет"]);
+        assert_eq!(form.variant_id, [12, 0]);
+    }
 }
 
 pub async fn index(State(state): State<AppState>, Query(q): Query<PagerQuery>, CurrentUser(current_user): CurrentUser) -> Result<Html<String>> {
     let _ = q;
-    let all_topics = list_topics(&state, None, None, 0, 30).await?;
+    let show_gallery_on_main = match &current_user {
+        Some(user) => {
+            let settings_text: Option<String> = sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
+                .bind(user.id).fetch_optional(&state.pool).await?.flatten();
+            crate::profile::ProfileSettings::from_hstore_text(settings_text).main_gallery
+        }
+        None => crate::profile::ProfileSettings::default().main_gallery,
+    };
+    let all_topics = if show_gallery_on_main {
+        let mut topics = Vec::new();
+        for section in ["news", "gallery", "polls", "articles"] {
+            topics.extend(list_topics(&state, Some(section), None, 0, 30).await?);
+        }
+        topics.sort_by(|left, right| {
+            let left_date = left.lastmod.as_ref().unwrap_or(&left.postdate);
+            let right_date = right.lastmod.as_ref().unwrap_or(&right.postdate);
+            right.sticky.cmp(&left.sticky).then_with(|| {
+                right_date.cmp(left_date)
+            })
+        });
+        topics.truncate(30);
+        topics
+    } else {
+        list_topics(&state, Some("news"), None, 0, 30).await?
+    };
     let news = prepare_news_topics(&state, all_topics.iter().take(10).cloned().collect(), true).await?;
     let brief = all_topics.iter().skip(10).cloned().collect();
-    let news_restriction: i32 = sqlx::query_scalar("SELECT restrict_score FROM sections WHERE id=1").fetch_one(&state.pool).await?;
-    let add_reason = posting_reason_for_port(&state, news_restriction, &current_user).await?;
-    let uncommitted = sqlx::query_as::<_, (i32, String, i64)>(
+    let add_restriction: i32 = if show_gallery_on_main {
+        sqlx::query_scalar("SELECT min(restrict_score) FROM sections")
+            .fetch_one(&state.pool)
+            .await?
+    } else {
+        sqlx::query_scalar("SELECT restrict_score FROM sections WHERE id=1")
+            .fetch_one(&state.pool)
+            .await?
+    };
+    let add_reason = posting_reason_for_port(&state, add_restriction, &current_user).await?;
+    let mut uncommitted = sqlx::query_as::<_, (i32, String, i64)>(
         "SELECT s.id,s.name,count(t.id) FROM sections s JOIN groups g ON g.section=s.id JOIN topics t ON t.groupid=g.id WHERE t.moderate AND NOT t.deleted AND NOT t.draft GROUP BY s.id,s.name HAVING count(t.id)>0 ORDER BY s.id",
     ).fetch_all(&state.pool).await?;
+    let can_review_all_sections = current_user.as_ref().is_some_and(|user| user.canmod || user.corrector);
+    if !show_gallery_on_main && !can_review_all_sections {
+        uncommitted.retain(|(section_id, _, _)| *section_id == 1);
+    }
     let (drafts_count, favorite_present, user_status) = match &current_user {
         Some(user) => {
             let drafts: i64 = sqlx::query_scalar("SELECT count(*) FROM topics WHERE userid=$1 AND draft AND NOT deleted").bind(user.id).fetch_one(&state.pool).await?;
@@ -533,15 +804,34 @@ pub async fn index(State(state): State<AppState>, Query(q): Query<PagerQuery>, C
         }
         None => (0, false, String::new()),
     };
-    let poll = list_topics(&state, Some("polls"), None, 0, 1).await?.into_iter().next();
-    let articles = list_topics(&state, Some("articles"), None, 0, 7).await?;
+    let poll = if show_gallery_on_main { None } else { list_topics(&state, Some("polls"), None, 0, 1).await?.into_iter().next() };
+    let articles = if show_gallery_on_main { Vec::new() } else { list_topics(&state, Some("articles"), None, 0, 7).await? };
     let top_topics = all_topics.iter().take(10).cloned().collect();
-    let gallery = list_topics(&state, Some("gallery"), None, 0, 3).await?;
+    let mut gallery = Vec::new();
+    if !show_gallery_on_main {
+        for topic in list_topics(&state, Some("gallery"), None, 0, 12).await? {
+            if let Some(image) = load_topic_images(&state, topic.id).await?.into_iter().next() {
+                let srcset = image_srcset(&image);
+                let padding_percent = 100.0 * f64::from(image.medium_height) / f64::from(image.medium_width);
+                gallery.push(GalleryBoxItem {
+                    topic,
+                    image_url: image.medium_url,
+                    image_srcset: srcset,
+                    image_width: image.medium_width,
+                    image_height: image.medium_height,
+                    image_padding_percent: padding_percent,
+                });
+                if gallery.len() == 3 {
+                    break;
+                }
+            }
+        }
+    }
     let tags = sqlx::query_as::<_, TagItem>("SELECT value,counter FROM tags_values WHERE counter>0 ORDER BY counter DESC,lower(value) LIMIT 25").fetch_all(&state.pool).await?;
     Ok(Html(MainPageTemplate {
         news,
         brief,
-        add_url: add_reason.is_none().then(|| "/add-section.jsp?section=1".to_string()),
+        add_url: add_reason.is_none().then(|| if show_gallery_on_main { "/add-section.jsp".to_string() } else { "/add-section.jsp?section=1".to_string() }),
         add_reason: add_reason.unwrap_or_default(),
         uncommitted,
         current_user,
@@ -553,6 +843,7 @@ pub async fn index(State(state): State<AppState>, Query(q): Query<PagerQuery>, C
         top_topics,
         gallery,
         tags,
+        show_gallery_on_main,
     }.render()?))
 }
 
@@ -561,7 +852,7 @@ pub async fn lenta(State(state): State<AppState>, Query(q): Query<PagerQuery>, C
     let topics = list_topics(&state, Some("forum"), None, pager.offset, pager.limit).await?;
     let news = prepare_news_topics(&state, topics.clone(), true).await?;
     let navigation = build_topic_list_navigation(&state, "forum", None, &current_user).await?;
-    Ok(Html(IndexTemplate { title: "Форум / лента".into(), topics, news, pager, current_user, main_page: false, tracker_layout: false, navigation: Some(navigation) }.render()?))
+    Ok(Html(IndexTemplate { title: "Форум / лента".into(), topics, news, pager, main_page: false, tracker_layout: false, navigation: Some(navigation) }.render()?))
 }
 
 pub async fn section_topics(State(state): State<AppState>, uri: Uri, Query(q): Query<PagerQuery>, CurrentUser(current_user): CurrentUser) -> Result<Html<String>> {
@@ -570,7 +861,7 @@ pub async fn section_topics(State(state): State<AppState>, uri: Uri, Query(q): Q
     let topics = list_topics(&state, Some(section), None, pager.offset, pager.limit).await?;
     let news = prepare_news_topics(&state, topics.clone(), true).await?;
     let navigation = build_topic_list_navigation(&state, section, None, &current_user).await?;
-    Ok(Html(IndexTemplate { title: section_title(section).to_string(), topics, news, pager, current_user, main_page: false, tracker_layout: false, navigation: Some(navigation) }.render()?))
+    Ok(Html(IndexTemplate { title: section_title(section).to_string(), topics, news, pager, main_page: false, tracker_layout: false, navigation: Some(navigation) }.render()?))
 }
 
 pub async fn section_group_topics(State(state): State<AppState>, uri: Uri, Path(group): Path<String>, Query(q): Query<PagerQuery>, CurrentUser(current_user): CurrentUser) -> Result<Html<String>> {
@@ -581,14 +872,14 @@ pub async fn section_group_topics(State(state): State<AppState>, uri: Uri, Path(
     if selected.section_prefix != section { return Err(AppError::NotFound); }
     let news = prepare_news_topics(&state, topics.clone(), false).await?;
     let navigation = build_topic_list_navigation(&state, section, Some(&selected), &current_user).await?;
-    Ok(Html(IndexTemplate { title: format!("{} «{}»", section_title(section), selected.title), topics, news, pager, current_user, main_page: false, tracker_layout: false, navigation: Some(navigation) }.render()?))
+    Ok(Html(IndexTemplate { title: format!("{} «{}»", section_title(section), selected.title), topics, news, pager, main_page: false, tracker_layout: false, navigation: Some(navigation) }.render()?))
 }
 
-pub async fn legacy_show_topics(State(state): State<AppState>, Query(q): Query<PagerQuery>, CurrentUser(current_user): CurrentUser) -> Result<Html<String>> {
+pub async fn legacy_show_topics(State(state): State<AppState>, Query(q): Query<PagerQuery>, CurrentUser(_current_user): CurrentUser) -> Result<Html<String>> {
     let pager = Pager::new(q.offset.unwrap_or(0), state.config.page_size);
     let topics = list_topics(&state, None, None, pager.offset, pager.limit).await?;
     let news = prepare_news_topics(&state, topics.clone(), true).await?;
-    Ok(Html(IndexTemplate { title: "show-topics.jsp".into(), topics, news, pager, current_user, main_page: false, tracker_layout: false, navigation: None }.render()?))
+    Ok(Html(IndexTemplate { title: "show-topics.jsp".into(), topics, news, pager, main_page: false, tracker_layout: false, navigation: None }.render()?))
 }
 
 const VIEW_ALL_SECTION_PREFIX_CASE: &str = "CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END";
@@ -643,7 +934,6 @@ struct ViewAllTemplate {
     deleted_topics: Vec<DeletedTopicRow>,
     show_dates: bool,
     show_gallery_notice: bool,
-    current_user: Option<UserSummary>,
 }
 
 #[derive(Deserialize)]
@@ -829,7 +1119,6 @@ pub async fn view_all(State(state): State<AppState>, Query(q): Query<ViewAllQuer
         deleted_topics,
         show_dates: is_moderator,
         show_gallery_notice,
-        current_user: user,
     }.render()?))
 }
 
@@ -849,6 +1138,7 @@ pub struct TopicViewQuery {
     pub deleted: Option<String>,
     /// "show" disables ignore-list-based comment hiding for this request.
     pub filter: Option<String>,
+    pub results: Option<bool>,
 }
 
 pub async fn topic_page(State(state): State<AppState>, uri: Uri, Path((group, id)): Path<(String, i32)>, Query(q): Query<TopicViewQuery>, CurrentUser(current_user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Response> {
@@ -942,7 +1232,7 @@ async fn render_topic_view(
         }
     }
 
-    let topic_html = markup::render_message(&topic.message, topic.bbcode);
+    let topic_html = markup::render_message_with_markup(&topic.message, Some(&topic.markup), topic.bbcode);
 
     let all_comments: Vec<CommentItem> = if want_deleted {
         topic_service(&state).vecListComments(id).await?
@@ -1009,14 +1299,14 @@ async fn render_topic_view(
     let current_user_id = current_user.as_ref().map(|u| u.id);
 
     let comments: Vec<CommentView> = page_comments.into_iter().map(|item| {
-        let html = markup::render_message(&item.message, Some(true));
+        let html = markup::render_message_with_markup(&item.message, Some(&item.markup), item.bbcode);
         let rows: Vec<(String, i32, String, i32)> = all_reactions.iter()
             .filter(|(cid, ..)| *cid == Some(item.id))
             .map(|(_, r, u, n, s)| (r.clone(), *u, n.clone(), *s))
             .collect();
         let allow_interact = reactions_allow_interact(&current_user, reactor_frozen, topic_expired, item.author_id, item.deleted, comments_hidden);
-        let reactions_html = render_reactions_widget(topic.id, Some(item.id), &rows, current_user_id, allow_interact, &csrf_token);
-        CommentView { item, html, reactions_html }
+        let reactions = render_reactions_widget(topic.id, Some(item.id), &rows, current_user_id, allow_interact, &csrf_token);
+        CommentView { item, html, reactions_html: reactions.html, show_reactions_link: reactions.show_menu_link }
     }).collect();
 
     let topic_reaction_rows: Vec<(String, i32, String, i32)> = all_reactions.iter()
@@ -1024,19 +1314,21 @@ async fn render_topic_view(
         .map(|(_, r, u, n, s)| (r.clone(), *u, n.clone(), *s))
         .collect();
     let topic_allow_interact = reactions_allow_interact(&current_user, reactor_frozen, topic_expired, topic.author_id, topic.deleted, false);
-    let topic_reactions_html = render_reactions_widget(topic.id, None, &topic_reaction_rows, current_user_id, topic_allow_interact, &csrf_token);
+    let topic_reactions = render_reactions_widget(topic.id, None, &topic_reaction_rows, current_user_id, topic_allow_interact, &csrf_token);
 
-    let poll = load_poll_view(&state, topic.id, topic.deleted, &current_user).await?;
+    let poll = load_poll_view(&state, topic.id, topic.deleted, topic.moderate, topic_expired, query.results.unwrap_or(false), &current_user).await?;
     let images = load_topic_images(&state, topic.id).await?;
     let images_html = render_topic_images(&images, &topic.title, topic.section_prefix == "gallery", false);
-    let can_edit_topic = current_user.as_ref().map(|u| u.canmod || u.id == topic.author_id).unwrap_or(false);
-    let show_add_image_link = topic.section_prefix == "gallery" && images.is_empty() && can_edit_topic;
+    let (comment_format_mode, comment_format_title, _) = match &current_user {
+        Some(user) => user_format_mode(&state, user.id).await?,
+        None => (crate::profile::DEFAULT_FORMAT_MODE.into(), "Markdown".into(), "MARKDOWN".into()),
+    };
+    let can_comment = current_user.is_some() && !topic_expired && !topic.deleted && !comments_hidden;
 
     Ok(Html(TopicTemplate {
         topic,
         topic_html,
         comments,
-        current_user,
         pages,
         thread_mode,
         thread_root,
@@ -1044,12 +1336,14 @@ async fn render_topic_view(
         show_deleted_button: can_view_deleted_comments && !want_deleted,
         filtered_count,
         unfiltered_count,
-        filter_show,
         csrf_token,
         poll,
         images_html,
-        show_add_image_link,
-        topic_reactions_html,
+        topic_reactions_html: topic_reactions.html,
+        topic_show_reactions_link: topic_reactions.show_menu_link,
+        comment_format_mode,
+        comment_format_title,
+        can_comment,
     }.render()?).into_response())
 }
 
@@ -1116,6 +1410,7 @@ pub struct NewTopicQuery {
     pub section: Option<i32>,
     pub tags: Option<String>,
     pub tag: Option<String>,
+    pub noinfo: Option<String>,
 }
 
 pub async fn choose_topic_section(State(state): State<AppState>, Query(q): Query<NewTopicQuery>, CurrentUser(user): CurrentUser) -> Result<Response> {
@@ -1126,17 +1421,19 @@ pub async fn choose_topic_section(State(state): State<AppState>, Query(q): Query
             .fetch_optional(&state.pool)
             .await?
             .ok_or(AppError::NotFound)?;
-        let rows: Vec<(i32, String, String, Option<String>, i32, i32)> = sqlx::query_as(
-            "SELECT g.id,g.title,g.urlname,g.info,COALESCE(g.restrict_topics,-9999),s.restrict_score FROM groups g JOIN sections s ON s.id=g.section WHERE s.id=$1 ORDER BY g.title",
+        let rows: Vec<(i32, String, String, Option<String>, i32, i32, String)> = sqlx::query_as(
+            r#"SELECT g.id,g.title,g.urlname,g.info,COALESCE(g.restrict_topics,-9999),s.restrict_score,
+                      CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END
+               FROM groups g JOIN sections s ON s.id=g.section WHERE s.id=$1 ORDER BY g.title"#,
         ).bind(section_id).fetch_all(&state.pool).await?;
         let mut choices = Vec::with_capacity(rows.len());
-        for (id, title, urlname, info, group_restriction, section_restriction) in rows {
+        for (id, title, urlname, info, group_restriction, section_restriction, section_prefix) in rows {
             let reason = posting_reason_for_port(&state, group_restriction.max(section_restriction), &user).await?;
             let suffix = if tag.is_empty() { String::new() } else { format!("&tags={}", urlencoding::encode(&tag)) };
             choices.push(AddSectionChoice {
                 title,
                 url: format!("/add.jsp?group={id}{suffix}"),
-                view_url: Some(format!("/{}/{}", section_prefix_by_id(section_id), urlname)),
+                view_url: Some(format!("/{section_prefix}/{urlname}/")),
                 info,
                 postable: reason.is_none(),
                 reason: reason.unwrap_or_default(),
@@ -1175,29 +1472,76 @@ pub async fn choose_topic_section(State(state): State<AppState>, Query(q): Query
     }.render()?).into_response())
 }
 
-fn section_prefix_by_id(id: i32) -> &'static str {
-    match id { 1 => "news", 2 => "forum", 3 => "gallery", 4 => "articles", 5 => "polls", _ => "news" }
+struct TopicFormGroup {
+    title: String,
+    links_allowed: bool,
+    poll_allowed: bool,
+    image_required: bool,
+    image_allowed_by_section: bool,
+    section_prefix: String,
 }
 
-pub async fn new_topic_form(State(state): State<AppState>, Query(q): Query<NewTopicQuery>, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Response> {
-    let groups = crate::routes::groups::list_groups(&state).await?;
+async fn load_topic_form_group(state: &AppState, group_id: i32) -> Result<TopicFormGroup> {
+    let row: Option<(String, bool, bool, bool, bool, String)> = sqlx::query_as(
+        r#"SELECT g.title, s.havelink, COALESCE(s.vote,false), s.imagepost,
+                  (COALESCE(s.imageallowed,false) OR COALESCE(s.image_allowed,false)),
+                  CASE s.name WHEN 'Новости' THEN 'news' WHEN 'Форум' THEN 'forum' WHEN 'Галерея' THEN 'gallery' WHEN 'Статьи' THEN 'articles' WHEN 'Опросы' THEN 'polls' ELSE lower(s.name) END
+           FROM groups g JOIN sections s ON s.id=g.section WHERE g.id=$1"#,
+    ).bind(group_id).fetch_optional(&state.pool).await?;
+    let Some((title, links_allowed, poll_allowed, image_required, image_allowed_by_section, section_prefix)) = row else {
+        return Err(AppError::NotFound);
+    };
+    Ok(TopicFormGroup { title, links_allowed, poll_allowed, image_required, image_allowed_by_section, section_prefix })
+}
+
+fn image_upload_allowed(group: &TopicFormGroup, user: &Option<UserSummary>) -> bool {
+    group.image_required || (group.image_allowed_by_section && user.as_ref().is_some_and(|u| u.canmod || u.corrector || u.score.unwrap_or(0) >= 50))
+}
+
+pub async fn new_topic_form(State(state): State<AppState>, Query(q): Query<NewTopicQuery>, CurrentUser(user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Response> {
     let selected_group = match q.group {
-        Some(id) if groups.iter().any(|group| group.id == id) => id,
-        Some(_) => return Err(AppError::NotFound),
+        Some(id) => id,
         None => return Ok(Redirect::to("/add-section.jsp").into_response()),
     };
-    let group_title = groups.iter().find(|group| group.id == selected_group).map(|group| group.title.as_str()).unwrap_or("");
+    let group = load_topic_form_group(&state, selected_group).await?;
+    let (format_mode, format_mode_title, _) = match &user {
+        Some(user) => user_format_mode(&state, user.id).await?,
+        None => (crate::profile::DEFAULT_FORMAT_MODE.into(), "Markdown".into(), "MARKDOWN".into()),
+    };
+    let image_allowed = image_upload_allowed(&group, &user);
+    let noinfo = q.noinfo.is_some();
+    let initial_tags = q.tags.or(q.tag).unwrap_or_default();
+    let add_info_html = if noinfo {
+        None
+    } else {
+        let path = format!("{}/help/new-topic-{}.md", state.config.static_dir, group.section_prefix);
+        tokio::fs::read_to_string(path).await.ok().map(|source| markup::render_markdown(&source))
+    };
     Ok(Html(TopicFormTemplate {
-        title: format!("Добавить в «{group_title}»"),
+        title: format!("Добавить в «{}»", group.title),
         action: "/add.jsp".into(),
-        topic: None,
-        groups,
+        topic_id: None,
         csrf_token,
         poll_variants: Vec::new(),
-        poll_new_rows: vec![(); POLL_MAX_VARIANTS],
+        poll_new_rows: if group.poll_allowed { vec![String::new(); POLL_MAX_VARIANTS] } else { Vec::new() },
         poll_multiselect: false,
         selected_group,
-        initial_tags: q.tags.or(q.tag).unwrap_or_default(),
+        is_edit: false,
+        links_allowed: group.links_allowed,
+        poll_allowed: group.poll_allowed,
+        image_allowed,
+        image_required: group.image_required,
+        additional_image_rows: if image_allowed && group.section_prefix != "forum" { vec![(); 3] } else { Vec::new() },
+        form_title: String::new(),
+        form_msg: String::new(),
+        form_url: String::new(),
+        form_linktext: String::new(),
+        form_tags: initial_tags.clone(),
+        preview_html: None,
+        noinfo,
+        add_info_html,
+        format_mode,
+        format_mode_title,
     }.render()?).into_response())
 }
 
@@ -1205,22 +1549,177 @@ pub async fn new_topic_form(State(state): State<AppState>, Query(q): Query<NewTo
 /// Rust's session model, so only the registered-user limit applies).
 const TOPIC_MAX_MESSAGE_LENGTH: usize = 65536;
 
-pub async fn create_topic(State(state): State<AppState>, CurrentUser(user): CurrentUser, body: axum::body::Bytes) -> Result<Redirect> {
-    let Some(user) = user else { return Err(AppError::Forbidden); };
-    let pairs = crate::form::parse_pairs(&body)?;
-    let form = parse_topic_form(&pairs)?;
+struct TopicUpload {
+    bytes: bytes::Bytes,
+    original_name: Option<String>,
+    primary: bool,
+}
+
+async fn parse_topic_request(state: &AppState, request: Request, expected_csrf: &str) -> Result<(Vec<(String, String)>, Vec<TopicUpload>)> {
+    let multipart_request = request.headers().get(CONTENT_TYPE).and_then(|value| value.to_str().ok()).is_some_and(|value| value.starts_with("multipart/form-data"));
+    if !multipart_request {
+        let bytes = axum::body::to_bytes(request.into_body(), 1024 * 1024).await.map_err(|error| AppError::BadRequest(format!("invalid body: {error}")))?;
+        return Ok((crate::form::parse_pairs(&bytes)?, Vec::new()));
+    }
+
+    let mut multipart = Multipart::from_request(request, state).await.map_err(|error| AppError::BadRequest(format!("ошибка multipart: {error}")))?;
+    let mut pairs = Vec::new();
+    let mut uploads = Vec::new();
+    while let Some(field) = multipart.next_field().await.map_err(|error| AppError::BadRequest(format!("ошибка multipart: {error}")))? {
+        let Some(name) = field.name().map(str::to_string) else { continue; };
+        if name == "image" || name == "additionalImage" {
+            let original_name = field.file_name().map(str::to_string);
+            let bytes = field.bytes().await.map_err(|error| AppError::BadRequest(format!("ошибка чтения изображения: {error}")))?;
+            if !bytes.is_empty() {
+                uploads.push(TopicUpload { bytes, original_name, primary: name == "image" });
+            }
+        } else {
+            let value = field.text().await.map_err(|error| AppError::BadRequest(format!("ошибка чтения поля {name}: {error}")))?;
+            pairs.push((name, value));
+        }
+    }
+    if crate::form::get(&pairs, "csrf") != Some(expected_csrf) {
+        return Err(AppError::Forbidden);
+    }
+    Ok((pairs, uploads))
+}
+
+fn validate_topic_form(form: &TopicForm, links_allowed: bool) -> Result<()> {
+    let title = form.title.trim();
+    if title.is_empty() {
+        return Err(AppError::BadRequest("заголовок сообщения не может быть пустым".into()));
+    }
+    if form.title.chars().count() > 140 {
+        return Err(AppError::BadRequest("Слишком большой заголовок".into()));
+    }
+    if title.starts_with('[') {
+        return Err(AppError::BadRequest("Не добавляйте теги в заголовки, используйте предназначенное для тегов поле ввода".into()));
+    }
     if form.msg.chars().count() > TOPIC_MAX_MESSAGE_LENGTH {
         return Err(AppError::BadRequest("Слишком большое сообщение".into()));
     }
-    if form.title.trim().is_empty() {
-        return Err(AppError::BadRequest("заголовок сообщения не может быть пустым".into()));
+    if links_allowed {
+        if let Some(url) = form.url.as_deref().filter(|value| !value.trim().is_empty()) {
+            if url.chars().count() > 255 {
+                return Err(AppError::BadRequest("Слишком длинный URL".into()));
+            }
+            if reqwest::Url::parse(url).is_err() {
+                return Err(AppError::BadRequest("Некорректный URL".into()));
+            }
+            if form.linktext.as_deref().unwrap_or("").is_empty() {
+                return Err(AppError::BadRequest("URL указан без текста ссылки".into()));
+            }
+        }
     }
-    let is_draft = form.draft.as_deref().is_some_and(|v| v == "true" || v == "on" || v == "1");
-    let (premoderated, poll_allowed, imagepost): (bool, bool, bool) = sqlx::query_as("SELECT s.moderate, s.vote, s.imagepost FROM groups g JOIN sections s ON s.id=g.section WHERE g.id=$1")
+    Ok(())
+}
+
+fn validate_topic_image(data: &[u8]) -> Result<(image::DynamicImage, &'static str)> {
+    use image::GenericImageView;
+    const MAX_FILE_SIZE: usize = 8 * 1024 * 1024;
+    if data.len() > MAX_FILE_SIZE {
+        return Err(AppError::BadRequest("Сбой загрузки изображения: слишком большой файл".into()));
+    }
+    let format = image::guess_format(data).map_err(|_| AppError::BadRequest("Некорректное изображение: неизвестный формат".into()))?;
+    let extension = match format {
+        image::ImageFormat::Jpeg => "jpg",
+        image::ImageFormat::Png => "png",
+        image::ImageFormat::Gif => "gif",
+        _ => return Err(AppError::BadRequest("Некорректное изображение: поддерживаются jpeg, gif и png".into())),
+    };
+    let image = image::load_from_memory_with_format(data, format).map_err(|error| AppError::BadRequest(format!("Некорректное изображение: {error}")))?;
+    let (width, height) = image.dimensions();
+    if !(400..=5120).contains(&width) || !(400..=5120).contains(&height) {
+        return Err(AppError::BadRequest("Сбой загрузки изображения: недопустимые размеры изображения".into()));
+    }
+    if f64::from(height) / (f64::from(width) + 1.0) > 2.3 {
+        return Err(AppError::BadRequest("Сбой загрузки изображения: слишком узкое изображение".into()));
+    }
+    if f64::from(width) / (f64::from(height) + 1.0) > 5.0 {
+        return Err(AppError::BadRequest("Сбой загрузки изображения: слишком широкое изображение".into()));
+    }
+    Ok((image, extension))
+}
+
+async fn save_topic_upload(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, state: &AppState, topic_id: i32, user_id: i32, upload: &TopicUpload) -> Result<()> {
+    use image::GenericImageView;
+    let (image, extension) = validate_topic_image(&upload.bytes)?;
+    let (width, height) = image.dimensions();
+    let image_id: i32 = sqlx::query_scalar("SELECT nextval(pg_get_serial_sequence('images','id'))::int").fetch_one(&mut **tx).await?;
+    let relative_dir = format!("images/{image_id}");
+    let directory = format!("{}/{relative_dir}", state.config.upload_dir);
+    tokio::fs::create_dir_all(&directory).await.map_err(|error| AppError::Anyhow(error.into()))?;
+    tokio::fs::write(format!("{directory}/original.{extension}"), &upload.bytes).await.map_err(|error| AppError::Anyhow(error.into()))?;
+    for size in [500u32, 1000, 1500, 2000] {
+        let scaled = if width.max(height) <= size { image.clone() } else { image.resize(size, size, image::imageops::FilterType::Lanczos3) };
+        let mut encoded = Vec::new();
+        scaled.write_to(&mut std::io::Cursor::new(&mut encoded), image::ImageFormat::Jpeg).map_err(|error| AppError::Anyhow(error.into()))?;
+        tokio::fs::write(format!("{directory}/{size}px.jpg"), encoded).await.map_err(|error| AppError::Anyhow(error.into()))?;
+    }
+    sqlx::query(
+        "INSERT INTO images(id,userid,topic,original,medium,thumbnail,width,height,original_name,primary_image,extension,main) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$10)",
+    ).bind(image_id).bind(user_id).bind(topic_id)
+        .bind(format!("{relative_dir}/original.{extension}"))
+        .bind(format!("{relative_dir}/1000px.jpg"))
+        .bind(format!("{relative_dir}/500px.jpg"))
+        .bind(width as i32).bind(height as i32).bind(&upload.original_name).bind(upload.primary).bind(extension)
+        .execute(&mut **tx).await?;
+    if upload.primary {
+        sqlx::query("UPDATE topics SET image=$1 WHERE id=$2").bind(image_id).bind(topic_id).execute(&mut **tx).await?;
+    }
+    Ok(())
+}
+
+pub async fn create_topic(State(state): State<AppState>, CurrentUser(user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken, request: Request) -> Result<Response> {
+    let Some(user) = user else { return Err(AppError::Forbidden); };
+    let (pairs, uploads) = parse_topic_request(&state, request, &csrf_token).await?;
+    let form = parse_topic_form(&pairs)?;
+    let (format_mode, format_mode_title, markup_id) = user_format_mode(&state, user.id).await?;
+    let group = load_topic_form_group(&state, form.group).await?;
+    validate_topic_form(&form, group.links_allowed)?;
+    let is_draft = form.draft.is_some();
+    let premoderated: bool = sqlx::query_scalar("SELECT s.moderate FROM groups g JOIN sections s ON s.id=g.section WHERE g.id=$1")
         .bind(form.group)
-        .fetch_optional(&state.pool)
-        .await?
-        .unwrap_or((false, false, false));
+        .fetch_one(&state.pool).await?;
+    let upload_allowed = image_upload_allowed(&group, &Some(user.clone()));
+    if !uploads.is_empty() && !upload_allowed {
+        return Err(AppError::Forbidden);
+    }
+    if group.image_required && !uploads.iter().any(|upload| upload.primary) {
+        return Err(AppError::BadRequest("Изображение отсутствует".into()));
+    }
+    if uploads.iter().filter(|upload| upload.primary).count() > 1 || uploads.iter().filter(|upload| !upload.primary).count() > 3 {
+        return Err(AppError::BadRequest("Слишком много изображений".into()));
+    }
+
+    if form.preview.is_some() {
+        return Ok(Html(TopicFormTemplate {
+            title: format!("Добавить в «{}»", group.title),
+            action: "/add.jsp".into(),
+            topic_id: None,
+            csrf_token,
+            poll_variants: Vec::new(),
+            poll_new_rows: if group.poll_allowed { form.poll.clone() } else { Vec::new() },
+            poll_multiselect: form.multiselect.is_some(),
+            selected_group: form.group,
+            is_edit: false,
+            links_allowed: group.links_allowed,
+            poll_allowed: group.poll_allowed,
+            image_allowed: upload_allowed,
+            image_required: group.image_required,
+            additional_image_rows: if upload_allowed && group.section_prefix != "forum" { vec![(); 3] } else { Vec::new() },
+            form_title: form.title.clone(),
+            form_msg: form.msg.clone(),
+            form_url: form.url.clone().unwrap_or_default(),
+            form_linktext: form.linktext.clone().unwrap_or_default(),
+            form_tags: form.tags.clone().unwrap_or_default(),
+            preview_html: Some(markup::render_message_with_markup(&form.msg, Some(&markup_id), None)),
+            noinfo: form.noinfo.as_deref().is_some_and(|value| matches!(value, "1" | "true" | "on")),
+            add_info_html: None,
+            format_mode: format_mode.clone(),
+            format_mode_title: format_mode_title.clone(),
+        }.render()?).into_response());
+    }
 
     // AddTopicRequestValidator.validateTags/AddTopicController: every
     // topic needs 1-5 valid tags, and creating a brand-new tag (one that
@@ -1234,47 +1733,54 @@ pub async fn create_topic(State(state): State<AppState>, CurrentUser(user): Curr
     let service = topic_service(&state);
     let id = service.iNextMessageId(&mut tx).await?;
     service.vInsertTopicMessage(&mut tx, id, &form.msg).await?;
+    sqlx::query("UPDATE msgbase SET markup=$2, bbcode=$3 WHERE id=$1")
+        .bind(id).bind(&markup_id).bind(markup_id != "MARKDOWN").execute(&mut *tx).await?;
     service.vInsertTopic(&mut tx, StNewTopic {
         iMsgId: id,
         iGroupId: form.group,
         iUserId: user.id,
         sTitle: form.title.trim(),
-        optUrl: form.url.as_deref().filter(|sValue| !sValue.trim().is_empty()),
-        optLinkText: form.linktext.as_deref().filter(|sValue| !sValue.trim().is_empty()),
+        optUrl: group.links_allowed.then_some(form.url.as_deref()).flatten().filter(|sValue| !sValue.trim().is_empty()),
+        optLinkText: group.links_allowed.then_some(form.linktext.as_deref()).flatten().filter(|sValue| !sValue.trim().is_empty()),
         bDraft: is_draft,
         bPremoderated: premoderated,
     }).await?;
     service.vReplaceTags(&mut tx, id, form.tags.as_deref()).await?;
-    if poll_allowed {
+    if group.poll_allowed {
         // AddTopicController.preparePollPreview/TopicService.addMessage:
         // every submitted variant_id is 0 (new) on creation.
         let variant_ids = vec![0; form.poll.len()];
         save_poll(&mut tx, id, form.multiselect.is_some(), &variant_ids, &form.poll).await?;
     }
+    for upload in &uploads {
+        save_topic_upload(&mut tx, &state, id, user.id, upload).await?;
+    }
     tx.commit().await?;
     notify_topic_created(&state, id, user.id, &form.msg).await?;
     crate::search_index::index_topic(&state, id, false).await;
-    // AddTopicController normally requires the image up front for an
-    // imagepost section; this port instead lets the topic post first and
-    // sends the author straight to the upload step, matching Java's own
-    // MultipartFile-based flow closely enough while avoiding a multipart
-    // main form (which would drop CSRF protection on every other field -
-    // see `src/csrf.rs`).
-    if imagepost {
-        return Ok(Redirect::to(&format!("/addphoto-topic.jsp?msgid={id}")));
-    }
-    // The topic-view gate (render_topic) lets the author through even while
-    // draft/pending, so redirecting straight to the topic works for both
-    // cases - Java instead shows a dedicated "add-done-moderated" interim
-    // page for the premoderated case, which isn't replicated here.
+    // Java shows a dedicated confirmation for protected sections because
+    // the new topic is intentionally absent from the public section until
+    // a moderator commits it.
     let topic = get_topic(&state, id).await?;
-    Ok(Redirect::to(&topic.topic_url()))
+    if premoderated && !is_draft {
+        return Ok(Html(ModeratedTopicTemplate { topic_url: topic.topic_url() }.render()?).into_response());
+    }
+    Ok(Redirect::to(&topic.topic_url()).into_response())
 }
 
-pub async fn edit_topic_form(State(state): State<AppState>, Query(q): Query<ViewMessageQuery>, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
+#[derive(Template)]
+#[template(path = "topic_created_moderated.html")]
+struct ModeratedTopicTemplate {
+    topic_url: String,
+}
+
+pub async fn edit_topic_form(State(state): State<AppState>, Query(q): Query<ViewMessageQuery>, CurrentUser(user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken) -> Result<Html<String>> {
     let topic = get_topic(&state, q.msgid).await?;
     let selected_group = topic.group_id;
-    let groups = crate::routes::groups::list_groups(&state).await?;
+    let group = load_topic_form_group(&state, selected_group).await?;
+    let (format_mode, format_mode_title) = markup_form_view(&topic.markup, topic.bbcode);
+    let image_allowed = image_upload_allowed(&group, &user);
+    let image_count: i64 = sqlx::query_scalar("SELECT count(*) FROM images WHERE topic=$1 AND NOT deleted AND NOT primary_image").bind(q.msgid).fetch_one(&state.pool).await?;
     // PollDao.getPollByTopicId/EditTopicController: pre-fill existing
     // variants (blank if the topic has no poll yet, e.g. a topic moved
     // into the Опросы section after creation) plus a handful of empty
@@ -1290,14 +1796,28 @@ pub async fn edit_topic_form(State(state): State<AppState>, Query(q): Query<View
     Ok(Html(TopicFormTemplate {
         title: "Редактировать тему".into(),
         action: "/edit.jsp".into(),
-        topic: Some(topic),
-        groups,
+        topic_id: Some(topic.id),
         csrf_token,
         poll_variants,
-        poll_new_rows: vec![(); POLL_NEW_VARIANT_SLOTS],
+        poll_new_rows: if group.poll_allowed { vec![String::new(); POLL_NEW_VARIANT_SLOTS] } else { Vec::new() },
         poll_multiselect,
         selected_group,
-        initial_tags: String::new(),
+        is_edit: true,
+        links_allowed: group.links_allowed,
+        poll_allowed: group.poll_allowed,
+        image_allowed,
+        image_required: false,
+        additional_image_rows: if image_allowed && group.section_prefix != "forum" { vec![(); 3usize.saturating_sub(image_count as usize)] } else { Vec::new() },
+        form_title: topic.title.clone(),
+        form_msg: topic.message.clone(),
+        form_url: topic.url.clone().unwrap_or_default(),
+        form_linktext: topic.linktext.clone().unwrap_or_default(),
+        form_tags: topic.tags_vec().join(", "),
+        preview_html: None,
+        noinfo: false,
+        add_info_html: None,
+        format_mode,
+        format_mode_title,
     }.render()?))
 }
 
@@ -1310,12 +1830,15 @@ pub async fn edit_topic_form(State(state): State<AppState>, Query(q): Query<View
 /// than leaving the endpoint wide open.
 const TOPIC_EDIT_WINDOW_DAYS: i64 = 14;
 
-pub async fn edit_topic(State(state): State<AppState>, CurrentUser(user): CurrentUser, body: axum::body::Bytes) -> Result<Redirect> {
+pub async fn edit_topic(State(state): State<AppState>, CurrentUser(user): CurrentUser, crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken, request: Request) -> Result<Response> {
     let Some(user) = user else { return Err(AppError::Forbidden); };
-    let pairs = crate::form::parse_pairs(&body)?;
+    let (pairs, uploads) = parse_topic_request(&state, request, &csrf_token).await?;
     let form = parse_topic_form(&pairs)?;
     let id = form.id.ok_or_else(|| AppError::BadRequest("missing topic id".into()))?;
     let meta = load_topic_delete_meta(&state, id).await?;
+    let current_topic = get_topic(&state, id).await?;
+    let group = load_topic_form_group(&state, current_topic.group_id).await?;
+    validate_topic_form(&form, group.links_allowed)?;
     if meta.deleted {
         return Err(AppError::BadRequest("нельзя править удаленные топики".into()));
     }
@@ -1324,9 +1847,9 @@ pub async fn edit_topic(State(state): State<AppState>, CurrentUser(user): Curren
     // *permanently* locked for the author, regardless of any deadline;
     // otherwise the 14-day window applies, measured from `commitDate` for
     // a committed Articles topic and from `postdate` everywhere else.
-    const ARTICLES_SECTION_ID: i32 = 4;
-    let permanently_locked = meta.commited && meta.premoderated && meta.section_id != ARTICLES_SECTION_ID;
-    let deadline_base = if meta.commited && meta.section_id == ARTICLES_SECTION_ID {
+    let is_articles = current_topic.section_prefix == "articles";
+    let permanently_locked = meta.commited && meta.premoderated && !is_articles;
+    let deadline_base = if meta.commited && is_articles {
         meta.commitdate.map(|d| d.and_utc()).unwrap_or(meta.postdate)
     } else {
         meta.postdate
@@ -1336,11 +1859,38 @@ pub async fn edit_topic(State(state): State<AppState>, CurrentUser(user): Curren
     if !user.canmod && !editable_by_author {
         return Err(AppError::Forbidden);
     }
+    let upload_allowed = image_upload_allowed(&group, &Some(user.clone()));
+    if !uploads.is_empty() && !upload_allowed {
+        return Err(AppError::Forbidden);
+    }
+    let additional_count: i64 = sqlx::query_scalar("SELECT count(*) FROM images WHERE topic=$1 AND NOT deleted AND NOT primary_image").bind(id).fetch_one(&state.pool).await?;
+    if uploads.iter().filter(|upload| upload.primary).count() > 1 || additional_count + uploads.iter().filter(|upload| !upload.primary).count() as i64 > 3 {
+        return Err(AppError::BadRequest("Слишком много изображений".into()));
+    }
 
     // EditTopicRequestValidator.validateTags: same rule as topic creation.
     let tags = crate::routes::tags::parse_and_validate_tags(form.tags.as_deref().unwrap_or(""))
         .map_err(AppError::BadRequest)?;
     crate::routes::tags::check_can_create_new_tags(&state, &tags, &user, meta.premoderated).await?;
+
+    if form.preview.is_some() {
+        let poll_variants = form.variant_id.iter().zip(form.poll.iter()).filter(|(id, _)| **id != 0).map(|(id, label)| (*id, label.clone())).collect();
+        let poll_new_rows = form.variant_id.iter().zip(form.poll.iter()).filter(|(id, _)| **id == 0).map(|(_, label)| label.clone()).collect();
+        return Ok(Html(TopicFormTemplate {
+            title: "Редактирование".into(), action: "/edit.jsp".into(), topic_id: Some(id), csrf_token,
+            poll_variants, poll_new_rows, poll_multiselect: form.multiselect.is_some(), selected_group: current_topic.group_id,
+            is_edit: true, links_allowed: group.links_allowed, poll_allowed: group.poll_allowed,
+            image_allowed: upload_allowed, image_required: false,
+            additional_image_rows: if upload_allowed && group.section_prefix != "forum" { vec![(); 3usize.saturating_sub(additional_count as usize)] } else { Vec::new() },
+            form_title: form.title.clone(), form_msg: form.msg.clone(), form_url: form.url.clone().unwrap_or_default(),
+            form_linktext: form.linktext.clone().unwrap_or_default(), form_tags: form.tags.clone().unwrap_or_default(),
+            preview_html: Some(markup::render_message_with_markup(&form.msg, Some(&current_topic.markup), current_topic.bbcode)),
+            noinfo: false,
+            add_info_html: None,
+            format_mode: markup_form_view(&current_topic.markup, current_topic.bbcode).0,
+            format_mode_title: markup_form_view(&current_topic.markup, current_topic.bbcode).1,
+        }.render()?).into_response());
+    }
 
     let mut tx = state.pool.begin().await?;
     let service = topic_service(&state);
@@ -1348,16 +1898,22 @@ pub async fn edit_topic(State(state): State<AppState>, CurrentUser(user): Curren
     service.vUpdateTopicHeader(&mut tx, StEditTopic {
         iMsgId: id,
         sTitle: form.title.trim(),
-        optUrl: form.url,
-        optLinkText: form.linktext,
+        optUrl: group.links_allowed.then_some(form.url).flatten(),
+        optLinkText: group.links_allowed.then_some(form.linktext).flatten(),
     }).await?;
     service.vReplaceTags(&mut tx, id, form.tags.as_deref()).await?;
     if meta.poll_allowed && !form.variant_id.is_empty() {
         save_poll(&mut tx, id, form.multiselect.is_some(), &form.variant_id, &form.poll).await?;
     }
+    if uploads.iter().any(|upload| upload.primary) {
+        sqlx::query("UPDATE images SET deleted=true WHERE topic=$1 AND primary_image AND NOT deleted").bind(id).execute(&mut *tx).await?;
+    }
+    for upload in &uploads {
+        save_topic_upload(&mut tx, &state, id, user.id, upload).await?;
+    }
     tx.commit().await?;
     crate::search_index::index_topic(&state, id, false).await;
-    Ok(Redirect::to(&format!("/jump-message.jsp?msgid={id}")))
+    Ok(Redirect::to(&format!("/jump-message.jsp?msgid={id}")).into_response())
 }
 
 #[derive(Deserialize)]
@@ -1377,7 +1933,6 @@ struct TopicDeleteMeta {
     premoderated: bool,
     commited: bool,
     comment_count: i64,
-    section_id: i32,
     poll_allowed: bool,
 }
 
@@ -1518,9 +2073,9 @@ pub(crate) async fn check_topic_viewable(state: &AppState, topic_id: i32, user: 
 }
 
 async fn load_topic_delete_meta(state: &AppState, msgid: i32) -> Result<TopicDeleteMeta> {
-    let row: (i32, bool, chrono::DateTime<chrono::Utc>, Option<chrono::NaiveDateTime>, bool, bool, bool, i64, i32, bool) = sqlx::query_as(
+    let row: (i32, bool, chrono::DateTime<chrono::Utc>, Option<chrono::NaiveDateTime>, bool, bool, bool, i64, bool) = sqlx::query_as(
         r#"SELECT t.userid, t.deleted, t.postdate, t.commitdate, COALESCE(t.draft,false), s.moderate,
-                  (t.commitdate IS NOT NULL), t.stat1::bigint, s.id, s.vote
+                  (t.commitdate IS NOT NULL), t.stat1::bigint, s.vote
            FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section
            WHERE t.id=$1"#,
     )
@@ -1537,8 +2092,7 @@ async fn load_topic_delete_meta(state: &AppState, msgid: i32) -> Result<TopicDel
         premoderated: row.5,
         commited: row.6,
         comment_count: row.7,
-        section_id: row.8,
-        poll_allowed: row.9,
+        poll_allowed: row.8,
     })
 }
 

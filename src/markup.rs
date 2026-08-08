@@ -25,10 +25,17 @@ pub fn extract_mentions(source: &str) -> Vec<String> {
 }
 
 pub fn render_message(source: &str, bbcode: Option<bool>) -> String {
-    let html = if bbcode.unwrap_or(true) {
-        render_lor_markup(source)
-    } else {
-        render_markdown(source)
+    render_message_with_markup(source, None, bbcode)
+}
+
+pub fn render_message_with_markup(source: &str, markup: Option<&str>, bbcode: Option<bool>) -> String {
+    let html = match markup {
+        Some("MARKDOWN") => render_markdown(source),
+        Some("PLAIN") => source.to_string(),
+        Some("BBCODE_ULB") => render_lor_markup_mode(source, true),
+        Some("BBCODE_TEX" | "LORCODE") => render_lor_markup_mode(source, false),
+        _ if bbcode == Some(false) => render_markdown(source),
+        _ => render_lor_markup_mode(source, false),
     };
     // Matches MessageTextService's universal Jsoup.clean(text, Safelist.relaxed())
     // pass in the Java original: every rendering path - lorcode/BBCode,
@@ -58,7 +65,7 @@ pub fn render_markdown(source: &str) -> String {
     out
 }
 
-pub fn render_lor_markup(source: &str) -> String {
+fn render_lor_markup_mode(source: &str, user_line_break: bool) -> String {
     // This is a compact Rust replacement for the old formatter pipeline.
     // It intentionally keeps the supported subset explicit and safe:
     // paragraphs, quotes, code blocks, common BBCode tags, autolinks and @mentions.
@@ -84,20 +91,11 @@ pub fn render_lor_markup(source: &str) -> String {
     }).to_string();
     text.split("\n\n")
         .map(|p| {
-            let p = p.replace('\n', "<br>");
+            let p = if user_line_break { p.replace('\n', "<br>") } else { p.to_string() };
             if p.starts_with("<blockquote>") || p.starts_with("<pre>") { p } else { format!("<p>{p}</p>") }
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-pub fn excerpt(source: &str, max_len: usize) -> String {
-    let plain = Regex::new(r"\[[^\]]+\]").unwrap().replace_all(source, "");
-    let mut out = plain.chars().take(max_len).collect::<String>();
-    if plain.chars().count() > max_len {
-        out.push('…');
-    }
-    out
 }
 
 static TAG_STRIP_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"<[^>]+>").expect("tag strip regex"));
@@ -118,4 +116,17 @@ pub fn plain_text_for_index(source: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preserves_all_java_markup_modes() {
+        assert!(render_message_with_markup("**жирный**", Some("MARKDOWN"), None).contains("<strong>жирный</strong>"));
+        assert!(!render_message_with_markup("строка 1\nстрока 2", Some("BBCODE_TEX"), None).contains("<br>"));
+        assert!(render_message_with_markup("строка 1\nстрока 2", Some("BBCODE_ULB"), None).contains("<br>"));
+        assert!(render_message_with_markup("<b>текст</b>", Some("PLAIN"), None).contains("<b>текст</b>"));
+    }
 }
