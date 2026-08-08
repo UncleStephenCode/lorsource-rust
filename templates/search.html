@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Поиск по сайту{% if searched %} - {{ q }}{% endif %}{% endblock %}
+{% block content %}
+<h1>Поиск по сайту</h1>
+<form method="get" action="/search.jsp">
+  <div class="control-group">
+    <input class="input-lg" name="q" type="search" size="50" maxlength="250" value="{{ q }}" autofocus>&nbsp;
+    <button type="submit" class="btn btn-primary">Поиск</button><br>
+  </div>
+  <div class="control-group">
+    <select name="range">
+      <option value="ALL"{% if range == "ALL" %} selected{% endif %}>темы и комментарии</option>
+      <option value="TOPICS"{% if range == "TOPICS" %} selected{% endif %}>только темы</option>
+      <option value="COMMENTS"{% if range == "COMMENTS" %} selected{% endif %}>только комментарии</option>
+    </select>
+  </div>
+  <div class="control-group"><label>За:
+    <select name="interval">
+      <option value="ALL"{% if interval == "ALL" %} selected{% endif %}>весь период</option>
+      <option value="MONTH"{% if interval == "MONTH" %} selected{% endif %}>месяц</option>
+      <option value="THREE_MONTH"{% if interval == "THREE_MONTH" %} selected{% endif %}>три месяца</option>
+      <option value="YEAR"{% if interval == "YEAR" %} selected{% endif %}>год</option>
+      <option value="THREE_YEAR"{% if interval == "THREE_YEAR" %} selected{% endif %}>три года</option>
+    </select>
+  </label></div>
+  <input type="hidden" name="section" value="{{ section }}">
+  <input type="hidden" name="group" value="{{ group }}">
+  {% match error %}{% when Some with (msg) %}<div class="error">{{ msg }}</div>{% when None %}{% endmatch %}
+
+  {% if searched && error.is_none() %}
+  <div class="infoblock">
+    {% if total > 1 %}<div style="float: right"><label>сортировать
+      <select name="sort" onchange="submit()">
+        <option value="RELEVANCE"{% if sort == "RELEVANCE" %} selected{% endif %}>по релевантности</option>
+        <option value="DATE"{% if sort == "DATE" %} selected{% endif %}>по дате: от новых к старым</option>
+        <option value="DATE_OLD_TO_NEW"{% if sort == "DATE_OLD_TO_NEW" %} selected{% endif %}>по дате: от старых к новым</option>
+      </select>
+    </label></div>{% endif %}
+    {% if section_facet.len() > 0 %}<div style="display: inline-block">Раздел:
+      <select name="section" onchange="submit()">{% for f in section_facet %}<option value="{{ f.key }}">{{ f.label }}</option>{% endfor %}</select>
+    </div>{% endif %}
+    {% if group_facet.len() > 0 %}<div style="display: inline-block">Группа:
+      <select name="group" onchange="submit()">{% for f in group_facet %}<option value="{{ f.key }}">{{ f.label }}</option>{% endfor %}</select>
+    </div>{% endif %}
+    <div>Всего найдено {{ total }} результатов</div>
+  </div>
+
+  <div class="messages">
+  {% for item in items %}
+    <article class="msg">
+      <h1>{% if item.is_comment %}<i class="icon-comment"></i>{% endif %}<a href="{{ item.url }}">{{ item.title }}</a></h1>
+      <div class="msg_body">
+        <p>{{ item.message_excerpt }}</p>
+        {% if item.tags.len() > 0 %}<div class="tags">{% for tag in item.tags %}<a class="tag" href="/tag/{{ tag }}">{{ tag }}</a>{% endfor %}</div>{% endif %}
+        <div class="sign"><a href="/people/{{ item.author }}/profile">{{ item.author }}</a> {{ item.postdate }}</div>
+      </div>
+    </article>
+  {% endfor %}
+  </div>
+  <div class="nav"><div style="display: table; width: 100%">
+    {% match prev_link %}{% when Some with (link) %}<div style="display: table-cell; text-align: left"><a href="{{ link }}">← предыдущие</a></div>{% when None %}{% endmatch %}
+    {% match next_link %}{% when Some with (link) %}<div style="display: table-cell; text-align: right"><a href="{{ link }}">следующие →</a></div>{% when None %}{% endmatch %}
+  </div></div>
+  <p><i>Время поиска {{ took_ms }} ms</i></p>
+  {% endif %}
+</form>
+{% endblock %}

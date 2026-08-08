@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Блокировка почтовых доменов{% endblock %}
+{% block content %}
+<h1>Блокировка почтовых доменов</h1>
+
+<fieldset>
+  <legend>Добавить домен в блок</legend>
+  <form method="post" action="/admin/email-domains/add">
+    <input type="hidden" name="csrf" value="{{ csrf_token }}">
+    <label>Домен:
+      <input type="text" name="domain" size="40" maxlength="255" required
+             placeholder="example.com" pattern="[a-z0-9]([a-z0-9.-]*[a-z0-9])?">
+    </label>
+    <button type="submit" class="btn btn-default">Заблокировать на 3 года</button>
+  </form>
+  <p class="info">Ручная блокировка добавляется на 3 года. Если домен уже заблокирован, срок продлевается.
+  Ручная блокировка перекрывает автоматическую.</p>
+</fieldset>
+
+{% if blocks.len() > 0 %}
+<div class="forum">
+  <table class="message-table" width="100%">
+    <thead><tr><th>Домен</th><th>Заблокирован до</th><th>Кем заблокирован</th><th>Когда</th><th>&nbsp;</th></tr></thead>
+    <tbody>
+    {% for block in blocks %}
+      <tr>
+        <td>{{ block.domain }}</td>
+        <td><time data-format="default" datetime="{{ block.block_until_iso }}">{{ block.block_until }}</time></td>
+        <td>{% match block.moderator_nick %}{% when Some with (nick) %}<a href="/people/{{ nick }}/profile">{{ nick }}</a>{% when None %}&mdash;{% endmatch %}</td>
+        <td><time data-format="default" datetime="{{ block.blocked_at_iso }}">{{ block.blocked_at }}</time></td>
+        <td>
+          <form method="post" action="/admin/email-domains/delete" style="display:inline">
+            <input type="hidden" name="csrf" value="{{ csrf_token }}">
+            <input type="hidden" name="domain" value="{{ block.domain }}">
+            <button type="submit" class="btn btn-danger btn-xs">удалить</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="nav"><div style="display: table; width: 100%">
+  {% if has_previous %}<div style="display: table-cell; text-align: left"><a href="/admin/email-domains?offset={{ previous_offset }}">&larr; предыдущие</a></div>{% endif %}
+  {% if has_more %}<div style="display: table-cell; text-align: right"><a href="/admin/email-domains?offset={{ next_offset }}">следующие &rarr;</a></div>{% endif %}
+</div></div>
+{% else %}
+<p>Доменов, заблокированных вручную, нет.</p>
+{% endif %}
+{% endblock %}

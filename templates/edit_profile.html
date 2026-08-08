@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Редактирование профиля{% endblock %}
+{% block content %}
+<h1>Редактирование профиля</h1>
+<nav>
+  <a href="/people/{{ user.nick }}/edit" class="btn btn-selected">Редактировать профиль</a>
+  <a class="btn btn-default" href="/addphoto.jsp">Добавить фотографию</a>
+  <a class="btn btn-default" href="/people/{{ user.nick }}/settings">Настройки</a>
+</nav>
+<form method="post" action="/people/{{ user.nick }}/edit" id="editRegForm">
+  <input type="hidden" name="csrf" value="{{ csrf_token }}">
+  <dl>
+    <dt><label for="name">Имя</label></dt><dd><input id="name" name="name" maxlength="255" value="{% match user.name %}{% when Some with (name) %}{{ name }}{% when None %}{% endmatch %}"><span class="help-block">&nbsp;</span></dd>
+    <dt><label for="password">Новый пароль</label></dt><dd><input id="password" type="password" name="password"><span class="help-block">не заполняйте если не хотите менять пароль</span></dd>
+    <dt><label for="password2">Подтвердите новый пароль</label></dt><dd><input id="password2" type="password" name="password2"><span class="help-block">не заполняйте если не хотите менять пароль</span></dd>
+    <dt><label for="url">URL</label></dt><dd><input id="url" name="url" maxlength="255" value="{% match profile.url %}{% when Some with (url) %}{{ url }}{% when None %}{% endmatch %}"><span class="help-block">не забудьте добавить <i>http://</i></span></dd>
+    <dt><label for="email">E-mail</label></dt><dd><input id="email" name="email" type="email" value="{% match profile.email %}{% when Some with (email) %}{{ email }}{% when None %}{% endmatch %}"><span class="help-block">виден только вам и модераторам</span></dd>
+    <dt><label for="town">Город</label></dt><dd><input id="town" name="town" maxlength="100" value="{% match user.town %}{% when Some with (town) %}{{ town }}{% when None %}{% endmatch %}"><span class="help-block">например: Москва, Нижний Новгород, Троицк (Московская область)</span></dd>
+    <dt><label for="userinfo">Дополнительная информация</label></dt><dd><textarea id="userinfo" name="userinfo" rows="12">{% match user.userinfo %}{% when Some with (info) %}{{ info }}{% when None %}{% endmatch %}</textarea><span class="help-block">Markdown/LORCODE совместимый текст профиля</span></dd>
+  </dl>
+  <button type="submit" class="btn btn-primary">Применить изменения</button>
+</form>
+{% endblock %}

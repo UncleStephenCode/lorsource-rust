@@ -1,0 +1,31 @@
+{
+  "name": "Linux.org.ru Rust Port Dev Environment",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "app",
+  "workspaceFolder": "/workspace",
+  "postCreateCommand": ".devcontainer/init-db.sh",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "vadimcn.vscode-lldb",
+        "tamasfe.even-better-toml",
+        "serayuzgur.crates",
+        "ms-azuretools.vscode-docker"
+      ],
+      "settings": {
+        "rust-analyzer.cargo.features": "all",
+        "rust-analyzer.check.command": "clippy",
+        "editor.formatOnSave": true
+      }
+    }
+  },
+  "remoteEnv": {
+    "DATABASE_URL": "postgres://linuxweb:linuxweb@postgres:5432/lor",
+    "PGHOST": "postgres",
+    "PGUSER": "postgres",
+    "PGPASSWORD": "postgres",
+    "OPENSEARCH_URL": "http://opensearch:9200",
+    "TESTCONTAINERS_HOST_OVERRIDE": "host.docker.internal"
+  }
+}

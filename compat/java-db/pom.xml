@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>org.linux</groupId>
+  <artifactId>lorsource-java-db-compat</artifactId>
+  <version>1</version>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.liquibase</groupId>
+        <artifactId>liquibase-maven-plugin</artifactId>
+        <version>4.17.2</version>
+        <configuration>
+          <driver>org.postgresql.Driver</driver>
+          <url>${env.JAVA_DATABASE_JDBC_URL}</url>
+          <username>${env.JAVA_DATABASE_MIGRATION_USER}</username>
+          <password>${env.JAVA_DATABASE_MIGRATION_PASSWORD}</password>
+          <changeLogFile>sql/main.xml</changeLogFile>
+          <contexts>production</contexts>
+          <verbose>false</verbose>
+        </configuration>
+        <dependencies>
+          <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>42.7.13</version>
+          </dependency>
+        </dependencies>
+      </plugin>
+    </plugins>
+  </build>
+</project>
+

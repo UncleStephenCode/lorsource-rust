@@ -1,0 +1,12 @@
+<h2>Облако Меток</h2>
+
+<div class="boxlet_content">
+  <p align="center">
+    {% for tag in tags %}
+    <a class="cloud{{ tag.iWeight }}" href="{{ tag.sUrl }}">{{ tag.sValue|safe }}</a>
+    {% endfor %}
+  </p>
+  <p>
+    <a href="/tags/">все метки...</a>
+  </p>
+</div>

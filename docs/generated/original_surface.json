@@ -1,0 +1,1030 @@
+{
+  "websocket": [
+    {
+      "kind": "websocket",
+      "path": "/ws",
+      "handshake_method": "GET (Upgrade: websocket)",
+      "allowed_origins_expression": "config.getSecureUrl",
+      "inbound_payload_contract": "text: <topicId> or <topicId> <lastSeenCommentId>",
+      "outbound_message_literals": [
+        "comment $comment",
+        "events-refresh"
+      ],
+      "authentication_principal": "RememberMeAuthenticationToken/UserDetailsImpl",
+      "closes_with_server_error_on_handler_exception": true,
+      "source": "src/main/scala/ru/org/linux/realtime/RealtimeEventHub.scala",
+      "line": 307
+    }
+  ],
+  "url_rewrite": [
+    {
+      "kind": "rule",
+      "from": "^/index.jsp$",
+      "to": "/",
+      "to_attributes": {
+        "type": "redirect"
+      },
+      "conditions": [],
+      "actions": [],
+      "source": "src/main/webapp/WEB-INF/urlrewrite.xml"
+    },
+    {
+      "kind": "rule",
+      "from": "^(/view-message.jsp[^#]*)#.*$",
+      "to": "$1",
+      "to_attributes": {
+        "type": "redirect"
+      },
+      "conditions": [],
+      "actions": [],
+      "source": "src/main/webapp/WEB-INF/urlrewrite.xml"
+    },
+    {
+      "kind": "rule",
+      "from": "^/topic-rss.jsp\\?topic=(.*)$",
+      "to": "/view-message.jsp?msgid=$1&output=rss",
+      "to_attributes": {
+        "type": "redirect"
+      },
+      "conditions": [],
+      "actions": [],
+      "source": "src/main/webapp/WEB-INF/urlrewrite.xml"
+    },
+    {
+      "kind": "rule",
+      "from": "^/info.html$",
+      "to": "/books",
+      "to_attributes": {
+        "type": "redirect"
+      },
+      "conditions": [],
+      "actions": [],
+      "source": "src/main/webapp/WEB-INF/urlrewrite.xml"
+    },
+    {
+      "kind": "rule",
+      "from": "^/info-mirror.html$",
+      "to": "/books",
+      "to_attributes": {
+        "type": "redirect"
+      },
+      "conditions": [],
+      "actions": [],
+      "source": "src/main/webapp/WEB-INF/urlrewrite.xml"
+    },
+    {
+      "kind": "rule",
+      "from": "^/rss.jsp$",
+      "to": "/section-rss.jsp",
+      "to_attributes": {
+        "type": "redirect"
+      },
+      "conditions": [],
+      "actions": [],
+      "source": "src/main/webapp/WEB-INF/urlrewrite.xml"
+    },
+    {
+      "kind": "rule",
+      "from": "^/server.jsp$",
+      "to": "/about",
+      "to_attributes": {
+        "type": "redirect"
+      },
+      "conditions": [],
+      "actions": [],
+      "source": "src/main/webapp/WEB-INF/urlrewrite.xml"
+    },
+    {
+      "kind": "rule",
+      "from": "^/rss.xml$",
+      "to": "/section-rss.jsp",
+      "to_attributes": {
+        "type": "redirect"
+      },
+      "conditions": [],
+      "actions": [],
+      "source": "src/main/webapp/WEB-INF/urlrewrite.xml"
+    },
+    {
+      "kind": "rule",
+      "from": "^/rules.jsp$",
+      "to": "/help/rules.md",
+      "to_attributes": {
+        "type": "redirect"
+      },
+      "conditions": [],
+      "actions": [],
+      "source": "src/main/webapp/WEB-INF/urlrewrite.xml"
+    },
+    {
+      "kind": "rule",
+      "from": "^/profile/([^/]+)/(.*)$",
+      "to": "/$2",
+      "to_attributes": {
+        "type": "redirect"
+      },
+      "conditions": [],
+      "actions": [],
+      "source": "src/main/webapp/WEB-INF/urlrewrite.xml"
+    },
+    {
+      "kind": "rule",
+      "from": "^/(.*)",
+      "to": "http://127.0.0.1/$1",
+      "to_attributes": {
+        "type": "redirect",
+        "last": "true"
+      },
+      "conditions": [
+        {
+          "attributes": {
+            "name": "host",
+            "operator": "equal"
+          },
+          "value": "^stoplinux\\.org\\.ru"
+        }
+      ],
+      "actions": [],
+      "source": "src/main/webapp/WEB-INF/urlrewrite.xml"
+    },
+    {
+      "kind": "rule",
+      "from": "^/(.*)",
+      "to": "https://www.linux.org.ru/$1",
+      "to_attributes": {
+        "type": "redirect",
+        "last": "true"
+      },
+      "conditions": [
+        {
+          "attributes": {
+            "name": "host",
+            "operator": "notequal"
+          },
+          "value": "^www\\.linux\\.org\\.ru"
+        },
+        {
+          "attributes": {
+            "name": "host",
+            "operator": "notequal"
+          },
+          "value": "^beta\\.linux\\.org\\.ru"
+        },
+        {
+          "attributes": {
+            "name": "host",
+            "operator": "notequal"
+          },
+          "value": "^test-lor"
+        },
+        {
+          "attributes": {
+            "name": "host",
+            "operator": "notequal"
+          },
+          "value": "^localhost"
+        },
+        {
+          "attributes": {
+            "name": "host",
+            "operator": "notequal"
+          },
+          "value": "^10.0.2.2"
+        },
+        {
+          "attributes": {
+            "name": "host",
+            "operator": "notequal"
+          },
+          "value": "^127.0.0.1"
+        },
+        {
+          "attributes": {
+            "name": "host",
+            "operator": "notequal"
+          },
+          "value": "^$"
+        }
+      ],
+      "actions": [],
+      "source": "src/main/webapp/WEB-INF/urlrewrite.xml"
+    },
+    {
+      "kind": "rule",
+      "from": "^/(.*)",
+      "to": "https://www.linux.org.ru/$1",
+      "to_attributes": {
+        "type": "redirect",
+        "last": "true"
+      },
+      "conditions": [
+        {
+          "attributes": {
+            "name": "host",
+            "operator": "equal"
+          },
+          "value": "^www\\.linux\\.org\\.ru"
+        },
+        {
+          "attributes": {
+            "operator": "equal",
+            "type": "scheme"
+          },
+          "value": "^http$"
+        }
+      ],
+      "actions": [],
+      "source": "src/main/webapp/WEB-INF/urlrewrite.xml"
+    },
+    {
+      "kind": "rule",
+      "from": "^/font/opensans/.*$",
+      "to": null,
+      "to_attributes": {},
+      "conditions": [],
+      "actions": [
+        {
+          "tag": "set",
+          "attributes": {
+            "type": "response-header",
+            "name": "Cache-Control"
+          },
+          "value": "max-age=315360000"
+        }
+      ],
+      "source": "src/main/webapp/WEB-INF/urlrewrite.xml"
+    },
+    {
+      "kind": "rule",
+      "from": "jquery.*\\.(js)$",
+      "to": null,
+      "to_attributes": {},
+      "conditions": [],
+      "actions": [
+        {
+          "tag": "set",
+          "attributes": {
+            "type": "response-header",
+            "name": "Cache-Control"
+          },
+          "value": "max-age=315360000"
+        }
+      ],
+      "source": "src/main/webapp/WEB-INF/urlrewrite.xml"
+    },
+    {
+      "kind": "rule",
+      "from": "\\.(css|js|woff|svg|ttf|woff2)$",
+      "to": null,
+      "to_attributes": {},
+      "conditions": [
+        {
+          "attributes": {
+            "type": "path-translated",
+            "operator": "notequal"
+          },
+          "value": ".*jquery.*"
+        },
+        {
+          "attributes": {
+            "type": "request-uri",
+            "operator": "notequal"
+          },
+          "value": "/font/opensans/.*"
+        }
+      ],
+      "actions": [
+        {
+          "tag": "set",
+          "attributes": {
+            "type": "response-header",
+            "name": "Cache-Control"
+          },
+          "value": "max-age=3600"
+        }
+      ],
+      "source": "src/main/webapp/WEB-INF/urlrewrite.xml"
+    },
+    {
+      "kind": "rule",
+      "from": "\\.(css|js|woff|svg|ttf|woff2)\\?.",
+      "to": null,
+      "to_attributes": {},
+      "conditions": [],
+      "actions": [
+        {
+          "tag": "set",
+          "attributes": {
+            "type": "response-header",
+            "name": "Cache-Control"
+          },
+          "value": "max-age=315360000"
+        }
+      ],
+      "source": "src/main/webapp/WEB-INF/urlrewrite.xml"
+    },
+    {
+      "kind": "rule",
+      "from": "\\.(gif)|(jpg)|(png)$",
+      "to": null,
+      "to_attributes": {},
+      "conditions": [
+        {
+          "attributes": {
+            "type": "request-uri",
+            "operator": "notequal"
+          },
+          "value": "/adv/"
+        }
+      ],
+      "actions": [
+        {
+          "tag": "set",
+          "attributes": {
+            "type": "response-header",
+            "name": "Cache-Control"
+          },
+          "value": "max-age=315360000"
+        }
+      ],
+      "source": "src/main/webapp/WEB-INF/urlrewrite.xml"
+    },
+    {
+      "kind": "rule",
+      "from": "\\.(gif)|(jpg)|(png)$",
+      "to": null,
+      "to_attributes": {},
+      "conditions": [
+        {
+          "attributes": {
+            "type": "request-uri"
+          },
+          "value": "/adv/"
+        }
+      ],
+      "actions": [
+        {
+          "tag": "set",
+          "attributes": {
+            "type": "response-header",
+            "name": "Cache-Control"
+          },
+          "value": "no-cache"
+        }
+      ],
+      "source": "src/main/webapp/WEB-INF/urlrewrite.xml"
+    },
+    {
+      "kind": "outbound_rule",
+      "from": "^(.*?)(?:\\;jsessionid=[^\\?#]*)?(\\?[^#]*)?(#.*)?$",
+      "to": "$1$2$3",
+      "to_attributes": {},
+      "conditions": [],
+      "actions": [],
+      "source": "src/main/webapp/WEB-INF/urlrewrite.xml"
+    }
+  ],
+  "resource_handlers": [
+    {
+      "kind": "resource_handler",
+      "path": "/images/*/*.jpg",
+      "locations": [
+        "$base/images/"
+      ],
+      "source": "src/main/scala/ru/org/linux/ImagesResourcesConfiguration.scala",
+      "line": 44
+    },
+    {
+      "kind": "resource_handler",
+      "path": "/images/*/*.png",
+      "locations": [
+        "$base/images/"
+      ],
+      "source": "src/main/scala/ru/org/linux/ImagesResourcesConfiguration.scala",
+      "line": 44
+    },
+    {
+      "kind": "resource_handler",
+      "path": "/images/*/*.gif",
+      "locations": [
+        "$base/images/"
+      ],
+      "source": "src/main/scala/ru/org/linux/ImagesResourcesConfiguration.scala",
+      "line": 44
+    },
+    {
+      "kind": "resource_handler",
+      "path": "/gallery/preview/*.jpg",
+      "locations": [
+        "$base/gallery/preview/"
+      ],
+      "source": "src/main/scala/ru/org/linux/ImagesResourcesConfiguration.scala",
+      "line": 48
+    },
+    {
+      "kind": "resource_handler",
+      "path": "/gallery/preview/*.png",
+      "locations": [
+        "$base/gallery/preview/"
+      ],
+      "source": "src/main/scala/ru/org/linux/ImagesResourcesConfiguration.scala",
+      "line": 48
+    },
+    {
+      "kind": "resource_handler",
+      "path": "/gallery/preview/*.gif",
+      "locations": [
+        "$base/gallery/preview/"
+      ],
+      "source": "src/main/scala/ru/org/linux/ImagesResourcesConfiguration.scala",
+      "line": 48
+    },
+    {
+      "kind": "resource_handler",
+      "path": "/photos/*",
+      "locations": [
+        "$base/photos/"
+      ],
+      "source": "src/main/scala/ru/org/linux/ImagesResourcesConfiguration.scala",
+      "line": 51
+    },
+    {
+      "kind": "resource_handler",
+      "path": "/webjars/**",
+      "locations": [
+        "classpath:/META-INF/resources/webjars/"
+      ],
+      "cache_period": "315360000",
+      "source": "src/main/webapp/WEB-INF/springapp-servlet.xml",
+      "line": null
+    }
+  ],
+  "servlet_mappings": [
+    {
+      "kind": "servlet_mapping",
+      "path": "/ExceptionResolver",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/view-section.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/tags.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/delip.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/add.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/view-message.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/login.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/edit.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/commit.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/register.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "*.boxlet",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/whois.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/edit-remark.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/deregister.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/group.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/group-lastmod.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/show-replies.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/tracker.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/lostpwd.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/add_comment.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/delete.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/addphoto.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/comment-message.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/show-topics.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/add-section.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/groupmod.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/activate.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/usermod.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/banip.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/delete_comment.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/section-rss.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/remove-userpic.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/view-news.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/vote.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/search.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/resolve.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/view-all.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/view-vote.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/jump-message.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/setpostscore.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/show-comments.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/sameip.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/mtn.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/mt.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/memories.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "servlet_mapping",
+      "path": "/uncommit.jsp",
+      "servlet": "springapp",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    }
+  ],
+  "filter_mappings": [
+    {
+      "kind": "filter_mapping",
+      "path": "/*",
+      "filter": "UrlRewriteFilter",
+      "dispatchers": [],
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "filter_mapping",
+      "path": "/*",
+      "filter": "springSecurityFilterChain",
+      "dispatchers": [
+        "REQUEST",
+        "ERROR",
+        "ASYNC"
+      ],
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    }
+  ],
+  "error_pages": [
+    {
+      "kind": "error_page",
+      "path": "/errors/404",
+      "error_code": "404",
+      "exception_type": null,
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "error_page",
+      "path": "/errors/403",
+      "error_code": "403",
+      "exception_type": null,
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    },
+    {
+      "kind": "error_page",
+      "path": "/ExceptionResolver",
+      "error_code": null,
+      "exception_type": "java.lang.Throwable",
+      "source": "src/main/webapp/WEB-INF/web.xml"
+    }
+  ],
+  "interceptors": [
+    {
+      "kind": "spring_mvc_interceptor",
+      "class": "ru.org.linux.monitoring.Perf4jHandlerInterceptor",
+      "path": "/** (unless excluded by nested config)",
+      "source": "src/main/webapp/WEB-INF/springapp-servlet.xml"
+    },
+    {
+      "kind": "spring_mvc_interceptor",
+      "class": "ru.org.linux.csrf.CSRFHandlerInterceptor",
+      "path": "/** (unless excluded by nested config)",
+      "source": "src/main/webapp/WEB-INF/springapp-servlet.xml"
+    },
+    {
+      "kind": "spring_mvc_interceptor",
+      "class": "ru.org.linux.auth.HstsInterceptor",
+      "path": "/** (unless excluded by nested config)",
+      "source": "src/main/webapp/WEB-INF/springapp-servlet.xml"
+    },
+    {
+      "kind": "spring_mvc_interceptor",
+      "class": "ru.org.linux.auth.LastLoginInterceptor",
+      "path": "/** (unless excluded by nested config)",
+      "source": "src/main/webapp/WEB-INF/springapp-servlet.xml"
+    }
+  ],
+  "controller_advice": [
+    {
+      "kind": "controller_advice",
+      "class": "BinderControllerAdvice",
+      "order_expression": "10000",
+      "disallowed_binding_fields": [
+        "class.",
+        "Class.",
+        ".class.",
+        ".Class."
+      ],
+      "source": "src/main/java/ru/org/linux/util/BinderControllerAdvice.java"
+    }
+  ],
+  "static_surface": [
+    {
+      "kind": "static_file",
+      "path": "/.htaccess",
+      "file_count": 1,
+      "extensions": [
+        "(none)"
+      ],
+      "served_by": "default servlet",
+      "source": "src/main/webapp/.htaccess"
+    },
+    {
+      "kind": "static_root",
+      "path": "/adv/**",
+      "file_count": 3,
+      "extensions": [
+        ".png"
+      ],
+      "served_by": "default servlet",
+      "source": "src/main/webapp/adv"
+    },
+    {
+      "kind": "static_root",
+      "path": "/black/**",
+      "file_count": 4,
+      "extensions": [
+        ".css",
+        ".png"
+      ],
+      "served_by": "default servlet",
+      "source": "src/main/webapp/black"
+    },
+    {
+      "kind": "static_file",
+      "path": "/favicon.ico",
+      "file_count": 1,
+      "extensions": [
+        ".ico"
+      ],
+      "served_by": "default servlet",
+      "source": "src/main/webapp/favicon.ico"
+    },
+    {
+      "kind": "static_root",
+      "path": "/font/**",
+      "file_count": 17,
+      "extensions": [
+        ".eot",
+        ".json",
+        ".svg",
+        ".ttf",
+        ".txt",
+        ".woff",
+        ".woff2"
+      ],
+      "served_by": "default servlet",
+      "source": "src/main/webapp/font"
+    },
+    {
+      "kind": "static_file",
+      "path": "/googlea3fb422736ed276d.html",
+      "file_count": 1,
+      "extensions": [
+        ".html"
+      ],
+      "served_by": "default servlet",
+      "source": "src/main/webapp/googlea3fb422736ed276d.html"
+    },
+    {
+      "kind": "static_root",
+      "path": "/help/**",
+      "file_count": 6,
+      "extensions": [
+        ".md"
+      ],
+      "served_by": "default servlet",
+      "source": "src/main/webapp/help"
+    },
+    {
+      "kind": "static_root",
+      "path": "/img/**",
+      "file_count": 21,
+      "extensions": [
+        ".gif",
+        ".jpg",
+        ".png",
+        ".svg"
+      ],
+      "served_by": "default servlet",
+      "source": "src/main/webapp/img"
+    },
+    {
+      "kind": "static_root",
+      "path": "/js/**",
+      "file_count": 19,
+      "extensions": [
+        ".js"
+      ],
+      "served_by": "default servlet",
+      "source": "src/main/webapp/js"
+    },
+    {
+      "kind": "static_file",
+      "path": "/manifest.json",
+      "file_count": 1,
+      "extensions": [
+        ".json"
+      ],
+      "served_by": "default servlet",
+      "source": "src/main/webapp/manifest.json"
+    },
+    {
+      "kind": "static_root",
+      "path": "/qrerror/**",
+      "file_count": 1,
+      "extensions": [
+        ".html"
+      ],
+      "served_by": "default servlet",
+      "source": "src/main/webapp/qrerror"
+    },
+    {
+      "kind": "static_file",
+      "path": "/robots.txt",
+      "file_count": 1,
+      "extensions": [
+        ".txt"
+      ],
+      "served_by": "default servlet",
+      "source": "src/main/webapp/robots.txt"
+    },
+    {
+      "kind": "static_root",
+      "path": "/sass/**",
+      "file_count": 34,
+      "extensions": [
+        ".scss"
+      ],
+      "served_by": "default servlet",
+      "source": "src/main/webapp/sass"
+    },
+    {
+      "kind": "static_root",
+      "path": "/tango/**",
+      "file_count": 44,
+      "extensions": [
+        ".css",
+        ".png",
+        ".xcf"
+      ],
+      "served_by": "default servlet",
+      "source": "src/main/webapp/tango"
+    },
+    {
+      "kind": "static_root",
+      "path": "/waltz/**",
+      "file_count": 1,
+      "extensions": [
+        ".css"
+      ],
+      "served_by": "default servlet",
+      "source": "src/main/webapp/waltz"
+    },
+    {
+      "kind": "static_root",
+      "path": "/white2/**",
+      "file_count": 4,
+      "extensions": [
+        ".css",
+        ".jpg",
+        ".png"
+      ],
+      "served_by": "default servlet",
+      "source": "src/main/webapp/white2"
+    },
+    {
+      "kind": "static_root",
+      "path": "/zomg_ponies/**",
+      "file_count": 5,
+      "extensions": [
+        ".gif",
+        ".jpg",
+        ".png"
+      ],
+      "served_by": "default servlet",
+      "source": "src/main/webapp/zomg_ponies"
+    }
+  ],
+  "webapp_settings": {
+    "default_servlet_handler": true,
+    "session_timeout_minutes": "60",
+    "multipart": {
+      "max_file_size": "10000000",
+      "max_request_size": "30000000"
+    }
+  },
+  "notes": [
+    "This artifact inventories declarations and literal static roots; it does not prove runtime reachability.",
+    "URL rewrite/filter ordering can change the externally observed behavior of an MVC mapping.",
+    "WebSocket message parsing and side effects still require behavioral tests."
+  ]
+}

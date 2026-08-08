@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}delip{% endblock %}
+{% block content %}
+<h1>Удаление тем и сообщений</h1>
+<p>Удалено тем: {{ iTopics }}; удалено комментариев: {{ iComments }}</p>
+<ul>
+{% for iCommentId in vecSkipped %}
+  <li>Пропущен <a href="/delete_comment.jsp?msgid={{ iCommentId }}">#{{ iCommentId }}</a></li>
+{% endfor %}
+</ul>
+{% endblock %}

@@ -1,0 +1,35 @@
+:root { --bg:#f4f1e9; --fg:#27221d; --muted:#73685b; --link:#8a2b12; --card:#fffaf0; --border:#d4c4aa; --accent:#f0d9a2; }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, -apple-system, Segoe UI, sans-serif; }
+a { color:var(--link); text-decoration:none; }
+a:hover { text-decoration:underline; }
+.wrap { max-width:1180px; margin:0 auto; padding:0 16px; }
+.site-header { background:#2f251e; color:#fff; border-bottom:4px solid var(--accent); }
+.site-header .wrap { display:flex; align-items:center; gap:24px; min-height:58px; }
+.logo { color:#fff; font-weight:800; font-size:1.4rem; }
+.site-header nav { display:flex; flex-wrap:wrap; gap:14px; }
+.site-header nav a { color:#f8ead1; }
+.layout { display:grid; grid-template-columns:minmax(0,1fr) 280px; gap:24px; padding-top:24px; }
+.content, .sidebar, .topic-card, .group-card, .comment, .topic-full, .comment-form, .profile, .form { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:16px; }
+.sidebar { align-self:start; }
+h1,h2,h3 { line-height:1.2; margin-top:0; }
+.meta, .muted, .footer { color:var(--muted); font-size:.92rem; }
+.topic-list { display:grid; gap:12px; }
+.topic-card h2, .topic-card h3 { margin-bottom:6px; }
+.topic-card.sticky { border-left:6px solid var(--accent); }
+.tags { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+.tags a, .tag-cloud a { background:#efe1c4; padding:2px 8px; border-radius:999px; }
+.tag-cloud { display:flex; gap:10px; flex-wrap:wrap; }
+.message { overflow-wrap:anywhere; }
+.message pre { padding:12px; background:#282828; color:#f8f8f2; overflow:auto; border-radius:8px; }
+.message blockquote { border-left:4px solid var(--border); padding-left:12px; color:#5f5143; }
+.comments { margin-top:24px; display:grid; gap:12px; }
+.comment.deleted { opacity:.55; }
+.form, .comment-form { display:grid; gap:12px; margin-top:16px; }
+.form label, .comment-form label { display:grid; gap:4px; }
+input, textarea, select, button { font:inherit; padding:9px 10px; border:1px solid var(--border); border-radius:8px; background:#fff; }
+button { cursor:pointer; background:#6f3b1c; color:white; border-color:#6f3b1c; }
+.pager { display:flex; gap:16px; margin:20px 0; }
+.error { color:#9c1d1d; }
+.footer { padding:32px 16px; }
+@media (max-width: 850px) { .layout { grid-template-columns:1fr; } .site-header .wrap { align-items:flex-start; flex-direction:column; padding-top:12px; padding-bottom:12px; } }

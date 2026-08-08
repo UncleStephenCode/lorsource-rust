@@ -1,0 +1,135 @@
+/*
+ * Copyright 1998-2026 Linux.org.ru
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS,
+ *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *    See the License for the specific language governing permissions and
+ *    limitations under the License.
+ */
+
+@use "sass:color";
+@use "../mixins";
+
+$main_background: #FFDFFF;
+$text_color: #000;
+$link_color: #000040;
+$logout_link_color: #000;
+$header_color: #000;
+$tag_color: #FFDDDD;
+$tag_even_color: #FFFFDD;
+$head_background: rgba(255,255,255,0.7);
+$head_color: #4F0F4F;
+$head_hover: #CCCCFF;
+$notification_bg: #FF6666;
+
+$table_border_color: #000;
+$table_header_background: #FFDDDD;
+$table_body_background_color: rgba(255,255,255,0.9);
+$table_link_color: #000040;
+$table_hover_background: #FFDDFF;
+$table_background_color: $table_body_background_color;
+
+$main_menu_color: #000;
+$signature_user_color: #000;
+$signature_remark_color: #400000;
+$article_background: rgba(255,255,255,0.9);
+$article_border_color: gray;
+$targeted_message_border_color: #400040;
+
+$page_number_background: #FF6666;
+
+$button_selected_background: #DDFFFF;
+$button_background: #CCCCFF;
+$button_border_color: #D4D4D4;
+$button_selected_text_color: #000;
+$button_text_color: $table_link_color;
+
+$stars_color: #400040;
+
+$icon_button_active_color: $stars_color;
+
+@include mixins.heatmap-colors(color.adjust(#8ae234, $lightness: -15%), -1.5);
+
+$tracker_tag_color: $tag_even_color;
+
+$code_background: #400040;
+
+#bd .swiffy-slider {
+    --swiffy-slider-nav-light: #333;
+}
+
+.swiffy-slider .slider-indicators>* {
+    filter: invert(1);
+}
+
+$unread_marker_color: #729fcf;
+
+/*
+
+Atom One Dark by Daniel Gamage
+Original One Dark Syntax theme from https://github.com/atom/one-dark-syntax
+
+base:    #282c34
+mono-1:  #abb2bf
+mono-2:  #818896
+mono-3:  #5c6370
+hue-1:   #56b6c2
+hue-2:   #61aeee
+hue-3:   #c678dd
+hue-4:   #98c379
+hue-5:   #e06c75
+hue-5-2: #be5046
+hue-6:   #d19a66
+hue-6-2: #e6c07b
+
+*/
+
+:root {
+  --text-color: #{$text_color};
+  --link-color: #{$link_color};
+  --logout-link-color: #{$logout_link_color};
+  --header-color: #{$header_color};
+  --main-background: #{$main_background};
+  --main-menu-color: #{$main_menu_color};
+  --signature-user-color: #{$signature_user_color};
+  --signature-remark-color: #{$signature_remark_color};
+  --article-background: #{$article_background};
+  --article-border-color: #{$article_border_color};
+  --targeted-message-border-color: #{$targeted_message_border_color};
+  --tag-color: #{$tag_color};
+  --tag-even-color: #{$tag_even_color};
+  --head-background: #{$head_background};
+  --head-color: #{$head_color};
+  --head-hover: #{$head_hover};
+  --notification-background: #{$notification_bg};
+  --page-number-background: #{$page_number_background};
+  --table-header-background: #{$table_header_background};
+  --table-border-color: #{$table_border_color};
+  --table-link-color: #{$table_link_color};
+  --table-hover-background: #{$table_hover_background};
+  --table-background-color: #{$table_background_color};
+  --tracker-tag-color: #{$tracker_tag_color};
+  --unread-marker-color: #{$unread_marker_color};
+  --code-background: #{$code_background};
+  --button-selected-background: #{$button_selected_background};
+  --button-background: #{$button_background};
+  --button-border-color: #{$button_border_color};
+  --button-selected-text-color: #{$button_selected_text_color};
+  --stars-color: #{$stars_color};
+
+  --syntax-mono-1: #abb2bf;
+  --syntax-mono-3: #5c6370;
+  --syntax-hue-1: #56b6c2;
+  --syntax-hue-2: #61aeee;
+  --syntax-hue-3: #c678dd;
+  --syntax-hue-4: #98c379;
+  --syntax-hue-5: #e06c75;
+  --syntax-hue-6: #d19a66;
+  --syntax-hue-6-2: #e6c07b;
+}

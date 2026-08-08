@@ -14,9 +14,6 @@ private/
 # Rust build artifacts
 /target/
 **/target/
-Cargo.lock
-# Keep Cargo.lock for applications if you want reproducible builds.
-# Remove the previous line if this repository should commit Cargo.lock.
 
 # Rust tooling / local caches
 .m2/

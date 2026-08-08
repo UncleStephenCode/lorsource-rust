@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<h1>Активные топики</h1>
+<nav>
+  <a href="/tracker/" class="btn {% if filter == "main" %}btn-selected{% else %}btn-default{% endif %}">основные</a>
+  <a href="/tracker/?filter=all" class="btn {% if filter == "all" %}btn-selected{% else %}btn-default{% endif %}">все</a>
+  <a href="/tracker/?filter=notalks" class="btn {% if filter == "notalks" %}btn-selected{% else %}btn-default{% endif %}">без talks</a>
+  <a href="/tracker/?filter=tech" class="btn {% if filter == "tech" %}btn-selected{% else %}btn-default{% endif %}">тех. форум</a>
+  {% if is_moderator %}<a class="btn btn-default" href="/sameip.jsp?score=-9999">anonymous</a><a class="btn btn-default" href="/sameip.jsp?score=46">score &lt;= 45</a>{% endif %}
+  {% for item in uncommitted %}<a class="btn btn-default" href="/view-all.jsp?section={{ item.0 }}">{{ item.1 }}: {{ item.2 }}</a>{% endfor %}
+</nav>
+<div class="tracker">
+{% for t in topics %}
+  <a href="{{ t.topic_url() }}" class="tracker-item">
+    <div class="tracker-src"><p><span class="group-label">{{ t.group_title }}</span><br class="hideon-phone hideon-tablet">{{ t.author }}</p></div>
+    <div class="tracker-count"><p>{% if t.comments == 0 %}-{% else %}<i class="icon-comment"></i> {{ t.comments }}{% endif %}</p></div>
+    <div class="tracker-title"><p>{% if t.sticky %}<i class="icon-pin icon-pin-color"></i>{% endif %}{% if t.resolved.unwrap_or(false) %}<i class="icon-check"></i>{% endif %}{{ t.title }}</p></div>
+    <div class="tracker-tags"><p>{% for tag in t.tags_vec() %}<span class="tag">{{ tag }}</span> {% endfor %}</p></div>
+    <div class="tracker-last"><p>{{ t.author }}, {{ t.postdate }}</p></div>
+  </a>
+{% endfor %}
+</div>
+{% if topics.len() == 0 %}<p>В трекере пока нет активных тем.</p>{% endif %}
+<div class="nav"><div style="display:table;width:100%"><div style="display:table-cell;text-align:left">{% match prev_link %}{% when Some with (link) %}<a href="{{ link }}" rel="prev">← предыдущие</a>{% when None %}{% endmatch %}</div><div style="display:table-cell;text-align:right">{% match next_link %}{% when Some with (link) %}<a href="{{ link }}" rel="next">следующие →</a>{% when None %}{% endmatch %}</div></div></div>
+{% endblock %}

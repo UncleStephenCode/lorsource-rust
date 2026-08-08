@@ -1,0 +1,2 @@
+[env]
+RUST_LOG = { value = "lorsource_rust=debug,tower_http=info,sqlx=warn", force = false }

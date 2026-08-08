@@ -1,0 +1,45 @@
+<!--
+  ~ Copyright 1998-2026 Linux.org.ru
+  ~    Licensed under the Apache License, Version 2.0 (the "License");
+  ~    you may not use this file except in compliance with the License.
+  ~    You may obtain a copy of the License at
+  ~
+  ~        http://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~    Unless required by applicable law or agreed to in writing, software
+  ~    distributed under the License is distributed on an "AS IS" BASIS,
+  ~    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  ~    See the License for the specific language governing permissions and
+  ~    limitations under the License.
+  -->
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+  <changeSet id="2026051401" author="migration">
+    <comment>Do not auto-subscribe anonymous user to topic notifications</comment>
+    <sql splitStatements="false">
+            CREATE OR REPLACE FUNCTION public.topins()
+                RETURNS trigger
+                LANGUAGE plpgsql
+            AS $function$
+                        BEGIN
+                            UPDATE groups SET stat3=stat3+1 WHERE groups.id = NEW.groupid;
+                            UPDATE topics SET lastmod=CURRENT_TIMESTAMP WHERE id = NEW.id;
+                            IF NEW.userid != 2 THEN
+                              INSERT INTO memories (userid, topic) VALUES (NEW.userid, NEW.id);
+                            END IF;
+                            RETURN NULL;
+                        END;
+                        $function$
+    </sql>
+  </changeSet>
+
+  <changeSet id="2026051402" author="migration">
+    <comment>Remove existing anonymous user subscriptions from memories</comment>
+    <sql>DELETE FROM memories WHERE userid = 2</sql>
+  </changeSet>
+
+</databaseChangeLog>

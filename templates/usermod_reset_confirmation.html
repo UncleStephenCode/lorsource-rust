@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Сброс пароля пользователя {{ sNick }}{% endblock %}
+{% block content %}
+<h1>Сброс пароля пользователя <a href="{{ sProfileLink }}">{{ sNick }}</a></h1>
+
+<p><strong>Внимание!</strong> Сброс пароля предназначен для защиты учетной записи при
+подозрении на «угон». Не используйте эту кнопку для ограничения доступа пользователя
+на сайт (используйте для этого функционал блокировки). Мы не храним старые пароли,
+по этому отменить действие сброса пароля не возможно.</p>
+
+<form action="/usermod.jsp" method="POST">
+  <input type="hidden" name="csrf" value="{{ sCsrfToken }}">
+  <input type="hidden" name="id" value="{{ iUserId }}">
+  <input type="hidden" name="action" value="reset-password">
+  <div class="form-actions">
+    <button type="submit" class="btn btn-danger">Сбросить пароль</button>
+  </div>
+</form>
+{% endblock %}

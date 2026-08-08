@@ -1,0 +1,178 @@
+# lorsource-rust
+
+Экспериментальный перенос ядра сайта LOR/lorsource со Scala/Spring MVC на Rust.
+
+Стек проекта:
+
+- Rust 2024
+- Axum + Tokio для HTTP
+- SQLx + PostgreSQL для доступа к БД
+- Askama вместо JSP
+- tower-http для static files, `/photos/*`, gzip и trace middleware
+- Docker Compose для локального запуска
+
+## Быстрый запуск через Docker Compose
+
+```bash
+docker compose up --build
+```
+
+Открыть:
+
+```text
+http://localhost:8181
+```
+
+PostgreSQL будет поднят рядом. Для нового пустого volume одноразовый
+`db-bootstrap` загрузит канонический Java demo dump и все Liquibase changesets.
+На уже существующей Java БД этот шаг только проверяет Liquibase history и
+ничего не накатывает. Mixed, legacy-Rust и неизвестные схемы отклоняются.
+
+## Локальный запуск без сборки контейнера приложения
+
+```bash
+cp .env.example .env
+make dev-db
+export DATABASE_URL=postgres://linuxweb:linuxweb@localhost:5432/lor
+cargo run
+```
+
+Rust-приложение не выполняет миграций при старте. Оно подключается как
+Java-role `linuxweb` и проверяет 33 таблицы, 214 колонок, enum, sequence,
+function, extension и оставшиеся Java triggers только через PostgreSQL catalog.
+
+## Проверка
+
+```bash
+curl -fsS http://localhost:8181/healthz
+curl -fsS http://localhost:8181/rss | head
+```
+
+Проверка карты маршрутов и схемы:
+
+```bash
+./scripts/run-compatibility-suite.sh
+```
+
+HTTP smoke-тесты по Rust-порту:
+
+```bash
+NEW_BASE_URL=http://localhost:8181 python3 compat/test_http_compat.py
+```
+
+Сравнение старого и нового приложения, если старый Scala-сайт запущен рядом:
+
+```bash
+OLD_BASE_URL=http://localhost:8081 \
+NEW_BASE_URL=http://localhost:8181 \
+python3 compat/test_http_compat.py
+```
+
+## Что уже перенесено / подготовлено
+
+- главная лента;
+- разделы `news`, `forum`, `articles`, `gallery`, `polls`;
+- группы и списки тем;
+- страница темы с комментариями;
+- создание/редактирование тем в dev-режиме;
+- добавление/редактирование/удаление комментариев в dev-режиме;
+- теги и страницы тегов;
+- профили пользователей;
+- поиск по PostgreSQL FTS;
+- RSS;
+- boxlet endpoints;
+- healthcheck и Docker-окружение;
+- воспроизводимая карта текущих Java+Scala Spring mapping’ов, включая условия запросов и form/model metadata;
+- отдельная инвентаризация WebSocket, urlrewrite, servlet/resource mapping’ов и статических корней;
+- структурное сравнение Rust route declarations (оно не считается доказательством поведенческой совместимости);
+- v4 functional coverage: explicit `legacy::not_implemented` routes removed;
+- перенесены activation, userpic upload, deregistration, `/check-login` и базовая admin/moderation surface;
+- v5: схема и обработчик `/vote.jsp` приведены к текущему Java-коду (`polls`, `polls_variants`, `vote_users.variant_id`, `voteid` + repeated `vote`);
+- v5: добавлены `user_settings`, `user_log`, `user_log_action` и базовое логирование account/moderation действий;
+- модельный слой совместимости `src/models_compat.rs`;
+- auth/security scaffold с BCrypt и signed session cookies;
+- канонический Java/Liquibase bootstrap и fail-closed проверка схемы;
+- HTTP smoke compatibility tests.
+
+## Важное ограничение
+
+Исходный проект большой. Этот архив — рабочий Rust-порт ядра, маршрутов и схемы совместимости, пригодный как основа для дальнейшего переноса, но **не production-ready замена исходного Scala/Spring приложения**.
+
+Сейчас все извлечённые URL-формы объявлены в Rust-router, и явных `legacy::not_implemented` маршрутов больше нет. SMTP-доставка activation/change-email/password-reset писем совместима с локальным MTA Java-приложения; детали описаны в `docs/EMAIL_COMPATIBILITY.md`. Это всё ещё не означает production parity: captcha/anonymous posting, administrator exception mail, поисковый reindex backend и полный image pipeline пока реализованы не полностью.
+
+## База данных
+
+Единственный активный bootstrap лежит в `compat/java-db/`: там сохранены
+исходные logical filenames, checksum и provenance Java commit. Для пустой
+тестовой БД:
+
+```bash
+LOR_DB_BOOTSTRAP_CONFIRM=bootstrap-empty-java-db \
+  compat/java-db/manage.sh bootstrap
+```
+
+Для existing Java DB разрешена только admin-проверка:
+
+```bash
+compat/java-db/manage.sh validate
+```
+
+Прежние Rust SQL перенесены в `compat/legacy-rust-db/offline-sql/` и оставлены
+только для аудита. Их нельзя запускать. Полный runbook: `docs/DATABASE_COMPATIBILITY.md`.
+
+## Структура
+
+```text
+src/routes/            HTTP extraction, redirects and rendering
+src/application/       application services and transaction coordination
+src/domain/            domain types and repository traits
+src/infra/postgres/    PostgreSQL repositories and schema validation
+compat/java-db/        canonical Java database bootstrap/validation
+compat/legacy-rust-db/ offline historical Rust SQL (never executed)
+```
+
+См. также:
+
+- `docs/PORTING_STATUS.md`
+- `docs/CONTROLLER_MAP.md`
+- `docs/ROUTE_MAP.md`
+- `docs/ROUTE_COVERAGE.md`
+- `docs/FUNCTIONAL_COVERAGE.md`
+- `docs/SCHEMA_COVERAGE.md`
+- `docs/AUTH_SECURITY_PORT.md`
+- `docs/SERVICE_PORTING_MAP.md`
+- `docs/COMPATIBILITY_TESTS.md`
+- `docs/DEMO_DB_COMPARISON.md`
+- `docs/DATABASE_COMPATIBILITY.md`
+- `docs/FUNCTIONAL_COMPARISON_JAVA_RUST.md`
+- `docs/CURRENT_JAVA_COMPATIBILITY.md`
+- `docs/CURRENT_SOURCE_TABLE_COVERAGE.md`
+- `docs/ARCHITECTURE.md`
+
+## v7 parity audit
+
+This archive contains the v7 Rust port iteration. It was re-checked against the uploaded current Java/Scala source and includes additional fixes for registration validation, check-login similarity checks, write attribution for topic/comment creation, and legacy jump redirects. See `docs/PARITY_AUDIT_V7.md` and `docs/VERIFICATION_REPORT_V7.md`.
+
+
+## v8 parity update
+
+This archive includes an additional Java/Rust parity pass:
+
+- Java-compatible encrypted register permits (`SecretTokenService` AES-GCM/PBKDF2 shape).
+- Java-style lost-password and reset-code flow.
+- `user-filter` add/delete form compatibility (`tagName`, `id`, `add`, `del`).
+- Reaction validation/rate-limit/own-post restrictions aligned with the Java controller.
+- Poll voting expiry check.
+- Adapted `.devcontainer` with Rust tooling, PostgreSQL and OpenSearch.
+
+See `docs/PARITY_AUDIT_V8.md` and `docs/DEVCONTAINER_PORT.md`.
+
+## Architecture refactor v9
+
+This archive contains the v9 architectural refactor: Rust 2024 / Rust 1.97 toolchain, domain/application/infra split, Hungarian-style identifiers in the new domain/service/repository layer, and PostgreSQL repositories for the forum/topic core flows. See `docs/ARCHITECTURE_REFACTOR_V9.md` and `docs/generated/architecture_report_v9.json`.
+
+### Profile and theme parity
+
+The Rust port includes a whois-like `/people/{nick}/profile` page and Java-compatible profile settings in `/people/{nick}/settings`. The settings are stored in `user_settings.settings` using the same keys as the Java `DefaultProfile`: `style`, `format.mode`, `topics`, `messages`, `photos`, `hideAdsense`, `mainGallery`, `avatar`, `trackerMode`, `oldTracker`, `reactionNotification`.
+
+Original webapp assets from the Java project are served under `/img`, `/font`, `/js`, `/black`, `/tango`, `/white2`, `/waltz`, `/zomg_ponies` and `/adv`. Supported theme IDs are `tango`, `tango-light`, `tango-auto`, `black`, `white2`, `waltz`, and `zomg_ponies`.

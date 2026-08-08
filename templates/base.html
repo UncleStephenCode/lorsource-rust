@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ru" data-style="tango-auto" data-theme="auto">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="initial-scale=1.0">
+  <title>{% block title %}Linux.org.ru{% endblock %}</title>
+  <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+  <link rel="stylesheet" href="/tango/combined.css" data-lor-theme-stylesheet>
+  <link rel="alternate" type="application/rss+xml" href="/rss">
+  <script src="/js/script.min.js"></script>
+  <script>
+    $script('/webjars/jquery/3.7.1/jquery.min.js', 'jquery');
+    $script('/js/realtime.js', 'realtime');
+  </script>
+  <script>
+    (function() {
+      if (!document.documentElement.dataset.style.startsWith('tango')) return;
+      var theme = localStorage.getItem('lor-theme');
+      if (theme === 'dark' || theme === 'light' || theme === 'auto') {
+        document.documentElement.setAttribute('data-theme', theme);
+      }
+    })();
+  </script>
+  {% block head_extra %}{% endblock %}
+</head>
+<body>
+<!-- LOR_THEME_HEADER -->
+<main id="bd">
+  {% block content %}{% endblock %}
+</main>
+<!-- LOR_THEME_FOOTER -->
+<script src="/js/lor/theme.js"></script>
+<script src="/js/lor/images.js"></script>
+<script src="/js/lor/forms-and-reactions.js"></script>
+<script src="/js/highlight.min.js"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    if (window.hljs) {
+      document.querySelectorAll('pre code').forEach(function(block) {
+        hljs.highlightElement(block);
+      });
+    }
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+{% if main_page %}<div id="mainpage"><div id="news">{% else %}<h1>{{ title }}</h1>{% endif %}
+
+{% match navigation %}{% when Some with (nav) %}
+<nav>
+  {% match nav.section_url %}{% when Some with (url) %}<a class="btn btn-selected" href="{{ url }}">Лента</a>{% when None %}{% endmatch %}
+  {% match nav.archive_url %}{% when Some with (url) %}<a class="btn btn-default" href="{{ url }}">Архив</a>{% when None %}{% endmatch %}
+  {% match nav.moderator_group_id %}{% when Some with (group_id) %}<a class="btn btn-default" href="/groupmod.jsp?group={{ group_id }}">Править группу</a>{% when None %}{% endmatch %}
+  {% match nav.add_url %}{% when Some with (url) %}<a href="{{ url }}" class="btn btn-primary">Добавить</a>{% when None %}<a class="btn btn-primary disabled" title="{{ nav.add_reason }}"><i class="icon-lock"></i> Добавить</a>{% endmatch %}
+  {% if nav.quick_groups.len() > 1 %}
+  <div class="nav-buttons"><form><select name="group" onchange="window.location.href=this.options[this.selectedIndex].value" title="Быстрый переход" class="btn btn-default">
+    {% match nav.section_url %}{% when Some with (url) %}<option value="{{ url }}"{% if nav.all_groups_selected %} selected{% endif %}>Все темы</option>{% when None %}{% endmatch %}
+    {% for group in nav.quick_groups %}<option value="{{ group.url }}"{% if group.selected %} selected{% endif %}>{{ group.title }}</option>{% endfor %}
+  </select></form></div>
+  {% endif %}
+</nav>
+{% when None %}{% endmatch %}
+
+{% if tracker_layout %}
+<div class="tracker">
+{% for t in topics %}
+  <a href="{{ t.topic_url() }}" class="group-item">
+    <div class="tracker-count"><p>{% if t.comments == 0 %}-{% else %}<i class="icon-comment"></i> {{ t.comments }}{% endif %}</p></div>
+    <div class="tracker-title"><p>{% if t.sticky %}<i class="icon-pin icon-pin-color"></i>{% endif %}{% if t.resolved.unwrap_or(false) %}<i class="icon-check"></i>{% endif %}{{ t.title }} <span class="group-author">({{ t.author }})</span></p></div>
+    <div class="tracker-tags"><p>{% for tag in t.tags_vec() %}<span class="tag">{{ tag }}</span> {% endfor %}</p></div>
+    <div class="tracker-last"><p>{{ t.author }}, {{ t.postdate }}</p></div>
+  </a>
+{% endfor %}
+</div>
+{% else %}
+{% for t in news %}
+<article class="news" id="topic-{{ t.topic.id }}">
+  <header>{% if t.show_group %}<div class="group"><a href="/{{ t.topic.section_prefix }}/">{{ t.topic.section_name }}</a> — <a href="/{{ t.topic.section_prefix }}/{{ t.topic.group_urlname }}">{{ t.topic.group_title }}</a></div>{% endif %}<h1>{% if t.topic.resolved.unwrap_or(false) %}<i class="icon-check" title="решено"></i>{% endif %}<a href="{{ t.topic.topic_url() }}">{{ t.topic.title }}</a></h1>{% if t.topic.tags_vec().len() > 0 %}<p class="tags"><i class="icon-tag"></i>&nbsp;{% for tag in t.topic.tags_vec() %}<a class="tag" href="/tag/{{ tag }}">{{ tag }}</a>{% if !loop.last %}, {% endif %}{% endfor %}</p>{% endif %}</header>
+  {{ t.images_html|safe }}
+  {% match t.group_image_url %}{% when Some with (image) %}<div class="entry-userpic"><a href="/{{ t.topic.section_prefix }}/{{ t.topic.group_urlname }}"><img class="groupimg" src="{{ image }}" alt="Группа {{ t.topic.group_title }}"></a></div>{% when None %}{% endmatch %}
+  <div class="entry-body"><div class="msg">{{ t.topic_html|safe }}{% match t.topic.url %}{% when Some with (url) %}<p>&gt;&gt;&gt; <a href="{{ url }}">{{ t.linktext }}</a></p>{% when None %}{% endmatch %}</div><div class="sign"><a href="/people/{{ t.topic.author }}/profile">{{ t.topic.author }}</a> ({{ t.topic.postdate }})</div><div class="nav">{% if t.topic.comments == 0 %}<a href="/comment-message.jsp?topic={{ t.topic.id }}">Добавить&nbsp;комментарий</a>{% else %}<a href="{{ t.topic.topic_url() }}#comments">{{ t.topic.comments }} комментариев</a>{% endif %}</div></div>
+</article>
+{% endfor %}
+{% endif %}
+
+{% if topics.len() == 0 %}<p>Тем пока нет.</p>{% endif %}
+<div class="nav"><table class="nav"><tr>{% match pager.prev_offset %}{% when Some with (prev) %}<td width="35%" align="left"><a href="?offset={{ prev }}">← предыдущие</a></td>{% when None %}<td></td>{% endmatch %}<td width="35%" align="right"><a href="?offset={{ pager.next_offset }}">следующие →</a></td></tr></table></div>
+
+{% match navigation %}{% when Some with (nav) %}{% match nav.rss_url %}{% when Some with (url) %}<p><i class="icon-rss"></i> <a href="{{ url }}">RSS подписка на новые темы</a></p>{% when None %}{% endmatch %}{% when None %}{% endmatch %}
+
+{% if main_page %}</div><div id="boxlets"><div class="boxlet"><h2>Навигация</h2><div class="boxlet_content"><ul><li><a href="/forum/">Форум</a></li><li><a href="/tracker/">Трекер</a></li><li><a href="/tags">Облако меток</a></li></ul></div></div></div></div>{% endif %}
+{% endblock %}

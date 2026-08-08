@@ -1,0 +1,85 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - lor_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  db-bootstrap:
+    build:
+      context: .
+      dockerfile: compat/java-db/Dockerfile
+    command: ["bootstrap"]
+    environment:
+      PG_ADMIN_URL: postgres://postgres:postgres@postgres:5432/postgres
+      PG_TARGET_ADMIN_URL: postgres://postgres:postgres@postgres:5432/lor
+      JAVA_DATABASE_NAME: lor
+      JAVA_DATABASE_MIGRATION_URL: postgres://maxcom:maxcom@postgres:5432/lor
+      JAVA_DATABASE_JDBC_URL: jdbc:postgresql://postgres:5432/lor
+      JAVA_DATABASE_MIGRATION_USER: maxcom
+      JAVA_DATABASE_MIGRATION_PASSWORD: maxcom
+      JAVA_DATABASE_RUNTIME_URL: postgres://linuxweb:linuxweb@postgres:5432/lor
+      JAVA_DATABASE_RUNTIME_USER: linuxweb
+      JAVA_DATABASE_RUNTIME_PASSWORD: linuxweb
+      LOR_DB_BOOTSTRAP_CONFIRM: bootstrap-empty-java-db
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgres://linuxweb:linuxweb@postgres:5432/lor
+      PUBLIC_URL: http://localhost:8181
+      WS_URL: ws://localhost:8181/
+      UPLOAD_DIR: /app/uploads
+      SITE_SECRET: change-me-in-production-change-me-in-production
+      COOKIE_SECRET: change-me-in-production-change-me-in-production
+      RUST_LOG: lorsource_rust=debug,tower_http=info,sqlx=warn
+      OPENSEARCH_URL: http://opensearch:9200
+      SMTP_HOST: ${SMTP_HOST:-localhost}
+      SMTP_PORT: ${SMTP_PORT:-25}
+      SMTP_HELO_NAME: ${SMTP_HELO_NAME:-localhost}
+    ports:
+      - "8181:8181"
+    volumes:
+      - lor_uploads:/app/uploads
+    depends_on:
+      db-bootstrap:
+        condition: service_completed_successfully
+      opensearch:
+        condition: service_healthy
+
+  opensearch:
+    image: opensearchproject/opensearch:3.6.0
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      - bootstrap.memory_lock=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -sf http://localhost:9200/_cluster/health | grep -qv ''"status":"red"''']
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    volumes:
+      - lor_opensearch:/usr/share/opensearch/data
+
+volumes:
+  lor_pgdata:
+  lor_uploads:
+  lor_opensearch:

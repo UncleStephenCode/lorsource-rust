@@ -1,0 +1,263 @@
+use std::time::Duration;
+
+use async_trait::async_trait;
+use base64::{Engine, engine::general_purpose::STANDARD};
+use tokio::{
+    io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader},
+    net::TcpStream,
+    time::timeout,
+};
+
+use crate::{
+    domain::{email::model::StEmailMessage, email::repository::TrEmailSender},
+    error::{AppError, Result},
+};
+
+const DT_SMTP_TIMEOUT: Duration = Duration::from_secs(15);
+
+#[derive(Debug, Clone)]
+pub struct CSmtpEmailSender {
+    sHost: String,
+    iPort: u16,
+    sHeloName: String,
+}
+
+impl CSmtpEmailSender {
+    pub fn new(sHost: impl Into<String>, iPort: u16, sHeloName: impl Into<String>) -> Self {
+        Self {
+            sHost: sHost.into(),
+            iPort,
+            sHeloName: sHeloName.into(),
+        }
+    }
+
+    pub fn from_env() -> Self {
+        let sHost = std::env::var("SMTP_HOST").unwrap_or_else(|_| "localhost".to_string());
+        let iPort = std::env::var("SMTP_PORT")
+            .ok()
+            .and_then(|sValue| sValue.parse().ok())
+            .unwrap_or(25);
+        let sHeloName = std::env::var("SMTP_HELO_NAME").unwrap_or_else(|_| "localhost".to_string());
+        Self::new(sHost, iPort, sHeloName)
+    }
+
+    async fn vSendCommand<W>(
+        oWriter: &mut W,
+        sCommand: &str,
+    ) -> std::result::Result<(), std::io::Error>
+    where
+        W: tokio::io::AsyncWrite + Unpin,
+    {
+        oWriter.write_all(sCommand.as_bytes()).await?;
+        oWriter.write_all(b"\r\n").await?;
+        oWriter.flush().await
+    }
+}
+
+#[async_trait]
+impl TrEmailSender for CSmtpEmailSender {
+    async fn vSend(&self, stMessage: &StEmailMessage) -> Result<()> {
+        vValidateMailbox(&stMessage.sFrom)?;
+        vValidateMailbox(&stMessage.sTo)?;
+        vValidateHeader(&stMessage.sSubject)?;
+
+        let oStream = timeout(
+            DT_SMTP_TIMEOUT,
+            TcpStream::connect((self.sHost.as_str(), self.iPort)),
+        )
+        .await
+        .map_err(|_| AppError::Anyhow(anyhow::anyhow!("SMTP connection timed out")))??;
+        let (oReadHalf, mut oWriteHalf) = oStream.into_split();
+        let mut oReader = BufReader::new(oReadHalf);
+
+        vExpectResponse(&mut oReader, &[220]).await?;
+        Self::vSendCommand(&mut oWriteHalf, &format!("HELO {}", self.sHeloName)).await?;
+        vExpectResponse(&mut oReader, &[250]).await?;
+        Self::vSendCommand(&mut oWriteHalf, &format!("MAIL FROM:<{}>", stMessage.sFrom)).await?;
+        vExpectResponse(&mut oReader, &[250]).await?;
+        Self::vSendCommand(&mut oWriteHalf, &format!("RCPT TO:<{}>", stMessage.sTo)).await?;
+        vExpectResponse(&mut oReader, &[250, 251]).await?;
+        Self::vSendCommand(&mut oWriteHalf, "DATA").await?;
+        vExpectResponse(&mut oReader, &[354]).await?;
+
+        let sWireMessage = sWireMessage(stMessage)?;
+        oWriteHalf.write_all(sWireMessage.as_bytes()).await?;
+        if !sWireMessage.ends_with("\r\n") {
+            oWriteHalf.write_all(b"\r\n").await?;
+        }
+        oWriteHalf.write_all(b".\r\n").await?;
+        oWriteHalf.flush().await?;
+        vExpectResponse(&mut oReader, &[250]).await?;
+
+        Self::vSendCommand(&mut oWriteHalf, "QUIT").await?;
+        let _ = vExpectResponse(&mut oReader, &[221]).await;
+        Ok(())
+    }
+}
+
+fn vValidateMailbox(sMailbox: &str) -> Result<()> {
+    if (sMailbox.contains('\r') || sMailbox.contains('\n'))
+        || !sMailbox.contains('@')
+        || sMailbox.starts_with('@')
+        || sMailbox.ends_with('@')
+    {
+        return Err(AppError::BadRequest("Incorrect email address".to_string()));
+    }
+    Ok(())
+}
+
+fn vValidateHeader(sValue: &str) -> Result<()> {
+    if sValue.contains('\r') || sValue.contains('\n') {
+        return Err(AppError::BadRequest("invalid email header".to_string()));
+    }
+    Ok(())
+}
+
+fn sEncodedHeader(sValue: &str) -> String {
+    if sValue.is_ascii() {
+        sValue.to_string()
+    } else {
+        format!("=?UTF-8?B?{}?=", STANDARD.encode(sValue.as_bytes()))
+    }
+}
+
+fn sWireMessage(stMessage: &StEmailMessage) -> Result<String> {
+    vValidateMailbox(&stMessage.sFrom)?;
+    vValidateMailbox(&stMessage.sTo)?;
+    vValidateHeader(&stMessage.sSubject)?;
+    let mut sResult = format!(
+        "From: {}\r\nTo: {}\r\nSubject: {}\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n",
+        stMessage.sFrom,
+        stMessage.sTo,
+        sEncodedHeader(&stMessage.sSubject),
+    );
+    let sNormalized = stMessage.sBody.replace("\r\n", "\n").replace('\r', "\n");
+    for (iIndex, sLine) in sNormalized.split('\n').enumerate() {
+        if iIndex > 0 {
+            sResult.push_str("\r\n");
+        }
+        if sLine.starts_with('.') {
+            sResult.push('.');
+        }
+        sResult.push_str(sLine);
+    }
+    Ok(sResult)
+}
+
+async fn vExpectResponse<R>(oReader: &mut R, vecExpected: &[u16]) -> Result<()>
+where
+    R: AsyncBufRead + Unpin,
+{
+    let mut sLastLine = String::new();
+    loop {
+        sLastLine.clear();
+        let iRead = timeout(DT_SMTP_TIMEOUT, oReader.read_line(&mut sLastLine))
+            .await
+            .map_err(|_| AppError::Anyhow(anyhow::anyhow!("SMTP response timed out")))??;
+        if iRead == 0 {
+            return Err(AppError::Anyhow(anyhow::anyhow!(
+                "SMTP server closed the connection"
+            )));
+        }
+        let iCode = sLastLine
+            .get(..3)
+            .and_then(|sCode| sCode.parse::<u16>().ok())
+            .ok_or_else(|| AppError::Anyhow(anyhow::anyhow!("invalid SMTP response")))?;
+        let bMore = sLastLine.as_bytes().get(3) == Some(&b'-');
+        if !bMore {
+            if !vecExpected.contains(&iCode) {
+                return Err(AppError::Anyhow(anyhow::anyhow!(
+                    "SMTP command failed with status {iCode}: {}",
+                    sLastLine.trim_end()
+                )));
+            }
+            return Ok(());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    #[test]
+    fn wire_message_encodes_unicode_subject_and_dot_stuffs_body() {
+        let sMessage = sWireMessage(&StEmailMessage {
+            sFrom: "no-reply@linux.org.ru".to_string(),
+            sTo: "user@example.org".to_string(),
+            sSubject: "Регистрация".to_string(),
+            sBody: "first\n.hidden\nlast".to_string(),
+        })
+        .unwrap();
+        assert!(sMessage.contains("Subject: =?UTF-8?B?"));
+        assert!(sMessage.contains("first\r\n..hidden\r\nlast"));
+    }
+
+    #[test]
+    fn rejects_header_injection() {
+        let stMessage = StEmailMessage {
+            sFrom: "no-reply@linux.org.ru".to_string(),
+            sTo: "user@example.org\r\nBcc: evil@example.org".to_string(),
+            sSubject: "test".to_string(),
+            sBody: String::new(),
+        };
+        assert!(sWireMessage(&stMessage).is_err());
+    }
+
+    #[tokio::test]
+    async fn sends_a_complete_message_to_a_local_smtp_server() {
+        let oListener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let iPort = oListener.local_addr().unwrap().port();
+        let hServer = tokio::spawn(async move {
+            let (oStream, _) = oListener.accept().await.unwrap();
+            let (oReadHalf, mut oWriteHalf) = oStream.into_split();
+            let mut oReader = BufReader::new(oReadHalf);
+            oWriteHalf.write_all(b"220 test ESMTP\r\n").await.unwrap();
+
+            for (sPrefix, sResponse) in [
+                ("HELO test-host", "250 hello\r\n"),
+                ("MAIL FROM:<no-reply@linux.org.ru>", "250 ok\r\n"),
+                ("RCPT TO:<user@example.org>", "250 ok\r\n"),
+                ("DATA", "354 continue\r\n"),
+            ] {
+                let mut sLine = String::new();
+                oReader.read_line(&mut sLine).await.unwrap();
+                assert_eq!(sLine.trim_end(), sPrefix);
+                oWriteHalf.write_all(sResponse.as_bytes()).await.unwrap();
+            }
+
+            let mut sData = String::new();
+            loop {
+                let mut sLine = String::new();
+                oReader.read_line(&mut sLine).await.unwrap();
+                if sLine == ".\r\n" {
+                    break;
+                }
+                sData.push_str(&sLine);
+            }
+            oWriteHalf.write_all(b"250 queued\r\n").await.unwrap();
+            let mut sQuit = String::new();
+            oReader.read_line(&mut sQuit).await.unwrap();
+            assert_eq!(sQuit, "QUIT\r\n");
+            oWriteHalf.write_all(b"221 bye\r\n").await.unwrap();
+            sData
+        });
+
+        let oSender = CSmtpEmailSender::new("127.0.0.1", iPort, "test-host");
+        oSender
+            .vSend(&StEmailMessage {
+                sFrom: "no-reply@linux.org.ru".to_string(),
+                sTo: "user@example.org".to_string(),
+                sSubject: "Test".to_string(),
+                sBody: "hello\n.world".to_string(),
+            })
+            .await
+            .unwrap();
+        let sData = hServer.await.unwrap();
+        assert!(sData.contains("Subject: Test\r\n"));
+        assert!(sData.contains("hello\r\n..world\r\n"));
+    }
+}

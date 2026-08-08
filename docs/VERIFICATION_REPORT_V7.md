@@ -1,0 +1,30 @@
+# Verification report v7
+
+Commands run in the sandbox:
+
+```bash
+python3 -m py_compile tools/*.py compat/test_http_compat.py
+bash -n scripts/run-compatibility-suite.sh scripts/import-original-demo.sh
+python3 tools/extract_original_routes.py /mnt/data/compare_lor/java/lorsource-java-cleared > docs/generated/current_java_routes.json
+python3 tools/extract_axum_routes.py . > docs/generated/rust_routes.json
+python3 tools/route_coverage.py --original docs/generated/current_java_routes.json --rust docs/generated/rust_routes.json --json docs/generated/route_coverage.json --md docs/ROUTE_COVERAGE.md
+rg -n "not_implemented|todo!|unimplemented!|panic!|501" src
+rg -n '/:' src
+```
+
+Results:
+
+- Python compatibility tooling: OK.
+- Shell scripts syntax: OK.
+- Extracted Java/Scala endpoint entries: 184.
+- Rust route coverage: 184/184.
+- Missing route declarations: 0.
+- Method mismatches: 0.
+- Explicit 501/not implemented placeholders in `src`: 0.
+- Old Axum `/:param` syntax in `src`: 0.
+
+Not run in this sandbox:
+
+- `cargo build` / `cargo test` — no Rust toolchain available.
+- `docker compose up` — no Docker daemon available.
+- full old-vs-new runtime HTTP comparison — requires running the original Java app and the Rust app against comparable databases.

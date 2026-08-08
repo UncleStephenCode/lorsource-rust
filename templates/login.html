@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<h1>Вход</h1>
+{% match error %}{% when Some with (e) %}<div class="error">{{ e }}</div>{% when None %}{% endmatch %}
+<form method="post" action="{{ login_action }}">
+  <input type="hidden" name="csrf" value="{{ csrf_token }}">
+  <input type="hidden" name="redirectUrl" value="{{ redirect_url }}">
+  <label>Имя/email:<br><input name="nick" value="{{ nick }}" size="40" autofocus autocapitalize="off"></label>
+  <label>Пароль:<br><input name="passwd" type="password" size="40"></label>
+  <div class="form-actions"><button type="submit" class="btn btn-primary">Вход</button></div>
+</form>
+<div style="font-size: smaller">(<a href="/register.jsp">Регистрация</a> | <a href="/lostpwd.jsp">Получить забытый пароль</a>)</div>
+{% endblock %}

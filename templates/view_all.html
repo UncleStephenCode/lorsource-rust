@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<h1>{% if let Some(s) = section %}{{ s.name }}{% else %}{{ title }}{% endif %}</h1>
+
+<nav>
+  {% if let Some(s) = section %}
+    <a class="btn btn-default" href="/{{ s.section_prefix }}/">Лента</a>
+    <a class="btn btn-selected" href="/view-all.jsp?section={{ s.id }}">Неподтверждённые: {{ uncommitted }}</a>
+    <a class="btn btn-default" href="/{{ s.section_prefix }}/archive">Архив</a>
+  {% else %}
+    <a class="btn btn-selected" href="/view-all.jsp">Все: {{ uncommitted }}</a>
+    {% for (s, count) in uncommitted_counts %}
+      <a href="/view-all.jsp?section={{ s.id }}" class="btn btn-default">{{ s.name }}: {{ count }}</a>
+    {% endfor %}
+  {% endif %}
+
+  {% if let Some(link) = add_link %}
+    <a class="btn btn-primary" href="{{ link }}">Добавить</a>
+  {% else %}
+    <a class="btn btn-primary disabled" title="{{ add_link_reason.as_deref().unwrap_or_default() }}"><i class="icon-lock"></i> Добавить</a>
+  {% endif %}
+</nav>
+
+<p><strong>Внимание!</strong> Сообщения отображаются точно так же, как они будут выглядеть на главной странице. Если ваше сообщение отображается не так, как вы хотели, или в нём не работают какие-либо ссылки, пожалуйста, исправьте его.</p>
+{% if show_gallery_notice %}
+<p><strong>Внимание модераторам!</strong> Не подтверждайте сразу много скриншотов, дайте им повисеть на главной странице.</p>
+{% endif %}
+
+<div class="messages">
+{% for t in messages %}
+  <article class="msg">
+    <h1><a href="{{ t.topic_url() }}">{{ t.title }}</a></h1>
+    <div class="msg_body"><div class="sign">
+      <a href="/{{ t.section_prefix }}/{{ t.group_urlname }}">{{ t.group_title }}</a> ·
+      <a href="/people/{{ t.author }}/profile">{{ t.author }}</a> ·
+      {{ t.postdate }} · {{ t.comments }} комм.
+    </div></div>
+  </article>
+{% endfor %}
+{% if messages.len() == 0 %}
+<p>Нет неподтверждённых тем.</p>
+{% endif %}
+</div>
+
+<h2>Последние удалённые неподтверждённые</h2>
+<div class="forum">
+  <table class="message-table" width="100%">
+    <thead>
+      <tr>
+        <th>Заголовок</th>
+        <th>Причина удаления</th>
+        {% if show_dates %}
+        <th>Штраф</th>
+        <th>Дата</th>
+        {% endif %}
+      </tr>
+    </thead>
+    <tbody>
+    {% for d in deleted_topics %}
+      <tr>
+        <td><a href="/view-message.jsp?msgid={{ d.msgid }}">{{ d.subj }}</a> ({{ d.nick }})</td>
+        <td>{{ d.reason_display() }}</td>
+        {% if show_dates %}
+        <td>{{ d.bonus.unwrap_or(0) }}</td>
+        <td>написано {{ d.postdate }}<br>удалено {{ d.deldate_display() }}</td>
+        {% endif %}
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
