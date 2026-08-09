@@ -58,6 +58,24 @@ DELETE FROM reactions_log
  WHERE topic_id IN (SELECT id FROM prod_ready_owned_topics)
     OR comment_id IN (SELECT id FROM prod_ready_owned_comments)
     OR origin_user BETWEEN 9100001 AND 9100014;
+DELETE FROM message_warnings
+ WHERE topic IN (SELECT id FROM prod_ready_owned_topics)
+    OR comment IN (SELECT id FROM prod_ready_owned_comments)
+    OR author BETWEEN 9100001 AND 9100014
+    OR closed_by BETWEEN 9100001 AND 9100014;
+DELETE FROM edit_info
+ WHERE msgid IN (SELECT id FROM prod_ready_owned_topics)
+    OR msgid IN (SELECT id FROM prod_ready_owned_comments)
+    OR editor BETWEEN 9100001 AND 9100014;
+DELETE FROM del_info
+ WHERE msgid IN (SELECT id FROM prod_ready_owned_topics)
+    OR msgid IN (SELECT id FROM prod_ready_owned_comments)
+    OR delby BETWEEN 9100001 AND 9100014;
+DELETE FROM telegram_posts
+ WHERE topic_id IN (SELECT id FROM prod_ready_owned_topics);
+DELETE FROM topic_users_notified
+ WHERE topic IN (SELECT id FROM prod_ready_owned_topics)
+    OR userid BETWEEN 9100001 AND 9100014;
 DELETE FROM vote_users
  WHERE vote BETWEEN 9103001 AND 9103099
     OR vote IN (SELECT id FROM polls WHERE topic IN (SELECT id FROM prod_ready_owned_topics));
@@ -246,42 +264,42 @@ INSERT INTO topics (
     stat1, stat3, lastmod, commitby, notop, commitdate, postscore, postip,
     sticky, resolved, minor, draft, allow_anonymous, reactions, open_warnings
 ) VALUES
-    (9101001,19399,9100001,'LineageOS и проверка разработчиков: тестовая новость','https://www.linux.org.ru/news/android/18335149',false,CURRENT_TIMESTAMP-interval '23 hours','Оригинальный материал',false,0,0,CURRENT_TIMESTAMP-interval '22 hours',NULL,false,NULL,-9999,'192.0.2.11',false,false,false,false,true,'{}',0),
-    (9101002,2121,9100004,'Спор вокруг бренда открытого сетевого проекта','https://www.linux.org.ru/news/russia/18335616',true,CURRENT_TIMESTAMP-interval '20 hours','Оригинальный материал',false,0,0,CURRENT_TIMESTAMP-interval '18 hours',9100011,false,CURRENT_TIMESTAMP-interval '19 hours',-9999,'192.0.2.12',false,false,false,false,true,jsonb_build_object('9100008','🔥','9100013','🎉'),0),
-    (9101003,10161,9100005,'Проходите ли вы игры, которые покупаете?',NULL,false,CURRENT_TIMESTAMP-interval '17 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '2 hours',NULL,false,NULL,-9999,'192.0.2.13',false,false,false,false,true,jsonb_build_object('9100001','👍','9100008','😊','9100013','☕☕'),0),
-    (9101004,1340,9100006,'Вожусь с Terraform: тест локального mirror',NULL,false,CURRENT_TIMESTAMP-interval '16 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '3 hours',NULL,false,NULL,-9999,'192.0.2.14',false,true,false,false,false,'{}',0),
-    (9101005,4962,9100007,'Linux-десктоп: одиночное изображение',NULL,true,CURRENT_TIMESTAMP-interval '15 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '14 hours',9100011,false,CURRENT_TIMESTAMP-interval '14 hours',-9999,'192.0.2.15',false,false,false,false,true,jsonb_build_object('9100010','👍'),0),
-    (9101006,4962,9100008,'Linux-десктоп: галерея из трёх изображений',NULL,true,CURRENT_TIMESTAMP-interval '13 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '12 hours',9100013,false,CURRENT_TIMESTAMP-interval '12 hours',-9999,'192.0.2.16',false,false,false,false,true,jsonb_build_object('9100002','🎉','9100014','🔥'),0),
-    (9101007,19387,9100009,'Как много игр из библиотеки вы действительно запускаете?',NULL,true,CURRENT_TIMESTAMP-interval '11 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '10 hours',9100012,false,CURRENT_TIMESTAMP-interval '10 hours',-9999,'192.0.2.17',false,false,false,false,true,jsonb_build_object('9100005','👍'),0),
-    (9101008,19387,9100010,'Как вы относитесь к маркировке использования ИИ в играх?',NULL,false,CURRENT_TIMESTAMP-interval '9 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '9 hours',NULL,false,NULL,-9999,'192.0.2.18',false,false,false,false,true,'{}',0),
-    (9101009,19362,9100003,'Проверка длинной статьи при портировании LOR',NULL,true,CURRENT_TIMESTAMP-interval '8 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '7 hours',9100011,false,CURRENT_TIMESTAMP-interval '7 hours',-9999,'192.0.2.19',false,false,false,false,true,jsonb_build_object('9100014','🎉'),0),
-    (9101010,4068,9100004,'Вайбкодю реакции для тестового профиля',NULL,false,CURRENT_TIMESTAMP-interval '7 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '1 hour',NULL,false,NULL,-9999,'192.0.2.20',false,false,false,false,true,jsonb_build_object('9100006','🤡','9100009','👍','9100013','🔥'),0),
-    (9101011,8404,9100002,'Тема в Talks на границе score=50',NULL,false,CURRENT_TIMESTAMP-interval '6 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '30 minutes',NULL,false,NULL,50,'192.0.2.21',false,false,false,false,false,'{}',0),
-    (9101012,6,9100011,'Новость корректора, подтверждённая коллегой','https://example.test/corrector-news',true,CURRENT_TIMESTAMP-interval '5 hours','Тестовый источник',false,0,0,CURRENT_TIMESTAMP-interval '4 hours',9100012,false,CURRENT_TIMESTAMP-interval '4 hours',-9999,'192.0.2.22',false,false,false,false,false,jsonb_build_object('9100013','👍'),0),
-    (9101013,4068,9100013,'Модераторская проверка интерфейса темы',NULL,false,CURRENT_TIMESTAMP-interval '4 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '40 minutes',NULL,false,NULL,10000,'192.0.2.23',true,false,false,false,false,'{}',1),
-    (9101014,19393,9100012,'Рабочее место корректора',NULL,true,CURRENT_TIMESTAMP-interval '3 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '2 hours',9100013,false,CURRENT_TIMESTAMP-interval '2 hours',-9999,'192.0.2.24',false,false,false,false,true,jsonb_build_object('9100007','😊'),0),
-    (9101015,7300,9100014,'Безопасная конфигурация тестового инстанса',NULL,false,CURRENT_TIMESTAMP-interval '2 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '20 minutes',NULL,false,NULL,-9999,'192.0.2.25',false,true,false,false,false,'{}',0),
-    (9101016,19399,9100001,'Черновик тестовой новости',NULL,false,CURRENT_TIMESTAMP-interval '1 hour',NULL,false,0,0,CURRENT_TIMESTAMP-interval '1 hour',NULL,false,NULL,-9999,'192.0.2.26',false,false,false,true,true,'{}',0),
-    (9101017,19393,9100012,'Неподтверждённое рабочее место',NULL,false,CURRENT_TIMESTAMP-interval '50 minutes',NULL,false,0,0,CURRENT_TIMESTAMP-interval '50 minutes',NULL,false,NULL,-9999,'192.0.2.27',false,false,false,false,true,'{}',0),
-    (9101018,19362,9100002,'Неподтверждённая статья о совместимости',NULL,false,CURRENT_TIMESTAMP-interval '40 minutes',NULL,false,0,0,CURRENT_TIMESTAMP-interval '40 minutes',NULL,false,NULL,-9999,'192.0.2.28',false,false,false,false,true,'{}',0);
+    (9101001,19399,9100001,'LineageOS и проверка разработчиков: тестовая новость','https://www.linux.org.ru/news/android/18335149',false,CURRENT_TIMESTAMP-interval '6 days 23 hours','Оригинальный материал',false,0,0,CURRENT_TIMESTAMP-interval '6 days 22 hours',NULL,false,NULL,-9999,'192.0.2.11',false,false,false,false,true,'{}',0),
+    (9101002,2121,9100004,'Спор вокруг бренда открытого сетевого проекта','https://www.linux.org.ru/news/russia/18335616',true,CURRENT_TIMESTAMP-interval '6 days 18 hours','Оригинальный материал',false,0,0,CURRENT_TIMESTAMP-interval '6 days 15 hours',9100011,false,CURRENT_TIMESTAMP-interval '6 days 17 hours',-9999,'192.0.2.12',false,false,false,false,true,jsonb_build_object('9100008','🔥','9100013','🎉'),0),
+    (9101003,10161,9100005,'Проходите ли вы игры, которые покупаете?',NULL,false,CURRENT_TIMESTAMP-interval '6 days',NULL,false,0,0,CURRENT_TIMESTAMP-interval '4 hours',NULL,false,NULL,-9999,'192.0.2.13',false,false,false,false,true,jsonb_build_object('9100001','👍','9100008','😊','9100013','☕☕'),0),
+    (9101004,1340,9100006,'Вожусь с Terraform: тест локального mirror',NULL,false,CURRENT_TIMESTAMP-interval '5 days 18 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '1 day',NULL,false,NULL,-9999,'192.0.2.14',false,true,false,false,false,'{}',0),
+    (9101005,4962,9100007,'Linux-десктоп: одиночное изображение',NULL,true,CURRENT_TIMESTAMP-interval '5 days',NULL,false,0,0,CURRENT_TIMESTAMP-interval '4 days 23 hours',9100011,false,CURRENT_TIMESTAMP-interval '4 days 23 hours',-9999,'192.0.2.15',false,false,false,false,true,jsonb_build_object('9100010','👍'),0),
+    (9101006,4962,9100008,'Linux-десктоп: галерея из трёх изображений',NULL,true,CURRENT_TIMESTAMP-interval '4 days 18 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '4 days 17 hours',9100013,false,CURRENT_TIMESTAMP-interval '4 days 17 hours',-9999,'192.0.2.16',false,false,false,false,true,jsonb_build_object('9100002','🎉','9100014','🔥'),0),
+    (9101007,19387,9100009,'Как много игр из библиотеки вы действительно запускаете?',NULL,true,CURRENT_TIMESTAMP-interval '4 days',NULL,false,0,0,CURRENT_TIMESTAMP-interval '3 days 23 hours',9100012,false,CURRENT_TIMESTAMP-interval '3 days 23 hours',-9999,'192.0.2.17',false,false,false,false,true,jsonb_build_object('9100005','👍'),0),
+    (9101008,19387,9100010,'Как вы относитесь к маркировке использования ИИ в играх?',NULL,false,CURRENT_TIMESTAMP-interval '3 days 18 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '3 days 17 hours',NULL,false,NULL,-9999,'192.0.2.18',false,false,false,false,true,'{}',0),
+    (9101009,19362,9100003,'Проверка длинной статьи при портировании LOR',NULL,true,CURRENT_TIMESTAMP-interval '3 days',NULL,false,0,0,CURRENT_TIMESTAMP-interval '2 days 23 hours',9100011,false,CURRENT_TIMESTAMP-interval '2 days 23 hours',-9999,'192.0.2.19',false,false,false,false,true,jsonb_build_object('9100014','🎉'),0),
+    (9101010,4068,9100004,'Вайбкодю реакции для тестового профиля',NULL,false,CURRENT_TIMESTAMP-interval '2 days 18 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '2 days 17 hours',NULL,false,NULL,-9999,'192.0.2.20',false,false,false,false,true,jsonb_build_object('9100006','🤡','9100009','👍','9100013','🔥'),0),
+    (9101011,8404,9100002,'Тема в Talks на границе score=50',NULL,false,CURRENT_TIMESTAMP-interval '2 days',NULL,false,0,0,CURRENT_TIMESTAMP-interval '1 day 23 hours',NULL,false,NULL,50,'192.0.2.21',false,false,false,false,false,'{}',0),
+    (9101012,6,9100011,'Новость корректора, подтверждённая коллегой','https://example.test/corrector-news',true,CURRENT_TIMESTAMP-interval '42 hours','Тестовый источник',false,0,0,CURRENT_TIMESTAMP-interval '41 hours',9100012,false,CURRENT_TIMESTAMP-interval '41 hours',-9999,'192.0.2.22',false,false,false,false,false,jsonb_build_object('9100013','👍'),0),
+    (9101013,4068,9100013,'Модераторская проверка интерфейса темы',NULL,false,CURRENT_TIMESTAMP-interval '36 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '35 hours',NULL,false,NULL,10000,'192.0.2.23',true,false,false,false,false,'{}',1),
+    (9101014,19393,9100012,'Рабочее место корректора',NULL,true,CURRENT_TIMESTAMP-interval '30 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '29 hours',9100013,false,CURRENT_TIMESTAMP-interval '29 hours',-9999,'192.0.2.24',false,false,false,false,true,jsonb_build_object('9100007','😊'),0),
+    (9101015,7300,9100014,'Безопасная конфигурация тестового инстанса',NULL,false,CURRENT_TIMESTAMP-interval '24 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '21 hours',NULL,false,NULL,-9999,'192.0.2.25',false,true,false,false,false,'{}',0),
+    (9101016,19399,9100001,'Черновик тестовой новости',NULL,false,CURRENT_TIMESTAMP-interval '18 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '18 hours',NULL,false,NULL,-9999,'192.0.2.26',false,false,false,true,true,'{}',0),
+    (9101017,19393,9100012,'Неподтверждённое рабочее место',NULL,false,CURRENT_TIMESTAMP-interval '12 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '12 hours',NULL,false,NULL,-9999,'192.0.2.27',false,false,false,false,true,'{}',0),
+    (9101018,19362,9100002,'Неподтверждённая статья о совместимости',NULL,false,CURRENT_TIMESTAMP-interval '6 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '6 hours',NULL,false,NULL,-9999,'192.0.2.28',false,false,false,false,true,'{}',0);
 
 INSERT INTO comments (
     id, topic, userid, title, postdate, replyto, deleted, postip,
     editor_id, edit_date, edit_count, reactions
 ) VALUES
-    (9102001,9101002,9100002,'Re: Спор вокруг бренда',CURRENT_TIMESTAMP-interval '17 hours',NULL,false,'198.51.100.1',NULL,NULL,0,jsonb_build_object('9100008','👍','9100013','🎉')),
-    (9102002,9101002,9100003,'Re: Спор вокруг бренда',CURRENT_TIMESTAMP-interval '16 hours',9102001,false,'198.51.100.2',NULL,NULL,0,'{}'),
-    (9102003,9101002,9100004,'Re: Спор вокруг бренда',CURRENT_TIMESTAMP-interval '15 hours',9102002,false,'198.51.100.3',NULL,NULL,0,jsonb_build_object('9100014','😊')),
-    (9102004,9101003,9100009,'Re: Проходите ли вы игры',CURRENT_TIMESTAMP-interval '12 hours',NULL,false,'198.51.100.4',NULL,NULL,0,'{}'),
-    (9102005,9101004,9100006,'Re: Terraform mirror',CURRENT_TIMESTAMP-interval '10 hours',NULL,false,'198.51.100.5',NULL,NULL,0,jsonb_build_object('9100011','👍')),
-    (9102006,9101005,9100008,'Re: одиночное изображение',CURRENT_TIMESTAMP-interval '9 hours',NULL,false,'198.51.100.6',NULL,NULL,0,'{}'),
-    (9102007,9101006,9100007,'Re: несколько изображений',CURRENT_TIMESTAMP-interval '8 hours',NULL,false,'198.51.100.7',NULL,NULL,0,jsonb_build_object('9100001','🎉')),
-    (9102008,9101007,9100005,'Re: игровой опрос',CURRENT_TIMESTAMP-interval '7 hours',NULL,false,'198.51.100.8',NULL,NULL,0,'{}'),
-    (9102009,9101008,9100011,'Re: неподтверждённый опрос',CURRENT_TIMESTAMP-interval '6 hours',NULL,false,'198.51.100.9',NULL,NULL,0,'{}'),
-    (9102010,9101009,9100012,'Re: длинная статья',CURRENT_TIMESTAMP-interval '5 hours',NULL,false,'198.51.100.10',NULL,NULL,0,jsonb_build_object('9100014','🔥')),
-    (9102011,9101010,9100010,'Re: реакции',CURRENT_TIMESTAMP-interval '4 hours',NULL,false,'198.51.100.11',NULL,NULL,0,jsonb_build_object('9100001','👍','9100002','😊','9100013','☕☕')),
-    (9102012,9101013,9100013,'Re: модераторская тема',CURRENT_TIMESTAMP-interval '3 hours',NULL,false,'198.51.100.12',NULL,NULL,0,'{}'),
-    (9102013,9101015,9100014,'Re: безопасная конфигурация',CURRENT_TIMESTAMP-interval '2 hours',NULL,false,'198.51.100.13',NULL,NULL,0,'{}'),
+    (9102001,9101002,9100002,'Re: Спор вокруг бренда',CURRENT_TIMESTAMP-interval '6 days 17 hours',NULL,false,'198.51.100.1',NULL,NULL,0,jsonb_build_object('9100008','👍','9100013','🎉')),
+    (9102002,9101002,9100003,'Re: Спор вокруг бренда',CURRENT_TIMESTAMP-interval '6 days 16 hours',9102001,false,'198.51.100.2',NULL,NULL,0,'{}'),
+    (9102003,9101002,9100004,'Re: Спор вокруг бренда',CURRENT_TIMESTAMP-interval '6 days 15 hours',9102002,false,'198.51.100.3',NULL,NULL,0,jsonb_build_object('9100014','😊')),
+    (9102004,9101003,9100009,'Re: Проходите ли вы игры',CURRENT_TIMESTAMP-interval '5 days 20 hours',NULL,false,'198.51.100.4',NULL,NULL,0,'{}'),
+    (9102005,9101004,9100006,'Re: Terraform mirror',CURRENT_TIMESTAMP-interval '5 days 17 hours',NULL,false,'198.51.100.5',NULL,NULL,0,jsonb_build_object('9100011','👍')),
+    (9102006,9101005,9100008,'Re: одиночное изображение',CURRENT_TIMESTAMP-interval '4 days 23 hours',NULL,false,'198.51.100.6',NULL,NULL,0,'{}'),
+    (9102007,9101006,9100007,'Re: несколько изображений',CURRENT_TIMESTAMP-interval '4 days 17 hours',NULL,false,'198.51.100.7',NULL,NULL,0,jsonb_build_object('9100001','🎉')),
+    (9102008,9101007,9100005,'Re: игровой опрос',CURRENT_TIMESTAMP-interval '3 days 23 hours',NULL,false,'198.51.100.8',NULL,NULL,0,'{}'),
+    (9102009,9101008,9100011,'Re: неподтверждённый опрос',CURRENT_TIMESTAMP-interval '3 days 17 hours',NULL,false,'198.51.100.9',NULL,NULL,0,'{}'),
+    (9102010,9101009,9100012,'Re: длинная статья',CURRENT_TIMESTAMP-interval '2 days 23 hours',NULL,false,'198.51.100.10',NULL,NULL,0,jsonb_build_object('9100014','🔥')),
+    (9102011,9101010,9100010,'Re: реакции',CURRENT_TIMESTAMP-interval '2 days 17 hours',NULL,false,'198.51.100.11',NULL,NULL,0,jsonb_build_object('9100001','👍','9100002','😊','9100013','☕☕')),
+    (9102012,9101013,9100013,'Re: модераторская тема',CURRENT_TIMESTAMP-interval '35 hours',NULL,false,'198.51.100.12',NULL,NULL,0,'{}'),
+    (9102013,9101015,9100014,'Re: безопасная конфигурация',CURRENT_TIMESTAMP-interval '23 hours',NULL,false,'198.51.100.13',NULL,NULL,0,'{}'),
     (9102014,9101004,9100014,'Re: Terraform mirror',CURRENT_TIMESTAMP-interval '90 minutes',9102005,false,'198.51.100.14',9100014,(CURRENT_TIMESTAMP-interval '80 minutes')::timestamp,1,jsonb_build_object('9100006','👍')),
     (9102015,9101003,9100001,'Re: удалённый комментарий',CURRENT_TIMESTAMP-interval '70 minutes',NULL,true,'198.51.100.15',NULL,NULL,0,'{}'),
     (9102016,9101003,9100001,'Re: score 45',CURRENT_TIMESTAMP-interval '55 minutes',9102004,false,'198.51.100.16',NULL,NULL,0,'{}'),

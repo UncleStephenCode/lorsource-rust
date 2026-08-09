@@ -1,67 +1,137 @@
 {
-  "source_window_hours": 24,
+  "source_window_hours": 168,
   "author": "raven1000",
   "commenter": "crane2000",
+  "reply_author": "robin201",
   "moderator": "hawk_moderator",
   "topics": [
     {
-      "key": "atomic-gallery",
-      "group_path": "/gallery/screenshots/",
-      "title": "Габен великим дозволением позволил жителям СНГ приобретать у него Atomic Heart...",
-      "body": "Тестовая карточка по мотивам свежей галереи LOR: игра на OpenSUSE Tumbleweed, два скриншота и длинный заголов.\n\n[Оригинал на LOR](https://www.linux.org.ru/gallery/screenshots/18354628)",
-      "tags": "atomic, opensuse, steam, tumbleweed, игры",
-      "images": 2,
-      "commit": true
-    },
-    {
-      "key": "polychromatic",
+      "key": "esp32-news",
       "group_path": "/news/hardware/",
-      "title": "Polychromatic 0.9.8",
-      "body": "Вышел Polychromatic 0.9.8 — графический интерфейс для настройки подсветки Razer в GNU/Linux. Релиз добавляет карту клавиатуры Razer Blade 16 и улучшает локализацию.\n\n>>>\nПосле cut проверяется полная версия текста в теме.\n<<<",
-      "tags": "gui, python, qt, razer",
-      "url": "https://github.com/polychromatic/polychromatic/releases/tag/v0.9.8",
+      "title": "Языковая модель с 28,9 млн параметров заработала на ESP32-S3",
+      "body": "Тестовая новость по мотивам свежего материала LOR: локальная модель на микроконтроллере.\n\n>>>\nТекст после cut должен быть скрыт в ленте и виден в теме.\n<<<",
+      "tags": "esp32-s3, llm, микроконтроллеры",
+      "url": "https://github.com/slvDev/esp32-llm",
       "linktext": "Источник",
       "images": 1,
-      "commit": true
+      "format": "markdown",
+      "moderation": "commit"
     },
     {
-      "key": "wine",
-      "group_path": "/news/opensource/",
-      "title": "Wine 11.15",
-      "body": "Тестовая новость о Wine 11.15. В релиз вошли сборка ARM64EC в MinGW, локальная NTLM-аутентификация и исправления WindowsCodecs.",
-      "tags": "arm64, wine",
-      "url": "https://gitlab.winehq.org/wine/wine/-/releases/wine-11.15",
-      "linktext": "Подробности",
+      "key": "alt-mobile-gallery",
+      "group_path": "/gallery/screenshots/",
+      "title": "Обезгугленные. Альт мобильный на OnePlus 6T",
+      "body": "Многокадровая галерея: мобильная Linux-система, Firefox и Waydroid.",
+      "tags": "altlinux, мобильный linux",
+      "images": 2,
+      "format": "markdown",
+      "moderation": "commit"
+    },
+    {
+      "key": "hyprland-gallery",
+      "group_path": "/gallery/screenshots/",
+      "title": "Linux-десктоп с Hyprland",
+      "body": "Одиночный скриншот для проверки responsive-контейнера без слайдера.",
+      "tags": "arch, hyprland, linux, скриншот",
+      "images": 1,
+      "format": "markdown",
+      "moderation": "commit"
+    },
+    {
+      "key": "compat-article",
+      "group_path": "/articles/development/",
+      "title": "Проверка совместимости Rust-порта LOR",
+      "body": "# Семидневный тест\n\nСтатья проверяет заголовки, таблицу и код.\n\n| Поток | Статус |\n|---|---|\n| HTTP | ok |\n| SQL | ok |\n\n```rust\nfn main() { println!(\"LOR\"); }\n```",
+      "tags": "rust, lorsource, тестирование",
       "images": 0,
-      "commit": true
+      "format": "markdown",
+      "moderation": "commit"
     },
     {
-      "key": "proxmox-arm",
-      "group_path": "/news/clusters/",
-      "title": "Proxmox VE получил официальную поддержку 64-разрядных ARM-серверов",
-      "body": "Proxmox VE 9.2 получил официальную ARM64-версию с общей кодовой базой и репозиториями для x86-64 и ARM.",
-      "tags": "arm64, proxmox",
-      "url": "https://www.proxmox.com/en/about/company-details/press-releases/proxmox-virtual-environment-launches-official-arm64-support",
-      "linktext": "Источник",
-      "images": 1,
-      "commit": true
+      "key": "forum-markdown",
+      "group_path": "/forum/linux-org-ru/",
+      "title": "Markdown: проверка темы форума",
+      "body": "**Markdown** тема с `inline code` и списком.\n\n- пункт 1\n- пункт 2",
+      "tags": "markdown, lorsource, benchmark",
+      "images": 0,
+      "format": "markdown",
+      "moderation": "immediate"
     },
     {
-      "key": "myoffice-pending",
+      "key": "forum-lorcode",
+      "group_path": "/forum/linux-org-ru/",
+      "title": "LORCODE: проверка темы форума",
+      "body": "[b]LORCODE[/b] [quote]цитата[/quote] [code]echo lor[/code]",
+      "tags": "lorcode, lorsource, benchmark",
+      "images": 0,
+      "format": "lorcode",
+      "moderation": "immediate"
+    },
+    {
+      "key": "forum-linebreak",
+      "group_path": "/forum/linux-org-ru/",
+      "title": "Plain text: проверка переносов строк",
+      "body": "Первая строка\nВторая строка\nТретья строка",
+      "tags": "plain text, lorsource, benchmark",
+      "images": 0,
+      "format": "ntobr",
+      "moderation": "immediate"
+    },
+    {
+      "key": "poll-single",
+      "group_path": "/polls/polls/",
+      "title": "Какой режим разметки вы используете?",
+      "body": "Одиночный выбор для проверки суммы процентов.",
+      "tags": "опрос, markdown, lorcode",
+      "poll_variants": ["Markdown", "LORCODE", "User line break"],
+      "multiselect": false,
+      "images": 0,
+      "format": "markdown",
+      "moderation": "commit"
+    },
+    {
+      "key": "poll-multi",
+      "group_path": "/polls/polls/",
+      "title": "Какие разделы LOR вы читаете?",
+      "body": "Мультивыбор: процент каждого варианта считается от числа проголосовавших.",
+      "tags": "опрос, lor, benchmark",
+      "poll_variants": ["Новости", "Форум", "Галерея"],
+      "multiselect": true,
+      "images": 0,
+      "format": "markdown",
+      "moderation": "commit"
+    },
+    {
+      "key": "pending-news",
       "group_path": "/news/commercial/",
-      "title": "«МойОфис» закрыл офисы в Петербурге и Иннополисе, штат компании сократился примерно в четыре раза",
-      "body": "Тестовая новость о реструктуризации «МойОфиса». Она намеренно остаётся неподтверждённой, чтобы проверить её карточку в истории автора.",
-      "tags": "мойофис, офисное по, россия, увольнение",
-      "url": "https://www.linux.org.ru/news/proprietary/18355249",
-      "linktext": "Оригинал на LOR",
-      "images": 1,
-      "commit": false
+      "title": "Неподтверждённая новость для проверки очереди",
+      "body": "Эта новость намеренно остаётся неподтверждённой.",
+      "tags": "очередь, премодерация",
+      "url": "https://www.linux.org.ru/news/",
+      "linktext": "Оригинал LOR",
+      "images": 0,
+      "format": "markdown",
+      "moderation": "pending"
     }
   ],
   "comments": [
-    {"topic": "proxmox-arm", "body": "Проверяю картинку и ARM64-карточку в списке."},
-    {"topic": "atomic-gallery", "body": "Проверяю ответ к галерее и ссылку на комментарий."},
-    {"topic": "polychromatic", "body": "Комментарий должен попасть в поиск и историю crane2000."},
-    {"topic": "wine", "body": "Вторая тема для проверки сортировки комментариев по дате."}
-  ]
+    {"key": "root", "author": "crane2000", "topic": "forum-markdown", "body": "Корневой комментарий для проверки ветки."},
+    {"key": "reply", "author": "robin201", "topic": "forum-markdown", "reply_to": "root", "body": "Ответ на корневой комментарий."},
+    {"key": "nested", "author": "raven1000", "topic": "forum-markdown", "reply_to": "reply", "body": "Вложенный ответ автора темы."},
+    {"key": "gallery-comment", "author": "crane2000", "topic": "alt-mobile-gallery", "body": "Комментарий к многокадровой галерее."},
+    {"key": "news-comment", "author": "crane2000", "topic": "esp32-news", "body": "Комментарий к новости должен попасть в поиск."}
+  ],
+  "poll_votes": {
+    "poll-single": {
+      "swift45": [0],
+      "lark70": [0],
+      "oriole300": [1],
+      "falcon500": [2]
+    },
+    "poll-multi": {
+      "swift45": [0, 1],
+      "lark70": [1, 2],
+      "oriole300": [1]
+    }
+  }
 }

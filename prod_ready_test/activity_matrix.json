@@ -1,0 +1,36 @@
+{
+  "excluded": [
+    {
+      "activity": "registration",
+      "reason": "explicitly excluded by the test scope; accounts are inserted through PostgreSQL"
+    }
+  ],
+  "browser_workflows": [
+    "login and session persistence for ordinary users and moderator",
+    "switch Markdown, LORCODE and User line break editor modes through settings",
+    "create, render and canonically resolve news, forum topic, article, single-image gallery, multi-image gallery, single-choice poll and multiselect poll",
+    "leave one content item pending and commit all other premoderated content as moderator",
+    "create root comments, replies and a nested reply through the site forms",
+    "add a topic reaction and a comment reaction through the hidden reaction controls",
+    "vote in single-choice and multiselect polls from several accounts",
+    "verify poll counters, voter totals and rounded percentages in rendered HTML",
+    "verify author topic history, section filters and commenter search history",
+    "verify gallery archive, gallery feed and forum counters"
+  ],
+  "http_and_database_regressions": [
+    "authentication redirects and access boundaries",
+    "score thresholds, corrector permissions and moderator permissions",
+    "topic and comment visibility for anonymous and authenticated viewers",
+    "all supported themes and profile markup formats",
+    "tags, favorite tags, memories, filters, remarks, tracker and notifications",
+    "edit, delete, resolve, warn and reaction add/remove mutation paths",
+    "gallery upload modes and media derivatives",
+    "database counters, sequences, reaction logs and vote logs"
+  ],
+  "historical_layer": {
+    "method": "direct PostgreSQL fixture insertion followed by public HTML verification",
+    "depth_days": 7,
+    "required_day_buckets": [0, 1, 2, 3, 4, 5, 6],
+    "sections": ["news", "forum", "gallery", "polls", "articles"]
+  }
+}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create the 24-hour LOR fixture through the real browser/UI workflows."""
+"""Create and benchmark the seven-day LOR fixture through real browser workflows."""
 
 from __future__ import annotations
 
@@ -69,9 +69,21 @@ class BrowserSeed:
         self.contexts = {}
         self.pages = {}
         self.topics: dict[str, dict[str, object]] = {}
+        self.comments: dict[str, dict[str, object]] = {}
+        self.current_formats: dict[str, str] = {}
+        self.metrics: list[dict[str, object]] = []
 
     def close(self) -> None:
         self.browser.close()
+
+    def metric(self, name: str, started: float, **details: object) -> None:
+        self.metrics.append(
+            {
+                "name": name,
+                "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                **details,
+            }
+        )
 
     def page_for(self, nick: str):
         if nick in self.pages:
@@ -118,6 +130,7 @@ class BrowserSeed:
             require(response.status < 500, f"{path}: HTTP {response.status}")
 
     def login(self, page, nick: str) -> None:
+        started = time.perf_counter()
         self.goto(page, "/login.jsp?from=/forum/")
         base_href = page.locator("base").get_attribute("href")
         if base_href:
@@ -137,6 +150,22 @@ class BrowserSeed:
             page.locator(f'a[href="/people/{nick}/profile"]').count() > 0,
             f"browser login failed for {nick}: {page.url}; {page_text[:500]!r}",
         )
+        self.metric("login", started, actor=nick)
+
+    def set_format_mode(self, page, nick: str, mode: str) -> None:
+        if self.current_formats.get(nick) == mode:
+            return
+        started = time.perf_counter()
+        self.goto(page, f"/people/{nick}/settings")
+        form = page.locator('#profileForm[action^="/people/"]')
+        require(form.count() == 1, f"settings form is absent for {nick}")
+        radio = form.locator(f'input[name="format_mode"][value="{mode}"]')
+        require(radio.count() == 1, f"format mode {mode} is unavailable for {nick}")
+        radio.check()
+        form.locator('button[type="submit"]').click()
+        page.wait_for_load_state("domcontentloaded")
+        self.current_formats[nick] = mode
+        self.metric("settings.format", started, actor=nick, mode=mode)
 
     def discover_add_url(self, page, group_path: str) -> str:
         self.goto(page, group_path)
@@ -147,6 +176,7 @@ class BrowserSeed:
         return str(href)
 
     def create_topic(self, page, item: dict[str, object], image_offset: int) -> dict[str, object]:
+        started = time.perf_counter()
         add_url = self.discover_add_url(page, str(item["group_path"]))
         self.goto(page, add_url)
         form = page.locator("#messageForm")
@@ -157,6 +187,15 @@ class BrowserSeed:
         if item.get("url"):
             form.locator('input[name="url"]').fill(str(item["url"]))
             form.locator('input[name="linktext"]').fill(str(item.get("linktext", "Источник")))
+        poll_variants = [str(value) for value in item.get("poll_variants", [])]
+        for index, label in enumerate(poll_variants):
+            variant = form.locator(f'input[name="poll[{index}]"]')
+            require(variant.count() == 1, f"{item['key']}: poll variant #{index} is absent")
+            variant.fill(label)
+        if bool(item.get("multiselect", False)):
+            multiselect = form.locator('input[name="multiSelect"]')
+            require(multiselect.count() == 1, f"{item['key']}: multiselect control is absent")
+            multiselect.check()
         image_count = int(item.get("images", 0))
         image_inputs = form.locator('input[type="file"][name="images"]')
         require(
@@ -169,39 +208,101 @@ class BrowserSeed:
         page.wait_for_load_state("domcontentloaded")
         error = page.locator(".error")
         require(error.count() == 0, f"{item['key']}: {error.all_inner_texts()}")
-        match = re.search(r"/(news|gallery)/[^/]+/(\d+)", urlparse(page.url).path)
+        match = re.search(
+            r"/(news|gallery|articles|forum|polls)/[^/]+/(\d+)",
+            urlparse(page.url).path,
+        )
         if match is None:
             confirmation_link = page.get_by_role("link", name="Перейти к сообщению")
             if confirmation_link.count() == 1:
                 confirmation_link.click()
                 page.wait_for_load_state("domcontentloaded")
-                match = re.search(r"/(news|gallery)/[^/]+/(\d+)", urlparse(page.url).path)
+                match = re.search(
+                    r"/(news|gallery|articles|forum|polls)/[^/]+/(\d+)",
+                    urlparse(page.url).path,
+                )
         page_text = page.locator("body").inner_text()
         require(
             match is not None,
             f"{item['key']}: unexpected create redirect {page.url}; {page_text[:1000]!r}",
         )
         topic_id = int(match.group(2))
-        return {
+        result = {
             "key": item["key"],
             "id": topic_id,
             "url": urlparse(page.url).path,
             "title": item["title"],
-            "commit": bool(item["commit"]),
+            "moderation": str(item["moderation"]),
+            "format": str(item.get("format", "markdown")),
+            "poll_variants": poll_variants,
+            "multiselect": bool(item.get("multiselect", False)),
         }
+        self.metric(
+            "topic.create",
+            started,
+            key=item["key"],
+            content_type=str(item["group_path"]).split("/")[1],
+            topic_id=topic_id,
+        )
+        return result
 
     def commit_topic(self, page, topic: dict[str, object]) -> None:
+        started = time.perf_counter()
         self.goto(page, f"/commit.jsp?msgid={topic['id']}")
         form = page.locator('form[action="/commit.jsp"]')
         require(form.count() == 1, f"commit form is absent for topic {topic['id']}")
         form.locator('button[type="submit"]').click()
         page.wait_for_load_state("domcontentloaded")
         require("jump-message.jsp" not in page.url, f"commit redirect was not resolved: {page.url}")
+        self.metric("topic.commit", started, key=topic["key"], topic_id=topic["id"])
 
-    def add_comment(self, page, topic: dict[str, object], body: str) -> str:
-        self.goto(page, f"/comment-message.jsp?topic={topic['id']}")
+    def add_comment(
+        self,
+        page,
+        topic: dict[str, object],
+        body: str,
+        reply_to: int | None = None,
+    ) -> dict[str, object]:
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+        started = time.perf_counter()
+        self.goto(page, str(topic["url"]))
+        topic_id = int(topic["id"])
+        if reply_to is not None:
+            reply_link = page.locator(
+                f'#comment-{reply_to} .reply a[href^="add_comment.jsp"]'
+            )
+        else:
+            reply_link = page.locator(
+                f'#topic-{topic_id} .reply a[href^="comment-message.jsp"]'
+            )
+        require(
+            reply_link.count() == 1,
+            f"inline reply link is absent for target {reply_to or topic_id}",
+        )
+        original_url = page.url
+        reply_link.click()
+        page.wait_for_timeout(100)
+        require(
+            page.url == original_url,
+            f"reply click unexpectedly navigated away from the topic: {page.url}",
+        )
         form = page.locator('#commentForm[action="/add_comment.jsp"]')
         require(form.count() == 1, f"comment form is absent for topic {topic['id']}")
+        form_container = page.locator("#comment-form-container")
+        require(
+            form_container.count() == 1
+            and not form_container.is_hidden()
+            and "comment-form-inline-visible"
+            in (form_container.get_attribute("class") or ""),
+            f"inline comment form did not open for target {reply_to or topic_id}",
+        )
+        hidden_reply = form.locator('input[name="replyto"]')
+        expected_reply = str(reply_to or 0)
+        require(
+            hidden_reply.count() == 1 and hidden_reply.input_value() == expected_reply,
+            f"reply target {expected_reply} is not preserved by the inline form",
+        )
         form.locator('textarea[name="msg"]').fill(body)
         with page.expect_response(
             lambda response: "/add_comment_ajax" in response.url
@@ -211,16 +312,54 @@ class BrowserSeed:
             response_info.value.ok,
             f"comment AJAX failed: HTTP {response_info.value.status}",
         )
-        page.wait_for_url(re.compile(rf"{re.escape(str(topic['url']))}\?cid=\d+$"))
-        return page.url
+        try:
+            page.wait_for_url(
+                re.compile(rf"{re.escape(str(topic['url']))}\?cid=\d+$"),
+                timeout=10_000,
+            )
+        except PlaywrightTimeoutError as error:
+            errors = form.locator("div[error]").all_inner_texts()
+            raise RuntimeError(f"comment AJAX did not redirect; errors={errors}") from error
+        match = re.search(r"[?&]cid=(\d+)", page.url)
+        require(match is not None, f"created comment URL has no cid: {page.url}")
+        result = {
+            "id": int(match.group(1)),
+            "url": page.url,
+            "topic": topic["key"],
+            "reply_to": reply_to,
+            "body": body,
+        }
+        self.metric(
+            "comment.reply" if reply_to is not None else "comment.create",
+            started,
+            topic_id=topic["id"],
+            comment_id=result["id"],
+        )
+        return result
 
-    def add_reaction(self, page, topic: dict[str, object]) -> None:
+    def add_reaction(
+        self,
+        page,
+        topic: dict[str, object],
+        comment_id: int | None = None,
+        emoji: str = "👍",
+    ) -> None:
+        started = time.perf_counter()
         self.goto(page, str(topic["url"]))
-        button = page.locator('form.reactions-form button[name="reaction"][value^="👍-true"]').first
-        require(button.count() == 1, f"reaction button is absent for topic {topic['id']}")
+        scope = page if comment_id is None else page.locator(f"#comment-{comment_id}")
+        if comment_id is not None:
+            require(scope.count() == 1, f"reaction target comment {comment_id} is absent")
+        button = scope.locator(
+            f'form.reactions-form button[name="reaction"][value^="{emoji}-true"]'
+        ).first
+        require(button.count() == 1, f"reaction button is absent for target {comment_id or topic['id']}")
         require(not button.is_visible(), "empty reaction choices must initially be hidden")
-        reveal = page.locator("#topicMenu a.reaction-show")
-        require(reveal.count() == 1, f"reaction reveal link is absent for topic {topic['id']}")
+        reveal = (
+            page.locator("#topicMenu a.reaction-show")
+            if comment_id is None
+            else scope.locator(".reply a.reaction-show")
+        )
+        require(reveal.count() == 1, f"reaction reveal link is absent for target {comment_id or topic['id']}")
         page.wait_for_function("window.jQuery && typeof window.jQuery === 'function'")
         page.wait_for_timeout(500)
         reveal.click()
@@ -228,17 +367,255 @@ class BrowserSeed:
         with page.expect_response(lambda response: "/reactions/ajax" in response.url) as response_info:
             button.click()
         require(response_info.value.ok, f"reaction AJAX failed: HTTP {response_info.value.status}")
-        selected = page.locator(
-            'form.reactions-form button[name="reaction"][value^="👍-false"]'
+        selected = scope.locator(
+            f'form.reactions-form button[name="reaction"][value^="{emoji}-false"]'
         ).first
         selected.wait_for(state="visible")
         require(
             selected.locator(".reaction-count").inner_text() == "1",
             "reaction count was not updated after AJAX submit",
         )
+        self.metric(
+            "reaction.comment" if comment_id is not None else "reaction.topic",
+            started,
+            topic_id=topic["id"],
+            comment_id=comment_id,
+            emoji=emoji,
+        )
 
-    def wait_for_comment_history(self, page, expected_bodies: list[str]) -> None:
-        path = "/search.jsp?range=COMMENTS&user=crane2000&sort=DATE"
+    def vote(self, page, topic: dict[str, object], variants: list[int], actor: str) -> None:
+        started = time.perf_counter()
+        self.goto(page, str(topic["url"]))
+        form = page.locator('form[action="/vote.jsp"]')
+        require(form.count() == 1, f"poll form is absent for {topic['key']} and {actor}")
+        inputs = form.locator('input[name="vote"]')
+        require(inputs.count() == len(topic["poll_variants"]), "poll variant count differs")
+        for index in variants:
+            require(0 <= index < inputs.count(), f"invalid poll variant index {index}")
+            inputs.nth(index).check()
+        form.locator('button[type="submit"]').click()
+        page.wait_for_load_state("domcontentloaded")
+        require(page.locator(".poll-result").count() == 1, "poll results are absent after vote")
+        self.metric(
+            "poll.vote.multi" if topic["multiselect"] else "poll.vote.single",
+            started,
+            actor=actor,
+            topic_id=topic["id"],
+            choices=variants,
+        )
+
+    def verify_poll_results(
+        self,
+        page,
+        topic: dict[str, object],
+        expected_votes: list[int],
+        expected_people: int,
+    ) -> None:
+        started = time.perf_counter()
+        self.goto(page, f"{topic['url']}?results=true")
+        rows = page.locator(".poll-result li")
+        require(rows.count() == len(expected_votes), f"{topic['key']}: result row count differs")
+        actual: dict[str, tuple[int, int]] = {}
+        for row in rows.all():
+            label = row.locator(".penguin_label").inner_text().strip()
+            match = re.search(r"(\d+)\s*\((\d+)%\)", row.locator(".penguin_percent").inner_text())
+            require(match is not None, f"{topic['key']}: malformed result for {label}")
+            actual[label] = (int(match.group(1)), int(match.group(2)))
+        divisor = expected_people if expected_people else sum(expected_votes)
+        for label, votes in zip(topic["poll_variants"], expected_votes, strict=True):
+            expected_percent = round(100 * votes / divisor) if divisor else 0
+            require(actual.get(label) == (votes, expected_percent), f"{topic['key']}: {label}={actual.get(label)}, expected {(votes, expected_percent)}")
+            require(actual[label][1] <= 100, f"{topic['key']}: impossible percentage for {label}")
+        summary = page.locator(".poll-sum").inner_text()
+        require(f"Всего голосов: {sum(expected_votes)}" in summary, "poll total votes differs")
+        if topic["multiselect"]:
+            require(
+                f"всего проголосовавших: {expected_people}" in summary,
+                "multiselect voter total differs",
+            )
+        self.metric("poll.results", started, topic_id=topic["id"])
+
+    def verify_created_content(self, page) -> None:
+        started = time.perf_counter()
+        for topic in self.topics.values():
+            self.goto(page, str(topic["url"]))
+            topic_node = page.locator(f"#topic-{topic['id']}")
+            require(topic_node.count() == 1, f"{topic['key']}: topic is absent from canonical page")
+            require(
+                topic_node.locator("h1").first.inner_text().strip() == str(topic["title"]),
+                f"{topic['key']}: canonical title differs",
+            )
+
+        markdown = self.topics["forum-markdown"]
+        self.goto(page, str(markdown["url"]))
+        markdown_body = page.locator(f"#topic-{markdown['id']} .msg-text")
+        require(
+            markdown_body.locator("strong").filter(has_text="Markdown").count() == 1,
+            "Markdown bold markup is not rendered",
+        )
+        require(
+            markdown_body.locator("code").filter(has_text="inline code").count() == 1,
+            "Markdown inline code is not rendered",
+        )
+        require(markdown_body.locator("li").count() == 2, "Markdown list is not rendered")
+
+        lorcode = self.topics["forum-lorcode"]
+        self.goto(page, str(lorcode["url"]))
+        lorcode_body = page.locator(f"#topic-{lorcode['id']} .msg-text")
+        require(
+            lorcode_body.locator("strong").filter(has_text="LORCODE").count() == 1,
+            "LORCODE bold markup is not rendered",
+        )
+        require(
+            lorcode_body.locator("blockquote").filter(has_text="цитата").count() == 1,
+            "LORCODE quote is not rendered",
+        )
+        require(
+            lorcode_body.locator("code").filter(has_text="echo lor").count() == 1,
+            "LORCODE code is not rendered",
+        )
+
+        linebreak = self.topics["forum-linebreak"]
+        self.goto(page, str(linebreak["url"]))
+        require(
+            page.locator(f"#topic-{linebreak['id']} .msg-text br").count() >= 2,
+            "User line break mode does not preserve single newlines",
+        )
+
+        gallery_multi = self.topics["alt-mobile-gallery"]
+        self.goto(page, str(gallery_multi["url"]))
+        require(
+            page.locator(
+                f"#topic-{gallery_multi['id']} .slider-parent .swiffy-slider"
+            ).count()
+            == 1,
+            "multi-image gallery has no original-compatible slider",
+        )
+        require(
+            page.locator(
+                f"#topic-{gallery_multi['id']} .slider-container > *"
+            ).count()
+            == 2,
+            "multi-image gallery image count differs",
+        )
+
+        gallery_single = self.topics["hyprland-gallery"]
+        self.goto(page, str(gallery_single["url"]))
+        single = page.locator(f"#topic-{gallery_single['id']}")
+        require(
+            single.locator(".medium-image-container").count() == 1,
+            "single-image gallery has no responsive image container",
+        )
+        require(
+            single.locator(".swiffy-slider").count() == 0,
+            "single-image gallery incorrectly uses a slider",
+        )
+
+        thread = self.topics["forum-markdown"]
+        self.goto(page, str(thread["url"]))
+        for key in ("root", "reply", "nested"):
+            comment = self.comments[key]
+            require(
+                page.locator(f"#comment-{comment['id']}").count() == 1,
+                f"thread misses comment {key}",
+            )
+        for key, parent in (("reply", "root"), ("nested", "reply")):
+            comment = self.comments[key]
+            parent_comment = self.comments[parent]
+            context = page.locator(f"#comment-{comment['id']} > .title")
+            require(
+                context.count() == 1 and "Ответ на:" in context.inner_text(),
+                f"reply context is absent for {key}",
+            )
+            require(
+                context.locator(f'a[href*="cid={parent_comment["id"]}"]').count()
+                == 1,
+                f"reply {key} points to the wrong parent",
+            )
+        root = page.locator(f"#comment-{self.comments['root']['id']}")
+        require(
+            root.locator(
+                'form.reactions-form button[name="reaction"][value^="🎉-"] .reaction-count'
+            ).inner_text()
+            == "1",
+            "comment reaction is absent after reload",
+        )
+
+        news = self.topics["esp32-news"]
+        self.goto(page, str(news["url"]))
+        require(
+            page.locator(
+                'form.reactions-form button[name="reaction"][value^="👍-"] .reaction-count'
+            ).first.inner_text()
+            == "1",
+            "topic reaction is absent after reload",
+        )
+
+        self.goto(page, "/view-all.jsp?section=1")
+        pending = self.topics["pending-news"]
+        pending_card = page.locator(f"#topic-{pending['id']}")
+        require(pending_card.count() == 1, "pending news is absent from moderation queue")
+        require(
+            "не подтверждено" in pending_card.inner_text(),
+            "pending news has no moderation marker",
+        )
+
+        self.goto(page, "/gallery/")
+        require(
+            page.locator(f"#topic-{gallery_multi['id']} .swiffy-slider").count() == 1,
+            "gallery feed misses multi-image slider",
+        )
+        require(
+            page.locator(
+                f"#topic-{gallery_single['id']} .medium-image-container"
+            ).count()
+            == 1,
+            "gallery feed misses single image",
+        )
+        page.screenshot(path=self.output / "created-gallery-desktop.png", full_page=True)
+        self.metric(
+            "content.verify",
+            started,
+            topics=len(self.topics),
+            comments=len(self.comments),
+        )
+
+    def benchmark_pages(self, page) -> None:
+        paths = [
+            "/",
+            "/news/",
+            "/forum/",
+            "/gallery/",
+            "/polls/",
+            "/articles/",
+            "/tracker/",
+            "/gallery/archive/",
+            "/people/raven1000/",
+            "/search.jsp?range=COMMENTS&user=crane2000&sort=DATE",
+            *(str(topic["url"]) for topic in self.topics.values()),
+        ]
+        for path in paths:
+            started = time.perf_counter()
+            self.goto(page, path)
+            duration_ms = (time.perf_counter() - started) * 1000
+            require(duration_ms < 10_000, f"benchmark page exceeded 10s: {path}")
+            self.metric("page.get", started, path=path)
+
+    def benchmark_summary(self) -> dict[str, object]:
+        durations = sorted(float(item["duration_ms"]) for item in self.metrics)
+        if not durations:
+            return {"operations": 0, "p50_ms": 0, "p95_ms": 0, "max_ms": 0}
+        p50 = durations[(len(durations) - 1) // 2]
+        p95 = durations[min(len(durations) - 1, int(len(durations) * 0.95))]
+        return {
+            "operations": len(durations),
+            "p50_ms": p50,
+            "p95_ms": p95,
+            "max_ms": durations[-1],
+        }
+
+    def wait_for_comment_history(self, page, nick: str, expected_bodies: list[str]) -> None:
+        path = f"/search.jsp?range=COMMENTS&user={nick}&sort=DATE"
         for _ in range(30):
             self.goto(page, path)
             text = page.locator("body").inner_text()
@@ -253,23 +630,31 @@ class BrowserSeed:
         for topic in self.topics.values():
             require(str(topic["title"]) in body, f"author history misses {topic['key']}")
         require("(не подтверждено)" in body, "pending news marker is absent from author history")
-        for section in ("1", "3"):
+        for section in ("1", "2", "3", "5", "6"):
             require(
                 author_page.locator(f'a[href="/people/raven1000/?section={section}"]').count() == 1,
                 f"author history section {section} is absent",
             )
-        require('href="/tag/%D0%BE%D1%84%D0%B8%D1%81%D0%BD%D0%BE%D0%B5%20%D0%BF%D0%BE"' in author_page.content(), "encoded profile tag URL is absent")
+        require('href="/tag/plain%20text"' in author_page.content(), "encoded profile tag URL is absent")
         author_page.screenshot(path=self.output / "author-topics-desktop.png", full_page=True)
 
         self.goto(author_page, "/people/raven1000/?section=3")
         filtered = author_page.locator("body").inner_text()
-        require("Atomic Heart" in filtered, "gallery filter misses gallery topic")
-        require("Wine 11.15" not in filtered, "gallery filter leaks news topics")
+        require("Альт мобильный" in filtered, "gallery filter misses gallery topic")
+        require("ESP32-S3" not in filtered, "gallery filter leaks news topics")
 
-        expected = [str(item["body"]) for item in CONTENT["comments"]]
-        self.wait_for_comment_history(commenter_page, expected)
+        expected = [
+            str(item["body"])
+            for item in CONTENT["comments"]
+            if str(item["author"]) == str(CONTENT["commenter"])
+        ]
+        self.wait_for_comment_history(commenter_page, str(CONTENT["commenter"]), expected)
         search_body = commenter_page.locator("body").inner_text()
-        require("Всего найдено 4" in search_body, "comment history count differs")
+        count_match = re.search(r"Всего найдено (\d+)", search_body)
+        require(
+            count_match is not None and int(count_match.group(1)) >= len(expected),
+            "comment history count differs",
+        )
         commenter_page.screenshot(path=self.output / "comment-history-desktop.png", full_page=True)
 
         author_page.set_viewport_size({"width": 390, "height": 844})
@@ -280,7 +665,7 @@ class BrowserSeed:
         commenter_page.screenshot(path=self.output / "comment-history-mobile.png", full_page=True)
 
     def verify_archive_comments_and_forum(self, page) -> None:
-        gallery = self.topics["atomic-gallery"]
+        gallery = self.topics["alt-mobile-gallery"]
         self.goto(page, str(gallery["url"]))
         comment = page.locator("#comments article.msg").first
         require(comment.count() == 1, "browser-created gallery comment is absent")
@@ -303,39 +688,77 @@ class BrowserSeed:
         author_page = self.page_for(str(CONTENT["author"]))
         moderator_page = self.page_for(str(CONTENT["moderator"]))
         commenter_page = self.page_for(str(CONTENT["commenter"]))
+        self.page_for(str(CONTENT["reply_author"]))
 
         image_offset = 0
         for index, item in enumerate(CONTENT["topics"]):
             if index:
                 print(f"WAIT topic flood interval {TOPIC_INTERVAL_SECONDS}s", flush=True)
                 time.sleep(TOPIC_INTERVAL_SECONDS)
+            self.set_format_mode(
+                author_page,
+                str(CONTENT["author"]),
+                str(item.get("format", "markdown")),
+            )
             topic = self.create_topic(author_page, item, image_offset)
             self.topics[str(item["key"])] = topic
             image_offset += int(item.get("images", 0))
             print(f"CREATED {topic['key']} {topic['url']}", flush=True)
 
         for topic in self.topics.values():
-            if topic["commit"]:
+            if topic["moderation"] == "commit":
                 self.commit_topic(moderator_page, topic)
                 print(f"COMMITTED {topic['key']}")
 
-        comment_urls = []
+        comment_urls: list[str] = []
         for index, item in enumerate(CONTENT["comments"]):
             if index:
                 print(f"WAIT comment flood interval {COMMENT_INTERVAL_SECONDS}s", flush=True)
                 time.sleep(COMMENT_INTERVAL_SECONDS)
             topic = self.topics[str(item["topic"])]
-            comment_urls.append(self.add_comment(commenter_page, topic, str(item["body"])))
-            print(f"COMMENTED {topic['key']}", flush=True)
+            actor = str(item["author"])
+            actor_page = self.page_for(actor)
+            reply_key = item.get("reply_to")
+            reply_to = self.comments[str(reply_key)]["id"] if reply_key is not None else None
+            comment = self.add_comment(actor_page, topic, str(item["body"]), reply_to)
+            self.comments[str(item["key"])] = comment
+            comment_urls.append(str(comment["url"]))
+            print(f"COMMENTED {topic['key']} {item['key']}", flush=True)
 
-        self.add_reaction(commenter_page, self.topics["polychromatic"])
-        print("REACTED polychromatic 👍")
+        self.add_reaction(commenter_page, self.topics["esp32-news"], emoji="👍")
+        self.add_reaction(
+            author_page,
+            self.topics["forum-markdown"],
+            int(self.comments["root"]["id"]),
+            "🎉",
+        )
+        print("REACTED topic and comment", flush=True)
+
+        for topic_key, actors in CONTENT["poll_votes"].items():
+            topic = self.topics[str(topic_key)]
+            for actor, choices in actors.items():
+                self.vote(self.page_for(str(actor)), topic, [int(value) for value in choices], str(actor))
+                print(f"VOTED {topic_key} {actor}", flush=True)
+
+        for topic_key, actors in CONTENT["poll_votes"].items():
+            topic = self.topics[str(topic_key)]
+            expected_votes = [0] * len(topic["poll_variants"])
+            for choices in actors.values():
+                for index in choices:
+                    expected_votes[int(index)] += 1
+            self.verify_poll_results(author_page, topic, expected_votes, len(actors))
+
+        self.verify_created_content(author_page)
         self.verify_archive_comments_and_forum(author_page)
         self.verify_histories(author_page, commenter_page)
+        self.benchmark_pages(author_page)
         return {
             "source_window_hours": CONTENT["source_window_hours"],
             "topics": list(self.topics.values()),
             "comment_urls": comment_urls,
+            "comments": list(self.comments.values()),
+            "metrics": self.metrics,
+            "benchmark": self.benchmark_summary(),
             "artifacts": str(self.output),
         }
 

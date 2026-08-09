@@ -21,9 +21,17 @@ def main() -> int:
     parser.add_argument(
         "--browser-seed",
         action="store_true",
-        help="seed accounts only, then create and verify 24-hour content through Playwright",
+        help="seed accounts only, then create and verify content through Playwright",
+    )
+    parser.add_argument(
+        "--seven-day-benchmark",
+        action="store_true",
+        help="load seven days of history, run HTTP tests, browser activities and load benchmark",
     )
     args = parser.parse_args()
+
+    if args.browser_seed and args.seven_day_benchmark:
+        parser.error("--browser-seed and --seven-day-benchmark are mutually exclusive")
 
     seed = [
         sys.executable,
@@ -51,6 +59,25 @@ def main() -> int:
         [sys.executable, str(HERE / "test_port.py"), "--base", args.base],
         check=True,
     )
+    if args.seven_day_benchmark:
+        subprocess.run(
+            [
+                sys.executable,
+                str(HERE / "browser_seed.py"),
+                "--base",
+                args.base,
+            ],
+            check=True,
+        )
+        subprocess.run(
+            [
+                sys.executable,
+                str(HERE / "benchmark_verify.py"),
+                "--base",
+                args.base,
+            ],
+            check=True,
+        )
     if args.visual:
         subprocess.run(
             [sys.executable, str(HERE / "visual_smoke.py"), "--base", args.base],

@@ -307,6 +307,20 @@ def canonical_routes() -> None:
     news_feed = require_html(ANON.request("/news/"), "news cut preview")
     require("читать дальше..." in news_feed, "news feed has no collapsed cut link")
     require("Эта часть должна быть скрыта" not in news_feed, "news feed exposes content below cut")
+    article_group = require_html(
+        ANON.request("/articles/development"), "article group with shared urlname"
+    )
+    require(
+        "Проверка длинной статьи" in article_group,
+        "article group is confused with the forum group of the same urlname",
+    )
+    forum_group = require_html(
+        ANON.request("/forum/linux-org-ru"), "forum group with shared urlname"
+    )
+    require(
+        "Вайбкодю реакции" in forum_group,
+        "forum group is confused with the news group of the same urlname",
+    )
 
 
 @test("single and multi-image gallery DOM")
@@ -338,10 +352,27 @@ def comment_action_visibility() -> None:
         anonymous_home,
         re.S,
     )
-    require(anonymous_card is not None, "restricted zero-comment news is absent from home page")
+    require(anonymous_card is not None, "restricted news is absent from home page")
     require(
-        "/comment-message.jsp?topic=9101012" not in anonymous_card.group(1),
+        "comment-message.jsp?topic=9101012" not in anonymous_card.group(1),
         "anonymous user sees a forbidden add-comment action on home page",
+    )
+    require(
+        "comment-message.jsp?topic=" not in anonymous_home,
+        "anonymous user sees an add-comment action in the topic feed",
+    )
+    anonymous_topic = topic("/forum/games/9101003")
+    require(
+        re.search(r">\s*Ответить\s*</a>", anonymous_topic) is None,
+        "anonymous user sees a reply action on the topic page",
+    )
+    require(
+        'id="commentForm"' not in anonymous_topic,
+        "anonymous user receives the inline comment form",
+    )
+    require(
+        "/js/add-form.js" not in anonymous_topic,
+        "anonymous topic page loads the reply-form script",
     )
 
     registered = Client(BASE)
@@ -354,8 +385,112 @@ def comment_action_visibility() -> None:
     )
     require(registered_card is not None, "restricted news is absent for registered viewer")
     require(
-        "/comment-message.jsp?topic=9101012" in registered_card.group(1),
-        "eligible registered user does not see the add-comment action",
+        'href="/news/opensource/9101012#comments"' in registered_card.group(1)
+        or "comment-message.jsp?topic=9101012" in registered_card.group(1),
+        "eligible registered user does not see the news comment action",
+    )
+    registered_news = topic("/news/opensource/9101012", registered)
+    require(
+        "comment-message.jsp?topic=9101012" in registered_news,
+        "eligible registered user does not see the news reply action",
+    )
+    registered_topic = topic("/forum/games/9101003", registered)
+    require(
+        "comment-message.jsp?topic=9101003" in registered_topic,
+        "eligible registered user does not see the topic reply action",
+    )
+    require(
+        "add_comment.jsp?topic=9101003&replyto=9102004" in registered_topic,
+        "eligible registered user does not see the comment reply action",
+    )
+    require(
+        'id="commentForm"' in registered_topic and "/js/add-form.js" in registered_topic,
+        "eligible registered user does not receive the inline comment form",
+    )
+    require(
+        "/js/lor/forms-and-reactions.js" not in registered_topic,
+        "topic loads the conflicting non-original comment handler",
+    )
+    require(
+        re.search(
+            r'href="add_comment\.jsp\?topic=9101003&replyto=9102004"\s+'
+            r'data-author-readonly="(?:true|false)"',
+            registered_topic,
+        )
+        is not None,
+        "comment reply link differs from the original add-form.js DOM contract",
+    )
+    require(
+        '/post-warning?topic=9101003&amp;comment=9102004' in registered_topic,
+        "eligible user does not see the comment moderator-warning action",
+    )
+
+    moderator = Client(BASE)
+    moderator.login("hawk_moderator")
+    moderator_topic = topic("/forum/games/9101003", moderator)
+    require(
+        '/delete_comment.jsp?msgid=9102004' in moderator_topic,
+        "moderator does not see the comment delete action",
+    )
+
+
+@test("comment forms, preview and reply target validation")
+def comment_form_contracts() -> None:
+    client = Client(BASE)
+    client.login("crane2000")
+
+    topic_form = require_html(
+        client.request("/comment-message.jsp?topic=9101003"),
+        "top-level comment form",
+    )
+    require('id="topic-9101003"' in topic_form, "top-level form omits topic context")
+    require(
+        'name="replyto" value="0"' in topic_form,
+        "top-level form does not preserve the original zero reply target",
+    )
+
+    reply_form = require_html(
+        client.request("/add_comment.jsp?topic=9101003&replyto=9102004"),
+        "reply comment form",
+    )
+    require('id="comment-9102004"' in reply_form, "reply form omits parent comment context")
+    require(
+        'name="replyto" value="9102004"' in reply_form,
+        "reply form loses its parent comment id",
+    )
+
+    preview = client.request(
+        "/add_comment_ajax",
+        "POST",
+        [
+            ("topic", "9101003"),
+            ("replyto", "0"),
+            ("msg", "**comment preview**"),
+            ("preview", "Предпросмотр"),
+        ],
+    )
+    require(preview.status == 200, f"comment preview returned {preview.status}")
+    preview_json = json.loads(preview.text)
+    require(preview_json.get("errors") == [], "valid comment preview contains errors")
+    require(
+        "<strong>comment preview</strong>" in str(preview_json.get("preview")),
+        "comment preview does not use the user's Markdown mode",
+    )
+
+    cross_topic = client.request(
+        "/add_comment_ajax",
+        "POST",
+        [
+            ("topic", "9101003"),
+            ("replyto", "9102001"),
+            ("msg", "cross-topic reply must be rejected"),
+        ],
+    )
+    require(cross_topic.status == 200, f"cross-topic validation returned {cross_topic.status}")
+    cross_topic_json = json.loads(cross_topic.text)
+    require(
+        "некорректная тема" in cross_topic_json.get("errors", []),
+        "reply to a comment from another topic was accepted",
     )
 
 
@@ -456,13 +591,20 @@ def comments_and_reactions() -> None:
         and re.search(r'<a[^>]*>Показать ответ', leaf.group(1)) is None,
         "leaf comment offers nonexistent answers",
     )
-    require("Пустая строка (два раза Enter)" in forum, "original comment markup help is absent")
-    require('href="/help/markdown.md"' in forum, "comment Markdown help link is absent")
+    reactor = Client(BASE)
+    reactor.login("swift45")
+    comment_form_topic = topic("/forum/games/9101003", reactor)
+    require(
+        "Пустая строка (два раза Enter)" in comment_form_topic,
+        "original comment markup help is absent for an eligible registered user",
+    )
+    require(
+        'href="/help/markdown.md"' in comment_form_topic,
+        "comment Markdown help link is absent for an eligible registered user",
+    )
     reaction_page = topic("/forum/linux-org-ru/9101010")
     for reaction in ("🤡", "👍", "🔥"):
         require(reaction in reaction_page, f"topic reaction is absent: {reaction}")
-    reactor = Client(BASE)
-    reactor.login("swift45")
     authenticated_reactions = topic("/forum/linux-org-ru/9101010", reactor)
     require("zero-reactions" in authenticated_reactions, "hidden zero-reaction choices are absent")
     require("reaction-show" in authenticated_reactions, "reaction reveal control is absent")
@@ -476,7 +618,7 @@ def topic_dom_contract() -> None:
     require(re.search(r'<div class="messages"[^>]*>\s*<article class="msg"', page) is not None, "topic is outside .messages")
     require('<link rel="canonical"' in page, "canonical link is absent")
     require('property="og:title"' in page, "OpenGraph title is absent")
-    require("/js/add-form.js" in page, "original add-form.js is not loaded")
+    require("/js/add-form.js" not in page, "anonymous page loads authenticated reply controls")
     require("/login.jsp?from=" in page, "header login link does not preserve current URL")
     require(
         re.search(r'>oriole300</a>\s*<span class="stars">★★★</span>', page) is not None,

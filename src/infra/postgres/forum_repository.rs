@@ -37,10 +37,16 @@ impl TrForumRepository for CForumPgRepository {
         .await?)
     }
 
-    async fn stFindGroupByUrlName(&self, sUrlName: &str) -> Result<StGroup> {
+    async fn stFindGroupBySectionAndUrlName(
+        &self,
+        sSectionPrefix: &str,
+        sUrlName: &str,
+    ) -> Result<StGroup> {
         Ok(sqlx::query_as::<_, StGroup>(sqlx::AssertSqlSafe(
-            S_GROUP_SELECT_SQL.to_string() + " WHERE g.urlname=$1 GROUP BY g.id,s.id",
+            S_GROUP_SELECT_SQL.to_string()
+                + " WHERE CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(s.name) END=$1 AND g.urlname=$2 GROUP BY g.id,s.id",
         ))
+        .bind(sSectionPrefix)
         .bind(sUrlName)
         .fetch_one(&self.oPool)
         .await?)

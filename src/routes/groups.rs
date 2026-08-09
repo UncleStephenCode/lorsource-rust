@@ -215,10 +215,7 @@ pub async fn group_page(
     }
     let show_deleted = show_deleted_requested;
 
-    let group = find_group(&state, &group_urlname).await?;
-    if group.section_prefix != "forum" {
-        return Err(AppError::NotFound);
-    }
+    let group = find_group_by_section(&state, "forum", &group_urlname).await?;
     let group_id = group.id;
 
     let tag_id: Option<i32> = if let Some(tag) = q.tag.as_deref().filter(|t| !t.is_empty()) {
@@ -488,7 +485,9 @@ pub async fn group_archive(
     Path(group_name): Path<String>,
     CurrentUser(user): CurrentUser,
 ) -> Result<Html<String>> {
-    let group = forum_service(&state).stArchiveGroup(&group_name).await?;
+    let group = forum_service(&state)
+        .stGroupBySectionAndUrlName("forum", &group_name)
+        .await?;
     let rows =
         crate::routes::legacy::list_archive_year_months(&state, Some("forum"), Some(&group_name))
             .await?;
@@ -535,9 +534,13 @@ pub async fn list_groups(state: &AppState) -> Result<Vec<Group>> {
     forum_service(state).vecListGroups().await
 }
 
-pub async fn find_group(state: &AppState, urlname: &str) -> Result<Group> {
+pub async fn find_group_by_section(
+    state: &AppState,
+    section_prefix: &str,
+    urlname: &str,
+) -> Result<Group> {
     forum_service(state)
-        .stArchiveGroup(urlname)
+        .stGroupBySectionAndUrlName(section_prefix, urlname)
         .await
         .map_err(|error| match error {
             AppError::Sqlx(sqlx::Error::RowNotFound) => AppError::NotFound,

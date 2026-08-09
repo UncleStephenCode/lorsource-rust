@@ -215,7 +215,7 @@ mod realtime_browser_contract_tests {
             "/templates/news_card.html"
         ));
         assert!(sNewsCard.contains("{% if t.can_comment %}"));
-        assert!(sNewsCard.contains("/comment-message.jsp?topic={{ t.topic.id }}"));
+        assert!(sNewsCard.contains("comment-message.jsp?topic={{ t.topic.id }}"));
     }
 
     #[test]
@@ -227,6 +227,10 @@ mod realtime_browser_contract_tests {
         let arrRealtime = include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/static/js/realtime.js"
+        ));
+        let arrAddForm = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/static/js/add-form.js"
         ));
         assert_eq!(
             Sha256::digest(arrScript)
@@ -241,6 +245,13 @@ mod realtime_browser_contract_tests {
                 .map(|iByte| format!("{iByte:02x}"))
                 .collect::<String>(),
             "1665374fa67a2fc27681c6bb9ac92017ef2dbc78539cf947bfb050c70ddfb10a"
+        );
+        assert_eq!(
+            Sha256::digest(arrAddForm)
+                .iter()
+                .map(|iByte| format!("{iByte:02x}"))
+                .collect::<String>(),
+            "daddf3c57a828e77fa96bdc17c01178e7aea560dd0a5a0b2d1e0121c419983b5"
         );
     }
 }
@@ -259,6 +270,19 @@ struct CommentView {
     reactions_html: String,
     show_reactions_link: bool,
     can_edit: bool,
+    can_delete: bool,
+    can_undelete: bool,
+    can_warn: bool,
+    is_topic_author: bool,
+    delete_info: Option<CommentDeleteInfoView>,
+    author_readonly: bool,
+}
+
+#[derive(Debug, Clone)]
+struct CommentDeleteInfoView {
+    user_id: i32,
+    nick: String,
+    reason: String,
 }
 
 #[derive(Debug, Clone)]
@@ -702,14 +726,19 @@ pub(crate) async fn prepare_news_topics_for_viewer(
                 value,
             })
             .collect();
-        let can_comment = crate::routes::comments::check_comment_posting_allowed(
-            state,
-            &stPostingIdentity.stUser,
-            !stPostingIdentity.bAuthorized,
-            topic.id,
-        )
-        .await
-        .is_ok();
+        // The public topic/feed UI on LOR does not expose reply controls to an
+        // anonymous viewer. Keep the legacy comment endpoints capable of
+        // validating an explicitly supplied posting identity, but only offer
+        // the browser action when the current session is authenticated.
+        let can_comment = stPostingIdentity.bAuthorized
+            && crate::routes::comments::check_comment_posting_allowed(
+                state,
+                &stPostingIdentity.stUser,
+                false,
+                topic.id,
+            )
+            .await
+            .is_ok();
         prepared.push(NewsTopicView {
             topic_html: markup::render_topic_with_minimized_cut(
                 &message,
@@ -1627,10 +1656,7 @@ pub async fn section_group_topics(
         pager.limit,
     )
     .await?;
-    let selected = crate::routes::groups::find_group(&state, &group).await?;
-    if selected.section_prefix != section {
-        return Err(AppError::NotFound);
-    }
+    let selected = crate::routes::groups::find_group_by_section(&state, section, &group).await?;
     let news =
         prepare_news_topics_for_viewer(&state, topics.clone(), false, &current_user, &csrf_token)
             .await?;
@@ -2487,6 +2513,36 @@ async fn render_topic_view(
     .await?;
     let current_user_id = current_user.as_ref().map(|u| u.id);
 
+    let vecPageCommentIds = page_comments
+        .iter()
+        .map(|stComment| stComment.id)
+        .collect::<Vec<_>>();
+    let vecDeleteInfoRows: Vec<(i32, i32, String, String)> = if vecPageCommentIds.is_empty() {
+        Vec::new()
+    } else {
+        sqlx::query_as(
+            r#"SELECT di.msgid, di.delby, u.nick, COALESCE(di.reason,'')
+               FROM del_info di JOIN users u ON u.id=di.delby
+               WHERE di.msgid=ANY($1)"#,
+        )
+        .bind(&vecPageCommentIds)
+        .fetch_all(&state.pool)
+        .await?
+    };
+    let mapDeleteInfo = vecDeleteInfoRows
+        .into_iter()
+        .map(|(iCommentId, iUserId, sNick, sReason)| {
+            (
+                iCommentId,
+                CommentDeleteInfoView {
+                    user_id: iUserId,
+                    nick: sNick,
+                    reason: sReason,
+                },
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+
     let bModeratorSession = current_user.as_ref().is_some_and(|stUser| stUser.canmod);
     let mut vecAuthorIds = Vec::with_capacity(page_comments.len() + 1);
     vecAuthorIds.push(topic.author_id);
@@ -2552,6 +2608,39 @@ async fn render_topic_view(
         .cloned()
         .unwrap_or_default();
 
+    // CommentPrepareService computes this for the author of every comment,
+    // not for the current viewer. The original inline form uses it to warn
+    // before replying to an author who cannot continue the conversation.
+    // A temporary freeze is deliberately ignored here, while a block and
+    // all topic/group/section score restrictions still apply.
+    let stCommentPostingContext =
+        crate::routes::comments::stCommentPostingContext(&state, topic.id).await?;
+    let vecAuthorUsers: Vec<UserSummary> = sqlx::query_as(
+        r#"SELECT id,nick,name,score,max_score,photo,town,regdate,canmod,
+                  COALESCE(candel,false) AS candel,
+                  COALESCE(corrector,false) AS corrector,blocked,userinfo
+           FROM users WHERE id=ANY($1)"#,
+    )
+    .bind(&vecAuthorIds)
+    .fetch_all(&state.pool)
+    .await?;
+    let mapAuthorReadonly: std::collections::HashMap<i32, bool> = vecAuthorUsers
+        .iter()
+        .map(|stAuthor| {
+            (
+                stAuthor.id,
+                crate::routes::comments::check_comment_posting_context(
+                    &stCommentPostingContext,
+                    stAuthor,
+                    stAuthor.id == crate::routes::comments::ANONYMOUS_USER_ID,
+                    false,
+                    true,
+                )
+                .is_err(),
+            )
+        })
+        .collect();
+
     let comments: Vec<CommentView> = page_comments
         .into_iter()
         .map(|item| {
@@ -2600,6 +2689,39 @@ async fn render_topic_view(
                     && !setCommentsWithReplies.contains(&item.id)
                     && chrono::Utc::now() <= item.postdate + chrono::Duration::minutes(30)
             });
+            let can_delete = current_user.as_ref().is_some_and(|stUser| {
+                !item.deleted
+                    && !topic.deleted
+                    && (stUser.canmod
+                        || (stUser.id == item.author_id
+                            && !topic_expired
+                            && !setCommentsWithReplies.contains(&item.id)
+                            && chrono::Utc::now() < item.postdate + chrono::Duration::hours(3)))
+            });
+            let can_undelete = current_user.as_ref().is_some_and(|stUser| {
+                stUser.canmod
+                    && item.deleted
+                    && !topic.deleted
+                    && !topic_expired
+                    && mapDeleteInfo
+                        .get(&item.id)
+                        .is_some_and(|stInfo| stInfo.user_id != item.author_id)
+            });
+            let can_warn = current_user.as_ref().is_some_and(|stUser| {
+                stUser.score.unwrap_or(0) >= 50
+                    && !reactor_frozen
+                    && !topic.deleted
+                    && !topic_expired
+                    && !topic.draft
+                    && !item.deleted
+            });
+            let is_topic_author = item.author_id == topic.author_id
+                && item.author_id != crate::routes::comments::ANONYMOUS_USER_ID;
+            let delete_info = mapDeleteInfo.get(&item.id).cloned();
+            let author_readonly = mapAuthorReadonly
+                .get(&item.author_id)
+                .copied()
+                .unwrap_or(true);
             CommentView {
                 author_signature: mapAuthorSignatures
                     .get(&item.author_id)
@@ -2616,6 +2738,12 @@ async fn render_topic_view(
                 reactions_html: reactions.html,
                 show_reactions_link: reactions.show_menu_link,
                 can_edit,
+                can_delete,
+                can_undelete,
+                can_warn,
+                is_topic_author,
+                delete_info,
+                author_readonly,
             }
         })
         .collect();
@@ -2682,11 +2810,12 @@ async fn render_topic_view(
         None,
     )
     .await?;
-    let can_comment = !comments_hidden
+    let can_comment = stPostingResolution.stIdentity.bAuthorized
+        && !comments_hidden
         && crate::routes::comments::optCommentActorError(
             &state,
             &stPostingResolution.stIdentity.stUser,
-            !stPostingResolution.stIdentity.bAuthorized,
+            false,
             &sRemoteIp,
         )
         .await?
@@ -2694,7 +2823,7 @@ async fn render_topic_view(
         && crate::routes::comments::check_comment_posting_allowed(
             &state,
             &stPostingResolution.stIdentity.stUser,
-            !stPostingResolution.stIdentity.bAuthorized,
+            false,
             topic.id,
         )
         .await

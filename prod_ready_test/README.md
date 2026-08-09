@@ -12,6 +12,9 @@ There are two deliberately separate modes:
 - browser-seed mode inserts accounts/settings only, then creates every topic,
   comment, image, moderation decision and reaction through the real site forms
   in Chrome via Playwright. No content row is inserted directly by that mode.
+- seven-day benchmark mode combines historical SQL fixtures with fresh content
+  created exclusively through the browser, then verifies persistence and runs a
+  concurrent public-page read benchmark.
 
 ## Safety
 
@@ -41,23 +44,46 @@ Include browser screenshots (Chrome/Chromium required):
 python3 prod_ready_test/run_all.py --start --visual
 ```
 
-Create the live-UI fixture based on unclestephen's public content from the last
-24 hours:
+Run the complete seven-day activity and performance benchmark:
 
 ```bash
 python3 -m venv /tmp/lorsource-browser-venv
 /tmp/lorsource-browser-venv/bin/pip install \
   -r prod_ready_test/requirements-browser.txt
 /tmp/lorsource-browser-venv/bin/python prod_ready_test/run_all.py \
-  --start --browser-seed
+  --start --seven-day-benchmark
 ```
 
-This mode creates four screenshots under `/tmp/prod_ready_browser_seed` and a
-machine-readable result at `/tmp/prod_ready_browser_seed_result.json`. It also
+Run the focused browser lifecycle for comments against an already seeded and
+running instance:
+
+```bash
+/tmp/lorsource-browser-venv/bin/python \
+  prod_ready_test/commenting_smoke.py \
+  --base http://127.0.0.1:8181
+```
+
+It verifies anonymous control visibility, the original inline Reply binding,
+Markdown preview, a root comment and nested reply, edit permissions, the
+author-delete/no-self-restore rule, moderator delete plus restoration by a
+different moderator, and a comment reaction. Generated output is written to
+`/tmp/lorsource-commenting-smoke`.
+
+This mode first runs the deterministic HTTP/DB regression suite, then creates
+fresh news, forum topics in all three markup modes, an article, both gallery
+forms and both poll forms through Chrome. Multiple users create a three-level
+comment thread, react to a topic and a comment, and vote. It creates screenshots
+under `/tmp/prod_ready_browser_seed`, a browser result at
+`/tmp/prod_ready_browser_seed_result.json`, and the combined performance and DB
+report at `/tmp/prod_ready_7d_benchmark.json`. It also
 asserts that the author's `/people/{nick}/` feed contains complete cards,
 including a pending item, that the gallery section filter is isolated, and
 that `/search.jsp?range=COMMENTS&user=...&sort=DATE` contains all comments made
 through the browser in newest-first history.
+
+Use `--browser-seed` only for the narrower account-only/UI-only run. The exact
+activity inventory and the explicit registration exclusion are recorded in
+`activity_matrix.json`.
 
 Screenshots are written to `/tmp/prod_ready_test_artifacts`. Individual stages:
 
@@ -121,7 +147,8 @@ the HTTP suite additionally verifies authenticated tracker and theme markup.
 
 ## Production-source provenance
 
-`source_catalog.json` records the exact 24-hour public-content snapshot found in the
+`source_catalog.json` records the seven-day public-content reference window and
+the original section pages used for structural comparison, including the
 [`unclestephen` profile](https://www.linux.org.ru/people/unclestephen/profile)
 and feed. Titles, timestamps, tags and links identify the compatibility
 references; fixture bodies are short deterministic paraphrases and generated

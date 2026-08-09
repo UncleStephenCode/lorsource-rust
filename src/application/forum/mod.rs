@@ -34,7 +34,13 @@ where
             .await
     }
 
-    pub async fn stArchiveGroup(&self, sGroupUrlName: &str) -> Result<StGroup> {
-        self.oRepository.stFindGroupByUrlName(sGroupUrlName).await
+    pub async fn stGroupBySectionAndUrlName(
+        &self,
+        sSectionPrefix: &str,
+        sGroupUrlName: &str,
+    ) -> Result<StGroup> {
+        self.oRepository
+            .stFindGroupBySectionAndUrlName(sSectionPrefix, sGroupUrlName)
+            .await
     }
 }

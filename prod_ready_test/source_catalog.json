@@ -1,11 +1,20 @@
 {
-  "captured_at": "2026-08-09T15:49:33+03:00",
-  "window_hours": 24,
-  "window_start": "2026-08-08T15:49:33+03:00",
+  "captured_at": "2026-08-09T18:00:00+03:00",
+  "window_hours": 168,
+  "window_start": "2026-08-02T18:00:00+03:00",
   "profile": "https://www.linux.org.ru/people/unclestephen/profile",
   "feed": "https://www.linux.org.ru/people/unclestephen/",
   "comments": "https://www.linux.org.ru/search.jsp?range=COMMENTS&user=unclestephen&sort=DATE",
-  "policy": "Public titles, timestamps, tags and links identify the compatibility references. Browser-seed bodies are short deterministic paraphrases, not a production archive.",
+  "policy": "Public titles, timestamps, tags and links identify compatibility references from the seven-day window. Browser-seed bodies are short deterministic paraphrases, not a production archive.",
+  "comparison_pages": {
+    "home": "https://www.linux.org.ru/",
+    "news": "https://www.linux.org.ru/news/",
+    "gallery": "https://www.linux.org.ru/gallery/",
+    "articles": "https://www.linux.org.ru/articles/",
+    "forum": "https://www.linux.org.ru/forum/",
+    "polls": "https://www.linux.org.ru/polls/",
+    "gallery_comments_replies_reactions": "https://www.linux.org.ru/gallery/screenshots/18354462"
+  },
   "topics": [
     {
       "kind": "gallery_multi_image",
