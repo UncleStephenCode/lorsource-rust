@@ -131,7 +131,7 @@ fn sImageSrcset(iImageId: i32) -> String {
 }
 
 fn sProcessTitle(sTitle: &str) -> String {
-    sTitle.trim().replace(" -- ", "&nbsp;&mdash; ")
+    sTitle.trim().replace(" -- ", "\u{a0}— ")
 }
 
 fn sJavaDouble(fValue: f64) -> String {
@@ -276,7 +276,7 @@ mod tests {
         );
         assert_eq!((stItem.iImageWidth, stItem.iImageHeight), (640, 480));
         assert_eq!(stItem.sImagePaddingPercent, "75.0");
-        assert_eq!(stItem.sAltTitle, "Тест&nbsp;&mdash; тире");
+        assert_eq!(stItem.sAltTitle, "Тест\u{a0}— тире");
 
         std::fs::remove_dir_all(&pathRoot).expect("remove test directory");
     }

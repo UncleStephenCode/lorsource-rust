@@ -20,8 +20,6 @@ mkdir -p \
   "$sFixtureRoot/secrets"
 printf '%s\n' 'postgres://runtime:fixture-password@database/lor' \
   > "$sFixtureRoot/secrets/database_url"
-printf '%s\n' 'fixture-cookie-secret-0123456789abcdef' \
-  > "$sFixtureRoot/secrets/cookie_secret"
 printf '%s\n' 'fixture-site-secret-fedcba9876543210' \
   > "$sFixtureRoot/secrets/site_secret"
 printf '%s\n' 'fixture-captcha-private-key' \
@@ -31,7 +29,6 @@ chmod 0600 "$sFixtureRoot"/secrets/*
 LORSOURCE_IMAGE="${LORSOURCE_RUNTIME_TEST_IMAGE:-lorsource-rust-app:latest}" \
 UPLOAD_HOST_PATH="$sFixtureRoot/uploads" \
 DATABASE_URL_SECRET_FILE="$sFixtureRoot/secrets/database_url" \
-COOKIE_SECRET_SOURCE="$sFixtureRoot/secrets/cookie_secret" \
 SITE_SECRET_SOURCE="$sFixtureRoot/secrets/site_secret" \
 CAPTCHA_PRIVATE_KEY_SOURCE="$sFixtureRoot/secrets/captcha_private_key" \
 PUBLIC_URL=https://www.linux.org.ru \

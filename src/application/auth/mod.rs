@@ -334,7 +334,6 @@ mod tests {
             ws_url: "wss://example.test/".to_owned(),
             static_dir: "static".to_owned(),
             upload_dir: "uploads".to_owned(),
-            cookie_secret: "unused-cookie-secret".to_owned(),
             site_secret: "unused-site-secret".to_owned(),
             opensearch_url: None,
             captcha_public_key: Some("public-key".to_owned()),

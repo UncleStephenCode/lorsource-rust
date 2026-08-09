@@ -297,7 +297,6 @@ mod tests {
                 ws_url: format!("ws://{stAddress}/"),
                 static_dir: "static".to_string(),
                 upload_dir: "uploads".to_string(),
-                cookie_secret: "unused-test-secret".to_string(),
                 site_secret: "unused-test-secret".to_string(),
                 opensearch_url: None,
                 captcha_public_key: None,

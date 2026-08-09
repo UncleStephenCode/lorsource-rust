@@ -12,7 +12,6 @@ pub struct StConfig {
     pub ws_url: String,
     pub static_dir: String,
     pub upload_dir: String,
-    pub cookie_secret: String,
     pub site_secret: String,
     pub opensearch_url: Option<String>,
     pub captcha_public_key: Option<String>,
@@ -58,9 +57,8 @@ impl StConfig {
         let sPublicUrl =
             std::env::var("PUBLIC_URL").unwrap_or_else(|_| "http://localhost:8181".to_string());
         let sWsUrl = std::env::var("WS_URL").unwrap_or_else(|_| sWsUrlFromPublic(&sPublicUrl));
-        let sCookieSecret = optEnvOrFile("COOKIE_SECRET")?
+        let sSiteSecret = optEnvOrFile("SITE_SECRET")?
             .unwrap_or_else(|| "dev-only-change-me-change-me-change-me".to_owned());
-        let sSiteSecret = optEnvOrFile("SITE_SECRET")?.unwrap_or_else(|| sCookieSecret.clone());
         Ok(Self {
             host: std::env::var("LOR_HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
             port: std::env::var("LOR_PORT")
@@ -73,7 +71,6 @@ impl StConfig {
             ws_url: sWsUrl,
             static_dir: std::env::var("STATIC_DIR").unwrap_or_else(|_| "static".to_string()),
             upload_dir: std::env::var("UPLOAD_DIR").unwrap_or_else(|_| "uploads".to_string()),
-            cookie_secret: sCookieSecret,
             site_secret: sSiteSecret,
             opensearch_url: std::env::var("OPENSEARCH_URL").ok(),
             captcha_public_key: std::env::var("CAPTCHA_PUBLIC_KEY").ok(),
@@ -89,23 +86,20 @@ impl StConfig {
                 .unwrap_or_else(|_| "localhost".to_owned()),
             telegram_token: optEnvOrFile("TELEGRAM_TOKEN")?
                 .filter(|sValue| !sValue.trim().is_empty() && sValue != "false"),
-            fallback_proxy_url: std::env::var("FALLBACK_PROXY_URL")
-                .ok()
-                .filter(|sValue| !sValue.trim().is_empty()),
+            fallback_proxy_url: optHttpProxyUrl(
+                std::env::var("FALLBACK_PROXY_URL")
+                    .ok()
+                    .filter(|sValue| !sValue.trim().is_empty()),
+            )?,
             enable_background_jobs: std::env::var("ENABLE_BACKGROUND_JOBS")
                 .map(|sValue| sValue == "true" || sValue == "1")
                 .unwrap_or(false),
             clean_old_userpics: std::env::var("CLEAN_OLD_USERPICS")
                 .map(|sValue| sValue == "true" || sValue == "1")
                 .unwrap_or(false),
-            trusted_proxy_cidrs: std::env::var("TRUSTED_PROXY_CIDRS")
-                .unwrap_or_default()
-                .split(',')
-                .filter_map(|sValue| {
-                    let sValue = sValue.trim();
-                    (!sValue.is_empty()).then(|| sValue.parse().ok()).flatten()
-                })
-                .collect(),
+            trusted_proxy_cidrs: vecTrustedProxyCidrs(
+                &std::env::var("TRUSTED_PROXY_CIDRS").unwrap_or_default(),
+            )?,
             page_size: std::env::var("PAGE_SIZE")
                 .ok()
                 .and_then(|sValue| sValue.parse().ok())
@@ -141,21 +135,17 @@ impl StConfig {
         }
 
         let mut vecProblems = Vec::new();
-        for (sName, sValue) in [
-            ("COOKIE_SECRET", self.cookie_secret.as_str()),
-            ("SITE_SECRET", self.site_secret.as_str()),
-        ] {
-            let sLower = sValue.to_ascii_lowercase();
-            if sValue.len() < 32
-                || sLower.contains("change-me")
-                || sLower.contains("dev-only")
-                || sLower.contains("devcontainer")
-                || sValue.chars().any(char::is_control)
-            {
-                vecProblems.push(format!(
-                    "{sName} must be an explicit production secret of at least 32 characters"
-                ));
-            }
+        let sSiteSecretLower = self.site_secret.to_ascii_lowercase();
+        if self.site_secret.len() < 32
+            || sSiteSecretLower.contains("change-me")
+            || sSiteSecretLower.contains("dev-only")
+            || sSiteSecretLower.contains("devcontainer")
+            || self.site_secret.chars().any(char::is_control)
+        {
+            vecProblems.push(
+                "SITE_SECRET must be an explicit production secret of at least 32 characters"
+                    .to_owned(),
+            );
         }
         if self.enable_dev_bypasses {
             vecProblems.push("ENABLE_DEV_BYPASSES must be disabled in production".to_owned());
@@ -190,9 +180,6 @@ impl StConfig {
                 "WS_URL must contain only the public WebSocket origin without credentials, query or fragment"
                     .to_owned(),
             );
-        }
-        if self.cookie_secret == self.site_secret {
-            vecProblems.push("COOKIE_SECRET and SITE_SECRET must be independent".to_owned());
         }
         if self.trusted_proxy_cidrs.is_empty() {
             vecProblems.push(
@@ -356,6 +343,32 @@ fn optEnvOrFile(sName: &str) -> anyhow::Result<Option<String>> {
     sReadSingleLineValue(sName, &sPath).map(Some)
 }
 
+fn vecTrustedProxyCidrs(sValue: &str) -> anyhow::Result<Vec<ipnetwork::IpNetwork>> {
+    sValue
+        .split(',')
+        .map(str::trim)
+        .filter(|sCidr| !sCidr.is_empty())
+        .map(|sCidr| {
+            sCidr
+                .parse::<ipnetwork::IpNetwork>()
+                .with_context(|| format!("invalid TRUSTED_PROXY_CIDRS entry {sCidr:?}"))
+        })
+        .collect()
+}
+
+fn optHttpProxyUrl(optValue: Option<String>) -> anyhow::Result<Option<String>> {
+    let Some(sValue) = optValue else {
+        return Ok(None);
+    };
+    let stUrl = reqwest::Url::parse(&sValue)
+        .with_context(|| "FALLBACK_PROXY_URL must be an absolute HTTP(S) URL")?;
+    if !matches!(stUrl.scheme(), "http" | "https") || stUrl.host_str().is_none() {
+        anyhow::bail!("FALLBACK_PROXY_URL must be an absolute HTTP(S) URL");
+    }
+    reqwest::Proxy::all(&sValue).with_context(|| "FALLBACK_PROXY_URL is not a valid proxy URL")?;
+    Ok(Some(sValue))
+}
+
 fn sReadSingleLineValue(sName: &str, sPath: &str) -> anyhow::Result<String> {
     let sValue = std::fs::read_to_string(sPath)
         .with_context(|| format!("failed to read {sName} from {sPath}"))?;
@@ -401,7 +414,9 @@ fn bValidSmtpHelo(sValue: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{StConfig, sReadSingleLineValue, sWsUrlFromPublic};
+    use super::{
+        StConfig, optHttpProxyUrl, sReadSingleLineValue, sWsUrlFromPublic, vecTrustedProxyCidrs,
+    };
 
     fn stConfig() -> StConfig {
         StConfig {
@@ -412,7 +427,6 @@ mod tests {
             ws_url: "wss://www.linux.org.ru/".to_owned(),
             static_dir: "static".to_owned(),
             upload_dir: "/srv/lorsource/uploads".to_owned(),
-            cookie_secret: "cookie-production-secret-0123456789".to_owned(),
             site_secret: "site-production-secret-01234567890".to_owned(),
             opensearch_url: Some("https://opensearch:9200".to_owned()),
             captcha_public_key: Some("production-site-key".to_owned()),
@@ -446,9 +460,36 @@ mod tests {
     }
 
     #[test]
+    fn trusted_proxy_cidrs_fail_closed_on_a_typo() {
+        let vecCidrs =
+            vecTrustedProxyCidrs("127.0.0.1/32, 10.0.0.0/8").expect("valid proxy networks");
+        assert_eq!(vecCidrs.len(), 2);
+
+        let sError = vecTrustedProxyCidrs("127.0.0.1/32, 10.0.0.0/99")
+            .expect_err("one malformed entry must reject the complete setting")
+            .to_string();
+        assert!(sError.contains("TRUSTED_PROXY_CIDRS"));
+        assert!(sError.contains("10.0.0.0/99"));
+    }
+
+    #[test]
+    fn malformed_fallback_proxy_is_rejected_during_configuration_loading() {
+        assert_eq!(
+            optHttpProxyUrl(Some("http://proxy.internal:3128".to_owned())).unwrap(),
+            Some("http://proxy.internal:3128".to_owned())
+        );
+        for sValue in ["not a URL", "file:///tmp/socket", "http://"] {
+            assert!(
+                optHttpProxyUrl(Some(sValue.to_owned())).is_err(),
+                "{sValue}"
+            );
+        }
+    }
+
+    #[test]
     fn production_configuration_fails_closed_on_development_values() {
         let mut stConfig = stConfig();
-        stConfig.cookie_secret = "change-me-in-production-change-me-in-production".to_owned();
+        stConfig.site_secret = "change-me-in-production-change-me-in-production".to_owned();
         stConfig.public_url = "http://localhost:8181".to_owned();
         stConfig.ws_url = "ws://localhost:8181/".to_owned();
         stConfig.opensearch_url = None;
@@ -462,7 +503,7 @@ mod tests {
             .expect_err("insecure production values must fail")
             .to_string();
 
-        assert!(sError.contains("COOKIE_SECRET"));
+        assert!(sError.contains("SITE_SECRET"));
         assert!(sError.contains("PUBLIC_URL"));
         assert!(sError.contains("WS_URL"));
         assert!(sError.contains("OPENSEARCH_URL"));
@@ -479,7 +520,6 @@ mod tests {
             .expect("secure production config");
 
         let mut stDevelopment = stConfig();
-        stDevelopment.cookie_secret = "dev-only".to_owned();
         stDevelopment.public_url = "http://localhost:8181".to_owned();
         stDevelopment
             .vValidateForEnvironment("development")
@@ -487,17 +527,15 @@ mod tests {
     }
 
     #[test]
-    fn production_rejects_cross_origin_websocket_and_reused_secrets() {
+    fn production_rejects_cross_origin_websocket() {
         let mut stConfig = stConfig();
         stConfig.ws_url = "wss://socket.example/".to_owned();
-        stConfig.site_secret = stConfig.cookie_secret.clone();
 
         let sError = stConfig
             .vValidateForEnvironment("production")
-            .expect_err("cross-origin websocket and reused secrets must fail")
+            .expect_err("cross-origin websocket must fail")
             .to_string();
         assert!(sError.contains("same authority"));
-        assert!(sError.contains("must be independent"));
     }
 
     #[test]
@@ -542,13 +580,13 @@ mod tests {
             std::env::temp_dir().join(format!("lorsource-secret-file-{}", uuid::Uuid::new_v4()));
         std::fs::write(&stPath, "production-secret\n").expect("write one-line secret");
         assert_eq!(
-            sReadSingleLineValue("COOKIE_SECRET", stPath.to_str().unwrap())
+            sReadSingleLineValue("SITE_SECRET", stPath.to_str().unwrap())
                 .expect("read one-line secret"),
             "production-secret"
         );
 
         std::fs::write(&stPath, "first\nsecond\n").expect("write multiline secret");
-        let sError = sReadSingleLineValue("COOKIE_SECRET", stPath.to_str().unwrap())
+        let sError = sReadSingleLineValue("SITE_SECRET", stPath.to_str().unwrap())
             .expect_err("multiline secret must fail")
             .to_string();
         assert!(sError.contains("one non-empty text line"));

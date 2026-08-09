@@ -21,7 +21,6 @@ services:
       WS_URL: ${WS_URL:?Set the matching public WSS origin}
       TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:?Set the TLS proxy CIDRs}
       DATABASE_URL_FILE: /run/secrets/database_url
-      COOKIE_SECRET_FILE: /run/secrets/cookie_secret
       SITE_SECRET_FILE: /run/secrets/site_secret
       CAPTCHA_PUBLIC_KEY: ${CAPTCHA_PUBLIC_KEY:?Set the public CAPTCHA site key}
       CAPTCHA_PRIVATE_KEY_FILE: /run/secrets/captcha_private_key
@@ -45,8 +44,7 @@ services:
     volumes:
       - ${UPLOAD_HOST_PATH:?Set the restored media root owned by UID/GID 8181}:/app/uploads:rw,Z
       - ${DATABASE_URL_SECRET_FILE:?Set the runtime database URL secret file}:/run/secrets/database_url:ro,Z
-      - ${COOKIE_SECRET_SOURCE:?Set the cookie secret file}:/run/secrets/cookie_secret:ro,Z
-      - ${SITE_SECRET_SOURCE:?Set the independent site secret file}:/run/secrets/site_secret:ro,Z
+      - ${SITE_SECRET_SOURCE:?Set the site secret file}:/run/secrets/site_secret:ro,Z
       - ${CAPTCHA_PRIVATE_KEY_SOURCE:?Set the CAPTCHA private-key file}:/run/secrets/captcha_private_key:ro,Z
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777

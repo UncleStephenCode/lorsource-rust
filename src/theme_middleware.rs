@@ -62,13 +62,8 @@ fn theme_view(style: &str) -> ThemeView<'_> {
 }
 
 async fn resolve_profile(state: &AppState, jar: &CookieJar) -> (String, Option<String>) {
-    if let Ok(Some(user_id)) = crate::auth::optUserIdFromCookies(
-        &state.pool,
-        jar,
-        &state.config.site_secret,
-        &state.config.cookie_secret,
-    )
-    .await
+    if let Ok(Some(user_id)) =
+        crate::auth::optUserIdFromCookies(&state.pool, jar, &state.config.site_secret).await
     {
         let profile: Option<(Option<String>, String)> = sqlx::query_as(
             "SELECT us.settings->'style', u.nick FROM users u LEFT JOIN user_settings us ON us.id=u.id WHERE u.id=$1",

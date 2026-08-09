@@ -2060,7 +2060,6 @@ mod tests {
                 ws_url: "ws://127.0.0.1/".to_owned(),
                 static_dir: "static".to_owned(),
                 upload_dir: "uploads".to_owned(),
-                cookie_secret: "test-cookie-secret-test-cookie-secret".to_owned(),
                 site_secret: "test-site-secret-test-site-secret".to_owned(),
                 opensearch_url: None,
                 captcha_public_key: None,

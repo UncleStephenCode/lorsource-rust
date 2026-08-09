@@ -3,7 +3,7 @@
 <div class="boxlet_content">
   <p align="center">
     {% for tag in tags %}
-    <a class="cloud{{ tag.iWeight }}" href="{{ tag.sUrl }}">{{ tag.sValue|safe }}</a>
+    <a class="cloud{{ tag.iWeight }}" href="{{ tag.sUrl }}">{{ tag.sValue }}</a>
     {% endfor %}
   </p>
   <p>

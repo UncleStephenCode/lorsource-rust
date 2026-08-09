@@ -12,9 +12,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use axum_extra::extract::cookie::CookieJar;
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-
-const SESSION_MAX_AGE_SECONDS: i64 = 365 * 24 * 60 * 60;
 
 #[derive(Debug, Clone)]
 pub struct CurrentUser(pub Option<UserSummary>);
@@ -37,13 +34,7 @@ where
         let jar = CookieJar::from_request_parts(parts, state)
             .await
             .map_err(|_| AppError::Forbidden)?;
-        let Some(user_id) = optUserIdFromCookies(
-            &app.pool,
-            &jar,
-            &app.config.site_secret,
-            &app.config.cookie_secret,
-        )
-        .await?
+        let Some(user_id) = optUserIdFromCookies(&app.pool, &jar, &app.config.site_secret).await?
         else {
             return Ok(CurrentUser(None));
         };
@@ -145,7 +136,6 @@ pub async fn optUserIdFromCookies(
     oPool: &sqlx::PgPool,
     oJar: &CookieJar,
     sJavaSecret: &str,
-    sLegacyRustSecret: &str,
 ) -> std::result::Result<Option<i32>, sqlx::Error> {
     if let Some(stCookie) = oJar.get(security::remember_me::COOKIE_NAME)
         && let Some(iUserId) = optRememberMeUserId(oPool, stCookie.value(), sJavaSecret).await?
@@ -153,25 +143,7 @@ pub async fn optUserIdFromCookies(
         return Ok(Some(iUserId));
     }
 
-    Ok(oJar
-        .get("lor_session")
-        .and_then(|stCookie| verify_session(stCookie.value(), sLegacyRustSecret)))
-}
-
-pub fn verify_session(value: &str, secret: &str) -> Option<i32> {
-    security::verify_timed_session(value, secret, SESSION_MAX_AGE_SECONDS)
-        .or_else(|| verify_legacy_session(value, secret))
-}
-
-/// Kept only for development cookies produced by the first MVP archive.
-fn verify_legacy_session(value: &str, secret: &str) -> Option<i32> {
-    let (payload64, sig) = value.split_once('.')?;
-    let payload = String::from_utf8(URL_SAFE_NO_PAD.decode(payload64).ok()?).ok()?;
-    if security::sign_payload(&payload, secret) == sig {
-        payload.parse().ok()
-    } else {
-        None
-    }
+    Ok(None)
 }
 
 #[derive(Debug, Clone)]

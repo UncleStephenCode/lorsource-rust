@@ -2763,8 +2763,9 @@ fn validate_topic_image(data: &[u8]) -> Result<(image::DynamicImage, &'static st
             ));
         }
     };
-    let image = image::load_from_memory_with_format(data, format)
-        .map_err(|error| AppError::BadRequest(format!("Некорректное изображение: {error}")))?;
+    let image =
+        crate::image_upload::stDecodeWithLimits(data, format, 5120, 5120, 256 * 1024 * 1024)
+            .map_err(|error| AppError::BadRequest(format!("Некорректное изображение: {error}")))?;
     let (width, height) = image.dimensions();
     if !(400..=5120).contains(&width) || !(400..=5120).contains(&height) {
         return Err(AppError::BadRequest(

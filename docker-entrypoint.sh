@@ -35,7 +35,7 @@ stage_secret_file() {
 # only this dedicated writable directory, then ensure the web process itself
 # never runs with container-root privileges.
 if [ "$(id -u)" = "0" ]; then
-    for sName in DATABASE_URL COOKIE_SECRET SITE_SECRET CAPTCHA_PRIVATE_KEY TELEGRAM_TOKEN; do
+    for sName in DATABASE_URL SITE_SECRET CAPTCHA_PRIVATE_KEY TELEGRAM_TOKEN; do
         stage_secret_file "$sName"
     done
     if [ "${SKIP_UPLOAD_CHOWN:-false}" != "true" ]; then

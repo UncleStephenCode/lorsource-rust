@@ -27,6 +27,7 @@ struct GroupsTemplate {
 struct GroupTopicsTemplate {
     title: String,
     group: Group,
+    longinfo_html: Option<String>,
     topics: Vec<GroupTopicView>,
     quick_groups: Vec<crate::routes::topics::QuickGroupLink>,
     new_url: String,
@@ -420,12 +421,14 @@ pub async fn group_page(
         )
     });
     let title = format!("Форум — {}", group.title);
+    let longinfo_html = optPreparedGroupLongInfo(group.longinfo.as_deref());
     let is_moderator = user.as_ref().is_some_and(|current| current.canmod);
 
     Ok(Html(
         GroupTopicsTemplate {
             title,
             group,
+            longinfo_html,
             topics,
             quick_groups,
             new_url,
@@ -441,6 +444,11 @@ pub async fn group_page(
         .render()?,
     )
     .into_response())
+}
+
+fn optPreparedGroupLongInfo(optSource: Option<&str>) -> Option<String> {
+    optSource
+        .map(|sSource| crate::markup::render_message_with_markup(sSource, Some("MARKDOWN"), None))
 }
 
 fn group_mode_url(
@@ -525,4 +533,20 @@ pub async fn list_groups_by_section(
 
 fn forum_service(state: &AppState) -> CForumService<CForumPgRepository> {
     CForumService::new(CForumPgRepository::new(state.pool.clone()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::optPreparedGroupLongInfo;
+
+    #[test]
+    fn group_longinfo_is_rendered_as_sanitized_markdown() {
+        let sHtml = optPreparedGroupLongInfo(Some(
+            "**важно** <script>alert(1)</script> [x](javascript:alert(2))",
+        ))
+        .expect("rendered long info");
+        assert!(sHtml.contains("<strong>важно</strong>"));
+        assert!(!sHtml.contains("<script"));
+        assert!(!sHtml.contains("javascript:"));
+    }
 }

@@ -51,7 +51,6 @@ fi
 
 for sVariable in \
   DATABASE_URL_SECRET_FILE \
-  COOKIE_SECRET_SOURCE \
   SITE_SECRET_SOURCE \
   CAPTCHA_PRIVATE_KEY_SOURCE; do
   sPath="${!sVariable:-}"
@@ -69,15 +68,6 @@ for sVariable in \
     exit 1
   fi
 done
-
-if [[ "$COOKIE_SECRET_SOURCE" -ef "$SITE_SECRET_SOURCE" ]]; then
-  echo "COOKIE_SECRET_SOURCE and SITE_SECRET_SOURCE must be different files" >&2
-  exit 1
-fi
-if cmp --silent "$COOKIE_SECRET_SOURCE" "$SITE_SECRET_SOURCE"; then
-  echo "Cookie and site secrets must have different values" >&2
-  exit 1
-fi
 
 docker run --rm \
   --user 8181:8181 \

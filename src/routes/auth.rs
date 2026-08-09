@@ -608,12 +608,9 @@ fn check_register_permit(state: &AppState, permit: Option<&str>) -> bool {
 }
 
 pub(crate) async fn validate_registration_email(state: &AppState, email: &str) -> Result<()> {
-    let Some((_local, domain)) = email.rsplit_once('@') else {
+    let Some(domain) = optRegistrationEmailDomain(email) else {
         return Err(AppError::BadRequest("Некорректный e-mail".into()));
     };
-    if domain.is_empty() || !domain.contains('.') {
-        return Err(AppError::BadRequest("Некорректный e-mail".into()));
-    }
     let domain = domain.to_lowercase();
     let top_private = domain
         .split('.')
@@ -633,6 +630,30 @@ pub(crate) async fn validate_registration_email(state: &AppState, email: &str) -
         return Err(AppError::BadRequest("некорректный email домен".into()));
     }
     Ok(())
+}
+
+fn optRegistrationEmailDomain(sEmail: &str) -> Option<&str> {
+    if sEmail.len() > 254
+        || sEmail
+            .chars()
+            .any(|cCharacter| cCharacter.is_control() || cCharacter.is_whitespace())
+        || sEmail.contains(['<', '>'])
+    {
+        return None;
+    }
+    let (sLocal, sDomain) = sEmail.rsplit_once('@')?;
+    if sLocal.is_empty() || sLocal.contains('@') || !sDomain.contains('.') {
+        return None;
+    }
+    let bValidDomain = sDomain.split('.').all(|sLabel| {
+        !sLabel.is_empty()
+            && !sLabel.starts_with('-')
+            && !sLabel.ends_with('-')
+            && sLabel
+                .chars()
+                .all(|cCharacter| cCharacter.is_ascii_alphanumeric() || cCharacter == '-')
+    });
+    bValidDomain.then_some(sDomain)
 }
 
 async fn user_exists_or_similar(state: &AppState, nick: &str) -> Result<bool> {
@@ -994,7 +1015,7 @@ fn generate_java_like_password() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{EMAIL_IN_USE_SQL, login_redirect, safe_redirect_url};
+    use super::{EMAIL_IN_USE_SQL, login_redirect, optRegistrationEmailDomain, safe_redirect_url};
     use axum::{
         http::{StatusCode, header},
         response::IntoResponse,
@@ -1046,5 +1067,23 @@ mod tests {
         assert!(EMAIL_IN_USE_SQL.contains("'block_user'::user_log_action"));
         assert!(EMAIL_IN_USE_SQL.contains("'14 days'::interval"));
         assert!(!EMAIL_IN_USE_SQL.contains("lastlogin"));
+    }
+
+    #[test]
+    fn registration_email_parser_rejects_envelope_and_header_injection() {
+        assert_eq!(
+            optRegistrationEmailDomain("user+tag@example.org"),
+            Some("example.org")
+        );
+        for sEmail in [
+            "@example.org",
+            "one@two@example.org",
+            "user@example.org> SIZE=1",
+            "user@example.org\r\nBcc:evil@example.org",
+            "user@-example.org",
+            "user@example..org",
+        ] {
+            assert!(optRegistrationEmailDomain(sEmail).is_none(), "{sEmail:?}");
+        }
     }
 }

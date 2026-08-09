@@ -15,7 +15,7 @@ schema at startup.
   `SMTP_HELO_NAME`; these are now parsed by the central production
   configuration instead of being read lazily on first delivery;
 - a valid crash-report recipient in `ADMIN_EMAIL`;
-- independent `COOKIE_SECRET` and `SITE_SECRET` values of at least 32 bytes;
+- a `SITE_SECRET` value of at least 32 bytes;
 - `PUBLIC_URL=https://...`, matching `WS_URL=wss://.../`;
 - the exact reverse-proxy CIDRs in `TRUSTED_PROXY_CIDRS`;
 - `LOR_ENV=production` and `ENABLE_DEV_BYPASSES=false`;
@@ -40,8 +40,8 @@ identity (`CHOWN`, `DAC_READ_SEARCH`, `SETGID`, `SETUID`). Secret files are
 copied into `/tmp` tmpfs as mode `0400`, owned by 8181, before `gosu`
 irreversibly starts the Rust process as that user. The manifest
 binds the HTTP port to loopback for a local TLS proxy and mounts database,
-cookie, site and CAPTCHA secrets as files. `DATABASE_URL`, `COOKIE_SECRET`,
-`SITE_SECRET`, `CAPTCHA_PRIVATE_KEY` and `TELEGRAM_TOKEN` support mutually
+site and CAPTCHA secrets as files. `DATABASE_URL`, `SITE_SECRET`,
+`CAPTCHA_PRIVATE_KEY` and `TELEGRAM_TOKEN` support mutually
 exclusive `*_FILE` forms; secret contents are never printed. The baseline
 manifest deliberately disables optional Telegram publishing. Enable it only
 through an operator-owned override that mounts `TELEGRAM_TOKEN_FILE` and sets
@@ -55,7 +55,6 @@ Before starting that manifest, run:
 LORSOURCE_IMAGE=registry.example/lorsource@sha256:<64-hex-digest> \
 UPLOAD_HOST_PATH=/srv/lorsource/uploads \
 DATABASE_URL_SECRET_FILE=/secure/database-url \
-COOKIE_SECRET_SOURCE=/secure/cookie-secret \
 SITE_SECRET_SOURCE=/secure/site-secret \
 CAPTCHA_PRIVATE_KEY_SOURCE=/secure/captcha-private-key \
 PUBLIC_URL=https://www.linux.org.ru \
@@ -71,7 +70,7 @@ scripts/check-production-runtime.sh
 ```
 
 The preflight rejects mutable image tags, insecure secret-file permissions,
-shared cookie/site secrets, missing media directories and wrong media
+missing secret files, media directories and wrong media
 ownership. It also performs a write/read/atomic-rename/cleanup probe as UID
 8181 and validates the fully interpolated Compose model without displaying it.
 For local development only, a non-pushable BuildKit image ID can be bound to a

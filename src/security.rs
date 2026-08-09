@@ -6,10 +6,8 @@
 //! target for that logic: password verification, role derivation, signed session
 //! cookies and reusable permission predicates.
 
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use chrono::Utc;
 use hmac::{Hmac, KeyInit, Mac};
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 
 /// Paths excluded from the main Spring Security filter chain by the current
 /// `springapp-security.xml`. MVC response interceptors still run for these
@@ -93,9 +91,6 @@ pub mod password {
     pub fn verify(raw: &str, encoded: &str) -> bool {
         if raw.is_empty() || encoded.is_empty() {
             return false;
-        }
-        if let Some(noop) = encoded.strip_prefix("{noop}") {
-            return raw == noop;
         }
         if is_bcrypt(encoded) {
             bcrypt::verify(truncate_for_bcrypt(raw), encoded).unwrap_or(false)
@@ -363,32 +358,6 @@ pub fn is_secure_request(
             .is_some_and(|v| v.eq_ignore_ascii_case("https"))
 }
 
-pub fn sign_payload(payload: &str, secret: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(secret.as_bytes());
-    hasher.update(b":");
-    hasher.update(payload.as_bytes());
-    URL_SAFE_NO_PAD.encode(hasher.finalize())
-}
-
-pub fn verify_timed_session(value: &str, secret: &str, max_age_seconds: i64) -> Option<i32> {
-    let (payload64, sig) = value.split_once('.')?;
-    let payload = String::from_utf8(URL_SAFE_NO_PAD.decode(payload64).ok()?).ok()?;
-    if sign_payload(&payload, secret) != sig {
-        return None;
-    }
-    let mut parts = payload.split('.');
-    if parts.next()? != "v1" {
-        return None;
-    }
-    let user_id = parts.next()?.parse().ok()?;
-    let issued_at: i64 = parts.next()?.parse().ok()?;
-    if Utc::now().timestamp().saturating_sub(issued_at) > max_age_seconds {
-        return None;
-    }
-    Some(user_id)
-}
-
 /// Token helpers compatible with the current Java `SecretTokenService`.
 ///
 /// Java uses:
@@ -542,6 +511,7 @@ mod tests {
             "VEc1e68qZA1zkq6VSi+SYkFe08leeNrk"
         ));
         assert!(!password::verify("password", "not-a-valid-hash"));
+        assert!(!password::verify("admin", "{noop}admin"));
     }
 
     #[test]

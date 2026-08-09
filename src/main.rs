@@ -9,6 +9,7 @@ mod domain;
 mod error;
 mod exception_report;
 mod form;
+mod image_upload;
 mod infra;
 mod markup;
 mod models;

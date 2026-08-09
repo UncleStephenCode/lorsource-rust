@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_PASSWORD: postgres
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - lor_pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -43,7 +43,6 @@ services:
       WS_URL: ${WS_URL:-ws://localhost:8181/}
       UPLOAD_DIR: /app/uploads
       SITE_SECRET: change-me-in-production-change-me-in-production
-      COOKIE_SECRET: change-me-in-production-change-me-in-production
       RUST_LOG: lorsource_rust=debug,tower_http=info,sqlx=warn
       OPENSEARCH_URL: http://opensearch:9200
       SMTP_HOST: ${SMTP_HOST:-localhost}
@@ -55,7 +54,7 @@ services:
       ENABLE_BACKGROUND_JOBS: ${ENABLE_BACKGROUND_JOBS:-false}
       CLEAN_OLD_USERPICS: ${CLEAN_OLD_USERPICS:-false}
     ports:
-      - "8181:8181"
+      - "127.0.0.1:8181:8181"
     volumes:
       - lor_uploads:/app/uploads
     depends_on:

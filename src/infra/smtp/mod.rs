@@ -87,10 +87,15 @@ impl TrEmailSender for CSmtpEmailSender {
 }
 
 fn vValidateMailbox(sMailbox: &str) -> Result<()> {
-    if (sMailbox.contains('\r') || sMailbox.contains('\n'))
-        || !sMailbox.contains('@')
-        || sMailbox.starts_with('@')
-        || sMailbox.ends_with('@')
+    let optParts = sMailbox.split_once('@').filter(|(sLocal, sDomain)| {
+        !sLocal.is_empty() && !sDomain.is_empty() && !sDomain.contains('@')
+    });
+    if sMailbox.len() > 254
+        || optParts.is_none()
+        || sMailbox
+            .chars()
+            .any(|cCharacter| cCharacter.is_control() || cCharacter.is_whitespace())
+        || sMailbox.contains(['<', '>'])
     {
         return Err(AppError::BadRequest("Incorrect email address".to_string()));
     }
@@ -98,7 +103,7 @@ fn vValidateMailbox(sMailbox: &str) -> Result<()> {
 }
 
 fn vValidateHeader(sValue: &str) -> Result<()> {
-    if sValue.contains('\r') || sValue.contains('\n') {
+    if sValue.chars().any(char::is_control) {
         return Err(AppError::BadRequest("invalid email header".to_string()));
     }
     Ok(())
@@ -207,6 +212,19 @@ mod tests {
             sBody: String::new(),
         };
         assert!(sWireMessage(&stMessage).is_err());
+    }
+
+    #[test]
+    fn rejects_smtp_envelope_delimiter_injection() {
+        for sMailbox in [
+            "user@example.org> SIZE=1",
+            "user@example.org<evil@example.org",
+            "user@@example.org",
+            " user@example.org",
+        ] {
+            assert!(vValidateMailbox(sMailbox).is_err(), "{sMailbox}");
+        }
+        assert!(vValidateMailbox("user@example.org").is_ok());
     }
 
     #[tokio::test]

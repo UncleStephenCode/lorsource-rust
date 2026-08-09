@@ -6,12 +6,12 @@ use crate::state::AppState;
 use axum::{
     body::Body,
     extract::{ConnectInfo, Request, State},
-    http::{HeaderValue, StatusCode, Uri, header},
+    http::{HeaderValue, StatusCode, Uri, header, uri::Authority},
     middleware::Next,
     response::{IntoResponse, Response},
 };
 
-const ARR_ALLOWED_HOST_PREFIXES: [&str; 6] = [
+const ARR_ALLOWED_HOSTS: [&str; 6] = [
     "www.linux.org.ru",
     "beta.linux.org.ru",
     "test-lor",
@@ -21,19 +21,22 @@ const ARR_ALLOWED_HOST_PREFIXES: [&str; 6] = [
 ];
 
 fn optCanonicalTarget(sHost: &str, bSecure: bool, stUri: &Uri) -> Option<String> {
-    let sHost = sHost.to_ascii_lowercase();
-    if sHost.starts_with("stoplinux.org.ru") {
+    if sHost.is_empty() {
+        return None;
+    }
+    let Ok(stAuthority) = sHost.parse::<Authority>() else {
+        return Some(format!("https://www.linux.org.ru{stUri}"));
+    };
+    let sHostname = stAuthority.host().to_ascii_lowercase();
+    if sHostname == "stoplinux.org.ru" {
         return Some(format!("http://127.0.0.1{stUri}"));
     }
 
-    let bAllowed = sHost.is_empty()
-        || ARR_ALLOWED_HOST_PREFIXES
-            .iter()
-            .any(|sPrefix| sHost.starts_with(sPrefix));
+    let bAllowed = ARR_ALLOWED_HOSTS.contains(&sHostname.as_str());
     if !bAllowed {
         return Some(format!("https://www.linux.org.ru{stUri}"));
     }
-    if sHost.starts_with("www.linux.org.ru") && !bSecure {
+    if sHostname == "www.linux.org.ru" && !bSecure {
         return Some(format!("https://www.linux.org.ru{stUri}"));
     }
     None
@@ -76,7 +79,7 @@ mod tests {
     }
 
     #[test]
-    fn reproduces_tuckey_host_prefix_and_scheme_rules() {
+    fn enforces_exact_host_and_scheme_rules() {
         assert_eq!(
             optTarget("unknown.example:8181", false, "/forum/?x=1"),
             Some("https://www.linux.org.ru/forum/?x=1".to_owned())
@@ -89,9 +92,14 @@ mod tests {
         assert_eq!(optTarget("beta.linux.org.ru", false, "/"), None);
         assert_eq!(optTarget("localhost:8181", false, "/readyz"), None);
         assert_eq!(optTarget("127.0.0.1:8181", false, "/readyz"), None);
-        // The original regular expressions are prefix matches, not strict
-        // authority equality; retain that externally visible quirk.
-        assert_eq!(optTarget("www.linux.org.ru.example", true, "/"), None);
+        assert_eq!(
+            optTarget("www.linux.org.ru.example", true, "/"),
+            Some("https://www.linux.org.ru/".to_owned())
+        );
+        assert_eq!(
+            optTarget("stoplinux.org.ru.example", true, "/"),
+            Some("https://www.linux.org.ru/".to_owned())
+        );
     }
 
     #[test]

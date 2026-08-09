@@ -118,6 +118,43 @@ mod tests {
     }
 
     #[test]
+    fn boxlet_database_values_are_html_escaped() {
+        let sGallery = StGalleryBoxletTemplate {
+            items: vec![StGalleryBoxletItem {
+                sTitle: "<script>alert(1)</script>".to_owned(),
+                sAltTitle: "\"><script>alert(2)</script>".to_owned(),
+                iStat: 1,
+                sUserNick: "<img src=x onerror=alert(3)>".to_owned(),
+                sLink: "/gallery/screenshots/1".to_owned(),
+                sImageMedium: "images/1/1000px.jpg".to_owned(),
+                sImageSrcset: "images/1/500px.jpg 500w".to_owned(),
+                iImageWidth: 640,
+                iImageHeight: 480,
+                sImagePaddingPercent: "75.0".to_owned(),
+            }],
+        }
+        .render()
+        .expect("gallery template");
+        assert!(!sGallery.contains("<script>"));
+        assert!(!sGallery.contains("<img src=x"));
+        assert!(sGallery.contains("alert(1)"));
+        assert!(sGallery.contains('&'));
+
+        let sTags = StTagCloudBoxletTemplate {
+            tags: vec![StTagCloudItem {
+                sValue: "<svg onload=alert(4)>".to_owned(),
+                iWeight: 1,
+                sUrl: "/tag/test".to_owned(),
+            }],
+        }
+        .render()
+        .expect("tag template");
+        assert!(!sTags.contains("<svg"));
+        assert!(sTags.contains("alert(4)"));
+        assert!(sTags.contains('&'));
+    }
+
+    #[test]
     fn fragment_content_type_matches_jsp_declaration() {
         let stResponse = stHtmlFragment(String::new());
         assert_eq!(

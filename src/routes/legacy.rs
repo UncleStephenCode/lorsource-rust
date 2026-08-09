@@ -1683,8 +1683,14 @@ fn validate_userpic_bytes(data: &[u8]) -> Result<&'static str> {
                     .into(),
             )),
         };
-    let image = image::load_from_memory_with_format(data, format)
-        .map_err(|e| AppError::BadRequest(format!("Сбой загрузки изображения: {e}")))?;
+    let image = crate::image_upload::stDecodeWithLimits(
+        data,
+        format,
+        MAX_IMAGE_SIZE,
+        MAX_IMAGE_SIZE,
+        8 * 1024 * 1024,
+    )
+    .map_err(|e| AppError::BadRequest(format!("Сбой загрузки изображения: {e}")))?;
     let (width, height) = image.dimensions();
     if !(MIN_IMAGE_SIZE..=MAX_IMAGE_SIZE).contains(&width)
         || !(MIN_IMAGE_SIZE..=MAX_IMAGE_SIZE).contains(&height)

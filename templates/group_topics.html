@@ -14,10 +14,10 @@
   </select></form></div>
 </nav>
 
-{% if group.info.is_some() || group.longinfo.is_some() %}
+{% if group.info.is_some() || longinfo_html.is_some() %}
 <div class="infoblock">
   {% match group.info %}{% when Some with (info) %}<p style="margin-top: 0"><em>{{ info }}</em></p>{% when None %}{% endmatch %}
-  {% match group.longinfo %}{% when Some with (longinfo) %}<div class="infoblock-small">{{ longinfo|safe }}</div>{% when None %}{% endmatch %}
+  {% match longinfo_html %}{% when Some with (longinfo) %}<div class="infoblock-small">{{ longinfo|safe }}</div>{% when None %}{% endmatch %}
   {% if is_moderator %}<p>[<a href="/groupmod.jsp?group={{ group.id }}">править</a>]</p>{% endif %}
 </div>
 {% endif %}
