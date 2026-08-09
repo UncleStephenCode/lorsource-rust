@@ -959,6 +959,11 @@ static ST_SIMILAR_CACHE: Lazy<tokio::sync::RwLock<TySimilarCache>> =
 const SIMILAR_CACHE_SIZE: usize = 10_000;
 const SIMILAR_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
+type TyActiveTagsCache = HashMap<(String, Option<String>), (std::time::Instant, Vec<String>)>;
+static ST_ACTIVE_TAGS_CACHE: Lazy<tokio::sync::RwLock<TyActiveTagsCache>> =
+    Lazy::new(|| tokio::sync::RwLock::new(HashMap::new()));
+const ACTIVE_TAGS_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
 #[derive(Debug, Deserialize)]
 struct StSimilarHit {
     _id: String,
@@ -1128,6 +1133,91 @@ fn stRelatedTagsRequestBody(sTag: &str) -> Value {
             }
         }
     })
+}
+
+fn stActiveTagsRequestBody(sSection: &str, optGroup: Option<&str>) -> Value {
+    let dtToday = chrono::Utc::now().date_naive();
+    let dtOneYearAgo = dtToday
+        .checked_sub_months(chrono::Months::new(12))
+        .unwrap_or(dtToday);
+    let dtTwoYearsAgo = dtToday
+        .checked_sub_months(chrono::Months::new(24))
+        .unwrap_or(dtToday);
+    let mut vecFilters = vec![
+        json!({"term": {"is_comment": "false"}}),
+        json!({"term": {"section": sSection}}),
+        json!({"range": {"postdate": {"gte": dtOneYearAgo.to_string()}}}),
+    ];
+    if let Some(sGroup) = optGroup {
+        vecFilters.push(json!({"term": {"group": sGroup}}));
+    }
+    json!({
+        "size": 0,
+        "query": {"bool": {"filter": vecFilters}},
+        "aggregations": {
+            "active": {
+                "significant_terms": {
+                    "field": "tag",
+                    "size": 15,
+                    "min_doc_count": 5,
+                    "background_filter": {"bool": {"filter": [
+                        {"term": {"is_comment": "false"}},
+                        {"term": {"section": sSection}},
+                        {"range": {"postdate": {"gte": dtTwoYearsAgo.to_string()}}}
+                    ]}}
+                }
+            }
+        }
+    })
+}
+
+/// `TagService.getActiveTopTags`: significant tags from the last year in a
+/// section (and optionally a group), using two years of section topics as the
+/// background. The Java service caches this result for fifteen minutes.
+pub async fn vecActiveTopTags(
+    stState: &AppState,
+    sSection: &str,
+    optGroup: Option<&str>,
+) -> Result<Vec<String>, String> {
+    let stKey = (sSection.to_owned(), optGroup.map(str::to_owned));
+    if let Some((stCreated, vecCached)) = ST_ACTIVE_TAGS_CACHE.read().await.get(&stKey)
+        && stCreated.elapsed() < ACTIVE_TAGS_CACHE_TTL
+    {
+        return Ok(vecCached.clone());
+    }
+    let Some(sBase) = base_url(stState) else {
+        return Ok(Vec::new());
+    };
+    let stResponse = stState
+        .http
+        .post(format!("{sBase}/{INDEX}/_search"))
+        .json(&stActiveTagsRequestBody(sSection, optGroup))
+        .send()
+        .await
+        .map_err(|stError| stError.to_string())?;
+    if !stResponse.status().is_success() {
+        let stStatus = stResponse.status();
+        let sBody = stResponse.text().await.unwrap_or_default();
+        return Err(format!("active-tags OpenSearch error {stStatus}: {sBody}"));
+    }
+    let stPayload: Value = stResponse
+        .json()
+        .await
+        .map_err(|stError| stError.to_string())?;
+    let mut vecTags: Vec<String> = stPayload
+        .pointer("/aggregations/active/buckets")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|stBucket| stBucket.get("key").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect();
+    vecTags.sort();
+    ST_ACTIVE_TAGS_CACHE
+        .write()
+        .await
+        .insert(stKey, (std::time::Instant::now(), vecTags.clone()));
+    Ok(vecTags)
 }
 
 /// `TagService.getRelatedTags`: significant tag terms among topic documents
@@ -1673,9 +1763,9 @@ mod moderation_semantics_tests {
 
     use super::{
         CommentRow, EnSearchQueueJob, SearchInterval, SearchParams, SearchRange, SearchSort,
-        StReindexMonth, TopicRow, stCommentIndexDocument, stIndexDefinition,
-        stRelatedTagsRequestBody, stSearchRequestBody, stSimilarRequestBody, topic_awaits_commit,
-        vecAllReindexMonths, vecIndexContractProblems, vecRecentReindexMonths,
+        StReindexMonth, TopicRow, stActiveTagsRequestBody, stCommentIndexDocument,
+        stIndexDefinition, stRelatedTagsRequestBody, stSearchRequestBody, stSimilarRequestBody,
+        topic_awaits_commit, vecAllReindexMonths, vecIndexContractProblems, vecRecentReindexMonths,
     };
 
     #[test]
@@ -1893,6 +1983,48 @@ mod moderation_semantics_tests {
             Some(&serde_json::json!("linux-org-ru"))
         );
         assert_eq!(stBody.pointer("/timeout"), Some(&serde_json::json!("60s")));
+    }
+
+    #[test]
+    fn active_tags_query_matches_java_section_group_and_background_scope() {
+        let stBody = stActiveTagsRequestBody("gallery", Some("screenshots"));
+
+        assert_eq!(
+            stBody.pointer("/query/bool/filter/0/term/is_comment"),
+            Some(&serde_json::json!("false"))
+        );
+        assert_eq!(
+            stBody.pointer("/query/bool/filter/1/term/section"),
+            Some(&serde_json::json!("gallery"))
+        );
+        assert_eq!(
+            stBody.pointer("/query/bool/filter/3/term/group"),
+            Some(&serde_json::json!("screenshots"))
+        );
+        assert_eq!(
+            stBody.pointer("/aggregations/active/significant_terms/field"),
+            Some(&serde_json::json!("tag"))
+        );
+        assert_eq!(
+            stBody.pointer("/aggregations/active/significant_terms/size"),
+            Some(&serde_json::json!(15))
+        );
+        assert_eq!(
+            stBody.pointer("/aggregations/active/significant_terms/min_doc_count"),
+            Some(&serde_json::json!(5))
+        );
+        assert_eq!(
+            stBody.pointer(
+                "/aggregations/active/significant_terms/background_filter/bool/filter/1/term/section"
+            ),
+            Some(&serde_json::json!("gallery"))
+        );
+        assert!(
+            stBody
+                .pointer("/aggregations/active/significant_terms/background_filter/bool/filter/3")
+                .is_none(),
+            "the Java background scope is the whole section, not the selected group"
+        );
     }
 
     #[test]

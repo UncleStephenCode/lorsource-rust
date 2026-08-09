@@ -131,7 +131,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/search.jsp", get(search::search))
         .route("/tags", get(tags::all_tags))
-        .route("/tags.jsp", get(tags::all_tags))
+        .route("/tags.jsp", get(tags::old_tags_redirect))
         .route("/tags/{first_letter}", get(tags::tags_by_letter))
         .route("/tag/{tag}", get(tags::tag_page))
         // Put exact people sub-pages before the short /people/{nick} route.

@@ -136,6 +136,7 @@ struct UserTemplate {
 struct SettingsTemplate {
     user: UserSummary,
     settings: ProfileSettings,
+    hide_adsense_disabled: bool,
     themes: Vec<ThemeOption>,
     avatars: Vec<ChoiceOption>,
     tracker_modes: Vec<ChoiceOption>,
@@ -1739,6 +1740,9 @@ pub async fn settings(
             .fetch_optional(&state.pool)
             .await?;
     let settings = ProfileSettings::from_hstore_text(settings_text);
+    // edit-settings.jsp disables this below one green star unless a legacy
+    // profile already has the option enabled.
+    let hide_adsense_disabled = user.score.unwrap_or(0) < 100 && !settings.hide_adsense;
     Ok(Html(
         SettingsTemplate {
             themes: settings.theme_options(user.score.unwrap_or(0)),
@@ -1749,6 +1753,7 @@ pub async fn settings(
             message_values: settings.message_options(),
             user,
             settings,
+            hide_adsense_disabled,
             csrf_token,
         }
         .render()?,

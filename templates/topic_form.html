@@ -53,6 +53,11 @@
         <textarea name="msg" id="form_msg">{{ form_msg }}</textarea>
       </div></div>
     </div>
+    <div class="help-block">
+      {% if format_mode == "lorcode" %}<b>Внимание:</b> прочитайте описание разметки <a href="/help/lorcode.md" target="_blank">LORCODE</a>.{% endif %}
+      {% if format_mode == "markdown" %}<b>Внимание:</b> прочитайте описание разметки <a target="_blank" href="/help/markdown.md">Markdown</a>.{% endif %}
+      Обратите внимание на то, как <a target="_blank" href="/forum/linux-org-ru/15431459">правильно копировать вывод терминала</a>.
+    </div>
   </div>
   {% if links_allowed %}
   <div class="control-group">
@@ -65,7 +70,7 @@
   </div>
   {% endif %}
   <div class="control-group">
-    <label for="tags"><a href="/tags" target="_blank">Метки</a> (разделенные запятой)</label>
+    <label for="tags"><a href="/tags" target="_blank">Метки</a> (разделенные запятой, не более 5{% if !premoderated %}; в заголовке будет показано не более 3{% endif %})</label>
     <input id="tags" name="tags" type="text" required autocapitalize="off" data-tags-autocomplete="data-tags-autocomplete" value="{{ form_tags }}">
   </div>
   {% if image_allowed %}
@@ -76,7 +81,7 @@
   <div class="form-actions">
     {% if !is_edit && !topic_posting_allowed %}<a class="btn btn-primary disabled" title="{{ topic_posting_reason }}">Поместить</a>{% else %}<button type="submit" class="btn btn-primary">{% if is_edit %}Отредактировать{% else %}Поместить{% endif %}</button>{% endif %}
     <button type="submit" name="preview" class="btn btn-default">Предпросмотр</button>
-    {% if !is_edit %}<button type="submit" name="draft" class="btn btn-default">Сохранить в черновики</button>{% endif %}
+    {% if !is_edit && !anonymous_form %}<button type="submit" name="draft" class="btn btn-default">Сохранить в черновики</button>{% endif %}
   </div>
 </form>
 {% if image_allowed %}<p>Технические требования к изображению:</p><ul><li>Ширина x Высота: от 400x400 до 5120x5120 пикселей</li><li>Тип: jpeg, gif, png</li><li>Размер не более 8142 Kb</li></ul>{% endif %}

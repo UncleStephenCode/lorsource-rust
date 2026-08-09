@@ -1,0 +1,48 @@
+{
+  "captured_at": "2026-08-09",
+  "profile": "https://www.linux.org.ru/people/unclestephen/profile",
+  "feed": "https://www.linux.org.ru/people/unclestephen/",
+  "policy": "Titles, metadata and links identify the public examples. Fixture bodies are synthetic and deterministic.",
+  "examples": [
+    {
+      "kind": "news",
+      "title": "LineageOS не будет включать проверку разработчиков Google для Android",
+      "url": "https://www.linux.org.ru/news/android/18335149"
+    },
+    {
+      "kind": "news",
+      "title": "Российская «ФорМакс» судится с Linux Foundation за бренд SONiC",
+      "url": "https://www.linux.org.ru/news/russia/18335616"
+    },
+    {
+      "kind": "forum",
+      "title": "Проходите ли вы игры которые покупаете?",
+      "url": "https://www.linux.org.ru/people/unclestephen/"
+    },
+    {
+      "kind": "forum",
+      "title": "Вожусь с Terraform",
+      "url": "https://www.linux.org.ru/forum/admin/18253960"
+    },
+    {
+      "kind": "forum_with_reactions",
+      "title": "РИА Новости: Роскомнадзор снимает ограничение доступа к Telegram",
+      "url": "https://www.linux.org.ru/forum/talks/18255501"
+    },
+    {
+      "kind": "gallery_multi_image",
+      "title": "Игорь из китайского Steam, вместо пиратской копии",
+      "url": "https://www.linux.org.ru/gallery/screenshots/18317899"
+    },
+    {
+      "kind": "poll",
+      "title": "Как много игр вы прошли из тех, что приобрели?",
+      "url": "https://www.linux.org.ru/polls/polls/18327393"
+    },
+    {
+      "kind": "profile_markup",
+      "title": "Публичный профиль и лента пользователя",
+      "url": "https://www.linux.org.ru/people/unclestephen/profile"
+    }
+  ]
+}

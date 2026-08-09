@@ -1,10 +1,20 @@
 {% extends "base.html" %}
-{% block title %}{{ title }}{% endblock %}
+{% block title %}Список меток{% endblock %}
 {% block content %}
-<h1>{{ title }}</h1>
+<h1>Список меток</h1>
+<div class="tags-first-letters">
+{% for letter in first_letters %}{% if !loop.first %}, {% endif %}{% if letter.selected %}<span>{{ letter.value }}</span>{% else %}<a href="{{ letter.url }}">{{ letter.value }}</a>{% endif %}{% endfor %}
+</div>
 {% if tags.len() > 0 %}
 <ul>
-{% for tag in tags %}<li><a href="/tag/{{ tag.value }}">{{ tag.value }}</a> ({% match tag.counter %}{% when Some with (c) %}{{ c }}{% when None %}0{% endmatch %})</li>{% endfor %}
+{% for tag in tags %}<li>{% match tag.url %}{% when Some with (url) %}<a href="{{ url }}">{{ tag.value }}</a>{% when None %}<span>{{ tag.value }}</span>{% endmatch %} ({{ tag.counter }}){% if is_moderator %} <span class="action-buttons">[<a href="{{ tag.edit_url }}">Изменить</a>] [<a href="{{ tag.delete_url }}">Удалить</a>]</span>{% endif %}</li>{% endfor %}
 </ul>
+{% endif %}
+{% if tagcloud.len() > 0 %}
+<section align="center" style="width: 100%; margin-top: 1em">
+  <div style="max-width: 50rem; margin-left: auto; margin-right: auto; font-size: 150%">
+  {% for tag in tagcloud %}<a class="cloud{{ tag.iWeight }}" href="{{ tag.sUrl }}">{{ tag.sValue }}</a>{% endfor %}
+  </div>
+</section>
 {% endif %}
 {% endblock %}

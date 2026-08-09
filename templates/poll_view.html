@@ -1,0 +1,13 @@
+{% if p.pending %}<div class="infoblock"><i class="icon-lock"></i> Опрос ожидает подтверждения модератором. Голосование недоступно.</div>{% endif %}
+{% if p.show_results %}
+  <div class="poll-result"><ol>{% for v in p.variants %}<li>{% if v.user_voted %}<span class="penguin_label poll-selected"><b>{{ v.label }}</b></span><span class="penguin_percent"><b>{{ v.votes }} ({{ v.pct }}%)</b></span>{% else %}<span class="penguin_label"> {{ v.label }}</span><span class="penguin_percent">{{ v.votes }} ({{ v.pct }}%)</span>{% endif %}<p class="penguin_progress"><span style="width: {{ v.progress_pct }}%"><span>{{ v.progress_alt }}</span></span></p></li>{% endfor %}</ol></div>
+  <div class="poll-sum"><p>Всего голосов: {{ p.total_votes }}{% if p.multiselect %}, всего проголосовавших: {{ p.total_people }}{% endif %}</p></div>
+{% else %}
+  {% if p.can_vote %}<form action="/vote.jsp" method="POST" style="margin-bottom: 1em"><input type="hidden" name="csrf" value="{{ p.csrf_token }}"><input type="hidden" name="voteid" value="{{ p.voteid }}">{% endif %}
+  {% if p.pending %}<div class="poll-uncommited">{% endif %}
+  {% for v in p.variants %}<div class="{% if p.multiselect %}checkbox{% else %}radio{% endif %}"><label><input type="{% if p.multiselect %}checkbox{% else %}radio{% endif %}"{% if !p.can_vote %} disabled{% endif %} name="vote" value="{{ v.id }}"> {{ v.label }}</label></div>{% endfor %}
+  {% if p.pending %}</div>{% endif %}
+  {% if p.can_vote %}<button type="submit" class="btn btn-default">Голосовать</button></form>{% endif %}
+  {% if !p.authorized && !p.pending %}<div class="infoblock">Для участия в опросе <a href="/login.jsp?from={{ p.topic_url }}">войдите</a> или <a href="/register.jsp">зарегистрируйтесь</a>.</div>{% endif %}
+  {% if !p.pending %}<p>&gt;&gt;&gt; <a href="{{ p.topic_url }}?results=true">Результаты</a></p>{% endif %}
+{% endif %}

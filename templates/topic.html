@@ -1,7 +1,20 @@
 {% extends "base.html" %}
-{% block title %}{{ topic.title }}{% endblock %}
-{% block head_extra %}{{ realtime_bootstrap_html|safe }}{% endblock %}
+{% block title %}{{ topic.title }} — {{ topic.group_title }} — {{ topic.section_name }}{% endblock %}
+{% block head_extra %}
+<link rel="canonical" href="{{ canonical_url }}">
+<meta property="og:type" content="article">
+<meta property="og:locale" content="ru_RU">
+<meta property="og:title" content="{{ topic.title }}">
+<meta property="og:url" content="{{ canonical_url }}">
+<meta property="og:image" content="{{ og_image_url }}">
+<meta property="article:section" content="{{ topic.group_title }}">
+<meta property="article:published_time" content="{{ topic.postdate.to_rfc3339() }}">
+{% for tag in topic.tags_vec() %}<meta property="article:tag" content="{{ tag }}">{% endfor %}
+{% if can_comment %}<script>$script('/js/add-form.js');</script>{% endif %}
+{{ realtime_bootstrap_html|safe }}
+{% endblock %}
 {% block content %}
+<div class="messages" itemscope itemtype="http://schema.org/Article">
 <article class="msg" id="topic-{{ topic.id }}">
   <header>
     <div class="msg-top-header"><a href="/{{ topic.section_prefix }}/">{{ topic.section_name }}</a> — <a href="/{{ topic.section_prefix }}/{{ topic.group_urlname }}">{{ topic.group_title }}</a></div>
@@ -13,24 +26,10 @@
       {{ images_html|safe }}
       <div class="msg-text">
         {{ topic_html|safe }}
+        {% match poll %}{% when Some with (p) %}{% include "poll_view.html" %}{% when None %}{% endmatch %}
         {% match topic.url %}{% when Some with (url) %}<p>&gt;&gt;&gt; <a rel="nofollow" href="{{ url }}">{% match topic.linktext %}{% when Some with (lt) %}{{ lt }}{% when None %}Подробности{% endmatch %}</a></p>{% when None %}{% endmatch %}
       </div>
-      {% match poll %}{% when Some with (p) %}
-        {% if p.pending %}<div class="infoblock"><i class="icon-lock"></i> Опрос ожидает подтверждения модератором. Голосование недоступно.</div>{% endif %}
-        {% if p.show_results %}
-          <div class="poll-result"><ol>{% for v in p.variants %}<li>{% if v.user_voted %}<span class="penguin_label poll-selected"><b>{{ v.label }}</b></span><span class="penguin_percent"><b>{{ v.votes }} ({{ v.pct }}%)</b></span>{% else %}<span class="penguin_label"> {{ v.label }}</span><span class="penguin_percent">{{ v.votes }} ({{ v.pct }}%)</span>{% endif %}<p class="penguin_progress"><span style="width: {{ v.progress_pct }}%"><span></span></span></p></li>{% endfor %}</ol></div>
-          <div class="poll-sum"><p>Всего голосов: {{ p.total_votes }}{% if p.multiselect %}, всего проголосовавших: {{ p.total_people }}{% endif %}</p></div>
-        {% else %}
-          {% if p.can_vote %}<form action="/vote.jsp" method="POST" style="margin-bottom: 1em"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="voteid" value="{{ p.voteid }}">{% endif %}
-          {% if p.pending %}<div class="poll-uncommited">{% endif %}
-          {% for v in p.variants %}<div class="{% if p.multiselect %}checkbox{% else %}radio{% endif %}"><label><input type="{% if p.multiselect %}checkbox{% else %}radio{% endif %}"{% if !p.can_vote %} disabled{% endif %} name="vote" value="{{ v.id }}"> {{ v.label }}</label></div>{% endfor %}
-          {% if p.pending %}</div>{% endif %}
-          {% if p.can_vote %}<button type="submit" class="btn btn-default">Голосовать</button></form>{% endif %}
-          {% if !p.pending %}<p>&gt;&gt;&gt; <a href="{{ topic.topic_url() }}?results=true">Результаты</a></p>{% endif %}
-          {% if !p.authorized && !p.pending %}<div class="infoblock">Для участия в опросе <a href="/login.jsp">войдите</a> или <a href="/register.jsp">зарегистрируйтесь</a>.</div>{% endif %}
-        {% endif %}
-      {% when None %}{% endmatch %}
-      <footer><div class="sign" style="margin-left:0"><a href="/people/{{ topic.author }}/profile">{{ topic.author }}</a><br><time data-format="default" datetime="{{ topic.postdate.to_rfc3339() }}">{{ topic.postdate }}</time></div></footer>
+      <footer><div class="sign" style="margin-left:0"><a href="/people/{{ topic.author }}/profile">{{ topic.author }}</a> {{ topic_author_signature.stars_html|safe }}{% if topic_author_signature.show_score %} (Score: {{ topic_author_signature.score }} MaxScore: {{ topic_author_signature.max_score }}){% endif %}<br><time data-format="default" datetime="{{ topic.postdate.to_rfc3339() }}">{{ topic.postdate }}</time></div></footer>
       {% if can_comment || topic_show_reactions_link %}<div class="reply"><ul id="topicMenu">{% if can_comment %}<li><a href="/comment-message.jsp?topic={{ topic.id }}">Ответить</a></li>{% endif %}{% if topic_show_reactions_link %}<li><a class="reaction-show" href="/reactions?topic={{ topic.id }}">Реакции</a></li>{% endif %}</ul></div>{% endif %}
       {{ topic_reactions_html|safe }}
     </div>
@@ -40,7 +39,7 @@
 {% match thread_root %}{% when Some with (root) %}<p><a href="{{ topic.topic_url() }}">← вернуться ко всем комментариям</a> (режим ветки, корень #{{ root }})</p>{% when None %}{% endmatch %}
 {% if show_deleted %}<p>Просмотр удалённых комментариев. <a href="{{ topic.topic_url() }}">Скрыть удалённые</a></p>{% endif %}
 
-<section id="comments" class="messages">
+<div id="comments" class="comment">
   <h2>Комментарии: {{ filtered_count }}</h2>
   {% if unfiltered_count > filtered_count %}<p>Скрыто {{ unfiltered_count - filtered_count }}. <a href="?filter=show">Показать все</a></p>{% endif %}
   {% for c in comments %}
@@ -48,18 +47,19 @@
     {% if c.item.deleted %}<div class="title"><strong>Сообщение удалено</strong></div>{% endif %}
     <div class="msg-container"><div class="msg_body">
       <div class="msg-text">{% if c.item.deleted %}[комментарий удалён]{% else %}{{ c.html|safe }}{% endif %}</div>
-      <div class="sign"><a href="/people/{{ c.item.author }}/profile">{{ c.item.author }}</a><br><time data-format="default" datetime="{{ c.item.postdate.to_rfc3339() }}">{{ c.item.postdate }}</time></div>
-      {% if !c.item.deleted %}<div class="reply"><ul><li><a href="/add_comment.jsp?topic={{ topic.id }}&replyto={{ c.item.id }}">Ответить</a></li>{% if c.can_edit %}<li><a href="/edit_comment?topic={{ topic.id }}&amp;original={{ c.item.id }}">Изменить</a></li>{% endif %}{% if !thread_mode %}<li><a href="/{{ topic.section_prefix }}/{{ topic.group_urlname }}/{{ topic.id }}/thread/{{ c.item.id }}">Показать ответы</a></li>{% endif %}<li><a href="{{ topic.topic_url() }}?cid={{ c.item.id }}">Ссылка</a></li>{% if c.show_reactions_link %}<li><a class="reaction-show" href="/reactions?topic={{ topic.id }}&comment={{ c.item.id }}">Реакции</a></li>{% endif %}</ul></div>{{ c.reactions_html|safe }}{% endif %}
+      <div class="sign"><a href="/people/{{ c.item.author }}/profile">{{ c.item.author }}</a> {{ c.author_signature.stars_html|safe }}{% if c.author_signature.show_score %} (Score:&nbsp;{{ c.author_signature.score }} MaxScore:&nbsp;{{ c.author_signature.max_score }}){% endif %}<br><time data-format="default" datetime="{{ c.item.postdate.to_rfc3339() }}">{{ c.item.postdate }}</time></div>
+      {% if !c.item.deleted %}<div class="reply"><ul>{% if can_comment %}<li><a href="/add_comment.jsp?topic={{ topic.id }}&replyto={{ c.item.id }}">Ответить</a></li>{% endif %}{% if c.can_edit %}<li><a href="/edit_comment?topic={{ topic.id }}&amp;original={{ c.item.id }}">Изменить</a></li>{% endif %}{% if !thread_mode %}<li><a href="/{{ topic.section_prefix }}/{{ topic.group_urlname }}/{{ topic.id }}/thread/{{ c.item.id }}">Показать ответы</a></li>{% endif %}<li><a href="{{ topic.topic_url() }}?cid={{ c.item.id }}">Ссылка</a></li>{% if c.show_reactions_link %}<li><a class="reaction-show" href="/reactions?topic={{ topic.id }}&comment={{ c.item.id }}">Реакции</a></li>{% endif %}</ul></div>{{ c.reactions_html|safe }}{% endif %}
     </div></div>
   </article>
   {% endfor %}
   {% if comments.len() == 0 %}<p>Комментариев нет.</p>{% endif %}
-</section>
+</div>
 
 <div id="realtime" style="display: none"></div>
 
 {% if pages.len() > 1 %}<div class="nav">{% for p in pages %}{% if p.current %}<b class="page-number">{{ p.page + 1 }}</b>{% else %}<a class="page-number" href="{% if p.page == 0 %}{{ topic.topic_url() }}{% else %}{{ topic.topic_url() }}/page{{ p.page }}{% endif %}">{{ p.page + 1 }}</a>{% endif %}{% endfor %}</div>{% endif %}
 {% if show_deleted_button %}<p><a href="?deleted=true">Показать удалённые комментарии</a></p>{% endif %}
+</div>
 
 {% if related_topics.len() > 0 %}<section id="related-topics">
   <h2>Похожие темы</h2>
@@ -73,7 +73,7 @@
   <input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="topic" value="{{ topic.id }}"><input type="hidden" name="replyto" value="0">
   {% if anonymous_comment_form %}<div class="control-group"><label for="nick">Имя</label><input id="nick" name="nick" type="text" value="anonymous"></div><div class="control-group"><label for="password">Пароль:</label><input id="password" name="password" type="password"></div>{% endif %}
   <div class="warning-block" id="author-readonly-note"></div>
-  <div class="control-group" data-format-mode="{{ comment_format_mode }}"><div class="markup-tabs"><ul class="markup-tabs__nav"><li class="markup-tabs__tab active" data-tab="editor">{{ comment_format_title }}</li></ul><div class="markup-tabs__content"><div class="markup-tabs__panel active" data-panel="editor"><textarea id="msg" name="msg" required></textarea></div></div></div></div>
+  <div class="control-group" data-format-mode="{{ comment_format_mode }}"><div class="markup-tabs"><ul class="markup-tabs__nav"><li class="markup-tabs__tab active" data-tab="editor">{{ comment_format_title }}</li></ul><div class="markup-tabs__content"><div class="markup-tabs__panel active" data-panel="editor"><textarea id="msg" name="msg" required></textarea></div></div></div><div class="help-block">Пустая строка (два раза Enter) начинает новый абзац. Знак '&gt;' в начале абзаца выделяет абзац курсивом цитирования.<br>{% if comment_format_mode == "lorcode" %}<b>Внимание:</b> прочитайте описание разметки <a href="/help/lorcode.md" target="_blank">LORCODE</a>.{% endif %}{% if comment_format_mode == "markdown" %}<b>Внимание:</b> прочитайте описание разметки <a target="_blank" href="/help/markdown.md">Markdown</a>.{% endif %}</div></div>
   {% if require_comment_captcha %}<div class="help-block"><script src="https://js.hcaptcha.com/1/api.js" async defer></script><div class="h-captcha" data-sitekey="{{ captcha_site_key }}"></div></div>{% endif %}
   <div class="form-actions"><button class="btn btn-primary" type="submit">Поместить</button><button class="btn btn-default" type="submit" name="preview">Предпросмотр</button><button class="btn btn-default" type="reset" id="cancelButton">Отменить</button><div class="help-block">Используйте Ctrl-Enter для размещения комментария</div></div>
 </form></div>{% endif %}

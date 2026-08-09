@@ -1,7 +1,10 @@
 use crate::{
+    application::boxlet::CBoxletService,
     auth::CurrentUser,
+    domain::boxlet::model::StTagCloudItem,
     error::{AppError, Result},
-    models::{TagItem, TopicSummary},
+    infra::postgres::boxlet_repository::CBoxletPgRepository,
+    models::TopicSummary,
     request_timezone::stRequestTimezone,
     state::AppState,
 };
@@ -9,6 +12,7 @@ use askama::Template;
 use axum::{
     Form, Json,
     extract::{Path, Query, State},
+    http::{StatusCode, header},
     response::{Html, IntoResponse, Redirect},
 };
 use axum_extra::extract::cookie::CookieJar;
@@ -20,8 +24,26 @@ use serde::Deserialize;
 #[derive(Template)]
 #[template(path = "tags.html")]
 struct TagsTemplate {
-    title: String,
-    tags: Vec<TagItem>,
+    first_letters: Vec<TagsFirstLetterView>,
+    tags: Vec<TagsListItemView>,
+    tagcloud: Vec<StTagCloudItem>,
+    is_moderator: bool,
+}
+
+#[derive(Debug, Clone)]
+struct TagsFirstLetterView {
+    value: String,
+    url: String,
+    selected: bool,
+}
+
+#[derive(Debug, Clone)]
+struct TagsListItemView {
+    value: String,
+    counter: i32,
+    url: Option<String>,
+    edit_url: String,
+    delete_url: String,
 }
 
 #[derive(Debug, Clone)]
@@ -85,20 +107,23 @@ pub struct AllTagsQuery {
 /// path+query-based dispatch, so branch on `term`'s presence here instead.
 pub async fn all_tags(
     State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
     Query(q): Query<AllTagsQuery>,
 ) -> Result<axum::response::Response> {
     if let Some(term) = q.term.filter(|t| !t.is_empty()) {
         return Ok(Json(tag_autocomplete(&state, &term).await?).into_response());
     }
-    let tags = sqlx::query_as::<_, TagItem>(
-        "SELECT value,counter FROM tags_values ORDER BY lower(value) LIMIT 1000",
-    )
-    .fetch_all(&state.pool)
-    .await?;
+    let first_letters = vecTagsFirstLetters(&state, None).await?;
+    let cService = CBoxletService::new(
+        CBoxletPgRepository::new(state.pool.clone()),
+        &state.config.upload_dir,
+    );
     Ok(Html(
         TagsTemplate {
-            title: "Метки".into(),
-            tags,
+            first_letters,
+            tags: Vec::new(),
+            tagcloud: cService.vecTagCloud().await?,
+            is_moderator: user.is_some_and(|stUser| stUser.canmod),
         }
         .render()?,
     )
@@ -135,18 +160,90 @@ async fn tag_autocomplete(state: &AppState, term: &str) -> Result<Vec<String>> {
 
 pub async fn tags_by_letter(
     State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
     Path(first_letter): Path<String>,
 ) -> Result<Html<String>> {
-    let prefix = format!("{}%", first_letter);
-    let tags = sqlx::query_as::<_, TagItem>("SELECT value,counter FROM tags_values WHERE lower(value) LIKE lower($1) ORDER BY lower(value) LIMIT 1000")
-        .bind(prefix).fetch_all(&state.pool).await?;
+    let escaped_prefix = first_letter
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    let prefix = format!("{escaped_prefix}%");
+    let is_moderator = user.as_ref().is_some_and(|stUser| stUser.canmod);
+    let threshold = if user
+        .as_ref()
+        .is_some_and(|stUser| stUser.canmod || stUser.corrector)
+    {
+        1
+    } else {
+        2
+    };
+    let rows: Vec<(String, i32)> = sqlx::query_as(
+        r#"SELECT value, counter
+           FROM tags_values
+           WHERE value LIKE $1 ESCAPE '\' AND counter >= $2
+           ORDER BY value"#,
+    )
+    .bind(prefix)
+    .bind(threshold)
+    .fetch_all(&state.pool)
+    .await?;
+    if rows.is_empty() {
+        return Err(AppError::NotFound);
+    }
+    let encoded_letter = urlencoding::encode(&first_letter);
+    let tags = rows
+        .into_iter()
+        .map(|(value, counter)| {
+            let encoded_tag = urlencoding::encode(&value);
+            let encoded_query_tag = urlencoding::encode(&value);
+            TagsListItemView {
+                url: is_good_tag(&value).then(|| format!("/tag/{encoded_tag}")),
+                edit_url: format!(
+                    "/tags/change?firstLetter={encoded_letter}&tagName={encoded_query_tag}"
+                ),
+                delete_url: format!(
+                    "/tags/delete?firstLetter={encoded_letter}&tagName={encoded_query_tag}"
+                ),
+                value,
+                counter,
+            }
+        })
+        .collect();
     Ok(Html(
         TagsTemplate {
-            title: format!("Метки: {first_letter}"),
+            first_letters: vecTagsFirstLetters(&state, Some(&first_letter)).await?,
             tags,
+            tagcloud: Vec::new(),
+            is_moderator,
         }
         .render()?,
     ))
+}
+
+async fn vecTagsFirstLetters(
+    state: &AppState,
+    current_letter: Option<&str>,
+) -> Result<Vec<TagsFirstLetterView>> {
+    let values: Vec<String> = sqlx::query_scalar(
+        r#"SELECT DISTINCT lower(substr(value, 1, 1)) AS firstchar
+           FROM tags_values
+           WHERE counter > 0
+           ORDER BY firstchar"#,
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(values
+        .into_iter()
+        .map(|value| TagsFirstLetterView {
+            url: format!("/tags/{}", urlencoding::encode(&value)),
+            selected: current_letter == Some(value.as_str()),
+            value,
+        })
+        .collect())
+}
+
+pub async fn old_tags_redirect() -> impl IntoResponse {
+    (StatusCode::FOUND, [(header::LOCATION, "/tags")])
 }
 
 /// Per-section topic caps, matching TagPageController's TotalNewsCount(21)/

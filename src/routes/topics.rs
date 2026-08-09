@@ -73,7 +73,14 @@ pub(crate) struct QuickGroupLink {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct ActiveTagLink {
+    pub(crate) name: String,
+    pub(crate) url: String,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct TopicListNavigation {
+    pub(crate) section_id: i32,
     pub(crate) section_url: Option<String>,
     pub(crate) archive_url: Option<String>,
     pub(crate) rss_url: Option<String>,
@@ -82,6 +89,8 @@ pub(crate) struct TopicListNavigation {
     pub(crate) moderator_group_id: Option<i32>,
     pub(crate) quick_groups: Vec<QuickGroupLink>,
     pub(crate) all_groups_selected: bool,
+    pub(crate) uncommitted_count: i64,
+    pub(crate) active_tags: Vec<ActiveTagLink>,
 }
 
 #[derive(Debug, Clone)]
@@ -94,6 +103,9 @@ struct CommentPageLink {
 #[template(path = "topic.html")]
 struct TopicTemplate {
     topic: TopicDetail,
+    topic_author_signature: AuthorSignatureView,
+    canonical_url: String,
+    og_image_url: String,
     topic_html: String,
     comments: Vec<CommentView>,
     /// Non-empty only outside thread/deleted mode, when there's more than
@@ -217,10 +229,52 @@ mod realtime_browser_contract_tests {
 #[derive(Debug, Clone)]
 struct CommentView {
     item: CommentItem,
+    author_signature: AuthorSignatureView,
     html: String,
     reactions_html: String,
     show_reactions_link: bool,
     can_edit: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct AuthorSignatureView {
+    stars_html: String,
+    score: i32,
+    max_score: i32,
+    show_score: bool,
+}
+
+/// `User.getStars`: at most five filled stars for current score plus hollow
+/// stars up to the historical maximum. Both values are capped at 599 before
+/// converting each full hundred points into a star.
+fn sUserStarsHtml(iScore: i32, iMaxScore: i32) -> String {
+    let iNormalizedScore = iScore.clamp(0, 599);
+    let iNormalizedMaxScore = iMaxScore.max(iScore).clamp(0, 599);
+    let iGreenStars = iNormalizedScore / 100;
+    let iGreyStars = iNormalizedMaxScore / 100 - iGreenStars;
+    format!(
+        "<span class=\"stars\">{}{}</span>",
+        "★".repeat(iGreenStars as usize),
+        "☆".repeat(iGreyStars as usize)
+    )
+}
+
+fn stAuthorSignature(
+    iScore: i32,
+    iMaxScore: i32,
+    bRegistered: bool,
+    bModeratorSession: bool,
+) -> AuthorSignatureView {
+    AuthorSignatureView {
+        stars_html: if bRegistered {
+            sUserStarsHtml(iScore, iMaxScore)
+        } else {
+            String::new()
+        },
+        score: iScore,
+        max_score: iMaxScore,
+        show_score: bRegistered && bModeratorSession,
+    }
 }
 
 /// poll-form.tag rendered server-side: a topic's poll (if any), with vote
@@ -230,26 +284,29 @@ struct CommentView {
 /// so a stale "Голосовать" button just surfaces that error instead of
 /// silently vanishing a beat early.
 #[derive(Debug, Clone)]
-struct PollView {
-    voteid: i32,
-    multiselect: bool,
-    variants: Vec<PollVariantView>,
-    total_votes: i32,
-    total_people: i64,
-    can_vote: bool,
-    show_results: bool,
-    pending: bool,
-    authorized: bool,
+pub(crate) struct PollView {
+    pub(crate) voteid: i32,
+    pub(crate) multiselect: bool,
+    pub(crate) variants: Vec<PollVariantView>,
+    pub(crate) total_votes: i32,
+    pub(crate) total_people: i64,
+    pub(crate) can_vote: bool,
+    pub(crate) show_results: bool,
+    pub(crate) pending: bool,
+    pub(crate) authorized: bool,
+    pub(crate) topic_url: String,
+    pub(crate) csrf_token: String,
 }
 
 #[derive(Debug, Clone)]
-struct PollVariantView {
-    id: i32,
-    label: String,
-    votes: i32,
-    pct: i32,
-    progress_pct: i32,
-    user_voted: bool,
+pub(crate) struct PollVariantView {
+    pub(crate) id: i32,
+    pub(crate) label: String,
+    pub(crate) votes: i32,
+    pub(crate) pct: i32,
+    pub(crate) progress_pct: i32,
+    pub(crate) progress_alt: String,
+    pub(crate) user_voted: bool,
 }
 
 /// PreparedImage-compatible view of any image attached to a topic.
@@ -270,7 +327,37 @@ pub(crate) struct NewsTopicView {
     pub(crate) images_html: String,
     pub(crate) group_image_url: Option<String>,
     pub(crate) linktext: String,
+    pub(crate) short_host: String,
+    pub(crate) tags: Vec<NewsTagView>,
     pub(crate) show_group: bool,
+    pub(crate) poll: Option<PollView>,
+    pub(crate) minor: bool,
+    /// `news.tag` is also used by the Java premoderation queue with
+    /// `moderateMode=true`.  Keep that mode on the same prepared card so the
+    /// queue cannot silently drift back to a compact topic list.
+    pub(crate) moderate_mode: bool,
+    pub(crate) can_commit: bool,
+    pub(crate) can_delete: bool,
+    pub(crate) can_edit: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct NewsTagView {
+    pub(crate) value: String,
+    pub(crate) url: String,
+}
+
+fn sExternalLinkHost(sUrl: &str) -> String {
+    let Some(sHost) = reqwest::Url::parse(sUrl)
+        .ok()
+        .and_then(|stUrl| stUrl.host_str().map(str::to_owned))
+    else {
+        return "Invalid URL, no host part!".to_owned();
+    };
+    psl::domain(sHost.as_bytes())
+        .and_then(|stDomain| std::str::from_utf8(stDomain.as_bytes()).ok())
+        .map(str::to_owned)
+        .unwrap_or_else(|| "Invalid URL, no host part!".to_owned())
 }
 
 pub(crate) async fn load_topic_images(
@@ -476,17 +563,45 @@ pub(crate) async fn prepare_news_topics(
     topics: Vec<TopicSummary>,
     show_group: bool,
 ) -> Result<Vec<NewsTopicView>> {
+    prepare_news_topics_for_viewer(state, topics, show_group, &None, "").await
+}
+
+pub(crate) async fn prepare_news_topics_for_viewer(
+    state: &AppState,
+    topics: Vec<TopicSummary>,
+    show_group: bool,
+    current_user: &Option<UserSummary>,
+    csrf_token: &str,
+) -> Result<Vec<NewsTopicView>> {
     let mut prepared = Vec::with_capacity(topics.len());
     for topic in topics {
-        type TyNewsTopicRow = (String, String, Option<String>, Option<String>);
+        type TyNewsTopicRow = (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            bool,
+            bool,
+            bool,
+        );
         let row: Option<TyNewsTopicRow> = sqlx::query_as(
-            "SELECT m.message, m.markup::text, t.linktext, g.image FROM msgbase m JOIN topics t ON t.id=m.id JOIN groups g ON g.id=t.groupid WHERE m.id=$1",
+            "SELECT m.message, m.markup::text, t.linktext, g.image, t.moderate, COALESCE(t.commitdate,t.postdate)+s.expire<CURRENT_TIMESTAMP, t.minor FROM msgbase m JOIN topics t ON t.id=m.id JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section WHERE m.id=$1",
         )
         .bind(topic.id)
         .fetch_optional(&state.pool)
         .await?;
-        let (message, message_markup, linktext, group_image) =
-            row.unwrap_or_else(|| (String::new(), "BBCODE_TEX".into(), None, None));
+        let (message, message_markup, linktext, group_image, moderate, expired, minor) = row
+            .unwrap_or_else(|| {
+                (
+                    String::new(),
+                    "BBCODE_TEX".into(),
+                    None,
+                    None,
+                    false,
+                    false,
+                    false,
+                )
+            });
         let images = load_topic_images(state, topic.id).await?;
         let images_html = render_topic_images(
             &images,
@@ -501,15 +616,56 @@ pub(crate) async fn prepare_news_topics(
                 format!("/tango/{path}")
             }
         });
+        let poll = if topic.section_prefix == "polls" {
+            load_poll_view(
+                state,
+                topic.id,
+                topic.deleted,
+                poll_is_pending(moderate),
+                expired,
+                false,
+                current_user,
+                csrf_token,
+                &topic.topic_url(),
+            )
+            .await?
+        } else {
+            None
+        };
+        let short_host = topic
+            .url
+            .as_deref()
+            .map(sExternalLinkHost)
+            .unwrap_or_default();
+        let tags = topic
+            .tags_vec()
+            .into_iter()
+            .map(|value| NewsTagView {
+                url: format!("/tag/{}", urlencoding::encode(&value)),
+                value,
+            })
+            .collect();
         prepared.push(NewsTopicView {
-            topic_html: markup::render_message_with_markup(&message, Some(&message_markup), None),
+            topic_html: markup::render_topic_with_minimized_cut(
+                &message,
+                &message_markup,
+                &topic.topic_url(),
+            ),
             images_html,
             group_image_url,
             linktext: linktext
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| "Подробности".to_string()),
+            short_host,
+            tags,
             topic,
             show_group,
+            poll,
+            minor,
+            moderate_mode: false,
+            can_commit: false,
+            can_delete: false,
+            can_edit: false,
         });
     }
     Ok(prepared)
@@ -766,6 +922,8 @@ async fn load_poll_view(
     expired: bool,
     results_requested: bool,
     current_user: &Option<UserSummary>,
+    csrf_token: &str,
+    topic_url: &str,
 ) -> Result<Option<PollView>> {
     let Some((poll_id, multiselect)): Option<(i32, bool)> =
         sqlx::query_as("SELECT id, multiselect FROM polls WHERE topic=$1")
@@ -790,29 +948,29 @@ async fn load_poll_view(
     if show_results {
         rows.sort_by_key(|(id, _, votes, _)| (std::cmp::Reverse(*votes), *id));
     }
-    let divisor = if total_people > 0 {
-        total_people as i32
-    } else {
-        total_votes
-    };
     let max_votes = rows.iter().map(|row| row.2).max().unwrap_or(0);
+    let divisor = iPollPercentageDivisor(multiselect, total_votes, total_people, max_votes);
     let variants = rows
         .into_iter()
-        .map(|(id, label, votes, selected)| PollVariantView {
-            id,
-            label,
-            votes,
-            pct: if divisor > 0 {
-                ((100.0 * f64::from(votes) / f64::from(divisor)).round()) as i32
+        .map(|(id, label, votes, selected)| {
+            let iWidth = if max_votes > 0 {
+                320 * votes / max_votes
             } else {
                 0
-            },
-            progress_pct: if max_votes > 0 {
-                ((320 * votes / max_votes) / 16) * 16 * 100 / 320
-            } else {
-                0
-            },
-            user_voted: selected,
+            };
+            PollVariantView {
+                id,
+                label,
+                votes,
+                pct: if divisor > 0 {
+                    ((100.0 * f64::from(votes) / f64::from(divisor)).round()) as i32
+                } else {
+                    0
+                },
+                progress_pct: (iWidth / 16) * 16 * 100 / 320,
+                progress_alt: "*".repeat(iWidth as usize),
+                user_voted: selected,
+            }
         })
         .collect();
     let authorized = current_user.is_some();
@@ -826,7 +984,24 @@ async fn load_poll_view(
         show_results,
         pending,
         authorized,
+        topic_url: topic_url.to_owned(),
+        csrf_token: csrf_token.to_owned(),
     }))
+}
+
+fn iPollPercentageDivisor(
+    bMultiselect: bool,
+    iTotalVotes: i32,
+    iTotalPeople: i64,
+    iMaxVotes: i32,
+) -> i32 {
+    if bMultiselect {
+        i32::try_from(iTotalPeople)
+            .unwrap_or(i32::MAX)
+            .max(iMaxVotes)
+    } else {
+        iTotalVotes
+    }
 }
 
 fn poll_is_pending(topic_committed: bool) -> bool {
@@ -834,13 +1009,64 @@ fn poll_is_pending(topic_committed: bool) -> bool {
 }
 
 #[cfg(test)]
+mod external_link_host_tests {
+    use super::sExternalLinkHost;
+
+    #[test]
+    fn uses_public_suffix_list_like_guava_top_private_domain() {
+        assert_eq!(
+            sExternalLinkHost("https://www.linux.org.ru/news/1"),
+            "linux.org.ru"
+        );
+        assert_eq!(
+            sExternalLinkHost("https://docs.example.co.uk/path"),
+            "example.co.uk"
+        );
+        assert_eq!(sExternalLinkHost("not a URL"), "Invalid URL, no host part!");
+    }
+}
+
+#[cfg(test)]
 mod poll_moderation_semantics_tests {
-    use super::poll_is_pending;
+    use super::{iPollPercentageDivisor, poll_is_pending};
 
     #[test]
     fn poll_is_pending_until_topics_moderate_is_true() {
         assert!(poll_is_pending(false));
         assert!(!poll_is_pending(true));
+    }
+
+    #[test]
+    fn single_select_percentages_survive_incomplete_legacy_vote_users() {
+        assert_eq!(iPollPercentageDivisor(false, 393, 1, 220), 393);
+    }
+
+    #[test]
+    fn multiselect_percentages_use_people_but_never_exceed_one_hundred() {
+        assert_eq!(iPollPercentageDivisor(true, 8, 6, 3), 6);
+        assert_eq!(iPollPercentageDivisor(true, 393, 1, 220), 220);
+    }
+}
+
+#[cfg(test)]
+mod author_signature_tests {
+    use super::{sUserStarsHtml, stAuthorSignature};
+
+    #[test]
+    fn stars_match_java_score_and_historical_maximum_rules() {
+        assert_eq!(sUserStarsHtml(45, 45), "<span class=\"stars\"></span>");
+        assert_eq!(sUserStarsHtml(201, 350), "<span class=\"stars\">★★☆</span>");
+        assert_eq!(
+            sUserStarsHtml(3_000, 3_200),
+            "<span class=\"stars\">★★★★★</span>"
+        );
+    }
+
+    #[test]
+    fn anonymous_authors_have_no_star_wrapper_or_moderator_score() {
+        let stSignature = stAuthorSignature(500, 500, false, true);
+        assert!(stSignature.stars_html.is_empty());
+        assert!(!stSignature.show_score);
     }
 }
 
@@ -865,6 +1091,7 @@ struct TopicFormTemplate {
     selected_group: i32,
     is_edit: bool,
     links_allowed: bool,
+    premoderated: bool,
     poll_allowed: bool,
     image_allowed: bool,
     image_required: bool,
@@ -1109,6 +1336,7 @@ pub async fn index(
     State(state): State<AppState>,
     Query(q): Query<PagerQuery>,
     CurrentUser(current_user): CurrentUser,
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
 ) -> Result<Html<String>> {
     let _ = q;
     let show_gallery_on_main = match &current_user {
@@ -1141,8 +1369,14 @@ pub async fn index(
     } else {
         list_topics(&state, Some("news"), None, 0, 30).await?
     };
-    let news =
-        prepare_news_topics(&state, all_topics.iter().take(10).cloned().collect(), true).await?;
+    let news = prepare_news_topics_for_viewer(
+        &state,
+        all_topics.iter().take(10).cloned().collect(),
+        true,
+        &current_user,
+        &csrf_token,
+    )
+    .await?;
     let brief = all_topics.iter().skip(10).cloned().collect();
     let add_restriction: i32 = if show_gallery_on_main {
         sqlx::query_scalar("SELECT COALESCE(min(restrict_topics),-9999) FROM sections")
@@ -1258,10 +1492,13 @@ pub async fn lenta(
     State(state): State<AppState>,
     Query(q): Query<PagerQuery>,
     CurrentUser(current_user): CurrentUser,
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
 ) -> Result<Html<String>> {
     let pager = Pager::new(q.offset.unwrap_or(0), state.config.page_size);
     let topics = list_topics(&state, Some("forum"), None, pager.offset, pager.limit).await?;
-    let news = prepare_news_topics(&state, topics.clone(), true).await?;
+    let news =
+        prepare_news_topics_for_viewer(&state, topics.clone(), true, &current_user, &csrf_token)
+            .await?;
     let navigation = build_topic_list_navigation(&state, "forum", None, &current_user).await?;
     Ok(Html(
         IndexTemplate {
@@ -1282,11 +1519,14 @@ pub async fn section_topics(
     uri: Uri,
     Query(q): Query<PagerQuery>,
     CurrentUser(current_user): CurrentUser,
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
 ) -> Result<Html<String>> {
     let section = section_from_uri(&uri).unwrap_or("news");
     let pager = Pager::new(q.offset.unwrap_or(0), state.config.page_size);
     let topics = list_topics(&state, Some(section), None, pager.offset, pager.limit).await?;
-    let news = prepare_news_topics(&state, topics.clone(), true).await?;
+    let news =
+        prepare_news_topics_for_viewer(&state, topics.clone(), true, &current_user, &csrf_token)
+            .await?;
     let navigation = build_topic_list_navigation(&state, section, None, &current_user).await?;
     Ok(Html(
         IndexTemplate {
@@ -1308,6 +1548,7 @@ pub async fn section_group_topics(
     Path(group): Path<String>,
     Query(q): Query<PagerQuery>,
     CurrentUser(current_user): CurrentUser,
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
 ) -> Result<Html<String>> {
     let section = section_from_uri(&uri).unwrap_or("news");
     let pager = Pager::new(q.offset.unwrap_or(0), state.config.page_size);
@@ -1323,7 +1564,9 @@ pub async fn section_group_topics(
     if selected.section_prefix != section {
         return Err(AppError::NotFound);
     }
-    let news = prepare_news_topics(&state, topics.clone(), false).await?;
+    let news =
+        prepare_news_topics_for_viewer(&state, topics.clone(), false, &current_user, &csrf_token)
+            .await?;
     let navigation =
         build_topic_list_navigation(&state, section, Some(&selected), &current_user).await?;
     Ok(Html(
@@ -1410,7 +1653,7 @@ struct ViewAllTemplate {
     uncommitted: i64,
     add_link: Option<String>,
     add_link_reason: Option<String>,
-    messages: Vec<TopicSummary>,
+    messages: Vec<NewsTopicView>,
     deleted_topics: Vec<DeletedTopicRow>,
     show_dates: bool,
     show_gallery_notice: bool,
@@ -1495,8 +1738,8 @@ async fn build_topic_list_navigation(
     selected_group: Option<&Group>,
     user: &Option<UserSummary>,
 ) -> Result<TopicListNavigation> {
-    let (section_id, section_restriction): (i32, i32) = sqlx::query_as(
-        r#"SELECT id, COALESCE(restrict_topics,-9999) FROM sections WHERE CASE id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(name) END=$1"#,
+    let (section_id, section_restriction, section_premoderated): (i32, i32, bool) = sqlx::query_as(
+        r#"SELECT id, COALESCE(restrict_topics,-9999), moderate FROM sections WHERE CASE id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(name) END=$1"#,
     )
     .bind(section_prefix)
     .fetch_optional(&state.pool)
@@ -1526,7 +1769,51 @@ async fn build_topic_list_navigation(
             selected: selected_group.is_some_and(|selected| selected.id == group.id),
         })
         .collect();
+    let uncommitted_count = if section_premoderated {
+        sqlx::query_scalar(
+            r#"SELECT count(*) FROM topics t
+               JOIN groups g ON g.id=t.groupid
+               WHERE g.section=$1 AND NOT t.moderate AND NOT t.deleted AND NOT t.draft
+                 AND t.postdate>CURRENT_TIMESTAMP-interval '3 months'"#,
+        )
+        .bind(section_id)
+        .fetch_one(&state.pool)
+        .await?
+    } else {
+        0
+    };
+    let active_tags = if selected_group.is_some_and(|stGroup| stGroup.id == 4068) {
+        Vec::new()
+    } else {
+        let optGroup = selected_group.map(|stGroup| stGroup.urlname.as_str());
+        match tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            crate::search_index::vecActiveTopTags(state, section_prefix, optGroup),
+        )
+        .await
+        {
+            Ok(Ok(vecTags)) => vecTags
+                .into_iter()
+                .map(|sName| ActiveTagLink {
+                    url: format!("/tag/{}?section={section_id}", urlencoding::encode(&sName)),
+                    name: sName,
+                })
+                .collect(),
+            Ok(Err(sError)) => {
+                tracing::warn!(error = %sError, section = section_prefix, "unable to find active section tags");
+                Vec::new()
+            }
+            Err(_) => {
+                tracing::warn!(
+                    section = section_prefix,
+                    "active section tags search timed out"
+                );
+                Vec::new()
+            }
+        }
+    };
     Ok(TopicListNavigation {
+        section_id,
         section_url: Some(format!("/{section_prefix}/")),
         archive_url: (section_prefix != "forum").then(|| format!("/{section_prefix}/archive")),
         rss_url: Some(format!("/section-rss.jsp?section={section_id}")),
@@ -1539,6 +1826,8 @@ async fn build_topic_list_navigation(
             .flatten(),
         quick_groups,
         all_groups_selected: selected_group.is_none(),
+        uncommitted_count,
+        active_tags,
     })
 }
 
@@ -1550,6 +1839,7 @@ pub async fn view_all(
     State(state): State<AppState>,
     Query(q): Query<ViewAllQuery>,
     CurrentUser(user): CurrentUser,
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
 ) -> Result<Html<String>> {
     let section: Option<ViewAllSection> = if let Some(sid) = q.section.filter(|&id| id != 0) {
         let sql = format!(
@@ -1586,11 +1876,34 @@ pub async fn view_all(
              AND ($1::int IS NULL OR s.id=$1)
            ORDER BY t.postdate DESC"#
     );
-    let messages = sqlx::query_as::<_, TopicSummary>(sqlx::AssertSqlSafe(sql))
+    let message_topics = sqlx::query_as::<_, TopicSummary>(sqlx::AssertSqlSafe(sql))
         .bind(section.as_ref().map(|s| s.id))
         .fetch_all(&state.pool)
         .await?;
-    let uncommitted = messages.len() as i64;
+    let uncommitted = message_topics.len() as i64;
+    let mut messages =
+        prepare_news_topics_for_viewer(&state, message_topics, true, &user, &csrf_token).await?;
+    for message in &mut messages {
+        message.moderate_mode = true;
+        if let Some(current_user) = &user {
+            message.can_commit =
+                check_commit_allowed(current_user, message.topic.author_id).is_ok();
+            // Every item in this list is a recent, non-deleted topic from a
+            // premoderated section.  These are the resulting TopicMenu rules
+            // from EditTopicChecker/GroupPermissionService for that state.
+            message.can_edit = current_user.candel
+                || current_user.canmod
+                || current_user.corrector
+                || current_user.id == message.topic.author_id;
+            message.can_delete = current_user.candel
+                || current_user.canmod
+                || (current_user.id == message.topic.author_id
+                    && message.topic.comments == 0
+                    && chrono::Utc::now()
+                        <= message.topic.postdate
+                            + chrono::Duration::hours(TOPIC_DELETE_WINDOW_HOURS));
+        }
+    }
 
     let bad_reason_filter = if is_moderator {
         ""
@@ -1653,7 +1966,8 @@ pub async fn view_all(
             .await?
         }
     };
-    let (add_link, add_link_reason) = match topic_posting_reason(restriction, &user) {
+    let posting_reason = posting_reason_for_port(&state, restriction, &user).await?;
+    let (add_link, add_link_reason) = match posting_reason {
         None => (
             Some(match &section {
                 Some(s) => format!("/add-section.jsp?section={}", s.id),
@@ -1913,12 +2227,11 @@ async fn render_topic_view(
     let topic = get_topic(&state, id).await?;
     let is_moderator = current_user.as_ref().map(|u| u.canmod).unwrap_or(false);
 
-    // GroupPermissionService.checkView / drafts: a draft or not-yet-committed
-    // premoderated topic is only visible to its author or a moderator. A
-    // deleted topic is likewise author/moderator-only - the previous
-    // implementation never checked `topic.deleted` at all here, so a
-    // deleted topic stayed fully visible to everyone.
-    if topic.draft || (topic.section_premoderated && !topic.moderate) || topic.deleted {
+    // TopicPermissionService.checkView restricts drafts and deleted topics,
+    // but deliberately does not hide an uncommitted topic by itself.  The
+    // public `/view-all.jsp` queue therefore links to a publicly viewable
+    // preview, matching the Java application.
+    if topic.draft || topic.deleted {
         let allowed = current_user
             .as_ref()
             .map(|u| u.canmod || u.id == topic.author_id)
@@ -1971,7 +2284,7 @@ async fn render_topic_view(
         .await
     });
 
-    let topic_html = markup::render_message_with_markup(&topic.message, Some(&topic.markup), None);
+    let topic_html = markup::render_topic_with_expanded_cut(&topic.message, &topic.markup);
 
     let all_comments: Vec<CommentItem> = if want_deleted {
         topic_service(&state).vecListComments(id).await?
@@ -2083,6 +2396,33 @@ async fn render_topic_view(
     .await?;
     let current_user_id = current_user.as_ref().map(|u| u.id);
 
+    let bModeratorSession = current_user.as_ref().is_some_and(|stUser| stUser.canmod);
+    let mut vecAuthorIds = Vec::with_capacity(page_comments.len() + 1);
+    vecAuthorIds.push(topic.author_id);
+    vecAuthorIds.extend(page_comments.iter().map(|stComment| stComment.author_id));
+    vecAuthorIds.sort_unstable();
+    vecAuthorIds.dedup();
+    let vecSignatureRows: Vec<(i32, i32, i32, bool)> = sqlx::query_as(
+        r#"SELECT id, COALESCE(score,0), COALESCE(max_score,0), COALESCE(passwd,'')<>''
+           FROM users WHERE id=ANY($1)"#,
+    )
+    .bind(&vecAuthorIds)
+    .fetch_all(&state.pool)
+    .await?;
+    let mapAuthorSignatures: std::collections::HashMap<i32, AuthorSignatureView> = vecSignatureRows
+        .into_iter()
+        .map(|(iUserId, iScore, iMaxScore, bRegistered)| {
+            (
+                iUserId,
+                stAuthorSignature(iScore, iMaxScore, bRegistered, bModeratorSession),
+            )
+        })
+        .collect();
+    let topic_author_signature = mapAuthorSignatures
+        .get(&topic.author_id)
+        .cloned()
+        .unwrap_or_default();
+
     let comments: Vec<CommentView> = page_comments
         .into_iter()
         .map(|item| {
@@ -2118,6 +2458,10 @@ async fn render_topic_view(
                     && chrono::Utc::now() <= item.postdate + chrono::Duration::minutes(30)
             });
             CommentView {
+                author_signature: mapAuthorSignatures
+                    .get(&item.author_id)
+                    .cloned()
+                    .unwrap_or_default(),
                 item,
                 html,
                 reactions_html: reactions.html,
@@ -2157,9 +2501,17 @@ async fn render_topic_view(
         topic_expired,
         query.results.unwrap_or(false),
         &current_user,
+        &csrf_token,
+        &topic.topic_url(),
     )
     .await?;
     let images = load_topic_images(&state, topic.id).await?;
+    let sPublicUrl = state.config.public_url.trim_end_matches('/');
+    let canonical_url = format!("{sPublicUrl}{}", topic.topic_url());
+    let og_image_url = images.first().map_or_else(
+        || format!("{sPublicUrl}/img/good-penguin.png"),
+        |stImage| format!("{sPublicUrl}{}", stImage.medium_url),
+    );
     let images_html = render_topic_images(
         &images,
         &topic.title,
@@ -2232,6 +2584,9 @@ async fn render_topic_view(
     Ok(Html(
         TopicTemplate {
             topic,
+            topic_author_signature,
+            canonical_url,
+            og_image_url,
             topic_html,
             comments,
             pages,
@@ -2616,6 +2971,7 @@ pub async fn new_topic_form(
             selected_group,
             is_edit: false,
             links_allowed: group.links_allowed,
+            premoderated: group.premoderated,
             poll_allowed: group.poll_allowed,
             image_allowed,
             image_required: group.image_required,
@@ -3114,6 +3470,7 @@ fn renderSubmittedAddTopicForm(
             selected_group: stForm.group,
             is_edit: false,
             links_allowed: stGroup.links_allowed,
+            premoderated: stGroup.premoderated,
             poll_allowed: stGroup.poll_allowed,
             image_allowed: bUploadAllowed,
             image_required: stGroup.image_required,
@@ -3567,6 +3924,7 @@ pub async fn edit_topic_form(
             selected_group,
             is_edit: true,
             links_allowed: group.links_allowed,
+            premoderated: group.premoderated,
             poll_allowed: group.poll_allowed,
             image_allowed,
             image_required: false,
@@ -4039,6 +4397,7 @@ pub async fn edit_topic(
                 selected_group: current_topic.group_id,
                 is_edit: true,
                 links_allowed: group.links_allowed,
+                premoderated: group.premoderated,
                 poll_allowed: group.poll_allowed,
                 image_allowed: upload_allowed,
                 image_required: false,

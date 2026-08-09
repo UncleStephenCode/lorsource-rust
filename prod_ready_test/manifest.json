@@ -1,0 +1,38 @@
+{
+  "password": "Birds-ProdReady-2026",
+  "users": [
+    {"id": 9100001, "nick": "swift45", "score": 45, "role": "user"},
+    {"id": 9100002, "nick": "finch50", "score": 50, "role": "user"},
+    {"id": 9100003, "nick": "lark70", "score": 70, "role": "user"},
+    {"id": 9100004, "nick": "robin201", "score": 201, "role": "user"},
+    {"id": 9100005, "nick": "oriole300", "score": 300, "role": "user"},
+    {"id": 9100006, "nick": "falcon500", "score": 500, "role": "user"},
+    {"id": 9100007, "nick": "heron750", "score": 750, "role": "user"},
+    {"id": 9100008, "nick": "raven1000", "score": 1000, "role": "user"},
+    {"id": 9100009, "nick": "crane2000", "score": 2000, "role": "user"},
+    {"id": 9100010, "nick": "albatross3000", "score": 3000, "role": "user"},
+    {"id": 9100011, "nick": "tern_corrector", "score": 850, "role": "corrector"},
+    {"id": 9100012, "nick": "ibis_corrector", "score": 650, "role": "corrector"},
+    {"id": 9100013, "nick": "hawk_moderator", "score": 1200, "role": "moderator"},
+    {"id": 9100014, "nick": "eagle_moderator", "score": 1800, "role": "senior_moderator"}
+  ],
+  "topics": [
+    {"id": 9101001, "path": "/news/android/9101001", "kind": "pending_news", "author": "swift45"},
+    {"id": 9101002, "path": "/news/russia/9101002", "kind": "news", "author": "robin201"},
+    {"id": 9101003, "path": "/forum/games/9101003", "kind": "forum", "author": "oriole300"},
+    {"id": 9101004, "path": "/forum/admin/9101004", "kind": "resolved_forum", "author": "falcon500"},
+    {"id": 9101005, "path": "/gallery/screenshots/9101005", "kind": "gallery_single", "author": "heron750"},
+    {"id": 9101006, "path": "/gallery/screenshots/9101006", "kind": "gallery_slider", "author": "raven1000"},
+    {"id": 9101007, "path": "/polls/polls/9101007", "kind": "poll", "author": "crane2000"},
+    {"id": 9101008, "path": "/polls/polls/9101008", "kind": "pending_poll", "author": "albatross3000"},
+    {"id": 9101009, "path": "/articles/development/9101009", "kind": "article", "author": "lark70"},
+    {"id": 9101010, "path": "/forum/linux-org-ru/9101010", "kind": "reactions", "author": "robin201"},
+    {"id": 9101011, "path": "/forum/talks/9101011", "kind": "score_boundary", "author": "finch50"},
+    {"id": 9101012, "path": "/news/opensource/9101012", "kind": "corrected_news", "author": "tern_corrector"},
+    {"id": 9101013, "path": "/forum/linux-org-ru/9101013", "kind": "moderator_topic", "author": "hawk_moderator"},
+    {"id": 9101014, "path": "/gallery/workplaces/9101014", "kind": "corrector_gallery", "author": "ibis_corrector"},
+    {"id": 9101015, "path": "/forum/security/9101015", "kind": "senior_moderator_topic", "author": "eagle_moderator"},
+    {"id": 9101017, "path": "/gallery/workplaces/9101017", "kind": "pending_gallery", "author": "ibis_corrector"},
+    {"id": 9101018, "path": "/articles/development/9101018", "kind": "pending_article", "author": "finch50"}
+  ]
+}

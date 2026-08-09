@@ -6,6 +6,7 @@
 {% match navigation %}{% when Some with (nav) %}
 <nav>
   {% match nav.section_url %}{% when Some with (url) %}<a class="btn btn-selected" href="{{ url }}">Лента</a>{% when None %}{% endmatch %}
+  {% if nav.uncommitted_count > 0 %}<a class="btn btn-default" href="/view-all.jsp?section={{ nav.section_id }}">Неподтверждённые: {{ nav.uncommitted_count }}</a>{% endif %}
   {% match nav.archive_url %}{% when Some with (url) %}<a class="btn btn-default" href="{{ url }}">Архив</a>{% when None %}{% endmatch %}
   {% match nav.moderator_group_id %}{% when Some with (group_id) %}<a class="btn btn-default" href="/groupmod.jsp?group={{ group_id }}">Править группу</a>{% when None %}{% endmatch %}
   {% match nav.add_url %}{% when Some with (url) %}<a href="{{ url }}" class="btn btn-primary">Добавить</a>{% when None %}<a class="btn btn-primary disabled" title="{{ nav.add_reason }}"><i class="icon-lock"></i> Добавить</a>{% endmatch %}
@@ -17,6 +18,8 @@
   {% endif %}
 </nav>
 {% when None %}{% endmatch %}
+
+{% match navigation %}{% when Some with (nav) %}{% if nav.active_tags.len() > 0 %}<div class="infoblock" style="font-size: medium">Активные теги: {% for tag in nav.active_tags %}<a class="tag" href="{{ tag.url }}">{{ tag.name }}</a>{% if !loop.last %}, {% endif %}{% endfor %}</div>{% endif %}{% when None %}{% endmatch %}
 
 {% if tracker_layout %}
 <div class="tracker">
@@ -31,12 +34,7 @@
 </div>
 {% else %}
 {% for t in news %}
-<article class="news" id="topic-{{ t.topic.id }}">
-  <header>{% if t.show_group %}<div class="group"><a href="/{{ t.topic.section_prefix }}/">{{ t.topic.section_name }}</a> — <a href="/{{ t.topic.section_prefix }}/{{ t.topic.group_urlname }}">{{ t.topic.group_title }}</a></div>{% endif %}<h1>{% if t.topic.resolved.unwrap_or(false) %}<i class="icon-check" title="решено"></i>{% endif %}<a href="{{ t.topic.topic_url() }}">{{ t.topic.title }}</a></h1>{% if t.topic.tags_vec().len() > 0 %}<p class="tags"><i class="icon-tag"></i>&nbsp;{% for tag in t.topic.tags_vec() %}<a class="tag" href="/tag/{{ tag }}">{{ tag }}</a>{% if !loop.last %}, {% endif %}{% endfor %}</p>{% endif %}</header>
-  {{ t.images_html|safe }}
-  {% match t.group_image_url %}{% when Some with (image) %}<div class="entry-userpic"><a href="/{{ t.topic.section_prefix }}/{{ t.topic.group_urlname }}"><img class="groupimg" src="{{ image }}" alt="Группа {{ t.topic.group_title }}"></a></div>{% when None %}{% endmatch %}
-  <div class="entry-body"><div class="msg">{{ t.topic_html|safe }}{% match t.topic.url %}{% when Some with (url) %}<p>&gt;&gt;&gt; <a href="{{ url }}">{{ t.linktext }}</a></p>{% when None %}{% endmatch %}</div><div class="sign"><a href="/people/{{ t.topic.author }}/profile">{{ t.topic.author }}</a> (<time data-format="default" datetime="{{ t.topic.postdate.to_rfc3339() }}">{{ t.topic.postdate }}</time>)</div><div class="nav">{% if t.topic.comments == 0 %}<a href="/comment-message.jsp?topic={{ t.topic.id }}">Добавить&nbsp;комментарий</a>{% else %}<a href="{{ t.topic.topic_url() }}#comments">{{ t.topic.comments }} комментариев</a>{% endif %}</div></div>
-</article>
+{% include "news_card.html" %}
 {% endfor %}
 {% endif %}
 

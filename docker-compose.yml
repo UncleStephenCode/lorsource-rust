@@ -43,6 +43,10 @@ services:
       WS_URL: ${WS_URL:-ws://localhost:8181/}
       UPLOAD_DIR: /app/uploads
       SITE_SECRET: change-me-in-production-change-me-in-production
+      # Official hCaptcha integration-test pair. It has no anti-bot value and
+      # is deliberately confined to this disposable local Compose setup.
+      CAPTCHA_PUBLIC_KEY: "10000000-ffff-ffff-ffff-000000000001"
+      CAPTCHA_PRIVATE_KEY: "0x0000000000000000000000000000000000000000"
       RUST_LOG: lorsource_rust=debug,tower_http=info,sqlx=warn
       OPENSEARCH_URL: http://opensearch:9200
       SMTP_HOST: ${SMTP_HOST:-localhost}

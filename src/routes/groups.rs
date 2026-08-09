@@ -46,7 +46,7 @@ struct GroupTopicView {
     topic: TopicSummary,
     last_author: String,
     last_postdate: chrono::DateTime<chrono::Utc>,
-    last_url: String,
+    target_url: String,
     comments: i32,
     comments_closed: bool,
 }
@@ -71,6 +71,7 @@ async fn vecPrepareGroupTopics(
     vecTopics: Vec<TopicSummary>,
     optIgnoreUserId: Option<i32>,
     iMessages: i32,
+    bLastmod: bool,
 ) -> Result<Vec<GroupTopicView>> {
     if vecTopics.is_empty() {
         return Ok(Vec::new());
@@ -113,7 +114,9 @@ async fn vecPrepareGroupTopics(
             let iPages = ((stTopic.comments.max(0) + iMessages - 1) / iMessages).max(0);
             let sCanonical = stTopic.sTopicUrl();
             let iLastCommentId = stActivity.last_comment_id.unwrap_or(0);
-            let sLastUrl = if iPages > 1 {
+            let sTargetUrl = if !bLastmod {
+                sCanonical
+            } else if iPages > 1 {
                 format!("{sCanonical}/page{}?lastmod={iLastCommentId}", iPages - 1)
             } else {
                 format!("{sCanonical}?lastmod={iLastCommentId}")
@@ -127,7 +130,7 @@ async fn vecPrepareGroupTopics(
                 comments_closed: stActivity.postscore >= 10000,
                 last_author: stActivity.last_author.clone(),
                 last_postdate: stActivity.last_postdate,
-                last_url: sLastUrl,
+                target_url: sTargetUrl,
                 topic: stTopic,
             })
         })
@@ -349,7 +352,8 @@ pub async fn group_page(
     } else {
         crate::profile::ProfileSettings::default()
     };
-    let topics = vecPrepareGroupTopics(&state, topics, ignore_user_id, stProfile.messages).await?;
+    let topics =
+        vecPrepareGroupTopics(&state, topics, ignore_user_id, stProfile.messages, lastmod).await?;
 
     let restriction: i32 = sqlx::query_scalar("SELECT GREATEST(COALESCE(g.restrict_topics,-9999),COALESCE(s.restrict_topics,-9999)) FROM groups g JOIN sections s ON s.id=g.section WHERE g.id=$1")
         .bind(group_id).fetch_one(&state.pool).await?;

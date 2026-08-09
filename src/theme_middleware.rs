@@ -61,28 +61,35 @@ fn theme_view(style: &str) -> ThemeView<'_> {
     }
 }
 
-async fn resolve_profile(state: &AppState, jar: &CookieJar) -> (String, Option<String>) {
+async fn resolve_profile(state: &AppState, jar: &CookieJar) -> (String, Option<String>, String) {
     if let Ok(Some(user_id)) =
         crate::auth::optUserIdFromCookies(&state.pool, jar, &state.config.site_secret).await
     {
-        let profile: Option<(Option<String>, String)> = sqlx::query_as(
-            "SELECT us.settings->'style', u.nick FROM users u LEFT JOIN user_settings us ON us.id=u.id WHERE u.id=$1",
+        let profile: Option<(Option<String>, Option<String>, String)> = sqlx::query_as(
+            "SELECT us.settings->'style', us.settings->'format.mode', u.nick FROM users u LEFT JOIN user_settings us ON us.id=u.id WHERE u.id=$1",
         )
         .bind(user_id)
         .fetch_optional(&state.pool)
         .await
         .ok()
         .flatten();
-        if let Some((style, nick)) = profile {
+        if let Some((style, format_mode, nick)) = profile {
             return (
                 style
                     .filter(|value| is_style(value))
                     .unwrap_or_else(|| DEFAULT_STYLE.to_string()),
                 Some(nick),
+                format_mode
+                    .filter(|value| crate::profile::is_format_mode(value))
+                    .unwrap_or_else(|| crate::profile::DEFAULT_FORMAT_MODE.to_string()),
             );
         }
     }
-    (DEFAULT_STYLE.to_string(), None)
+    (
+        DEFAULT_STYLE.to_string(),
+        None,
+        crate::profile::DEFAULT_FORMAT_MODE.to_string(),
+    )
 }
 
 fn login_block(nick: Option<&str>, pony: bool) -> String {
@@ -201,13 +208,24 @@ fn render_header(style: &str, nick: Option<&str>, main_page: bool) -> String {
 
 const THEME_INDICATOR: &str = r#"<div id="theme-indicator"><span class="theme-indicator-dark" title="Темная тема"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M9.37,5.51C9.19,6.15,9.1,6.82,9.1,7.5c0,4.08,3.32,7.4,7.4,7.4c0.68,0,1.35-0.09,1.99-0.27C17.45,17.19,14.93,19,12,19 c-3.86,0-7-3.14-7-7C5,9.07,6.81,6.55,9.37,5.51z M12,3c-4.97,0-9,4.03-9,9s4.03,9,9,9s9-4.03,9-9c0-0.46-0.04-0.92-0.1-1.36 c-0.98,1.37-2.58,2.26-4.4,2.26c-2.98,0-5.4-2.42-5.4-5.4c0-1.81,0.89-3.42,2.26-4.4C12.92,3.04,12.46,3,12,3L12,3z"></path></svg></span><span class="theme-indicator-light" title="Светлая тема"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M12,9c1.65,0,3,1.35,3,3s-1.35,3-3,3s-3-1.35-3-3S10.35,9,12,9 M12,7c-2.76,0-5,2.24-5,5s2.24,5,5,5s5-2.24,5-5 S14.76,7,12,7L12,7z M2,13l2,0c0.55,0,1-0.45,1-1s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S1.45,13,2,13z M20,13l2,0c0.55,0,1-0.45,1-1 s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S19.45,13,20,13z M11,2v2c0,0.55,0.45,1,1,1s1-0.45,1-1V2c0-0.55-0.45-1-1-1S11,1.45,11,2z M11,20v2c0,0.55,0.45,1,1,1s1-0.45,1-1v-2c0-0.55-0.45-1-1-1C11.45,19,11,19.45,11,20z M5.99,4.58c-0.39-0.39-1.03-0.39-1.41,0 c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0s0.39-1.03,0-1.41L5.99,4.58z M18.36,16.95 c-0.39-0.39-1.03-0.39-1.41,0c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0c0.39-0.39,0.39-1.03,0-1.41 L18.36,16.95z M19.42,5.99c0.39-0.39,0.39-1.03,0-1.41c-0.39,0.39-1.03-0.39-1.41,0l-1.06,1.06c-0.39,0.39-0.39,1.03,0,1.41 s1.03,0.39,1.41,0L19.42,5.99z M7.05,18.36c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06 c-0.39,0.39-0.39,1.03,0,1.41s1.03,0.39,1.41,0L7.05,18.36z"></path></svg></span><span class="theme-indicator-auto" title="Системная тема"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="m12 21c4.971 0 9-4.029 9-9s-4.029-9-9-9-9 4.029-9 9 4.029 9 9 9zm4.95-13.95c1.313 1.313 2.05 3.093 2.05 4.95s-0.738 3.637-2.05 4.95c-1.313 1.313-3.093 2.05-4.95 2.05v-14c1.857 0 3.637 0.737 4.95 2.05z"></path></svg></span></div>"#;
 
-fn render_footer(public_url: &str, ws_url: &str, authenticated: bool, main_page: bool) -> String {
+fn render_footer(
+    public_url: &str,
+    ws_url: &str,
+    authenticated: bool,
+    main_page: bool,
+    format_mode: &str,
+) -> String {
     let info = if main_page {
         r#"<p id="ft-info"><a href="/about">О Сервере</a> - <a href="/help/rules.md">Правила форума</a><br>Разработка и&nbsp;поддержка&nbsp;— <a href="/people/maxcom/profile">Максим Валянский</a> 1998–2026<br>Сервер для сайта предоставлен «<a href="http://www.ittelo.ru/" target="_blank">ITTelo</a>»<br>Размещение сервера и&nbsp;подключение к&nbsp;сети Интернет осуществляется компанией «<a href="https://selectel.ru/?ref_code=3dce4333ba" target="_blank">Selectel</a>».</p>"#.to_string()
     } else {
         let url = html_escape::encode_double_quoted_attribute(public_url);
+        let markup_help = match format_mode {
+            "lorcode" => r#" - <a href="/help/lorcode.md">Разметка LORCODE</a>"#,
+            "markdown" => r#" - <a href="/help/markdown.md">Разметка Markdown</a>"#,
+            _ => "",
+        };
         format!(
-            r#"<p id="ft-info"><a href="/about">О Сервере</a> - <a href="/help/rules.md">Правила форума</a><br><a href="https://github.com/maxcom/lorsource/issues">Сообщить об ошибке</a><br><a href="{url}">{url}</a></p>"#
+            r#"<p id="ft-info"><a href="/about">О Сервере</a> - <a href="/help/rules.md">Правила форума</a>{markup_help}<br><a href="https://github.com/maxcom/lorsource/issues">Сообщить об ошибке</a><br><a href="{url}">{url}</a></p>"#
         )
     };
     let theme_indicator = THEME_INDICATOR.replace(
@@ -232,7 +250,12 @@ pub async fn apply_theme(
     next: Next,
 ) -> Response {
     let main_page = matches!(req.uri().path(), "/" | "/index.jsp");
-    let (style, nick) = resolve_profile(&state, &jar).await;
+    let sCurrentUrl = req
+        .uri()
+        .path_and_query()
+        .map_or("/", axum::http::uri::PathAndQuery::as_str)
+        .to_owned();
+    let (style, nick, format_mode) = resolve_profile(&state, &jar).await;
     let response = next.run(req).await;
     let is_html = response
         .headers()
@@ -265,11 +288,24 @@ pub async fn apply_theme(
         &format!("{}\" data-lor-theme-stylesheet", view.stylesheet),
         1,
     );
+    let sBaseUrl = format!("{}/", state.config.public_url.trim_end_matches('/'));
     text = text.replacen(
-        "<!-- LOR_THEME_HEADER -->",
-        &render_header(&style, nick.as_deref(), main_page),
+        "<!-- LOR_BASE_URL -->",
+        &html_escape::encode_double_quoted_attribute(&sBaseUrl),
         1,
     );
+    let mut sHeader = render_header(&style, nick.as_deref(), main_page);
+    if nick.is_none() {
+        sHeader = sHeader.replacen(
+            "href=\"/login.jsp\"",
+            &format!(
+                "href=\"/login.jsp?from={}\"",
+                urlencoding::encode(&sCurrentUrl)
+            ),
+            1,
+        );
+    }
+    text = text.replacen("<!-- LOR_THEME_HEADER -->", &sHeader, 1);
     text = text.replacen(
         "<!-- LOR_THEME_FOOTER -->",
         &render_footer(
@@ -277,6 +313,7 @@ pub async fn apply_theme(
             &state.config.ws_url,
             nick.is_some(),
             main_page,
+            &format_mode,
         ),
         1,
     );
@@ -353,13 +390,25 @@ mod tests {
         assert!(!black_header(None, true).contains("Уведомления"));
         assert!(black_header(Some("user"), true).contains("Уведомления"));
         assert!(
-            !render_footer("https://example/", "wss://example/", false, false)
-                .contains("RealtimeContext.start")
+            !render_footer(
+                "https://example/",
+                "wss://example/",
+                false,
+                false,
+                "markdown"
+            )
+            .contains("RealtimeContext.start")
         );
-        let authenticated_footer =
-            render_footer("https://example/", "wss://example/ws-root/", true, false);
+        let authenticated_footer = render_footer(
+            "https://example/",
+            "wss://example/ws-root/",
+            true,
+            false,
+            "lorcode",
+        );
         assert!(authenticated_footer.contains("$script.ready('realtime'"));
         assert!(authenticated_footer.contains("RealtimeContext.start(\"wss://example/ws-root/\")"));
+        assert!(authenticated_footer.contains("Разметка LORCODE"));
     }
 
     #[test]

@@ -9,6 +9,17 @@ use regex::Regex;
 static URL_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"https?://[^\s<>"']+"#).expect("url regex"));
 static USER_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"@([A-Za-z0-9_][A-Za-z0-9_.-]{1,79})").expect("user regex"));
+static LOR_CUT_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?is)\[cut(?:=([^\]]*))?\](.*?)\[/cut\]").expect("LOR cut regex"));
+
+#[derive(Debug, Clone)]
+enum EnCutPiece {
+    Text(String),
+    Cut {
+        content: String,
+        label: Option<String>,
+    },
+}
 
 /// CommentCreateService.notifyMentions: pulls @nick references out of raw
 /// (unrendered) message source, deduplicated, in first-seen order - used to
@@ -50,6 +61,128 @@ pub fn render_message_with_markup(
     // pulldown-cmark's raw-HTML passthrough and closes any escaping bug in
     // the hand-rolled autolinker above from becoming stored XSS.
     sanitize_html(&html)
+}
+
+/// Topic preview in section feeds.  Java renders topic cuts collapsed in
+/// `PreparedTopic` while the canonical topic page expands the same content.
+pub fn render_topic_with_minimized_cut(source: &str, markup: &str, canonical_url: &str) -> String {
+    render_topic_cut(source, markup, canonical_url, true)
+}
+
+pub fn render_topic_with_expanded_cut(source: &str, markup: &str) -> String {
+    render_topic_cut(source, markup, "", false)
+}
+
+fn render_topic_cut(source: &str, markup: &str, canonical_url: &str, minimized: bool) -> String {
+    let (pieces, markdown) = if markup == "MARKDOWN" {
+        (markdown_cut_pieces(source), true)
+    } else if matches!(markup, "BBCODE_TEX" | "BBCODE_ULB" | "LORCODE") {
+        (lor_cut_pieces(source), false)
+    } else {
+        return render_message_with_markup(source, Some(markup), None);
+    };
+    if !pieces
+        .iter()
+        .any(|piece| matches!(piece, EnCutPiece::Cut { .. }))
+    {
+        return render_message_with_markup(source, Some(markup), None);
+    }
+
+    let mut html = String::new();
+    let mut cut_index = 0usize;
+    for piece in pieces {
+        match piece {
+            EnCutPiece::Text(text) => {
+                html.push_str(&render_message_with_markup(&text, Some(markup), None));
+            }
+            EnCutPiece::Cut { content, label } => {
+                let anchor = if markdown {
+                    if cut_index == 0 {
+                        "cut".to_owned()
+                    } else {
+                        format!("cut-{cut_index}")
+                    }
+                } else {
+                    format!("cut{cut_index}")
+                };
+                if minimized {
+                    let href_value = format!("{canonical_url}#{anchor}");
+                    let href = html_escape::encode_double_quoted_attribute(&href_value);
+                    let label = label
+                        .filter(|value| !value.trim().is_empty())
+                        .map(|value| html_escape::encode_text(value.trim()).into_owned())
+                        .unwrap_or_else(|| "читать дальше...".to_owned());
+                    html.push_str(&format!("<p>( <a href=\"{href}\">{label}</a> )</p>"));
+                } else {
+                    html.push_str(&format!("<div id=\"{anchor}\">"));
+                    html.push_str(&render_message_with_markup(&content, Some(markup), None));
+                    html.push_str("</div>");
+                }
+                cut_index += 1;
+            }
+        }
+    }
+    html
+}
+
+fn lor_cut_pieces(source: &str) -> Vec<EnCutPiece> {
+    let mut pieces = Vec::new();
+    let mut offset = 0usize;
+    for captures in LOR_CUT_RE.captures_iter(source) {
+        let whole = captures.get(0).expect("whole cut capture");
+        if whole.start() > offset {
+            pieces.push(EnCutPiece::Text(source[offset..whole.start()].to_owned()));
+        }
+        pieces.push(EnCutPiece::Cut {
+            label: captures.get(1).map(|value| value.as_str().to_owned()),
+            content: captures
+                .get(2)
+                .map_or_else(String::new, |value| value.as_str().to_owned()),
+        });
+        offset = whole.end();
+    }
+    if offset < source.len() {
+        pieces.push(EnCutPiece::Text(source[offset..].to_owned()));
+    }
+    pieces
+}
+
+fn markdown_cut_pieces(source: &str) -> Vec<EnCutPiece> {
+    let mut pieces = Vec::new();
+    let mut text = String::new();
+    let mut cut = None::<String>;
+    for line in source.split_inclusive('\n') {
+        let marker = line.trim_end_matches(['\r', '\n']);
+        if cut.is_none() && marker == ">>>" {
+            if !text.is_empty() {
+                pieces.push(EnCutPiece::Text(std::mem::take(&mut text)));
+            }
+            cut = Some(String::new());
+        } else if marker == "<<<" {
+            if let Some(content) = cut.take() {
+                pieces.push(EnCutPiece::Cut {
+                    content,
+                    label: None,
+                });
+            } else {
+                text.push_str(line);
+            }
+        } else if let Some(content) = cut.as_mut() {
+            content.push_str(line);
+        } else {
+            text.push_str(line);
+        }
+    }
+    if let Some(content) = cut {
+        pieces.push(EnCutPiece::Cut {
+            content,
+            label: None,
+        });
+    }
+    if !text.is_empty() {
+        pieces.push(EnCutPiece::Text(text));
+    }
+    pieces
 }
 
 fn sanitize_html(html: &str) -> String {
@@ -163,5 +296,24 @@ mod tests {
             render_message_with_markup("<b>текст</b>", Some("PLAIN"), None)
                 .contains("<b>текст</b>")
         );
+    }
+
+    #[test]
+    fn topic_cuts_are_collapsed_in_feeds_and_expanded_on_topic_page() {
+        let markdown = "до\n\n>>>\nскрыто\n<<<\nпосле";
+        let collapsed = render_topic_with_minimized_cut(markdown, "MARKDOWN", "/news/g/1");
+        assert!(
+            collapsed.contains("href=\"/news/g/1#cut\"") && collapsed.contains("читать дальше")
+        );
+        assert!(!collapsed.contains("скрыто"));
+        let expanded = render_topic_with_expanded_cut(markdown, "MARKDOWN");
+        assert!(expanded.contains("<div id=\"cut\">") && expanded.contains("скрыто"));
+
+        let lor = "до [cut=ещё]скрыто[/cut] после";
+        let collapsed = render_topic_with_minimized_cut(lor, "BBCODE_TEX", "/forum/g/2");
+        assert!(collapsed.contains("href=\"/forum/g/2#cut0\"") && collapsed.contains("ещё"));
+        assert!(!collapsed.contains("скрыто"));
+        let expanded = render_topic_with_expanded_cut(lor, "BBCODE_TEX");
+        assert!(expanded.contains("<div id=\"cut0\">") && expanded.contains("скрыто"));
     }
 }
