@@ -1,6 +1,6 @@
 {% if !t.minor %}<article class="news" id="topic-{{ t.topic.id }}">
   <header>
-    {% if t.show_group %}<div class="group"><a href="/{{ t.topic.section_prefix }}/">{{ t.topic.section_name }}</a> — <a href="/{{ t.topic.section_prefix }}/{{ t.topic.group_urlname }}">{{ t.topic.group_title }}</a>{% if t.moderate_mode %} <span>(не подтверждено)</span>{% endif %}</div>{% endif %}
+    {% if t.show_group %}<div class="group"><a href="/{{ t.topic.section_prefix }}/">{{ t.topic.section_name }}</a> — <a href="/{{ t.topic.section_prefix }}/{{ t.topic.group_urlname }}">{{ t.topic.group_title }}</a>{% if t.pending %} <span>(не подтверждено)</span>{% endif %}</div>{% endif %}
     <h1>{% if t.topic.resolved.unwrap_or(false) %}<i class="icon-check" title="решено"></i>{% endif %}<a href="{{ t.topic.topic_url() }}">{{ t.topic.title }}</a></h1>
     {% if t.tags.len() > 0 %}<p class="tags"><i class="icon-tag"></i>&nbsp;{% for tag in t.tags %}<a class="tag" href="{{ tag.url }}">{{ tag.value }}</a>{% if !loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
   </header>
@@ -20,9 +20,9 @@
         {% if t.can_edit %}[<a href="/edit.jsp?msgid={{ t.topic.id }}">Править</a>]{% endif %}
         {% if t.topic.comments > 0 %}<a href="{{ t.topic.topic_url() }}#comments">{{ t.topic.comments }} комментариев</a>{% endif %}
       {% else %}
-        {% if t.topic.comments == 0 %}<a href="/comment-message.jsp?topic={{ t.topic.id }}">Добавить&nbsp;комментарий</a>{% else %}<a href="{{ t.topic.topic_url() }}#comments">{{ t.topic.comments }} комментариев</a>{% endif %}
+        {% if t.topic.comments == 0 %}{% if t.can_comment %}<a href="/comment-message.jsp?topic={{ t.topic.id }}">Добавить&nbsp;комментарий</a>{% endif %}{% else %}<a href="{{ t.topic.topic_url() }}#comments">{{ t.topic.comments }} комментариев</a>{% endif %}
       {% endif %}
     </div>
   </div>
 </article>
-{% else %}<article class="infoblock mini-news" id="topic-{{ t.topic.id }}"><a href="{{ t.topic.topic_url() }}">{{ t.topic.title }}</a>{% if t.show_group && t.moderate_mode %} <span>(не подтверждено)</span>{% endif %}{% if t.topic.comments > 0 %} (<a href="{{ t.topic.topic_url() }}#comments">{{ t.topic.comments }} комментариев</a>){% endif %}</article>{% endif %}
+{% else %}<article class="infoblock mini-news" id="topic-{{ t.topic.id }}"><a href="{{ t.topic.topic_url() }}">{{ t.topic.title }}</a>{% if t.show_group && t.pending %} <span>(не подтверждено)</span>{% endif %}{% if t.topic.comments > 0 %} (<a href="{{ t.topic.topic_url() }}#comments">{{ t.topic.comments }} комментариев</a>){% endif %}</article>{% endif %}

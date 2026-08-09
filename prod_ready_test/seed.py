@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 import os
 import subprocess
 import sys
@@ -28,6 +29,22 @@ PHOTO_IDS = {
     9100013: (130, 70, 25, "HM"),
     9100014: (45, 95, 55, "EM"),
 }
+FIXTURE_NICKS = (
+    "swift45",
+    "finch50",
+    "lark70",
+    "robin201",
+    "oriole300",
+    "falcon500",
+    "heron750",
+    "raven1000",
+    "crane2000",
+    "albatross3000",
+    "tern_corrector",
+    "ibis_corrector",
+    "hawk_moderator",
+    "eagle_moderator",
+)
 
 
 def run(
@@ -94,8 +111,8 @@ def verify_target() -> None:
         raise RuntimeError("unexpected section catalog; refusing to mutate the database")
 
 
-def load_sql() -> None:
-    compose(
+def load_sql(accounts_only: bool) -> None:
+    arguments = [
         "exec",
         "-T",
         "postgres",
@@ -107,10 +124,59 @@ def load_sql() -> None:
         "lor",
         "-v",
         "ON_ERROR_STOP=1",
+    ]
+    if accounts_only:
+        arguments.extend(("-v", "accounts_only=true"))
+    arguments.extend((
         "-f",
         "-",
+    ))
+    compose(
+        *arguments,
         input_bytes=SEED_SQL.read_bytes(),
     )
+
+
+def reset_search_fixture() -> None:
+    """Remove only fixture-authored documents left by earlier UI runs."""
+
+    payload = json.dumps(
+        {
+            "query": {
+                "bool": {
+                    "should": [
+                        {"terms": {"author": FIXTURE_NICKS}},
+                        {"terms": {"topic_author": FIXTURE_NICKS}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            }
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    response = compose(
+        "exec",
+        "-T",
+        "opensearch",
+        "curl",
+        "-sS",
+        "-XPOST",
+        "http://localhost:9200/messages/_delete_by_query?refresh=true&conflicts=proceed",
+        "-H",
+        "Content-Type: application/json",
+        "--data-binary",
+        "@-",
+        "-w",
+        "\n%{http_code}",
+        input_bytes=payload,
+        capture=True,
+    )
+    body, _, status = response.stdout.decode("utf-8").rpartition("\n")
+    if status not in {"200", "404"}:
+        raise RuntimeError(f"OpenSearch fixture cleanup failed: HTTP {status}: {body[:500]}")
+    if status == "200":
+        result = json.loads(body)
+        print(f"OpenSearch fixture cleanup: {result.get('deleted', 0)} documents")
 
 
 def image_bytes(
@@ -185,7 +251,15 @@ def load_media() -> None:
         put_file(f"/app/uploads/photos/{user_id}.png", photo)
 
 
-def print_summary() -> None:
+def print_summary(accounts_only: bool) -> None:
+    if accounts_only:
+        print(
+            "prod_ready_test loaded: "
+            + query("SELECT count(*) FROM users WHERE id BETWEEN 9100001 AND 9100014")
+            + " accounts; content must be created by browser_seed.py"
+        )
+        print("All fixture passwords: Birds-ProdReady-2026")
+        return
     summary = query(
         "SELECT "
         "(SELECT count(*) FROM users WHERE id BETWEEN 9100001 AND 9100014)||' users, '||"
@@ -215,6 +289,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="load SQL only (gallery UI tests will intentionally fail)",
     )
+    parser.add_argument(
+        "--accounts-only",
+        action="store_true",
+        help="insert fixture accounts/settings only; create all content through browser_seed.py",
+    )
     return parser.parse_args()
 
 
@@ -230,10 +309,11 @@ def main() -> int:
     if args.start:
         compose("up", "-d")
     verify_target()
-    load_sql()
-    if not args.skip_media:
+    load_sql(args.accounts_only)
+    reset_search_fixture()
+    if not args.skip_media and not args.accounts_only:
         load_media()
-    print_summary()
+    print_summary(args.accounts_only)
     return 0
 
 

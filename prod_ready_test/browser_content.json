@@ -1,0 +1,67 @@
+{
+  "source_window_hours": 24,
+  "author": "raven1000",
+  "commenter": "crane2000",
+  "moderator": "hawk_moderator",
+  "topics": [
+    {
+      "key": "atomic-gallery",
+      "group_path": "/gallery/screenshots/",
+      "title": "Габен великим дозволением позволил жителям СНГ приобретать у него Atomic Heart...",
+      "body": "Тестовая карточка по мотивам свежей галереи LOR: игра на OpenSUSE Tumbleweed, два скриншота и длинный заголов.\n\n[Оригинал на LOR](https://www.linux.org.ru/gallery/screenshots/18354628)",
+      "tags": "atomic, opensuse, steam, tumbleweed, игры",
+      "images": 2,
+      "commit": true
+    },
+    {
+      "key": "polychromatic",
+      "group_path": "/news/hardware/",
+      "title": "Polychromatic 0.9.8",
+      "body": "Вышел Polychromatic 0.9.8 — графический интерфейс для настройки подсветки Razer в GNU/Linux. Релиз добавляет карту клавиатуры Razer Blade 16 и улучшает локализацию.\n\n>>>\nПосле cut проверяется полная версия текста в теме.\n<<<",
+      "tags": "gui, python, qt, razer",
+      "url": "https://github.com/polychromatic/polychromatic/releases/tag/v0.9.8",
+      "linktext": "Источник",
+      "images": 1,
+      "commit": true
+    },
+    {
+      "key": "wine",
+      "group_path": "/news/opensource/",
+      "title": "Wine 11.15",
+      "body": "Тестовая новость о Wine 11.15. В релиз вошли сборка ARM64EC в MinGW, локальная NTLM-аутентификация и исправления WindowsCodecs.",
+      "tags": "arm64, wine",
+      "url": "https://gitlab.winehq.org/wine/wine/-/releases/wine-11.15",
+      "linktext": "Подробности",
+      "images": 0,
+      "commit": true
+    },
+    {
+      "key": "proxmox-arm",
+      "group_path": "/news/clusters/",
+      "title": "Proxmox VE получил официальную поддержку 64-разрядных ARM-серверов",
+      "body": "Proxmox VE 9.2 получил официальную ARM64-версию с общей кодовой базой и репозиториями для x86-64 и ARM.",
+      "tags": "arm64, proxmox",
+      "url": "https://www.proxmox.com/en/about/company-details/press-releases/proxmox-virtual-environment-launches-official-arm64-support",
+      "linktext": "Источник",
+      "images": 1,
+      "commit": true
+    },
+    {
+      "key": "myoffice-pending",
+      "group_path": "/news/commercial/",
+      "title": "«МойОфис» закрыл офисы в Петербурге и Иннополисе, штат компании сократился примерно в четыре раза",
+      "body": "Тестовая новость о реструктуризации «МойОфиса». Она намеренно остаётся неподтверждённой, чтобы проверить её карточку в истории автора.",
+      "tags": "мойофис, офисное по, россия, увольнение",
+      "url": "https://www.linux.org.ru/news/proprietary/18355249",
+      "linktext": "Оригинал на LOR",
+      "images": 1,
+      "commit": false
+    }
+  ],
+  "comments": [
+    {"topic": "proxmox-arm", "body": "Проверяю картинку и ARM64-карточку в списке."},
+    {"topic": "atomic-gallery", "body": "Проверяю ответ к галерее и ссылку на комментарий."},
+    {"topic": "polychromatic", "body": "Комментарий должен попасть в поиск и историю crane2000."},
+    {"topic": "wine", "body": "Вторая тема для проверки сортировки комментариев по дате."}
+  ]
+}

@@ -111,7 +111,6 @@ struct TopicTemplate {
     /// Non-empty only outside thread/deleted mode, when there's more than
     /// one page of comments (TopicController.buildPages).
     pages: Vec<CommentPageLink>,
-    thread_mode: bool,
     thread_root: Option<i32>,
     show_deleted: bool,
     /// Java's `showDeletedButton`: only a moderator viewing the live
@@ -197,6 +196,26 @@ mod realtime_browser_contract_tests {
         assert!(sTopic.contains("data-format=\"default\""));
         assert_eq!(sTopic.matches("id=\"realtime\"").count(), 1);
         assert!(sTopic.contains("{{ realtime_bootstrap_html|safe }}"));
+        assert!(sTopic.contains("<div class=\"userpic\"><img class=\"photo\""));
+        assert!(sTopic.contains("message-w-userpic"));
+        assert!(sTopic.contains("Ответ на:"));
+        assert!(sTopic.contains("c.answer_count == 1"));
+        assert!(!sTopic.contains("<h2>Комментарии:"));
+
+        let sArchive = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/templates/archive_index.html"
+        ));
+        assert!(sArchive.contains("action=\"/search.jsp\""));
+        assert!(sArchive.contains("name=\"section\""));
+        assert!(sArchive.contains("href=\"{{ archive_url }}\""));
+
+        let sNewsCard = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/templates/news_card.html"
+        ));
+        assert!(sNewsCard.contains("{% if t.can_comment %}"));
+        assert!(sNewsCard.contains("/comment-message.jsp?topic={{ t.topic.id }}"));
     }
 
     #[test]
@@ -230,10 +249,24 @@ mod realtime_browser_contract_tests {
 struct CommentView {
     item: CommentItem,
     author_signature: AuthorSignatureView,
+    userpic_url: Option<String>,
+    userpic_width: i32,
+    userpic_height: i32,
+    reply: Option<CommentReplyView>,
+    answer_count: usize,
+    answer_url: String,
     html: String,
     reactions_html: String,
     show_reactions_link: bool,
     can_edit: bool,
+}
+
+#[derive(Debug, Clone)]
+struct CommentReplyView {
+    id: i32,
+    title: Option<String>,
+    author: String,
+    postdate: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -243,6 +276,8 @@ struct AuthorSignatureView {
     max_score: i32,
     show_score: bool,
 }
+
+type TyAuthorPresentationRow = (i32, i32, i32, bool, Option<String>, Option<String>);
 
 /// `User.getStars`: at most five filled stars for current score plus hollow
 /// stars up to the historical maximum. Both values are capped at 599 before
@@ -332,6 +367,7 @@ pub(crate) struct NewsTopicView {
     pub(crate) show_group: bool,
     pub(crate) poll: Option<PollView>,
     pub(crate) minor: bool,
+    pub(crate) pending: bool,
     /// `news.tag` is also used by the Java premoderation queue with
     /// `moderateMode=true`.  Keep that mode on the same prepared card so the
     /// queue cannot silently drift back to a compact topic list.
@@ -339,6 +375,9 @@ pub(crate) struct NewsTopicView {
     pub(crate) can_commit: bool,
     pub(crate) can_delete: bool,
     pub(crate) can_edit: bool,
+    /// Java `news.tag` renders the zero-comment action only when
+    /// `messageMenu.commentsAllowed` is true for the current session.
+    pub(crate) can_comment: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -574,6 +613,14 @@ pub(crate) async fn prepare_news_topics_for_viewer(
     csrf_token: &str,
 ) -> Result<Vec<NewsTopicView>> {
     let mut prepared = Vec::with_capacity(topics.len());
+    let stPostingResolution = crate::application::auth::stResolvePostingIdentity(
+        state,
+        current_user.as_ref(),
+        None,
+        None,
+    )
+    .await?;
+    let stPostingIdentity = stPostingResolution.stIdentity;
     for topic in topics {
         type TyNewsTopicRow = (
             String,
@@ -583,25 +630,35 @@ pub(crate) async fn prepare_news_topics_for_viewer(
             bool,
             bool,
             bool,
+            bool,
         );
         let row: Option<TyNewsTopicRow> = sqlx::query_as(
-            "SELECT m.message, m.markup::text, t.linktext, g.image, t.moderate, COALESCE(t.commitdate,t.postdate)+s.expire<CURRENT_TIMESTAMP, t.minor FROM msgbase m JOIN topics t ON t.id=m.id JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section WHERE m.id=$1",
+            "SELECT m.message, m.markup::text, t.linktext, g.image, t.moderate, COALESCE(t.commitdate,t.postdate)+s.expire<CURRENT_TIMESTAMP, t.minor, s.moderate FROM msgbase m JOIN topics t ON t.id=m.id JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section WHERE m.id=$1",
         )
         .bind(topic.id)
         .fetch_optional(&state.pool)
         .await?;
-        let (message, message_markup, linktext, group_image, moderate, expired, minor) = row
-            .unwrap_or_else(|| {
-                (
-                    String::new(),
-                    "BBCODE_TEX".into(),
-                    None,
-                    None,
-                    false,
-                    false,
-                    false,
-                )
-            });
+        let (
+            message,
+            message_markup,
+            linktext,
+            group_image,
+            moderate,
+            expired,
+            minor,
+            section_premoderated,
+        ) = row.unwrap_or_else(|| {
+            (
+                String::new(),
+                "BBCODE_TEX".into(),
+                None,
+                None,
+                false,
+                false,
+                false,
+                false,
+            )
+        });
         let images = load_topic_images(state, topic.id).await?;
         let images_html = render_topic_images(
             &images,
@@ -645,6 +702,14 @@ pub(crate) async fn prepare_news_topics_for_viewer(
                 value,
             })
             .collect();
+        let can_comment = crate::routes::comments::check_comment_posting_allowed(
+            state,
+            &stPostingIdentity.stUser,
+            !stPostingIdentity.bAuthorized,
+            topic.id,
+        )
+        .await
+        .is_ok();
         prepared.push(NewsTopicView {
             topic_html: markup::render_topic_with_minimized_cut(
                 &message,
@@ -662,10 +727,12 @@ pub(crate) async fn prepare_news_topics_for_viewer(
             show_group,
             poll,
             minor,
+            pending: section_premoderated && !moderate,
             moderate_mode: false,
             can_commit: false,
             can_delete: false,
             can_edit: false,
+            can_comment,
         });
     }
     Ok(prepared)
@@ -1732,7 +1799,7 @@ pub(crate) async fn posting_reason_for_port(
     Ok(topic_posting_reason(restriction, user))
 }
 
-async fn build_topic_list_navigation(
+pub(crate) async fn build_topic_list_navigation(
     state: &AppState,
     section_prefix: &str,
     selected_group: Option<&Group>,
@@ -2323,8 +2390,32 @@ async fn render_topic_view(
             .collect()
     };
     let filtered_count = visible_comments.len();
+    let mapCommentReplies: std::collections::HashMap<i32, CommentReplyView> = visible_comments
+        .iter()
+        .map(|stComment| {
+            (
+                stComment.id,
+                CommentReplyView {
+                    id: stComment.id,
+                    title: (!stComment.title.trim().is_empty()).then(|| stComment.title.clone()),
+                    author: stComment.author.clone(),
+                    postdate: stComment.postdate,
+                },
+            )
+        })
+        .collect();
+    let mut mapCommentAnswers: std::collections::HashMap<i32, Vec<i32>> =
+        std::collections::HashMap::new();
+    for stComment in &visible_comments {
+        if let Some(iReplyTo) = stComment.replyto {
+            mapCommentAnswers
+                .entry(iReplyTo)
+                .or_default()
+                .push(stComment.id);
+        }
+    }
 
-    let (page_comments, pages, thread_mode, bHasNextPage): (
+    let (page_comments, pages, _thread_mode, bHasNextPage): (
         Vec<CommentItem>,
         Vec<CommentPageLink>,
         bool,
@@ -2402,22 +2493,60 @@ async fn render_topic_view(
     vecAuthorIds.extend(page_comments.iter().map(|stComment| stComment.author_id));
     vecAuthorIds.sort_unstable();
     vecAuthorIds.dedup();
-    let vecSignatureRows: Vec<(i32, i32, i32, bool)> = sqlx::query_as(
-        r#"SELECT id, COALESCE(score,0), COALESCE(max_score,0), COALESCE(passwd,'')<>''
+    let vecSignatureRows: Vec<TyAuthorPresentationRow> = sqlx::query_as(
+        r#"SELECT id, COALESCE(score,0), COALESCE(max_score,0), COALESCE(passwd,'')<>'',
+                  photo, email
            FROM users WHERE id=ANY($1)"#,
     )
     .bind(&vecAuthorIds)
     .fetch_all(&state.pool)
     .await?;
     let mapAuthorSignatures: std::collections::HashMap<i32, AuthorSignatureView> = vecSignatureRows
-        .into_iter()
-        .map(|(iUserId, iScore, iMaxScore, bRegistered)| {
+        .iter()
+        .map(|(iUserId, iScore, iMaxScore, bRegistered, _, _)| {
             (
-                iUserId,
-                stAuthorSignature(iScore, iMaxScore, bRegistered, bModeratorSession),
+                *iUserId,
+                stAuthorSignature(*iScore, *iMaxScore, *bRegistered, bModeratorSession),
             )
         })
         .collect();
+    let stViewerProfile = match current_user.as_ref() {
+        Some(stUser) => {
+            let optSettings: Option<String> =
+                sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
+                    .bind(stUser.id)
+                    .fetch_optional(&state.pool)
+                    .await?;
+            crate::profile::ProfileSettings::from_hstore_text(optSettings)
+        }
+        None => crate::profile::ProfileSettings::default(),
+    };
+    let mapAuthorUserpics: std::collections::HashMap<i32, (String, i32, i32)> =
+        if stViewerProfile.photos {
+            vecSignatureRows
+                .iter()
+                .map(|(iUserId, _, _, _, optPhoto, optEmail)| {
+                    let optUrl = crate::profile::userpic_url(
+                        &stViewerProfile.avatar,
+                        false,
+                        *iUserId == 2,
+                        optPhoto.as_deref(),
+                        optEmail.as_deref(),
+                    );
+                    let bDisabled = optUrl.is_none();
+                    (
+                        *iUserId,
+                        (
+                            optUrl.unwrap_or_else(|| crate::profile::DISABLED_USERPIC.to_owned()),
+                            if bDisabled { 1 } else { 150 },
+                            if bDisabled { 1 } else { 150 },
+                        ),
+                    )
+                })
+                .collect()
+        } else {
+            std::collections::HashMap::new()
+        };
     let topic_author_signature = mapAuthorSignatures
         .get(&topic.author_id)
         .cloned()
@@ -2426,6 +2555,20 @@ async fn render_topic_view(
     let comments: Vec<CommentView> = page_comments
         .into_iter()
         .map(|item| {
+            let optReply = item
+                .replyto
+                .and_then(|iReplyTo| mapCommentReplies.get(&iReplyTo).cloned());
+            let vecAnswers = mapCommentAnswers.get(&item.id).cloned().unwrap_or_default();
+            let iAnswerCount = vecAnswers.len();
+            let sAnswerUrl = if iAnswerCount == 1 {
+                format!("{}?cid={}", topic.topic_url(), vecAnswers[0])
+            } else {
+                format!("{}/thread/{}#comments", topic.topic_url(), item.id)
+            };
+            let (optUserpicUrl, iUserpicWidth, iUserpicHeight) = mapAuthorUserpics
+                .get(&item.author_id)
+                .map(|(sUrl, iWidth, iHeight)| (Some(sUrl.clone()), *iWidth, *iHeight))
+                .unwrap_or((None, 0, 0));
             let html = markup::render_message_with_markup(&item.message, Some(&item.markup), None);
             let rows: Vec<(String, i32, String, i32)> = all_reactions
                 .iter()
@@ -2462,6 +2605,12 @@ async fn render_topic_view(
                     .get(&item.author_id)
                     .cloned()
                     .unwrap_or_default(),
+                userpic_url: optUserpicUrl,
+                userpic_width: iUserpicWidth,
+                userpic_height: iUserpicHeight,
+                reply: optReply,
+                answer_count: iAnswerCount,
+                answer_url: sAnswerUrl,
                 item,
                 html,
                 reactions_html: reactions.html,
@@ -2590,7 +2739,6 @@ async fn render_topic_view(
             topic_html,
             comments,
             pages,
-            thread_mode,
             thread_root,
             show_deleted: want_deleted,
             show_deleted_button: can_view_deleted_comments && !want_deleted,

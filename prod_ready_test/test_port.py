@@ -243,6 +243,24 @@ def profiles() -> None:
     require("<script>alert(1)</script>" not in legacy, "profile stored XSS was not sanitized")
 
 
+@test("user topic history uses complete cards and includes pending content")
+def user_topic_history() -> None:
+    pending = require_html(ANON.request("/people/swift45/"), "pending author history")
+    require('id="topic-9101001"' in pending, "pending author topic is hidden from user history")
+    require("(не подтверждено)" in pending, "pending marker is absent from user history")
+    require("9101016" not in pending, "draft leaked into public user history")
+
+    news = require_html(ANON.request("/people/robin201/?section=1"), "news author history")
+    require('id="topic-9101002"' in news, "section-filtered user topic is absent")
+    require('href="/tag/linux%20foundation"' in news, "user history tag URL is not encoded")
+    require("(linux.org.ru)" in news, "external source host is absent from user history")
+
+    gallery = require_html(ANON.request("/people/raven1000/"), "gallery author history")
+    require('class="slider-parent"' in gallery, "multi-image gallery is not rendered in user history")
+    poll = require_html(ANON.request("/people/crane2000/"), "poll author history")
+    require('name="vote"' in poll and "Прошёл большую часть" in poll, "poll is not rendered in user history")
+
+
 @test("tag index cloud and role-aware letter lists")
 def tag_index() -> None:
     root = require_html(ANON.request("/tags"), "tag index")
@@ -310,6 +328,35 @@ def galleries() -> None:
         response = ANON.request(f"/images/{image_id}/1000px.jpg")
         require(response.status == 200, f"image {image_id} is unavailable")
         require(response.headers.get("Content-Type") == "image/jpeg", f"image {image_id} content type")
+
+
+@test("comment actions follow viewer security restrictions")
+def comment_action_visibility() -> None:
+    anonymous_home = require_html(ANON.request("/"), "anonymous home page")
+    anonymous_card = re.search(
+        r'<article class="news" id="topic-9101012">(.*?)</article>',
+        anonymous_home,
+        re.S,
+    )
+    require(anonymous_card is not None, "restricted zero-comment news is absent from home page")
+    require(
+        "/comment-message.jsp?topic=9101012" not in anonymous_card.group(1),
+        "anonymous user sees a forbidden add-comment action on home page",
+    )
+
+    registered = Client(BASE)
+    registered.login("lark70")
+    registered_home = require_html(registered.request("/"), "registered home page")
+    registered_card = re.search(
+        r'<article class="news" id="topic-9101012">(.*?)</article>',
+        registered_home,
+        re.S,
+    )
+    require(registered_card is not None, "restricted news is absent for registered viewer")
+    require(
+        "/comment-message.jsp?topic=9101012" in registered_card.group(1),
+        "eligible registered user does not see the add-comment action",
+    )
 
 
 @test("poll rendering and pending visibility")
@@ -398,6 +445,17 @@ def premoderation_queue() -> None:
 def comments_and_reactions() -> None:
     forum = topic("/forum/games/9101003")
     require('id="comment-9102004"' in forum and 'id="comment-9102016"' in forum, "fixture comments missing")
+    require('class="userpic"><img class="photo"' in forum, "comment userpic column is absent")
+    require("message-w-userpic" in forum, "comment body does not reserve userpic space")
+    require("<h2>Комментарии:" not in forum, "non-original comment count heading is present")
+    reply = topic("/news/russia/9101002")
+    require("Ответ на:" in reply and "от lark70" in reply, "reply context is absent")
+    leaf = re.search(r'id="comment-9102003"(.*?)</article>', reply, re.S)
+    require(
+        leaf is not None
+        and re.search(r'<a[^>]*>Показать ответ', leaf.group(1)) is None,
+        "leaf comment offers nonexistent answers",
+    )
     require("Пустая строка (два раза Enter)" in forum, "original comment markup help is absent")
     require('href="/help/markdown.md"' in forum, "comment Markdown help link is absent")
     reaction_page = topic("/forum/linux-org-ru/9101010")
@@ -488,6 +546,34 @@ def group_dom() -> None:
     )
     require(active_card is not None, "active group row is absent")
     require("lastmod=9102016" in active_card.group(1), "active mode does not open the last comment")
+
+    stale = db(
+        "SELECT count(*) FROM groups g WHERE g.section=2 AND g.stat3<>0 "
+        "AND NOT EXISTS(SELECT 1 FROM topics t WHERE t.groupid=g.id AND NOT t.deleted "
+        "AND (t.postdate>CURRENT_TIMESTAMP-'1 day'::interval "
+        "OR (t.lastmod>CURRENT_TIMESTAMP-'2 days'::interval AND t.stat3>0)))"
+    )
+    require(stale == "0", "forum index contains activity counters with no displayable content")
+
+
+@test("archive index matches original controls and visibility")
+def archive_index() -> None:
+    gallery = require_html(ANON.request("/gallery/archive/"), "gallery archive")
+    for fragment in (
+        'action="/search.jsp"',
+        'name="range"',
+        'name="section" value="gallery"',
+        'class="btn btn-selected" href="/gallery/archive/"',
+    ):
+        require(fragment in gallery, f"gallery archive contract is absent: {fragment}")
+    require("/gallery/archive/2026/8/" in gallery, "archive month URL has no canonical trailing slash")
+    require("Неподтверждённые: 1" in gallery, "archive misses premoderation count")
+    require("(36)" not in gallery, "uncommitted gallery topics leaked into archive statistics")
+
+    forum = require_html(ANON.request("/forum/games/archive/"), "forum archive")
+    require('href="/forum/games?lastmod=true"' in forum, "forum archive active tab is absent")
+    require('name="group" value="games"' in forum, "forum archive search group is absent")
+    require("/forum/games/2026/8/" in forum, "forum archive month URL differs")
 
 
 @test("public page and form DOM contracts")

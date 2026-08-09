@@ -1,4 +1,8 @@
 \set ON_ERROR_STOP on
+\if :{?accounts_only}
+\else
+\set accounts_only false
+\endif
 
 -- Deterministic production-readiness fixture for the disposable Compose DB.
 -- Run through seed.py; it performs the external safety checks before psql.
@@ -31,25 +35,51 @@ $$;
 
 -- Fixture-owned IDs are deliberately isolated. Remove only this namespace so
 -- repeated runs restore the same state without touching imported Java data.
+-- Browser-created topics/comments use normal sequences, so ownership by the
+-- fixture accounts is part of the namespace too.
+CREATE TEMP TABLE prod_ready_owned_topics ON COMMIT DROP AS
+SELECT id FROM topics
+ WHERE id BETWEEN 9101001 AND 9101099
+    OR userid BETWEEN 9100001 AND 9100014;
+ALTER TABLE prod_ready_owned_topics ADD PRIMARY KEY (id);
+CREATE TEMP TABLE prod_ready_owned_comments ON COMMIT DROP AS
+SELECT id FROM comments
+ WHERE id BETWEEN 9102001 AND 9102099
+    OR topic IN (SELECT id FROM prod_ready_owned_topics)
+    OR userid BETWEEN 9100001 AND 9100014;
+ALTER TABLE prod_ready_owned_comments ADD PRIMARY KEY (id);
+
 DELETE FROM user_events
- WHERE message_id BETWEEN 9101001 AND 9101099
-    OR comment_id BETWEEN 9102001 AND 9102099
+ WHERE message_id IN (SELECT id FROM prod_ready_owned_topics)
+    OR comment_id IN (SELECT id FROM prod_ready_owned_comments)
     OR userid BETWEEN 9100001 AND 9100014
     OR origin_user BETWEEN 9100001 AND 9100014;
 DELETE FROM reactions_log
- WHERE topic_id BETWEEN 9101001 AND 9101099
-    OR comment_id BETWEEN 9102001 AND 9102099
+ WHERE topic_id IN (SELECT id FROM prod_ready_owned_topics)
+    OR comment_id IN (SELECT id FROM prod_ready_owned_comments)
     OR origin_user BETWEEN 9100001 AND 9100014;
-DELETE FROM vote_users WHERE vote BETWEEN 9103001 AND 9103099;
-DELETE FROM polls_variants WHERE vote BETWEEN 9103001 AND 9103099;
-DELETE FROM polls WHERE id BETWEEN 9103001 AND 9103099 OR topic BETWEEN 9101001 AND 9101099;
-DELETE FROM images WHERE id BETWEEN 9104001 AND 9104099 OR topic BETWEEN 9101001 AND 9101099;
+DELETE FROM vote_users
+ WHERE vote BETWEEN 9103001 AND 9103099
+    OR vote IN (SELECT id FROM polls WHERE topic IN (SELECT id FROM prod_ready_owned_topics));
+DELETE FROM polls_variants
+ WHERE vote BETWEEN 9103001 AND 9103099
+    OR vote IN (SELECT id FROM polls WHERE topic IN (SELECT id FROM prod_ready_owned_topics));
+DELETE FROM polls
+ WHERE id BETWEEN 9103001 AND 9103099
+    OR topic IN (SELECT id FROM prod_ready_owned_topics);
+DELETE FROM images
+ WHERE id BETWEEN 9104001 AND 9104099
+    OR topic IN (SELECT id FROM prod_ready_owned_topics);
 DELETE FROM memories
- WHERE topic BETWEEN 9101001 AND 9101099 OR userid BETWEEN 9100001 AND 9100014;
-DELETE FROM tags WHERE msgid BETWEEN 9101001 AND 9101099;
-DELETE FROM comments WHERE id BETWEEN 9102001 AND 9102099 OR topic BETWEEN 9101001 AND 9101099;
-DELETE FROM topics WHERE id BETWEEN 9101001 AND 9101099;
-DELETE FROM msgbase WHERE id BETWEEN 9101001 AND 9102099;
+ WHERE topic IN (SELECT id FROM prod_ready_owned_topics)
+    OR userid BETWEEN 9100001 AND 9100014;
+DELETE FROM tags WHERE msgid IN (SELECT id FROM prod_ready_owned_topics);
+DELETE FROM comments WHERE id IN (SELECT id FROM prod_ready_owned_comments);
+DELETE FROM topics WHERE id IN (SELECT id FROM prod_ready_owned_topics);
+DELETE FROM msgbase
+ WHERE id IN (SELECT id FROM prod_ready_owned_topics)
+    OR id IN (SELECT id FROM prod_ready_owned_comments)
+    OR id BETWEEN 9101001 AND 9102099;
 DELETE FROM ignore_list WHERE userid BETWEEN 9100001 AND 9100014 OR ignored BETWEEN 9100001 AND 9100014;
 DELETE FROM user_remarks WHERE user_id BETWEEN 9100001 AND 9100014 OR ref_user_id BETWEEN 9100001 AND 9100014;
 DELETE FROM user_tags WHERE user_id BETWEEN 9100001 AND 9100014;
@@ -155,6 +185,21 @@ FROM (VALUES
     (9100014,'tango-light','markdown','500','500','true','true','true','robohash','all','false','false','true')
 ) AS fixture(id,style,format_mode,topics,messages,photos,hide_adsense,main_gallery,avatar,tracker_mode,old_tracker,old_notifications,reaction_notification);
 
+-- Browser-seed mode intentionally stops here: only accounts, roles and their
+-- settings may be inserted through SQL. Topics, comments, polls, reactions
+-- and uploaded images are then created through the real HTTP/UI workflows.
+\if :accounts_only
+SELECT setval('s_uid', GREATEST((SELECT max(id) FROM users),1), true);
+-- The Java demo snapshot contains historical group.stat3 values for groups
+-- whose topic rows are not part of the snapshot.  Run the same maintenance
+-- functions as StatUpdater so the forum index cannot advertise activity that
+-- no group page can display.
+SELECT stat_update2();
+SELECT update_monthly_stats();
+COMMIT;
+\quit
+\endif
+
 -- Synthetic bodies are based on public unclestephen topics. Each body keeps a
 -- stable link to the production example while exercising a markup/content path.
 INSERT INTO msgbase(id, message, markup) VALUES
@@ -212,7 +257,7 @@ INSERT INTO topics (
     (9101009,19362,9100003,'Проверка длинной статьи при портировании LOR',NULL,true,CURRENT_TIMESTAMP-interval '8 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '7 hours',9100011,false,CURRENT_TIMESTAMP-interval '7 hours',-9999,'192.0.2.19',false,false,false,false,true,jsonb_build_object('9100014','🎉'),0),
     (9101010,4068,9100004,'Вайбкодю реакции для тестового профиля',NULL,false,CURRENT_TIMESTAMP-interval '7 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '1 hour',NULL,false,NULL,-9999,'192.0.2.20',false,false,false,false,true,jsonb_build_object('9100006','🤡','9100009','👍','9100013','🔥'),0),
     (9101011,8404,9100002,'Тема в Talks на границе score=50',NULL,false,CURRENT_TIMESTAMP-interval '6 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '30 minutes',NULL,false,NULL,50,'192.0.2.21',false,false,false,false,false,'{}',0),
-    (9101012,6,9100011,'Новость корректора, подтверждённая коллегой','https://example.test/corrector-news',true,CURRENT_TIMESTAMP-interval '5 hours','Тестовый источник',false,0,0,CURRENT_TIMESTAMP-interval '4 hours',9100012,false,CURRENT_TIMESTAMP-interval '4 hours',-9999,'192.0.2.22',false,false,false,false,true,jsonb_build_object('9100013','👍'),0),
+    (9101012,6,9100011,'Новость корректора, подтверждённая коллегой','https://example.test/corrector-news',true,CURRENT_TIMESTAMP-interval '5 hours','Тестовый источник',false,0,0,CURRENT_TIMESTAMP-interval '4 hours',9100012,false,CURRENT_TIMESTAMP-interval '4 hours',-9999,'192.0.2.22',false,false,false,false,false,jsonb_build_object('9100013','👍'),0),
     (9101013,4068,9100013,'Модераторская проверка интерфейса темы',NULL,false,CURRENT_TIMESTAMP-interval '4 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '40 minutes',NULL,false,NULL,10000,'192.0.2.23',true,false,false,false,false,'{}',1),
     (9101014,19393,9100012,'Рабочее место корректора',NULL,true,CURRENT_TIMESTAMP-interval '3 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '2 hours',9100013,false,CURRENT_TIMESTAMP-interval '2 hours',-9999,'192.0.2.24',false,false,false,false,true,jsonb_build_object('9100007','😊'),0),
     (9101015,7300,9100014,'Безопасная конфигурация тестового инстанса',NULL,false,CURRENT_TIMESTAMP-interval '2 hours',NULL,false,0,0,CURRENT_TIMESTAMP-interval '20 minutes',NULL,false,NULL,-9999,'192.0.2.25',false,true,false,false,false,'{}',0),
@@ -404,5 +449,10 @@ SELECT setval(pg_get_serial_sequence('images','id'), GREATEST((SELECT max(id) FR
 SELECT setval(pg_get_serial_sequence('memories','id'), GREATEST((SELECT max(id) FROM memories),1), true);
 SELECT setval(pg_get_serial_sequence('user_remarks','id'), GREATEST((SELECT max(id) FROM user_remarks),1), true);
 SELECT setval(pg_get_serial_sequence('user_events','id'), GREATEST((SELECT max(id) FROM user_events),1), true);
+
+-- Keep the denormalized forum/archive statistics in the same state that the
+-- original scheduled StatUpdater would produce after loading this fixture.
+SELECT stat_update2();
+SELECT update_monthly_stats();
 
 COMMIT;

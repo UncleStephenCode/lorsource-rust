@@ -18,6 +18,11 @@ def main() -> int:
     parser.add_argument("--base", default="http://127.0.0.1:8181")
     parser.add_argument("--visual", action="store_true")
     parser.add_argument("--start", action="store_true")
+    parser.add_argument(
+        "--browser-seed",
+        action="store_true",
+        help="seed accounts only, then create and verify 24-hour content through Playwright",
+    )
     args = parser.parse_args()
 
     seed = [
@@ -28,7 +33,20 @@ def main() -> int:
     ]
     if args.start:
         seed.append("--start")
+    if args.browser_seed:
+        seed.append("--accounts-only")
     subprocess.run(seed, check=True)
+    if args.browser_seed:
+        subprocess.run(
+            [
+                sys.executable,
+                str(HERE / "browser_seed.py"),
+                "--base",
+                args.base,
+            ],
+            check=True,
+        )
+        return 0
     subprocess.run(
         [sys.executable, str(HERE / "test_port.py"), "--base", args.base],
         check=True,

@@ -1,48 +1,52 @@
 {
-  "captured_at": "2026-08-09",
+  "captured_at": "2026-08-09T15:49:33+03:00",
+  "window_hours": 24,
+  "window_start": "2026-08-08T15:49:33+03:00",
   "profile": "https://www.linux.org.ru/people/unclestephen/profile",
   "feed": "https://www.linux.org.ru/people/unclestephen/",
-  "policy": "Titles, metadata and links identify the public examples. Fixture bodies are synthetic and deterministic.",
-  "examples": [
-    {
-      "kind": "news",
-      "title": "LineageOS не будет включать проверку разработчиков Google для Android",
-      "url": "https://www.linux.org.ru/news/android/18335149"
-    },
-    {
-      "kind": "news",
-      "title": "Российская «ФорМакс» судится с Linux Foundation за бренд SONiC",
-      "url": "https://www.linux.org.ru/news/russia/18335616"
-    },
-    {
-      "kind": "forum",
-      "title": "Проходите ли вы игры которые покупаете?",
-      "url": "https://www.linux.org.ru/people/unclestephen/"
-    },
-    {
-      "kind": "forum",
-      "title": "Вожусь с Terraform",
-      "url": "https://www.linux.org.ru/forum/admin/18253960"
-    },
-    {
-      "kind": "forum_with_reactions",
-      "title": "РИА Новости: Роскомнадзор снимает ограничение доступа к Telegram",
-      "url": "https://www.linux.org.ru/forum/talks/18255501"
-    },
+  "comments": "https://www.linux.org.ru/search.jsp?range=COMMENTS&user=unclestephen&sort=DATE",
+  "policy": "Public titles, timestamps, tags and links identify the compatibility references. Browser-seed bodies are short deterministic paraphrases, not a production archive.",
+  "topics": [
     {
       "kind": "gallery_multi_image",
-      "title": "Игорь из китайского Steam, вместо пиратской копии",
-      "url": "https://www.linux.org.ru/gallery/screenshots/18317899"
+      "date": "2026-08-09T11:51:04.661469+03:00",
+      "title": "Габен великим дозволением позволил жителям СНГ приобретать у него Atomic Heart...",
+      "url": "https://www.linux.org.ru/gallery/screenshots/18354628",
+      "tags": ["atomic", "opensuse", "steam", "tumbleweed", "игры"]
     },
     {
-      "kind": "poll",
-      "title": "Как много игр вы прошли из тех, что приобрели?",
-      "url": "https://www.linux.org.ru/polls/polls/18327393"
+      "kind": "news_single_image",
+      "date": "2026-08-09T10:44:51.066100+03:00",
+      "title": "Polychromatic 0.9.8",
+      "url": "https://www.linux.org.ru/news/hardware/18355552",
+      "tags": ["gui", "python", "qt", "razer"]
     },
     {
-      "kind": "profile_markup",
-      "title": "Публичный профиль и лента пользователя",
-      "url": "https://www.linux.org.ru/people/unclestephen/profile"
+      "kind": "news",
+      "date": "2026-08-09T10:44:12.716966+03:00",
+      "title": "Wine 11.15",
+      "url": "https://www.linux.org.ru/news/opensource/18355551",
+      "tags": ["arm64", "wine"]
+    },
+    {
+      "kind": "news_single_image",
+      "date": "2026-08-09T10:43:06.884227+03:00",
+      "title": "Proxmox VE получил официальную поддержку 64-разрядных ARM-серверов",
+      "url": "https://www.linux.org.ru/news/clusters/18355550",
+      "tags": ["arm64", "proxmox"]
+    },
+    {
+      "kind": "pending_news",
+      "date": "2026-08-08T19:26:02.460694+03:00",
+      "title": "«МойОфис» закрыл офисы в Петербурге и Иннополисе, штат компании сократился примерно в четыре раза",
+      "url": "https://www.linux.org.ru/news/proprietary/18355249",
+      "fresh_schema_group": "/news/commercial/",
+      "tags": ["мойофис", "офисное по", "россия", "увольнение"]
     }
+  ],
+  "recent_comment_urls": [
+    "https://www.linux.org.ru/news/clusters/18355550?cid=18355816",
+    "https://www.linux.org.ru/gallery/screenshots/18354628?cid=18355814",
+    "https://www.linux.org.ru/gallery/screenshots/18354628?cid=18355676"
   ]
 }

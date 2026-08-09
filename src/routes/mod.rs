@@ -42,9 +42,14 @@ pub fn router() -> Router<AppState> {
             get(groups::group_page).post(groups::group_page),
         )
         .route("/forum/{group}/archive", get(groups::group_archive))
+        .route("/forum/{group}/archive/", get(groups::group_archive))
         .route("/forum/{group}/{id}", get(topics::topic_page))
         .route(
             "/forum/{group}/{id_or_year}/{page_or_month}",
+            get(legacy::forum_page_or_archive),
+        )
+        .route(
+            "/forum/{group}/{id_or_year}/{page_or_month}/",
             get(legacy::forum_page_or_archive),
         )
         .route("/news/", get(topics::section_topics))
@@ -191,6 +196,7 @@ pub fn router() -> Router<AppState> {
             get(legacy::addphoto_form).post(legacy::upload_userpic),
         )
         .route("/articles/archive", get(legacy::archive_section))
+        .route("/articles/archive/", get(legacy::archive_section))
         .route(
             "/commit.jsp",
             get(topics::commit_topic_form).post(topics::commit_topic),
@@ -206,6 +212,7 @@ pub fn router() -> Router<AppState> {
         .route("/errors/403", get(legacy::error_403))
         .route("/errors/404", get(legacy::error_404))
         .route("/gallery/archive", get(legacy::archive_section))
+        .route("/gallery/archive/", get(legacy::archive_section))
         .route("/group-lastmod.jsp", get(legacy::group_lastmod_jsp))
         .route("/group.jsp", get(legacy::group_jsp))
         .route("/help/{page}", get(legacy::help_page))
@@ -221,12 +228,14 @@ pub fn router() -> Router<AppState> {
         )
         .route("/mtn.jsp", get(topics::premoderated_move_form))
         .route("/news/archive", get(legacy::archive_section))
+        .route("/news/archive/", get(legacy::archive_section))
         .route("/notifications-click", post(legacy::notifications_click))
         .route(
             "/notifications-click/ajax",
             post(legacy::notifications_click_ajax),
         )
         .route("/polls/archive", get(legacy::archive_section))
+        .route("/polls/archive/", get(legacy::archive_section))
         .route(
             "/reactions",
             get(api::reactions_get).post(api::reactions_post),
@@ -291,6 +300,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/people/{nick}/tracked", get(users::tracked))
         .route("/people/{nick}", get(users::topic_feed))
+        .route("/people/{nick}/", get(users::topic_feed))
         .route("/forum/{group}/{id}/history", get(legacy::topic_history))
         .route(
             "/forum/{group}/{id}/{commentid}/history",
@@ -321,7 +331,15 @@ pub fn router() -> Router<AppState> {
             get(legacy::archive_section_month),
         )
         .route(
+            "/news/archive/{year}/{month}/",
+            get(legacy::archive_section_month),
+        )
+        .route(
             "/articles/archive/{year}/{month}",
+            get(legacy::archive_section_month),
+        )
+        .route(
+            "/articles/archive/{year}/{month}/",
             get(legacy::archive_section_month),
         )
         .route(
@@ -329,7 +347,15 @@ pub fn router() -> Router<AppState> {
             get(legacy::archive_section_month),
         )
         .route(
+            "/gallery/archive/{year}/{month}/",
+            get(legacy::archive_section_month),
+        )
+        .route(
             "/polls/archive/{year}/{month}",
+            get(legacy::archive_section_month),
+        )
+        .route(
+            "/polls/archive/{year}/{month}/",
             get(legacy::archive_section_month),
         )
         .route(

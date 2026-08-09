@@ -280,6 +280,14 @@ pub(crate) struct ArchiveIndexTemplate {
     pub(crate) heading: String,
     pub(crate) back_url: String,
     pub(crate) back_label: String,
+    pub(crate) active_url: Option<String>,
+    pub(crate) archive_url: String,
+    pub(crate) section_id: i32,
+    pub(crate) section_urlname: String,
+    pub(crate) group_urlname: Option<String>,
+    pub(crate) uncommitted_count: i64,
+    pub(crate) add_url: Option<String>,
+    pub(crate) add_reason: String,
     pub(crate) months: Vec<ArchiveMonthLink>,
 }
 
@@ -290,13 +298,10 @@ pub(crate) struct ArchiveMonthLink {
     pub(crate) url: String,
 }
 
-/// ArchiveDao.getArchiveStats: rather than maintaining a separate
-/// `monthly_stats` side-table (unpopulated in this port - no triggers
-/// write to it), the year/month breakdown is computed live from `topics`.
-/// Functionally equivalent to Java's precomputed table for this dataset
-/// size; matches `list_archive_topics`' own visibility filter (`NOT
-/// deleted`) so the counts always agree with what the drill-down page
-/// actually lists.
+/// ArchiveDao.getArchiveStats is backed by `monthly_stats` in Java.  Compute
+/// the same projection live so a newly committed topic is visible without
+/// waiting for the ten-minute maintenance job, while retaining the exact
+/// original visibility predicate used by `update_monthly_stats()`.
 pub(crate) async fn list_archive_year_months(
     state: &AppState,
     section: Option<&str>,
@@ -309,6 +314,7 @@ pub(crate) async fn list_archive_year_months(
            JOIN sections s ON s.id=g.section
            WHERE ($1::text IS NULL OR CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(s.name) END = $1)
              AND ($2::text IS NULL OR g.urlname=$2)
+             AND (t.moderate OR NOT s.moderate)
              AND NOT t.deleted
            GROUP BY y, m
            ORDER BY y, m"#,
@@ -322,7 +328,7 @@ pub(crate) async fn list_archive_year_months(
 pub async fn archive_section(
     State(state): State<AppState>,
     uri: Uri,
-    CurrentUser(_current_user): CurrentUser,
+    CurrentUser(current_user): CurrentUser,
 ) -> Result<Html<String>> {
     let section = section_from_uri(&uri).unwrap_or("news");
     let section_name = match section {
@@ -334,13 +340,16 @@ pub async fn archive_section(
         _ => "Темы",
     };
     let rows = list_archive_year_months(&state, Some(section), None).await?;
+    let navigation =
+        crate::routes::topics::build_topic_list_navigation(&state, section, None, &current_user)
+            .await?;
     let months = rows
         .into_iter()
         .map(|(y, m, c)| ArchiveMonthLink {
             year: y,
             month_name: month_name(m),
             count: c,
-            url: format!("/{section}/archive/{y}/{m}"),
+            url: format!("/{section}/archive/{y}/{m}/"),
         })
         .collect();
     Ok(Html(
@@ -349,6 +358,14 @@ pub async fn archive_section(
             heading: section_name.to_string(),
             back_url: format!("/{section}/"),
             back_label: "Лента".to_string(),
+            active_url: None,
+            archive_url: format!("/{section}/archive/"),
+            section_id: navigation.section_id,
+            section_urlname: section.to_string(),
+            group_urlname: None,
+            uncommitted_count: navigation.uncommitted_count,
+            add_url: navigation.add_url,
+            add_reason: navigation.add_reason,
             months,
         }
         .render()?,
@@ -466,6 +483,8 @@ async fn list_archive_topics(
              AND ($3::int IS NULL OR EXTRACT(YEAR FROM t.postdate)::int=$3)
              AND ($4::int IS NULL OR EXTRACT(MONTH FROM t.postdate)::int=$4)
              AND NOT t.deleted
+             AND NOT t.draft
+             AND (t.moderate OR NOT s.moderate)
            ORDER BY t.postdate DESC
            OFFSET $5 LIMIT $6"#,
     )

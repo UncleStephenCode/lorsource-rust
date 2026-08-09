@@ -5,6 +5,14 @@ Docker Compose database and verifies the Rust port through its public HTTP and
 HTML interfaces. It does not test registration: accounts are inserted directly
 into the Java/Liquibase-compatible PostgreSQL schema.
 
+There are two deliberately separate modes:
+
+- the complete compatibility fixture uses `seed.sql` for deterministic edge
+  cases and database invariants;
+- browser-seed mode inserts accounts/settings only, then creates every topic,
+  comment, image, moderation decision and reaction through the real site forms
+  in Chrome via Playwright. No content row is inserted directly by that mode.
+
 ## Safety
 
 The seed mutates the Compose database named `lor`. It refuses to run unless:
@@ -32,6 +40,24 @@ Include browser screenshots (Chrome/Chromium required):
 ```bash
 python3 prod_ready_test/run_all.py --start --visual
 ```
+
+Create the live-UI fixture based on unclestephen's public content from the last
+24 hours:
+
+```bash
+python3 -m venv /tmp/lorsource-browser-venv
+/tmp/lorsource-browser-venv/bin/pip install \
+  -r prod_ready_test/requirements-browser.txt
+/tmp/lorsource-browser-venv/bin/python prod_ready_test/run_all.py \
+  --start --browser-seed
+```
+
+This mode creates four screenshots under `/tmp/prod_ready_browser_seed` and a
+machine-readable result at `/tmp/prod_ready_browser_seed_result.json`. It also
+asserts that the author's `/people/{nick}/` feed contains complete cards,
+including a pending item, that the gallery section filter is isolated, and
+that `/search.jsp?range=COMMENTS&user=...&sort=DATE` contains all comments made
+through the browser in newest-first history.
 
 Screenshots are written to `/tmp/prod_ready_test_artifacts`. Individual stages:
 
@@ -95,9 +121,12 @@ the HTTP suite additionally verifies authenticated tracker and theme markup.
 
 ## Production-source provenance
 
-`source_catalog.json` records public content examples found in the
+`source_catalog.json` records the exact 24-hour public-content snapshot found in the
 [`unclestephen` profile](https://www.linux.org.ru/people/unclestephen/profile)
-and feed. Titles and links identify the compatibility references; fixture
-bodies and generated images are synthetic and deterministic. The test suite
-therefore exercises the same content categories without copying an archive of
-production user content into the repository.
+and feed. Titles, timestamps, tags and links identify the compatibility
+references; fixture bodies are short deterministic paraphrases and generated
+images are synthetic. The test suite therefore exercises the same current
+content shapes without copying a production archive into the repository.
+The production `proprietary` news item is posted to the fresh Java catalog's
+equivalent `commercial` group; `source_catalog.json` records this mapping
+explicitly because the production-only group rename is absent from Liquibase.

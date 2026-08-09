@@ -204,6 +204,7 @@ pub async fn topic_feed(
     Path(nick): Path<String>,
     Query(q): Query<UserTopicFeedQuery>,
     current: CurrentUser,
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
 ) -> Result<Response> {
     if q.output.as_deref() == Some("rss") {
         return Ok(StatusCode::GONE.into_response());
@@ -232,7 +233,6 @@ pub async fn topic_feed(
            JOIN groups g ON g.id=t.groupid
            JOIN sections s ON s.id=g.section
            WHERE u.id=$1 AND NOT t.deleted AND NOT COALESCE(t.draft,false)
-             AND (t.moderate OR NOT s.moderate)
              {section_clause}
            ORDER BY t.postdate DESC OFFSET $2 LIMIT $3"#,
         section_clause = if q.section.is_some() {
@@ -254,7 +254,7 @@ pub async fn topic_feed(
         return Err(AppError::NotFound);
     }
     let section_rows: Vec<(i32, String)> = sqlx::query_as(
-        "SELECT DISTINCT s.id,s.name FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section WHERE t.userid=$1 AND NOT t.deleted AND NOT t.draft AND (t.moderate OR NOT s.moderate) ORDER BY s.id",
+        "SELECT DISTINCT s.id,s.name FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section WHERE t.userid=$1 AND NOT t.deleted AND NOT t.draft ORDER BY s.id",
     ).bind(user.id).fetch_all(&state.pool).await?;
     let sections = section_rows
         .into_iter()
@@ -283,8 +283,14 @@ pub async fn topic_feed(
     let prev_link = (pager.offset > 0).then(|| page_url((pager.offset - pager.limit).max(0)));
     let next_link = (topics.len() as i64 == pager.limit && pager.offset < 200)
         .then(|| page_url(pager.offset + pager.limit));
-    let topics =
-        crate::routes::topics::prepare_news_topics(&state, topics, q.section.is_none()).await?;
+    let topics = crate::routes::topics::prepare_news_topics_for_viewer(
+        &state,
+        topics,
+        q.section.is_none(),
+        &current.0,
+        &csrf_token,
+    )
+    .await?;
     Ok(Html(
         UserTopicsTemplate {
             title: format!("Сообщения {}", user.nick),

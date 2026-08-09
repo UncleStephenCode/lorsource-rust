@@ -253,7 +253,7 @@ pub async fn group_page(
         "t.postdate DESC"
     };
     let date_filter = if lastmod {
-        "COALESCE(t.lastmod, t.postdate) > now() - interval '7 days'"
+        "COALESCE(t.lastmod, t.postdate) > now() - interval '6 months'"
     } else {
         "t.postdate > now() - interval '6 months'"
     };
@@ -486,6 +486,7 @@ fn group_mode_url(
 pub async fn group_archive(
     State(state): State<AppState>,
     Path(group_name): Path<String>,
+    CurrentUser(user): CurrentUser,
 ) -> Result<Html<String>> {
     let group = forum_service(&state).stArchiveGroup(&group_name).await?;
     let rows =
@@ -497,15 +498,33 @@ pub async fn group_archive(
             year: y,
             month_name: crate::routes::legacy::month_name(m),
             count: c,
-            url: format!("/forum/{group_name}/{y}/{m}"),
+            url: format!("/forum/{group_name}/{y}/{m}/"),
         })
         .collect();
+    let restriction: i32 = sqlx::query_scalar(
+        "SELECT GREATEST(COALESCE(g.restrict_topics,-9999),COALESCE(s.restrict_topics,-9999)) FROM groups g JOIN sections s ON s.id=g.section WHERE g.id=$1",
+    )
+    .bind(group.id)
+    .fetch_one(&state.pool)
+    .await?;
+    let add_reason =
+        crate::routes::topics::posting_reason_for_port(&state, restriction, &user).await?;
     Ok(Html(
         crate::routes::legacy::ArchiveIndexTemplate {
             title: format!("Форум - {} - Архив", group.title),
             heading: format!("Форум «{}»", group.title),
             back_url: format!("/forum/{group_name}"),
             back_label: "Новые".to_string(),
+            active_url: Some(format!("/forum/{group_name}?lastmod=true")),
+            archive_url: format!("/forum/{group_name}/archive/"),
+            section_id: group.section,
+            section_urlname: "forum".to_string(),
+            group_urlname: Some(group_name.clone()),
+            uncommitted_count: 0,
+            add_url: add_reason
+                .is_none()
+                .then(|| format!("/add.jsp?group={}", group.id)),
+            add_reason: add_reason.unwrap_or_default(),
             months,
         }
         .render()?,
