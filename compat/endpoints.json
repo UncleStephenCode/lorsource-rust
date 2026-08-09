@@ -1,5 +1,15 @@
 [
   {
+    "name": "dependency readiness",
+    "method": "GET",
+    "old": "/healthz",
+    "new": "/readyz",
+    "compare": false,
+    "new_expected_status": 200,
+    "new_expected_content_type": "application/json",
+    "new_body_contains": ["\"database\":\"ok\"", "\"opensearch\":\"ok\""]
+  },
+  {
     "name": "home",
     "method": "GET",
     "old": "/",
@@ -7,7 +17,14 @@
     "compare": true,
     "new_expected_status": 200,
     "new_expected_content_type": "text/html",
-    "new_body_contains": ["id=\"hd\"", "id=\"bd\"", "id=\"ft\""]
+    "new_body_contains": [
+      "id=\"hd\"",
+      "id=\"bd\"",
+      "id=\"ft\"",
+      "/js/lor.js",
+      "/js/plugins.js",
+      "fixTimezone('Etc/UTC')"
+    ]
   },
   {
     "name": "legacy index",
@@ -43,7 +60,13 @@
     "old": "/forum/general",
     "new": "/forum/general",
     "compare": true,
-    "requires_seed": true
+    "requires_seed": true,
+    "new_body_contains": [
+      "class=\"tracker-item\"",
+      "class=\"tracker-src\"",
+      "class=\"tracker-last\"",
+      "lastmod="
+    ]
   },
   {
     "name": "news",
@@ -134,11 +157,89 @@
     "requires_seed": true
   },
   {
+    "name": "anonymous topic edit history forbidden",
+    "method": "GET",
+    "old": "/news/opensource/1927836/history",
+    "new": "/news/opensource/1927836/history",
+    "compare": true,
+    "compare_exact": true,
+    "requires_seed": true,
+    "expected_status": 403,
+    "expected_content_type": "text/html"
+  },
+  {
+    "name": "anonymous comment edit history remains visible",
+    "method": "GET",
+    "old": "/news/opensource/1927836/1927856/history",
+    "new": "/news/opensource/1927836/1927856/history",
+    "compare": true,
+    "compare_exact": true,
+    "requires_seed": true,
+    "expected_status": 200,
+    "expected_content_type": "text/html",
+    "body_contains": [
+      "История изменений",
+      "id=\"historyButtonBar\"",
+      "/js/diff_match_patch.js",
+      "/js/lor_view_diff_history.js"
+    ]
+  },
+  {
     "name": "search",
     "method": "GET",
     "old": "/search.jsp?q=Rust",
     "new": "/search.jsp?q=Rust",
-    "compare": true
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 200,
+    "expected_content_type": "text/html"
+  },
+  {
+    "name": "search selected date",
+    "method": "GET",
+    "old": "/search.jsp?dt=1743314400000",
+    "new": "/search.jsp?dt=1743314400000",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 200,
+    "body_contains": ["selectedDt"]
+  },
+  {
+    "name": "search unknown user binding error",
+    "method": "GET",
+    "old": "/search.jsp?user=definitely-no-such-user",
+    "new": "/search.jsp?user=definitely-no-such-user",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 200,
+    "body_contains": ["definitely-no-such-user"]
+  },
+  {
+    "name": "search invalid order binding error",
+    "method": "GET",
+    "old": "/search.jsp?q=Rust&sort=BROKEN",
+    "new": "/search.jsp?q=Rust&sort=BROKEN",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 200
+  },
+  {
+    "name": "search legacy numeric filter ids",
+    "method": "GET",
+    "old": "/search.jsp?q=Rust&sort=2&range=topics&interval=month&section=2&group=2",
+    "new": "/search.jsp?q=Rust&sort=2&range=topics&interval=month&section=2&group=2",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 200
+  },
+  {
+    "name": "initial search retains section without executing",
+    "method": "GET",
+    "old": "/search.jsp?section=2&group=2",
+    "new": "/search.jsp?section=2&group=2",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 200
   },
   {
     "name": "tags",
@@ -153,7 +254,8 @@
     "old": "/tag/3d",
     "new": "/tag/3d",
     "compare": true,
-    "requires_seed": true
+    "requires_seed": true,
+    "new_body_contains": ["id=\"tag-page-news\"", "<h3>2009</h3>"]
   },
   {
     "name": "user profile",
@@ -172,11 +274,23 @@
     "requires_seed": true
   },
   {
-    "name": "user settings redirects anonymous to login",
+    "name": "anonymous user settings forbidden",
     "method": "GET",
     "old": "/people/maxcom/settings",
     "new": "/people/maxcom/settings",
     "compare": true,
+    "compare_exact": true,
+    "expected_status": 403,
+    "requires_seed": true
+  },
+  {
+    "name": "anonymous profile edit forbidden",
+    "method": "GET",
+    "old": "/people/maxcom/edit",
+    "new": "/people/maxcom/edit",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 403,
     "requires_seed": true
   },
   {
@@ -230,7 +344,9 @@
     "method": "GET",
     "old": "/tracker.jsp",
     "new": "/tracker.jsp",
-    "compare": true
+    "compare": true,
+    "new_expected_status": 302,
+    "new_expected_location": "/tracker/?filter=all"
   },
   {
     "name": "login form",
@@ -386,5 +502,280 @@
     "new": "/jump-message.jsp?msgid=1927836",
     "compare": false,
     "requires_seed": true
+  },
+  {
+    "name": "theme css one-hour cache",
+    "method": "GET",
+    "old": "/tango/combined.css",
+    "new": "/tango/combined.css",
+    "compare": true,
+    "compare_cache_control": true,
+    "expected_cache_control": "max-age=3600"
+  },
+  {
+    "name": "cachebuster theme css long cache",
+    "method": "GET",
+    "old": "/tango/combined.css?v=compat",
+    "new": "/tango/combined.css?v=compat",
+    "compare": true,
+    "compare_cache_control": true,
+    "expected_cache_control": "max-age=315360000"
+  },
+  {
+    "name": "opensans long cache",
+    "method": "GET",
+    "old": "/font/opensans/open-sans-v15-cyrillic_latin-600.woff2",
+    "new": "/font/opensans/open-sans-v15-cyrillic_latin-600.woff2",
+    "compare": true,
+    "compare_cache_control": true,
+    "expected_cache_control": "max-age=315360000"
+  },
+  {
+    "name": "webjar long cache",
+    "method": "GET",
+    "old": "/webjars/jquery/3.7.1/jquery.min.js",
+    "new": "/webjars/jquery/3.7.1/jquery.min.js",
+    "compare": true,
+    "compare_cache_control": true,
+    "expected_cache_control": "max-age=315360000"
+  },
+  {
+    "name": "ordinary image long cache",
+    "method": "GET",
+    "old": "/img/p.gif",
+    "new": "/img/p.gif",
+    "compare": true,
+    "compare_cache_control": true,
+    "expected_cache_control": "max-age=315360000"
+  },
+  {
+    "name": "advertisement image no-cache",
+    "method": "GET",
+    "old": "/adv/bare-metal-new-h2-320x100.png",
+    "new": "/adv/bare-metal-new-h2-320x100.png",
+    "compare": true,
+    "compare_cache_control": true,
+    "expected_cache_control": "no-cache"
+  },
+  {
+    "name": "queried png preserves tuckey regex behavior",
+    "method": "GET",
+    "old": "/adv/bare-metal-new-h2-320x100.png?compat=1",
+    "new": "/adv/bare-metal-new-h2-320x100.png?compat=1",
+    "compare": true,
+    "compare_cache_control": true,
+    "expected_cache_control": ""
+  },
+  {
+    "name": "favicon has no explicit cache policy",
+    "method": "GET",
+    "old": "/favicon.ico",
+    "new": "/favicon.ico",
+    "compare": true,
+    "compare_cache_control": true,
+    "expected_cache_control": ""
+  },
+  {
+    "name": "generated lor browser bundle",
+    "method": "GET",
+    "old": "/js/lor.js",
+    "new": "/js/lor.js",
+    "fresh_session": true,
+    "compare": true,
+    "compare_exact": true,
+    "compare_cache_control": true,
+    "compare_cookies": true,
+    "expected_status": 200,
+    "expected_content_type": "text/javascript",
+    "expected_cache_control": "max-age=3600",
+    "expected_cookie_names_exact": []
+  },
+  {
+    "name": "generated plugins browser bundle",
+    "method": "GET",
+    "old": "/js/plugins.js",
+    "new": "/js/plugins.js",
+    "fresh_session": true,
+    "compare": true,
+    "compare_exact": true,
+    "compare_cache_control": true,
+    "compare_cookies": true,
+    "expected_status": 200,
+    "expected_content_type": "text/javascript",
+    "expected_cache_control": "max-age=3600",
+    "expected_cookie_names_exact": []
+  },
+  {
+    "name": "diff match patch browser bundle",
+    "method": "GET",
+    "old": "/js/diff_match_patch.js",
+    "new": "/js/diff_match_patch.js",
+    "fresh_session": true,
+    "compare": true,
+    "compare_exact": true,
+    "compare_cache_control": true,
+    "compare_cookies": true,
+    "expected_status": 200,
+    "expected_content_type": "text/javascript",
+    "expected_cache_control": "max-age=3600",
+    "expected_cookie_names_exact": []
+  },
+  {
+    "name": "edit history browser controller",
+    "method": "GET",
+    "old": "/js/lor_view_diff_history.js",
+    "new": "/js/lor_view_diff_history.js",
+    "fresh_session": true,
+    "compare": true,
+    "compare_exact": true,
+    "compare_cache_control": true,
+    "compare_cookies": true,
+    "expected_status": 200,
+    "expected_content_type": "text/javascript",
+    "expected_cache_control": "max-age=3600",
+    "expected_cookie_names_exact": [],
+    "body_contains": ["toggleDiffHighlight"]
+  },
+  {
+    "name": "fresh theme resource bypasses security context",
+    "method": "GET",
+    "old": "/tango/combined.css",
+    "new": "/tango/combined.css",
+    "fresh_session": true,
+    "compare": true,
+    "compare_exact": true,
+    "compare_cache_control": true,
+    "compare_cookies": true,
+    "expected_status": 200,
+    "expected_content_type": "text/css",
+    "expected_cache_control": "max-age=3600",
+    "expected_cookie_names_exact": []
+  },
+  {
+    "name": "web manifest security context",
+    "method": "GET",
+    "old": "/manifest.json",
+    "new": "/manifest.json",
+    "fresh_session": true,
+    "compare": true,
+    "compare_exact": true,
+    "compare_cache_control": true,
+    "compare_cookies": true,
+    "expected_status": 200,
+    "expected_content_type": "application/json",
+    "expected_cache_control": "private",
+    "expected_cookie_names_exact": ["CSRF_TOKEN"],
+    "body_contains": ["\"api_version\": 3"]
+  },
+  {
+    "name": "robots security context",
+    "method": "GET",
+    "old": "/robots.txt",
+    "new": "/robots.txt",
+    "fresh_session": true,
+    "compare": true,
+    "compare_exact": true,
+    "compare_cache_control": true,
+    "compare_cookies": true,
+    "expected_status": 200,
+    "expected_content_type": "text/plain",
+    "expected_cache_control": "private",
+    "expected_cookie_names_exact": ["CSRF_TOKEN"],
+    "body_contains": ["Disallow: /add.jsp"]
+  },
+  {
+    "name": "google verification security context",
+    "method": "GET",
+    "old": "/googlea3fb422736ed276d.html",
+    "new": "/googlea3fb422736ed276d.html",
+    "fresh_session": true,
+    "compare": true,
+    "compare_exact": true,
+    "compare_cache_control": true,
+    "compare_cookies": true,
+    "expected_status": 200,
+    "expected_content_type": "text/html",
+    "expected_cache_control": "private",
+    "expected_cookie_names_exact": ["CSRF_TOKEN"],
+    "body_contains": ["google-site-verification: googlea3fb422736ed276d.html"]
+  },
+  {
+    "name": "reverse proxy error page security context",
+    "method": "GET",
+    "old": "/qrerror/502.html",
+    "new": "/qrerror/502.html",
+    "fresh_session": true,
+    "compare": true,
+    "compare_exact": true,
+    "compare_cache_control": true,
+    "compare_cookies": true,
+    "expected_status": 200,
+    "expected_content_type": "text/html",
+    "expected_cache_control": "private",
+    "expected_cookie_names_exact": ["CSRF_TOKEN"],
+    "body_contains": ["<title>Error 502</title>"]
+  },
+  {
+    "name": "reverse proxy error stylesheet layered cache policy",
+    "method": "GET",
+    "old": "/qrerror/combined.css",
+    "new": "/qrerror/combined.css",
+    "fresh_session": true,
+    "compare": true,
+    "compare_exact": true,
+    "compare_cache_control": true,
+    "compare_cookies": true,
+    "expected_status": 200,
+    "expected_content_type": "text/css",
+    "expected_cache_control": "max-age=3600",
+    "expected_cookie_names_exact": ["CSRF_TOKEN"]
+  },
+  {
+    "name": "unknown host canonical redirect",
+    "method": "GET",
+    "old": "/about?host=compat",
+    "new": "/about?host=compat",
+    "headers": {"Host": "unknown.example"},
+    "compare": true,
+    "compare_exact": true,
+    "compare_location_raw": true,
+    "expected_status": 302,
+    "expected_location": "/about?host=compat",
+    "expected_location_raw": "https://www.linux.org.ru/about?host=compat"
+  },
+  {
+    "name": "www http upgrades to https",
+    "method": "GET",
+    "old": "/news/",
+    "new": "/news/",
+    "headers": {"Host": "www.linux.org.ru"},
+    "compare": true,
+    "compare_exact": true,
+    "compare_location_raw": true,
+    "expected_status": 302,
+    "expected_location": "/news/",
+    "expected_location_raw": "https://www.linux.org.ru/news/"
+  },
+  {
+    "name": "beta host remains accepted",
+    "method": "GET",
+    "old": "/about",
+    "new": "/about",
+    "headers": {"Host": "beta.linux.org.ru"},
+    "compare": true,
+    "expected_status": 200
+  },
+  {
+    "name": "stoplinux legacy host redirect",
+    "method": "GET",
+    "old": "/about?legacy=1",
+    "new": "/about?legacy=1",
+    "headers": {"Host": "stoplinux.org.ru"},
+    "compare": true,
+    "compare_exact": true,
+    "compare_location_raw": true,
+    "expected_status": 302,
+    "expected_location": "/about?legacy=1",
+    "expected_location_raw": "http://127.0.0.1/about?legacy=1"
   }
 ]

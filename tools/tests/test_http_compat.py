@@ -107,6 +107,7 @@ class HttpCompatibilityClientTest(unittest.TestCase):
         headers = email.message.Message()
         headers["Content-Type"] = "text/html; charset=utf-8"
         headers["Set-Cookie"] = "CSRF_TOKEN=compat-token; Path=/"
+        headers["Cache-Control"] = "max-age=3600"
         response = compat.response_value(200, headers, b'<form><input name="csrf"></form>')
         case = {
             "name": "form",
@@ -115,9 +116,21 @@ class HttpCompatibilityClientTest(unittest.TestCase):
             "new_body_contains": ['name="csrf"'],
             "new_body_not_contains": ["internal error"],
             "new_expected_cookie_names": ["CSRF_TOKEN"],
+            "new_expected_cache_control": "max-age=3600",
         }
 
         self.assertEqual([], compat.validate_expected(case, "new", response))
+
+    def test_exact_cookie_contract_can_assert_an_empty_static_response(self) -> None:
+        response = compat.response_value(200, email.message.Message(), b"asset")
+        case = {
+            "name": "direct static",
+            "new_expected_cookie_names_exact": [],
+        }
+        self.assertEqual([], compat.validate_expected(case, "new", response))
+
+        response.set_cookie_names = frozenset({"CSRF_TOKEN"})
+        self.assertEqual(1, len(compat.validate_expected(case, "new", response)))
 
     def test_machine_report_omits_response_body_and_keeps_protocol_fields(self) -> None:
         headers = email.message.Message()
@@ -131,7 +144,9 @@ class HttpCompatibilityClientTest(unittest.TestCase):
                 "status": 302,
                 "content_type": "text/html; charset=utf-8",
                 "location": "/target?from=compat",
+                "location_raw": "/target?from=compat",
                 "set_cookie_names": ["CSRF_TOKEN"],
+                "cache_control": "",
             },
             compat.report_response(response),
         )

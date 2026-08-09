@@ -17,8 +17,16 @@ Compatibility details:
   escapes and parameter order exactly as the Java replacement does, while
   percent escapes in their path components are decoded before matching.
 
-The canonical-host and HTTP-to-HTTPS rules are intentionally not enabled yet.
-They depend on the deployment's exact public-host and proxy/TLS configuration;
-enabling the Java production host list unchanged would break local and migrated
-installations. Static-asset cache headers and outbound `;jsessionid` removal are
-separate compatibility work and are not claimed by this path-redirect layer.
+The canonical-host and HTTP-to-HTTPS rules are implemented as a separate outer
+middleware, after the path-rewrite middleware in request order. It reproduces
+the current Tuckey host prefixes: unknown hosts redirect to the absolute
+`https://www.linux.org.ru` URL, plain HTTP on `www.linux.org.ru` upgrades to
+HTTPS, beta/test/local hosts pass through, and `stoplinux.org.ru` keeps its
+historical absolute redirect. Trusted proxy handling is shared with the rest of
+the security boundary, so an untrusted `X-Forwarded-Proto` cannot suppress the
+HTTPS upgrade.
+
+Static-asset cache headers are implemented by another response middleware and
+preserve the original rule ordering and regular-expression edge cases. Rust
+does not create servlet URL-rewritten `;jsessionid` links, so the Java outbound
+cleanup rule has no Rust output on which to operate.

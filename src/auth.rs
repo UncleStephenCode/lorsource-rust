@@ -5,8 +5,11 @@ use crate::{
     state::AppState,
 };
 use axum::{
-    extract::{FromRef, FromRequestParts},
+    body::Body,
+    extract::{FromRef, FromRequestParts, Request, State},
     http::request::Parts,
+    middleware::Next,
+    response::{IntoResponse, Response},
 };
 use axum_extra::extract::cookie::CookieJar;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -27,6 +30,9 @@ where
         parts: &mut Parts,
         state: &S,
     ) -> std::result::Result<Self, Self::Rejection> {
+        if let Some(stCurrentUser) = parts.extensions.get::<CurrentUser>() {
+            return Ok(stCurrentUser.clone());
+        }
         let app = AppState::from_ref(state);
         let jar = CookieJar::from_request_parts(parts, state)
             .await
@@ -74,6 +80,31 @@ where
         }
         Ok(CurrentUser(user))
     }
+}
+
+/// Java's `LastLoginInterceptor` executes for every DispatcherServlet request,
+/// including handlers which do not explicitly request an authenticated user.
+/// Resolve the session once at the application boundary, update activity with
+/// the original one-hour throttle, and cache it for route extractors.
+pub async fn hydrate(
+    State(stState): State<AppState>,
+    mut stRequest: Request<Body>,
+    oNext: Next,
+) -> Response {
+    if crate::security::bSpringSecurityIgnoredPath(stRequest.uri().path()) {
+        // These paths use `security="none"` in Spring. Keep an explicit
+        // anonymous extension for a fallback handler, but avoid remember-me
+        // verification, a user lookup and LastLogin writes for every asset.
+        stRequest.extensions_mut().insert(CurrentUser(None));
+        return oNext.run(stRequest).await;
+    }
+    let (mut stParts, stBody) = stRequest.into_parts();
+    let stCurrentUser = match CurrentUser::from_request_parts(&mut stParts, &stState).await {
+        Ok(stCurrentUser) => stCurrentUser,
+        Err(stError) => return stError.into_response(),
+    };
+    stParts.extensions.insert(stCurrentUser);
+    oNext.run(Request::from_parts(stParts, stBody)).await
 }
 
 type TyRememberMeRow = (i32, String, String, i32, bool);

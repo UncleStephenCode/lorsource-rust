@@ -1,3 +1,6 @@
+use anyhow::Context;
+use std::path::{Component, Path};
+
 #[derive(Debug, Clone)]
 pub struct StConfig {
     pub host: String,
@@ -51,31 +54,30 @@ pub struct StConfig {
 pub type Config = StConfig;
 
 impl StConfig {
-    pub fn stFromEnv() -> Self {
+    pub fn stFromEnv() -> anyhow::Result<Self> {
         let sPublicUrl =
             std::env::var("PUBLIC_URL").unwrap_or_else(|_| "http://localhost:8181".to_string());
         let sWsUrl = std::env::var("WS_URL").unwrap_or_else(|_| sWsUrlFromPublic(&sPublicUrl));
-        Self {
+        let sCookieSecret = optEnvOrFile("COOKIE_SECRET")?
+            .unwrap_or_else(|| "dev-only-change-me-change-me-change-me".to_owned());
+        let sSiteSecret = optEnvOrFile("SITE_SECRET")?.unwrap_or_else(|| sCookieSecret.clone());
+        Ok(Self {
             host: std::env::var("LOR_HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
             port: std::env::var("LOR_PORT")
                 .ok()
                 .and_then(|sValue| sValue.parse().ok())
                 .unwrap_or(8181),
-            database_url: std::env::var("DATABASE_URL")
-                .unwrap_or_else(|_| "postgres://linuxweb:linuxweb@localhost:5432/lor".to_string()),
+            database_url: optEnvOrFile("DATABASE_URL")?
+                .unwrap_or_else(|| "postgres://linuxweb:linuxweb@localhost:5432/lor".to_string()),
             public_url: sPublicUrl,
             ws_url: sWsUrl,
             static_dir: std::env::var("STATIC_DIR").unwrap_or_else(|_| "static".to_string()),
             upload_dir: std::env::var("UPLOAD_DIR").unwrap_or_else(|_| "uploads".to_string()),
-            cookie_secret: std::env::var("COOKIE_SECRET")
-                .unwrap_or_else(|_| "dev-only-change-me-change-me-change-me".to_string()),
-            site_secret: std::env::var("SITE_SECRET")
-                .ok()
-                .or_else(|| std::env::var("COOKIE_SECRET").ok())
-                .unwrap_or_else(|| "dev-only-change-me-change-me-change-me".to_string()),
+            cookie_secret: sCookieSecret,
+            site_secret: sSiteSecret,
             opensearch_url: std::env::var("OPENSEARCH_URL").ok(),
             captcha_public_key: std::env::var("CAPTCHA_PUBLIC_KEY").ok(),
-            captcha_private_key: std::env::var("CAPTCHA_PRIVATE_KEY").ok(),
+            captcha_private_key: optEnvOrFile("CAPTCHA_PRIVATE_KEY")?,
             captcha_verify_url: std::env::var("CAPTCHA_VERIFY_URL")
                 .unwrap_or_else(|_| "https://hcaptcha.com/siteverify".to_owned()),
             admin_email: std::env::var("ADMIN_EMAIL")
@@ -85,8 +87,7 @@ impl StConfig {
             smtp_port: std::env::var("SMTP_PORT").map_or(25, |sValue| sValue.parse().unwrap_or(0)),
             smtp_helo_name: std::env::var("SMTP_HELO_NAME")
                 .unwrap_or_else(|_| "localhost".to_owned()),
-            telegram_token: std::env::var("TELEGRAM_TOKEN")
-                .ok()
+            telegram_token: optEnvOrFile("TELEGRAM_TOKEN")?
                 .filter(|sValue| !sValue.trim().is_empty() && sValue != "false"),
             fallback_proxy_url: std::env::var("FALLBACK_PROXY_URL")
                 .ok()
@@ -115,10 +116,10 @@ impl StConfig {
             enable_dev_bypasses: std::env::var("ENABLE_DEV_BYPASSES")
                 .map(|sValue| sValue == "true" || sValue == "1")
                 .unwrap_or(false),
-        }
+        })
     }
 
-    pub fn from_env() -> Self {
+    pub fn from_env() -> anyhow::Result<Self> {
         Self::stFromEnv()
     }
 
@@ -149,6 +150,7 @@ impl StConfig {
                 || sLower.contains("change-me")
                 || sLower.contains("dev-only")
                 || sLower.contains("devcontainer")
+                || sValue.chars().any(char::is_control)
             {
                 vecProblems.push(format!(
                     "{sName} must be an explicit production secret of at least 32 characters"
@@ -167,6 +169,11 @@ impl StConfig {
         if optPublicAuthority.is_none() {
             vecProblems
                 .push("PUBLIC_URL must be an absolute https:// URL in production".to_owned());
+        } else if !bOriginOnlyUri(&self.public_url) {
+            vecProblems.push(
+                "PUBLIC_URL must contain only the public HTTPS origin without credentials, query or fragment"
+                    .to_owned(),
+            );
         }
         let optWebSocketAuthority = self
             .ws_url
@@ -178,6 +185,11 @@ impl StConfig {
             vecProblems.push("WS_URL must be an absolute wss:// URL in production".to_owned());
         } else if optWebSocketAuthority != optPublicAuthority {
             vecProblems.push("WS_URL must use the same authority as PUBLIC_URL".to_owned());
+        } else if !bOriginOnlyUri(&self.ws_url) {
+            vecProblems.push(
+                "WS_URL must contain only the public WebSocket origin without credentials, query or fragment"
+                    .to_owned(),
+            );
         }
         if self.cookie_secret == self.site_secret {
             vecProblems.push("COOKIE_SECRET and SITE_SECRET must be independent".to_owned());
@@ -188,12 +200,37 @@ impl StConfig {
                     .to_owned(),
             );
         }
-        if self.opensearch_url.is_none() {
-            vecProblems.push("OPENSEARCH_URL is required in production".to_owned());
+        match self.opensearch_url.as_deref().and_then(|sValue| {
+            reqwest::Url::parse(sValue).ok().filter(|stUrl| {
+                matches!(stUrl.scheme(), "http" | "https") && stUrl.host_str().is_some()
+            })
+        }) {
+            Some(_) => {}
+            None => vecProblems
+                .push("OPENSEARCH_URL must be an absolute HTTP(S) URL in production".to_owned()),
         }
-        if self.captcha_public_key.is_none() || self.captcha_private_key.is_none() {
+        let bInvalidCaptchaKey = |optValue: Option<&str>| {
+            optValue.is_none_or(|sValue| {
+                sValue.trim().is_empty() || sValue.chars().any(char::is_control)
+            })
+        };
+        if bInvalidCaptchaKey(self.captcha_public_key.as_deref())
+            || bInvalidCaptchaKey(self.captcha_private_key.as_deref())
+        {
             vecProblems.push(
                 "CAPTCHA_PUBLIC_KEY and CAPTCHA_PRIVATE_KEY are required in production".to_owned(),
+            );
+        }
+        let bValidCaptchaUrl = reqwest::Url::parse(&self.captcha_verify_url).is_ok_and(|stUrl| {
+            stUrl.scheme() == "https"
+                && stUrl.host_str().is_some()
+                && stUrl.username().is_empty()
+                && stUrl.password().is_none()
+                && stUrl.fragment().is_none()
+        });
+        if !bValidCaptchaUrl {
+            vecProblems.push(
+                "CAPTCHA_VERIFY_URL must be an absolute credential-free HTTPS URL".to_owned(),
             );
         }
         if self.admin_email.as_deref().is_none_or(|sValue| {
@@ -213,6 +250,13 @@ impl StConfig {
                 .push("SMTP_HELO_NAME must be a valid SMTP domain/address literal".to_owned());
         }
         if self.telegram_token.is_some() {
+            if self
+                .telegram_token
+                .as_deref()
+                .is_some_and(|sValue| sValue.chars().any(char::is_control))
+            {
+                vecProblems.push("TELEGRAM_TOKEN must not contain control characters".to_owned());
+            }
             let bValidProxy = self.fallback_proxy_url.as_deref().is_some_and(|sUrl| {
                 sUrl.parse::<http::Uri>().is_ok_and(|stUri| {
                     matches!(stUri.scheme_str(), Some("http" | "https"))
@@ -232,6 +276,53 @@ impl StConfig {
             vecProblems.push("DATABASE_URL contains development credentials".to_owned());
         }
 
+        match reqwest::Url::parse(&self.database_url) {
+            Ok(stUrl) => {
+                let optDecodedCredentials = stUrl.password().and_then(|sPassword| {
+                    Some((
+                        urlencoding::decode(stUrl.username()).ok()?.into_owned(),
+                        urlencoding::decode(sPassword).ok()?.into_owned(),
+                    ))
+                });
+                if !matches!(stUrl.scheme(), "postgres" | "postgresql")
+                    || stUrl.username().is_empty()
+                    || stUrl.password().is_none_or(str::is_empty)
+                    || stUrl.path().trim_matches('/').is_empty()
+                    || optDecodedCredentials.is_none()
+                {
+                    vecProblems.push(
+                        "DATABASE_URL must be a complete PostgreSQL URL with runtime credentials and database name"
+                            .to_owned(),
+                    );
+                }
+                if optDecodedCredentials
+                    .as_ref()
+                    .is_some_and(|(sUser, sPassword)| {
+                        matches!(
+                            (sUser.as_str(), sPassword.as_str()),
+                            ("linuxweb", "linuxweb")
+                                | ("postgres", "postgres")
+                                | ("maxcom", "maxcom")
+                        )
+                    })
+                {
+                    vecProblems.push("DATABASE_URL contains development credentials".to_owned());
+                }
+            }
+            Err(_) => vecProblems.push("DATABASE_URL must be a valid PostgreSQL URL".to_owned()),
+        }
+        let stUploadDir = Path::new(&self.upload_dir);
+        let bUnsafeUploadDir = !stUploadDir.is_absolute()
+            || matches!(self.upload_dir.as_str(), "/" | "/app" | "/tmp" | "/var")
+            || stUploadDir
+                .components()
+                .any(|stComponent| matches!(stComponent, Component::ParentDir));
+        if bUnsafeUploadDir {
+            vecProblems.push(
+                "UPLOAD_DIR must be a dedicated absolute path without parent traversal".to_owned(),
+            );
+        }
+
         if vecProblems.is_empty() {
             Ok(())
         } else {
@@ -241,6 +332,53 @@ impl StConfig {
             )
         }
     }
+}
+
+fn optEnvOrFile(sName: &str) -> anyhow::Result<Option<String>> {
+    let sFileName = format!("{sName}_FILE");
+    let optValue = std::env::var_os(sName);
+    let optFile = std::env::var_os(&sFileName);
+    if optValue.is_some() && optFile.is_some() {
+        anyhow::bail!("set only one of {sName} and {sFileName}");
+    }
+    if let Some(sValue) = optValue {
+        return sValue
+            .into_string()
+            .map(Some)
+            .map_err(|_| anyhow::anyhow!("{sName} is not valid UTF-8"));
+    }
+    let Some(sPath) = optFile else {
+        return Ok(None);
+    };
+    let sPath = sPath
+        .into_string()
+        .map_err(|_| anyhow::anyhow!("{sFileName} is not valid UTF-8"))?;
+    sReadSingleLineValue(sName, &sPath).map(Some)
+}
+
+fn sReadSingleLineValue(sName: &str, sPath: &str) -> anyhow::Result<String> {
+    let sValue = std::fs::read_to_string(sPath)
+        .with_context(|| format!("failed to read {sName} from {sPath}"))?;
+    let sValue = sValue.trim_end_matches(['\r', '\n']).to_owned();
+    if sValue.is_empty()
+        || sValue
+            .chars()
+            .any(|cCharacter| matches!(cCharacter, '\r' | '\n' | '\0'))
+    {
+        anyhow::bail!("{sName}_FILE must contain one non-empty text line");
+    }
+    Ok(sValue)
+}
+
+fn bOriginOnlyUri(sValue: &str) -> bool {
+    sValue.parse::<http::Uri>().is_ok_and(|stUri| {
+        stUri
+            .authority()
+            .is_some_and(|stAuthority| !stAuthority.as_str().contains('@'))
+            && stUri
+                .path_and_query()
+                .is_none_or(|stPath| stPath.as_str() == "/")
+    })
 }
 
 fn sWsUrlFromPublic(sPublicUrl: &str) -> String {
@@ -263,7 +401,7 @@ fn bValidSmtpHelo(sValue: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{StConfig, sWsUrlFromPublic};
+    use super::{StConfig, sReadSingleLineValue, sWsUrlFromPublic};
 
     fn stConfig() -> StConfig {
         StConfig {
@@ -273,7 +411,7 @@ mod tests {
             public_url: "https://www.linux.org.ru".to_owned(),
             ws_url: "wss://www.linux.org.ru/".to_owned(),
             static_dir: "static".to_owned(),
-            upload_dir: "uploads".to_owned(),
+            upload_dir: "/srv/lorsource/uploads".to_owned(),
             cookie_secret: "cookie-production-secret-0123456789".to_owned(),
             site_secret: "site-production-secret-01234567890".to_owned(),
             opensearch_url: Some("https://opensearch:9200".to_owned()),
@@ -376,5 +514,44 @@ mod tests {
         stConfig
             .vValidateForEnvironment("production")
             .expect("Telegram with fallback proxy is production-valid");
+    }
+
+    #[test]
+    fn production_rejects_unsafe_dependency_and_storage_configuration() {
+        let mut stConfig = stConfig();
+        stConfig.database_url = "postgres://l%69nuxweb:l%69nuxweb@database/lor".to_owned();
+        stConfig.public_url = "https://www.linux.org.ru/unexpected?debug=1".to_owned();
+        stConfig.opensearch_url = Some("ftp://search.internal/messages".to_owned());
+        stConfig.captcha_verify_url = "http://captcha.internal/siteverify".to_owned();
+        stConfig.upload_dir = "uploads/../shared".to_owned();
+
+        let sError = stConfig
+            .vValidateForEnvironment("production")
+            .expect_err("unsafe production endpoints and paths must fail")
+            .to_string();
+        assert!(sError.contains("development credentials"));
+        assert!(sError.contains("PUBLIC_URL must contain only"));
+        assert!(sError.contains("OPENSEARCH_URL"));
+        assert!(sError.contains("CAPTCHA_VERIFY_URL"));
+        assert!(sError.contains("UPLOAD_DIR"));
+    }
+
+    #[test]
+    fn secret_file_accepts_one_line_and_rejects_multiline_content() {
+        let stPath =
+            std::env::temp_dir().join(format!("lorsource-secret-file-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&stPath, "production-secret\n").expect("write one-line secret");
+        assert_eq!(
+            sReadSingleLineValue("COOKIE_SECRET", stPath.to_str().unwrap())
+                .expect("read one-line secret"),
+            "production-secret"
+        );
+
+        std::fs::write(&stPath, "first\nsecond\n").expect("write multiline secret");
+        let sError = sReadSingleLineValue("COOKIE_SECRET", stPath.to_str().unwrap())
+            .expect_err("multiline secret must fail")
+            .to_string();
+        assert!(sError.contains("one non-empty text line"));
+        std::fs::remove_file(stPath).expect("remove secret fixture");
     }
 }

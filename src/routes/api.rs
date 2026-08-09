@@ -1,7 +1,6 @@
 use crate::{
     auth::CurrentUser,
     error::{AppError, Result},
-    models::TopicSummary,
     state::AppState,
 };
 use askama::Template;
@@ -45,6 +44,8 @@ pub(crate) struct NotificationEvent {
     pub closed_warning: bool,
     pub bonus: Option<i32>,
     pub tags: Vec<String>,
+    pub message_text: String,
+    pub message_markup: String,
     /// Reaction currently stored on the target. `None` means that an old,
     /// already-read event outlived a subsequently removed reaction.
     pub reaction: Option<String>,
@@ -87,6 +88,7 @@ pub(crate) async fn fetch_events(
                   CASE WHEN e.type='DEL'::event_type THEN di.bonus ELSE NULL END AS bonus,
                   ARRAY(SELECT tv.value FROM tags tg JOIN tags_values tv ON tv.id=tg.tagid
                         WHERE tg.msgid=t.id ORDER BY tv.value LIMIT 3) AS tags,
+                  mb.message AS message_text,mb.markup::text AS message_markup,
                   CASE WHEN e.type='REACTION'::event_type AND e.origin_user IS NOT NULL
                        THEN COALESCE(c.reactions,t.reactions)->>(e.origin_user::text)
                        ELSE NULL END AS reaction
@@ -98,6 +100,7 @@ pub(crate) async fn fetch_events(
            JOIN users tu ON tu.id=t.userid
            LEFT JOIN message_warnings mw ON mw.id=e.warning_id
            LEFT JOIN del_info di ON di.msgid=CASE WHEN e.comment_id IS NOT NULL THEN e.comment_id ELSE e.message_id END
+           JOIN msgbase mb ON mb.id=COALESCE(e.comment_id,e.message_id)
            JOIN groups g ON g.id=t.groupid
            JOIN sections s ON s.id=g.section
            WHERE e.userid=$1 AND ($2::text IS NULL OR e.type::text=$2) AND ($3 OR NOT e.private)
@@ -407,6 +410,7 @@ pub async fn notifications(
             } else {
                 sNotificationAuthor(&stEvent.author_nick)
             };
+            let sDate = crate::request_timezone::sTimeTag("interval", stEvent.event_date);
             html.push_str(&format!(
                 "<tr><td align=\"center\">{icon}</td><td><a href=\"{link}\" class=\"event-unread-{unread}\">{tags}{subj}</a> ({section}){details} {unread_mark}</td><td title=\"{authors}\">{date}, {author_or_count}</td></tr>",
                 icon = sIcon,
@@ -418,7 +422,7 @@ pub async fn notifications(
                 details = sDetails,
                 unread_mark = sUnreadMark,
                 authors = html_escape::encode_double_quoted_attribute(&stPrepared.vecAuthors.join(", ")),
-                date = stEvent.event_date,
+                date = sDate,
                 author_or_count = sAuthorOrCount,
             ));
         }
@@ -427,6 +431,7 @@ pub async fn notifications(
         html.push_str("<div class=\"notifications\">");
         for stPrepared in &vecPage {
             let stEvent = &stPrepared.stEvent;
+            let sDate = crate::request_timezone::sTimeTag("compact-interval", stEvent.event_date);
             let sUnreadClass = if stEvent.unread {
                 "event-unread-true"
             } else {
@@ -472,13 +477,13 @@ pub async fn notifications(
                 html.push_str(&format!(
                     "<div class=\"notifications-details\"><p>{sDetails}</p></div><div class=\"notifications-who-when\"><p>{}, {}</p></div>",
                     sNotificationAuthor(&stEvent.author_nick),
-                    stEvent.event_date,
+                    sDate,
                 ));
             }
             if !stPrepared.vecReactions.is_empty() || stPrepared.iCount > 1 {
                 html.push_str(&format!(
                     "<div class=\"notifications-when\"><p>{}</p></div>",
-                    stEvent.event_date
+                    sDate
                 ));
             }
             html.push_str("</button></form>");
@@ -586,21 +591,148 @@ pub struct TrackerQuery {
 struct TrackerTemplate {
     title: String,
     filter: String,
-    topics: Vec<crate::models::TopicSummary>,
+    default_filter: String,
+    topics: Vec<TrackerTopic>,
     prev_link: Option<String>,
     next_link: Option<String>,
     is_moderator: bool,
+    old_tracker: bool,
     uncommitted: Vec<(i32, String, i64)>,
+    new_users: Vec<TrackerModeratorUser>,
+    frozen_users: Vec<TrackerModeratorUser>,
+    unfrozen_users: Vec<TrackerModeratorUser>,
+    blocked_users: Vec<TrackerModeratorUser>,
+    unblocked_users: Vec<TrackerModeratorUser>,
+    recent_userpics: Vec<TrackerModeratorUserpic>,
+    blocked_ips: Vec<String>,
+    unblocked_ips: Vec<String>,
 }
 
-pub async fn tracker_old_redirect(Query(q): Query<TrackerQuery>) -> Redirect {
-    match q.filter {
-        Some(filter) if !filter.trim().is_empty() && filter != "all" => Redirect::to(&format!(
-            "/tracker/?filter={}",
-            urlencoding::encode(&filter)
-        )),
-        _ => Redirect::to("/tracker/"),
+#[derive(Debug, sqlx::FromRow)]
+struct TrackerModeratorUser {
+    nick: String,
+    bold: bool,
+    strike: bool,
+}
+
+impl TrackerModeratorUser {
+    fn profile_url(&self) -> String {
+        format!("/people/{}/profile", urlencoding::encode(&self.nick))
     }
+}
+
+#[derive(Debug)]
+struct TrackerModeratorUserpic {
+    nick: String,
+    profile_url: String,
+    image_url: String,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct TrackerTopicRow {
+    id: i32,
+    title: String,
+    postdate: chrono::DateTime<chrono::Utc>,
+    topic_author: String,
+    author: String,
+    group_title: String,
+    group_urlname: String,
+    section_prefix: String,
+    comments: i32,
+    raw_comments: i32,
+    resolved: bool,
+    tags: Option<String>,
+    last_comment_id: Option<i32>,
+    comments_closed: bool,
+    uncommitted: bool,
+}
+
+#[derive(Debug)]
+struct TrackerTopic {
+    stRow: TrackerTopicRow,
+    iPages: i32,
+}
+
+impl TrackerTopic {
+    fn sGroupUrl(&self) -> String {
+        format!(
+            "/{}/{}/",
+            self.stRow.section_prefix, self.stRow.group_urlname
+        )
+    }
+
+    fn sLastPageUrl(&self) -> String {
+        let iLastCommentId = self.stRow.last_comment_id.unwrap_or(0);
+        if self.iPages > 1 {
+            format!(
+                "{}{}/page{}?lastmod={iLastCommentId}",
+                self.sGroupUrl(),
+                self.stRow.id,
+                self.iPages - 1
+            )
+        } else {
+            format!(
+                "{}{}?lastmod={iLastCommentId}",
+                self.sGroupUrl(),
+                self.stRow.id
+            )
+        }
+    }
+
+    fn vecTags(&self) -> Vec<&str> {
+        self.stRow
+            .tags
+            .as_deref()
+            .unwrap_or("")
+            .split(',')
+            .map(str::trim)
+            .filter(|sValue| !sValue.is_empty())
+            .collect()
+    }
+}
+
+fn sTrackerOldLocation(optFilter: Option<&str>, sDefaultFilter: &str) -> String {
+    // @RequestParam(defaultValue = "all") followed by
+    // TrackerFilterEnum.getByValue: invalid and empty values are deliberately
+    // preserved, while the user's own default is omitted from the canonical
+    // tracker URL.
+    let sFilter = optFilter.unwrap_or("all");
+    if ["all", "main", "notalks", "tech"].contains(&sFilter) && sFilter == sDefaultFilter {
+        "/tracker/".to_owned()
+    } else {
+        format!("/tracker/?filter={}", urlencoding::encode(sFilter))
+    }
+}
+
+async fn stTrackerProfile(
+    stState: &AppState,
+    optUser: Option<&crate::models::UserSummary>,
+) -> Result<crate::profile::ProfileSettings> {
+    let optSettings = if let Some(stUser) = optUser {
+        sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
+            .bind(stUser.id)
+            .fetch_optional(&stState.pool)
+            .await?
+    } else {
+        None
+    };
+    Ok(crate::profile::ProfileSettings::from_hstore_text(
+        optSettings,
+    ))
+}
+
+pub async fn tracker_old_redirect(
+    State(stState): State<AppState>,
+    CurrentUser(optUser): CurrentUser,
+    Query(stQuery): Query<TrackerQuery>,
+) -> Result<axum::response::Response> {
+    let stProfile = stTrackerProfile(&stState, optUser.as_ref()).await?;
+    let sLocation = sTrackerOldLocation(stQuery.filter.as_deref(), &stProfile.tracker_mode);
+    Ok((
+        axum::http::StatusCode::FOUND,
+        [(axum::http::header::LOCATION, sLocation)],
+    )
+        .into_response())
 }
 
 /// Matches TrackerFilterEnum.NonTech (SectionController.NonTech): these are
@@ -636,6 +768,119 @@ const UNCOMMITTED_COUNTS_SQL: &str = r#"SELECT s.id,s.name,count(t.id)
     HAVING count(t.id)>0
     ORDER BY s.id"#;
 
+async fn stTrackerModeratorData(
+    stState: &AppState,
+) -> Result<(
+    Vec<TrackerModeratorUser>,
+    Vec<TrackerModeratorUser>,
+    Vec<TrackerModeratorUser>,
+    Vec<TrackerModeratorUser>,
+    Vec<TrackerModeratorUser>,
+    Vec<TrackerModeratorUserpic>,
+    Vec<String>,
+    Vec<String>,
+)> {
+    let vecNewUsers = sqlx::query_as::<_, TrackerModeratorUser>(
+        r#"SELECT nick,activated AS bold,blocked AS strike FROM users
+           WHERE regdate IS NOT NULL
+             AND regdate>CURRENT_TIMESTAMP-'3 days'::interval
+           ORDER BY regdate"#,
+    )
+    .fetch_all(&stState.pool)
+    .await?;
+    let vecFrozenUsers = sqlx::query_as::<_, TrackerModeratorUser>(
+        r#"SELECT nick,COALESCE(lastlogin>CURRENT_TIMESTAMP-'1 day'::interval,false) AS bold,
+                  false AS strike
+           FROM users
+           WHERE frozen_until>CURRENT_TIMESTAMP AND NOT blocked
+           ORDER BY frozen_until"#,
+    )
+    .fetch_all(&stState.pool)
+    .await?;
+    let vecUnfrozenUsers = sqlx::query_as::<_, TrackerModeratorUser>(
+        r#"SELECT nick,COALESCE(lastlogin>CURRENT_TIMESTAMP-'1 day'::interval,false) AS bold,
+                  false AS strike
+           FROM users
+           WHERE frozen_until<CURRENT_TIMESTAMP
+             AND frozen_until>CURRENT_TIMESTAMP-'3 days'::interval
+             AND NOT blocked
+           ORDER BY frozen_until"#,
+    )
+    .fetch_all(&stState.pool)
+    .await?;
+    let vecBlockedUsers = sqlx::query_as::<_, TrackerModeratorUser>(
+        r#"SELECT u.nick,false AS bold,u.blocked AS strike
+           FROM user_log l JOIN users u ON u.id=l.userid
+           WHERE l.action='block_user'::user_log_action
+             AND l.action_date>CURRENT_TIMESTAMP-'3 days'::interval
+           ORDER BY l.action_date"#,
+    )
+    .fetch_all(&stState.pool)
+    .await?;
+    let vecUnblockedUsers = sqlx::query_as::<_, TrackerModeratorUser>(
+        r#"SELECT u.nick,false AS bold,u.blocked AS strike
+           FROM user_log l JOIN users u ON u.id=l.userid
+           WHERE l.action='unblock_user'::user_log_action
+             AND l.action_date>CURRENT_TIMESTAMP-'3 days'::interval
+           ORDER BY l.action_date"#,
+    )
+    .fetch_all(&stState.pool)
+    .await?;
+
+    // UserService.getRecentUserpics uses the first occurrence of each user
+    // from the three-day, action-date-ordered set and drops DisabledUserpic.
+    let vecRecentPhotoRows: Vec<(i32, String, Option<String>)> = sqlx::query_as(
+        r#"SELECT u.id,u.nick,u.photo
+           FROM user_log l JOIN users u ON u.id=l.userid
+           WHERE l.action='set_userpic'::user_log_action
+             AND l.action_date>CURRENT_TIMESTAMP-'3 days'::interval
+           ORDER BY l.action_date"#,
+    )
+    .fetch_all(&stState.pool)
+    .await?;
+    let mut setRecentPhotoUsers = std::collections::HashSet::new();
+    let vecRecentUserpics = vecRecentPhotoRows
+        .into_iter()
+        .filter(|(iUserId, _, _)| setRecentPhotoUsers.insert(*iUserId))
+        .filter_map(|(_, sNick, optPhoto)| {
+            crate::profile::userpic_url("empty", false, false, optPhoto.as_deref(), None).map(
+                |sImageUrl| TrackerModeratorUserpic {
+                    profile_url: format!("/people/{}/profile", urlencoding::encode(&sNick)),
+                    nick: sNick,
+                    image_url: sImageUrl,
+                },
+            )
+        })
+        .collect();
+    let vecBlockedIps: Vec<String> = sqlx::query_scalar(
+        r#"SELECT ip::text FROM b_ips
+           WHERE date>CURRENT_TIMESTAMP-'3 days'::interval
+             AND ban_date>CURRENT_TIMESTAMP AND mod_id<>0
+           ORDER BY date"#,
+    )
+    .fetch_all(&stState.pool)
+    .await?;
+    let vecUnblockedIps: Vec<String> = sqlx::query_scalar(
+        r#"SELECT ip::text FROM b_ips
+           WHERE ban_date<CURRENT_TIMESTAMP
+             AND ban_date>CURRENT_TIMESTAMP-'3 days'::interval AND mod_id<>0
+           ORDER BY ban_date"#,
+    )
+    .fetch_all(&stState.pool)
+    .await?;
+
+    Ok((
+        vecNewUsers,
+        vecFrozenUsers,
+        vecUnfrozenUsers,
+        vecBlockedUsers,
+        vecUnblockedUsers,
+        vecRecentUserpics,
+        vecBlockedIps,
+        vecUnblockedIps,
+    ))
+}
+
 fn tracker_filter_group_clause(filter: &str) -> String {
     let non_tech = TRACKER_NON_TECH_GROUPS
         .iter()
@@ -665,30 +910,9 @@ pub async fn tracker(
     let offset = q.offset.unwrap_or(0).clamp(0, 300);
     // GroupListDao.getTrackerTopics uses session.profile.topics, not a
     // global page size - each user's own "topics per page" setting.
-    let limit: i64 = if let Some(u) = &user {
-        let settings_text: Option<String> =
-            sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
-                .bind(u.id)
-                .fetch_optional(&state.pool)
-                .await?;
-        crate::profile::ProfileSettings::from_hstore_text(settings_text).topics as i64
-    } else {
-        crate::profile::DEFAULT_TOPICS as i64
-    };
-
-    let default_filter: String = if let Some(u) = &user {
-        sqlx::query_scalar::<_, Option<String>>(
-            "SELECT settings->'trackerMode' FROM user_settings WHERE id=$1",
-        )
-        .bind(u.id)
-        .fetch_optional(&state.pool)
-        .await?
-        .flatten()
-        .filter(|v: &String| v == "all" || v == "main")
-        .unwrap_or_else(|| "main".to_string())
-    } else {
-        "main".to_string()
-    };
+    let stProfile = stTrackerProfile(&state, user.as_ref()).await?;
+    let limit = i64::from(stProfile.topics);
+    let default_filter = stProfile.tracker_mode.clone();
     let filter = q
         .filter
         .filter(|f| ["all", "main", "notalks", "tech"].contains(&f.as_str()))
@@ -701,20 +925,26 @@ pub async fn tracker(
     let show_uncommitted = filter == "all" || is_moderator || is_corrector;
 
     let sql = format!(
-        r#"SELECT t.id, t.title, t.url, t.postdate, t.lastmod, u.id AS author_id, u.nick AS author,
-                  g.id AS group_id, g.title AS group_title, g.urlname AS group_urlname,
-                  s.id AS section_id, s.name AS section_name,
+        r#"SELECT t.id, t.title,
+                  GREATEST(t.postdate,COALESCE(lc.postdate,t.postdate)) AS postdate,
+                  u.nick AS topic_author, COALESCE(lu.nick,u.nick) AS author,
+                  g.title AS group_title, g.urlname AS group_urlname,
                   CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(s.name) END AS section_prefix,
-                  t.stat1 AS comments, t.deleted, t.sticky, t.resolved,
+                  CASE WHEN t.postscore IS DISTINCT FROM 10002 THEN t.stat1 ELSE 0 END AS comments,
+                  t.stat1 AS raw_comments,
+                  COALESCE(t.resolved,false) AS resolved,
                   (SELECT string_agg(tv.value, ',' ORDER BY tv.value)
                      FROM tags tg JOIN tags_values tv ON tv.id=tg.tagid
-                    WHERE tg.msgid=t.id) AS tags
+                    WHERE tg.msgid=t.id) AS tags,
+                  lc.id AS last_comment_id,
+                  COALESCE(t.postscore,-9999) >= 10000 AS comments_closed,
+                  s.moderate AND NOT t.moderate AS uncommitted
            FROM topics t
            JOIN users u ON u.id=t.userid
            JOIN groups g ON g.id=t.groupid
            JOIN sections s ON s.id=g.section
            LEFT JOIN LATERAL (
-             SELECT c.postdate
+             SELECT c.id,c.userid,c.postdate
              FROM comments c
              WHERE c.topic=t.id AND NOT c.deleted
                AND ($3::int IS NULL OR NOT EXISTS (
@@ -724,6 +954,7 @@ pub async fn tracker(
              ORDER BY c.postdate DESC
              LIMIT 1
            ) lc ON t.postscore IS DISTINCT FROM 10002
+           LEFT JOIN users lu ON lu.id=lc.userid
            WHERE NOT t.draft AND NOT t.deleted
              AND COALESCE(t.lastmod, t.postdate) > now() - interval '7 days'
              AND ($3::int IS NULL OR t.userid NOT IN (
@@ -760,12 +991,20 @@ pub async fn tracker(
         },
         group_clause = tracker_filter_group_clause(&filter),
     );
-    let topics = sqlx::query_as::<_, TopicSummary>(&sql)
+    let vecRows = sqlx::query_as::<_, TrackerTopicRow>(&sql)
         .bind(offset)
         .bind(limit)
         .bind(user.as_ref().map(|stUser| stUser.id))
         .fetch_all(&state.pool)
         .await?;
+    let iMessages = stProfile.messages.max(1);
+    let topics = vecRows
+        .into_iter()
+        .map(|stRow| TrackerTopic {
+            iPages: ((stRow.raw_comments.max(0) + iMessages - 1) / iMessages).max(0),
+            stRow,
+        })
+        .collect::<Vec<_>>();
 
     let filter_label = match filter.as_str() {
         "main" => "основные",
@@ -819,15 +1058,39 @@ pub async fn tracker(
     } else {
         Vec::new()
     };
+    let (
+        new_users,
+        frozen_users,
+        unfrozen_users,
+        blocked_users,
+        unblocked_users,
+        recent_userpics,
+        blocked_ips,
+        unblocked_ips,
+    ) = if is_moderator {
+        stTrackerModeratorData(&state).await?
+    } else {
+        Default::default()
+    };
     Ok(Html(
         TrackerTemplate {
             title,
             filter,
+            default_filter,
             topics,
             prev_link,
             next_link,
             is_moderator,
+            old_tracker: stProfile.old_tracker,
             uncommitted,
+            new_users,
+            frozen_users,
+            unfrozen_users,
+            blocked_users,
+            unblocked_users,
+            recent_userpics,
+            blocked_ips,
+            unblocked_ips,
         }
         .render()?,
     ))
@@ -1452,7 +1715,7 @@ pub async fn vote(
 mod moderation_semantics_tests {
     use super::{
         NotificationEvent, TRACKER_PUBLIC_TOPICS_CLAUSE, UNCOMMITTED_COUNTS_SQL, VOTE_TOPIC_SQL,
-        bNotificationIsCurrent, sNotificationDetails, sUnreadDescription,
+        bNotificationIsCurrent, sNotificationDetails, sTrackerOldLocation, sUnreadDescription,
         tracker_commit_visibility_clause, vecPrepareNotifications,
     };
 
@@ -1483,6 +1746,8 @@ mod moderation_semantics_tests {
             closed_warning: false,
             bonus: None,
             tags: vec!["linux".into()],
+            message_text: "body".into(),
+            message_markup: "MARKDOWN".into(),
             reaction: optReaction.map(str::to_owned),
         }
     }
@@ -1591,6 +1856,21 @@ mod moderation_semantics_tests {
             TRACKER_PUBLIC_TOPICS_CLAUSE
         );
         assert_eq!(tracker_commit_visibility_clause(true), "");
+    }
+
+    #[test]
+    fn legacy_tracker_redirect_uses_the_profile_default_like_java() {
+        assert_eq!(sTrackerOldLocation(None, "main"), "/tracker/?filter=all");
+        assert_eq!(sTrackerOldLocation(Some("main"), "main"), "/tracker/");
+        assert_eq!(sTrackerOldLocation(Some("all"), "all"), "/tracker/");
+        assert_eq!(
+            sTrackerOldLocation(Some("main"), "all"),
+            "/tracker/?filter=main"
+        );
+        assert_eq!(
+            sTrackerOldLocation(Some("invalid value"), "main"),
+            "/tracker/?filter=invalid%20value"
+        );
     }
 
     #[test]

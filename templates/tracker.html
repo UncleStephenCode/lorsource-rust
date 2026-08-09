@@ -3,24 +3,46 @@
 {% block content %}
 <h1>Активные топики</h1>
 <nav>
-  <a href="/tracker/" class="btn {% if filter == "main" %}btn-selected{% else %}btn-default{% endif %}">основные</a>
-  <a href="/tracker/?filter=all" class="btn {% if filter == "all" %}btn-selected{% else %}btn-default{% endif %}">все</a>
+  <a href="{% if default_filter == "main" %}/tracker/{% else %}/tracker/?filter=main{% endif %}" class="btn {% if filter == "main" %}btn-selected{% else %}btn-default{% endif %}">основные</a>
+  <a href="{% if default_filter == "all" %}/tracker/{% else %}/tracker/?filter=all{% endif %}" class="btn {% if filter == "all" %}btn-selected{% else %}btn-default{% endif %}">все</a>
   <a href="/tracker/?filter=notalks" class="btn {% if filter == "notalks" %}btn-selected{% else %}btn-default{% endif %}">без talks</a>
   <a href="/tracker/?filter=tech" class="btn {% if filter == "tech" %}btn-selected{% else %}btn-default{% endif %}">тех. форум</a>
   {% if is_moderator %}<a class="btn btn-default" href="/sameip.jsp?score=-9999">anonymous</a><a class="btn btn-default" href="/sameip.jsp?score=46">score &lt;= 45</a>{% endif %}
   {% for item in uncommitted %}<a class="btn btn-default" href="/view-all.jsp?section={{ item.0 }}">{{ item.1 }}: {{ item.2 }}</a>{% endfor %}
 </nav>
+{% if old_tracker %}
+<div class="forum"><table class="message-table"><thead><tr><th class="hideon-tablet">Группа</th><th>Заголовок</th><th>Последнее сообщение</th><th><i class="icon-reply"></i></th></tr></thead><tbody>
+{% for t in topics %}<tr>
+  <td class="hideon-tablet"><a href="{{ t.sGroupUrl() }}" class="secondary">{{ t.stRow.group_title }}</a>{% if t.stRow.uncommitted %}, не подтверждено{% endif %}</td>
+  <td>{% if t.stRow.resolved %}<img src="/img/solved.png" alt="решено" title="решено" width="15" height="15">{% endif %}<a href="{{ t.sLastPageUrl() }}">{% for tag in t.vecTags() %}<span class="tag">{{ tag }}</span> {% endfor %}{{ t.stRow.title }}</a> (<a href="/people/{{ t.stRow.topic_author }}/profile">{{ t.stRow.topic_author }}</a>)</td>
+  <td class="dateinterval"><time data-format="compact-interval" datetime="{{ t.stRow.postdate.to_rfc3339() }}">{{ t.stRow.postdate }}</time>, <a href="/people/{{ t.stRow.author }}/profile">{{ t.stRow.author }}</a></td>
+  <td class="numbers">{% if t.stRow.comments == 0 %}-{% else %}{{ t.stRow.comments }}{% endif %}</td>
+</tr>{% endfor %}
+</tbody></table></div>
+{% else %}
 <div class="tracker">
 {% for t in topics %}
-  <a href="{{ t.topic_url() }}" class="tracker-item">
-    <div class="tracker-src"><p><span class="group-label">{{ t.group_title }}</span><br class="hideon-phone hideon-tablet">{{ t.author }}</p></div>
-    <div class="tracker-count"><p>{% if t.comments == 0 %}-{% else %}<i class="icon-comment"></i> {{ t.comments }}{% endif %}</p></div>
-    <div class="tracker-title"><p>{% if t.sticky %}<i class="icon-pin icon-pin-color"></i>{% endif %}{% if t.resolved.unwrap_or(false) %}<i class="icon-check"></i>{% endif %}{{ t.title }}</p></div>
-    <div class="tracker-tags"><p>{% for tag in t.tags_vec() %}<span class="tag">{{ tag }}</span> {% endfor %}</p></div>
-    <div class="tracker-last"><p>{{ t.author }}, {{ t.postdate }}</p></div>
+  <a href="{{ t.sLastPageUrl() }}" class="tracker-item">
+    <div class="tracker-src"><p><span class="group-label">{{ t.stRow.group_title }}</span>{% if t.stRow.uncommitted %}(не подтверждено){% endif %}<br class="hideon-phone hideon-tablet"><span>{{ t.stRow.topic_author }}</span></p></div>
+    <div class="tracker-count"><p>{% if t.stRow.comments == 0 %}-{% else %}<i class="icon-comment"></i> {{ t.stRow.comments }}{% endif %}</p></div>
+    <div class="tracker-title"><p>{% if t.stRow.comments_closed %}<i class="icon-lock"></i>{% endif %}{% if t.stRow.resolved %}<i class="icon-check" title="решено"></i>{% endif %}{{ t.stRow.title }}</p></div>
+    <div class="tracker-tags"><p>{% for tag in t.vecTags() %}<span class="tag">{{ tag }}</span> {% endfor %}</p></div>
+    <div class="tracker-last"><p>{{ t.stRow.author }}, <time data-format="compact-interval" datetime="{{ t.stRow.postdate.to_rfc3339() }}">{{ t.stRow.postdate }}</time></p></div>
   </a>
 {% endfor %}
 </div>
+{% endif %}
 {% if topics.len() == 0 %}<p>В трекере пока нет активных тем.</p>{% endif %}
 <div class="nav"><div style="display:table;width:100%"><div style="display:table-cell;text-align:left">{% match prev_link %}{% when Some with (link) %}<a href="{{ link }}" rel="prev">← предыдущие</a>{% when None %}{% endmatch %}</div><div style="display:table-cell;text-align:right">{% match next_link %}{% when Some with (link) %}<a href="{{ link }}" rel="next">следующие →</a>{% when None %}{% endmatch %}</div></div></div>
+{% if new_users.len() > 0 || frozen_users.len() > 0 || unfrozen_users.len() > 0 || blocked_users.len() > 0 || unblocked_users.len() > 0 || recent_userpics.len() > 0 || blocked_ips.len() > 0 || unblocked_ips.len() > 0 %}
+<h2>Пользователи</h2>
+<p>Новые пользователи за последние 3 дня: {% for item in new_users %}{% if item.strike %}<s>{% endif %}{% if item.bold %}<b>{% endif %}<a href="{{ item.profile_url() }}">{{ item.nick }}</a>{% if item.bold %}</b>{% endif %}{% if item.strike %}</s>{% endif %} {% endfor %}(всего {{ new_users.len() }})</p>
+<p>Замороженные пользователи: {% for item in frozen_users %}{% if item.bold %}<b>{% endif %}<a href="{{ item.profile_url() }}">{{ item.nick }}</a>{% if item.bold %}</b>{% endif %} {% endfor %}(всего {{ frozen_users.len() }})</p>
+<p>Размороженные пользователи за последние 3 дня: {% for item in unfrozen_users %}{% if item.bold %}<b>{% endif %}<a href="{{ item.profile_url() }}">{{ item.nick }}</a>{% if item.bold %}</b>{% endif %} {% endfor %}(всего {{ unfrozen_users.len() }})</p>
+<p>Заблокированные пользователи за последние 3 дня: {% for item in blocked_users %}{% if item.strike %}<s>{% endif %}<a href="{{ item.profile_url() }}">{{ item.nick }}</a>{% if item.strike %}</s>{% endif %} {% endfor %}(всего {{ blocked_users.len() }})</p>
+<p>Разблокированные пользователи за последние 3 дня: {% for item in unblocked_users %}{% if item.strike %}<s>{% endif %}<a href="{{ item.profile_url() }}">{{ item.nick }}</a>{% if item.strike %}</s>{% endif %} {% endfor %}(всего {{ unblocked_users.len() }})</p>
+<p>Заблокированные IP за последние 3 дня: {% for ip in blocked_ips %}<a href="/sameip.jsp?ip={{ ip }}">{{ ip }}</a> {% endfor %}(всего {{ blocked_ips.len() }})</p>
+<p>Разблокированные IP за последние 3 дня: {% for ip in unblocked_ips %}<a href="/sameip.jsp?ip={{ ip }}">{{ ip }}</a> {% endfor %}(всего {{ unblocked_ips.len() }})</p>
+<div class="userpic-list">{% for item in recent_userpics %}<a href="{{ item.profile_url }}"><img class="userpic" src="{{ item.image_url }}" alt="{{ item.nick }}"></a>{% endfor %}</div>
+{% endif %}
 {% endblock %}

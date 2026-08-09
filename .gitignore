@@ -1,4 +1,5 @@
 .claude/
+.ci/
 
 # Environment / secrets
 .env

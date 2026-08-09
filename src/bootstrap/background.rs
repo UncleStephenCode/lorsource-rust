@@ -38,18 +38,21 @@ const S_DISPOSABLE_DOMAINS_URL: &str =
     "https://disposable.github.io/disposable-email-domains/domains_mx.txt";
 
 pub fn vecSpawn(stState: AppState, oShutdown: watch::Receiver<bool>) -> Vec<JoinHandle<()>> {
-    let mut vecJobs = vec![stSpawnFixed(
-        "search queue",
-        Duration::from_secs(1),
-        Duration::from_secs(5),
-        stState.clone(),
-        oShutdown.clone(),
-        |stState| async move {
-            crate::search_index::vDrainQueue(&stState)
-                .await
-                .map_err(anyhow::Error::msg)
-        },
-    )];
+    let mut vecJobs = vec![
+        stSpawnFixed(
+            "search queue",
+            Duration::from_secs(1),
+            Duration::from_secs(5),
+            stState.clone(),
+            oShutdown.clone(),
+            |stState| async move {
+                crate::search_index::vDrainQueue(&stState)
+                    .await
+                    .map_err(anyhow::Error::msg)
+            },
+        ),
+        stSpawnAdvCounters(stState.clone(), oShutdown.clone()),
+    ];
     if !stState.config.enable_background_jobs {
         tracing::info!("maintenance and external background jobs disabled by configuration");
         return vecJobs;
@@ -171,6 +174,52 @@ pub fn vecSpawn(stState: AppState, oShutdown: watch::Receiver<bool>) -> Vec<Join
         ),
     ]);
     vecJobs
+}
+
+fn stSpawnAdvCounters(stState: AppState, mut oShutdown: watch::Receiver<bool>) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            let bShutdown = bWaitOrShutdown(Duration::from_secs(60), &mut oShutdown).await;
+            if let Err(stError) = vFlushAdvCounters(&stState).await {
+                tracing::error!(job = "advertisement counters", error = %stError, "background job failed");
+            }
+            if bShutdown {
+                return;
+            }
+        }
+    })
+}
+
+async fn vFlushAdvCounters(stState: &AppState) -> anyhow::Result<()> {
+    let mapBatch = stState.adv_counter.mapTake();
+    if mapBatch.is_empty() {
+        return Ok(());
+    }
+
+    let stResult = async {
+        let mut stTransaction = stState.pool.begin().await?;
+        for (sPath, iIncrement) in &mapBatch {
+            sqlx::query(
+                r#"INSERT INTO adv_counts(path,day,counter)
+                   VALUES($1,CURRENT_DATE,$2)
+                   ON CONFLICT(path,day) DO UPDATE
+                   SET counter=adv_counts.counter+excluded.counter"#,
+            )
+            .bind(sPath)
+            .bind(iIncrement)
+            .execute(&mut *stTransaction)
+            .await?;
+        }
+        stTransaction.commit().await?;
+        Ok::<(), sqlx::Error>(())
+    }
+    .await;
+
+    if let Err(stError) = stResult {
+        stState.adv_counter.vRestore(mapBatch);
+        return Err(stError.into());
+    }
+    Ok(())
 }
 
 fn stSpawnFixed<F, Fut>(
@@ -818,6 +867,11 @@ async fn vCleanupOldUserpics(stState: &AppState) -> anyhow::Result<()> {
             .await?;
     let stActive: std::collections::HashSet<_> = vecActive.into_iter().collect();
     let stDirectory = PathBuf::from(&stState.config.upload_dir).join("photos");
+    if !stDirectory.is_dir() {
+        tracing::warn!(path = %stDirectory.display(), "photos directory does not exist");
+        stTransaction.commit().await?;
+        return Ok(());
+    }
     let dtRaceGuard = std::time::SystemTime::now() - Duration::from_secs(60 * 60);
     let stPattern = regex::Regex::new(r"^\d+(?::-?\d+)?\.\w+$")?;
     let mut vecCandidates = Vec::new();
@@ -828,10 +882,27 @@ async fn vCleanupOldUserpics(stState: &AppState) -> anyhow::Result<()> {
         let Some(sName) = stPath.file_name().and_then(|s| s.to_str()) else {
             continue;
         };
-        if !stPath.is_file() || !stPattern.is_match(sName) || stActive.contains(sName) {
+        if !stPath.is_file() {
             continue;
         }
-        if stPath.metadata()?.modified()? < dtRaceGuard {
+        if !stPattern.is_match(sName) {
+            tracing::warn!(userpic = sName, "unexpected file in photos directory");
+            continue;
+        }
+        if stActive.contains(sName) {
+            continue;
+        }
+        let dtModified = match stPath
+            .metadata()
+            .and_then(|stMetadata| stMetadata.modified())
+        {
+            Ok(dtModified) => dtModified,
+            Err(stError) => {
+                tracing::warn!(userpic = sName, error = %stError, "cannot read userpic mtime");
+                continue;
+            }
+        };
+        if dtModified < dtRaceGuard {
             vecCandidates.push((sName.to_owned(), stPath));
         }
     }
@@ -854,8 +925,15 @@ async fn vCleanupOldUserpics(stState: &AppState) -> anyhow::Result<()> {
         for (sName, stPath) in stBatch {
             if !stRecent.contains(sName) {
                 if stState.config.clean_old_userpics {
-                    std::fs::remove_file(stPath)?;
-                    tracing::info!(userpic = sName, "deleted old userpic");
+                    match std::fs::remove_file(stPath) {
+                        Ok(()) => tracing::info!(userpic = sName, "deleted old userpic"),
+                        Err(stError) if stError.kind() == std::io::ErrorKind::NotFound => {
+                            tracing::info!(userpic = sName, "old userpic already removed");
+                        }
+                        Err(stError) => {
+                            tracing::warn!(userpic = sName, error = %stError, "failed to delete old userpic");
+                        }
+                    }
                 } else {
                     tracing::info!(userpic = sName, "old userpic candidate (dry run)");
                 }

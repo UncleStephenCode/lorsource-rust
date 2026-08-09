@@ -1,0 +1,14 @@
+.git
+.ci
+.github
+.agents
+.codex
+target
+**/target
+__pycache__
+*.pyc
+.env
+.env.*
+test-results
+compat-results
+replay-results

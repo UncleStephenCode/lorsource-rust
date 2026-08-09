@@ -1,6 +1,8 @@
 use crate::{
+    application::edit_history::{CEditHistoryService, StPreparedEditHistory},
     auth::CurrentUser,
     error::{AppError, Result},
+    infra::postgres::edit_history_repository::CEditHistoryPgRepository,
     markup,
     models::{CommentItem, PagerQuery, TopicSummary},
     pagination::Pager,
@@ -477,87 +479,59 @@ async fn list_archive_topics(
     .await?)
 }
 
-/// Java's EditHistoryController.canViewHistory requires an authenticated
-/// viewer in every branch (moderator, author, or "any logged-in user on a
-/// non-expired topic") - anonymous visitors are always rejected. Rust's
-/// "expired" (archived-topic) concept isn't modeled yet, so this collapses
-/// to "must be logged in", which closes the actual disclosure hole (history
-/// text, including deleted/edited content, was previously world-readable).
+#[derive(Template)]
+#[template(path = "history.html")]
+struct StHistoryTemplate {
+    topic_id: i32,
+    histories: Vec<StPreparedEditHistory>,
+    can_restore: bool,
+}
+
 pub async fn topic_history(
     State(state): State<AppState>,
-    uri: Uri,
     Path((_group, id)): Path<(String, i32)>,
     CurrentUser(user): CurrentUser,
 ) -> Result<Html<String>> {
-    if user.is_none() {
+    let Some(stUser) = user else {
+        return Err(AppError::Forbidden);
+    };
+    let stTopic = crate::routes::topics::get_topic(&state, id).await?;
+    crate::routes::topics::check_topic_viewable(&state, id, &Some(stUser.clone())).await?;
+    let bExpired = crate::routes::comments::is_topic_expired(&state, id).await?;
+    if !stUser.canmod && stUser.id != stTopic.author_id && bExpired {
         return Err(AppError::Forbidden);
     }
-    render_history(&state, section_from_uri(&uri).unwrap_or("forum"), id, None).await
+    let stRules = crate::routes::topics::load_topic_edit_rules(&state, id).await?;
+    let bCanRestore = crate::routes::topics::b_topic_content_editable(&stTopic, &stRules, &stUser);
+    let cService = CEditHistoryService::new(CEditHistoryPgRepository::new(state.pool.clone()));
+    let vecHistories = cService.vecTopicHistory(id).await?;
+    Ok(Html(
+        StHistoryTemplate {
+            topic_id: id,
+            histories: vecHistories,
+            can_restore: bCanRestore,
+        }
+        .render()?,
+    ))
 }
 
 pub async fn comment_history(
     State(state): State<AppState>,
-    uri: Uri,
-    Path((_group, _id, commentid)): Path<(String, i32, i32)>,
+    Path((_group, id, commentid)): Path<(String, i32, i32)>,
     CurrentUser(user): CurrentUser,
 ) -> Result<Html<String>> {
-    if user.is_none() {
-        return Err(AppError::Forbidden);
-    }
-    render_history(
-        &state,
-        section_from_uri(&uri).unwrap_or("forum"),
-        commentid,
-        Some(commentid),
-    )
-    .await
-}
-
-async fn render_history(
-    state: &AppState,
-    section: &str,
-    msgid: i32,
-    commentid: Option<i32>,
-) -> Result<Html<String>> {
-    let rows = sqlx::query_as::<
-        _,
-        (
-            i32,
-            String,
-            String,
-            Option<String>,
-            chrono::DateTime<chrono::Utc>,
-        ),
-    >(
-        r#"SELECT e.id, u.nick, COALESCE(e.oldtitle,''), e.oldmessage, e.editdate
-           FROM edit_info e JOIN users u ON u.id=e.editor
-           WHERE e.msgid=$1
-           ORDER BY e.editdate DESC LIMIT 50"#,
-    )
-    .bind(msgid)
-    .fetch_all(&state.pool)
-    .await?;
-
-    let mut html = format!("<h1>История изменений {section} #{msgid}</h1>");
-    if let Some(commentid) = commentid {
-        html.push_str(&format!("<p>Комментарий: #{commentid}</p>"));
-    }
-    if rows.is_empty() {
-        html.push_str("<p class=\"muted\">История изменений пуста.</p>");
-    } else {
-        html.push_str("<ul>");
-        for (_id, editor, old_title, old_message, editdate) in rows {
-            html.push_str(&format!(
-                "<li><b>{}</b> · {}<br><small>{}</small><pre>{}</pre></li>",
-                html_escape::encode_text(&editor),
-                editdate,
-                html_escape::encode_text(&old_title),
-                html_escape::encode_text(old_message.as_deref().unwrap_or(""))
-            ));
+    let stTopic = crate::routes::topics::get_topic(&state, id).await?;
+    crate::routes::topics::check_topic_viewable(&state, id, &user).await?;
+    let cService = CEditHistoryService::new(CEditHistoryPgRepository::new(state.pool.clone()));
+    let vecHistories = cService.vecCommentHistory(stTopic.id, commentid).await?;
+    Ok(Html(
+        StHistoryTemplate {
+            topic_id: id,
+            histories: vecHistories,
+            can_restore: false,
         }
-        html.push_str("</ul>");
-    }
-    Ok(Html(html))
+        .render()?,
+    ))
 }
 
 #[derive(Deserialize)]
@@ -676,12 +650,13 @@ pub async fn show_replies_jsp(
         html_escape::encode_text(&current.nick)
     );
     for e in &events {
+        let sDate = crate::request_timezone::sTimeTag("interval", e.event_date);
         html.push_str(&format!(
             "<li{}><a href=\"{}\">{}</a> <small>{} · {}</small></li>",
             if e.unread { " class=\"unread\"" } else { "" },
             e.link(),
             html_escape::encode_text(&e.subj),
-            e.event_date,
+            sDate,
             html_escape::encode_text(&e.event_type),
         ));
     }
@@ -698,7 +673,7 @@ fn render_replies_feed(
     events: &[crate::routes::api::NotificationEvent],
     atom: bool,
 ) -> String {
-    let title = format!("Ответы пользователю {nick}");
+    let title = format!("Уведомления пользователя {nick}");
     if atom {
         let mut body = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"><title>{}</title><link href="{}/show-replies.jsp?nick={}&amp;output=atom" rel="self"/><id>{}/show-replies.jsp?nick={}</id>"#,
@@ -710,9 +685,26 @@ fn render_replies_feed(
         );
         for e in events {
             let link = format!("{}{}", state.config.public_url, e.link());
+            let sDescription = sNotificationFeedDescription(e);
+            let sAuthor = e
+                .cid
+                .map(|_| {
+                    format!(
+                        "<author><name>{}</name></author>",
+                        html_escape::encode_text(&e.author_nick)
+                    )
+                })
+                .unwrap_or_default();
             body.push_str(&format!(
-                "<entry><title>{}</title><link href=\"{link}\"/><id>{link}</id><updated>{}</updated></entry>",
-                html_escape::encode_text(&e.subj), e.event_date.to_rfc3339(),
+                "<entry><title>{}</title><link href=\"{}\"/><id>{}</id><updated>{}</updated>{author}{description}</entry>",
+                html_escape::encode_text(&html_escape::decode_html_entities(&e.subj)),
+                html_escape::encode_double_quoted_attribute(&link),
+                e.id,
+                e.event_date.to_rfc3339(),
+                author = sAuthor,
+                description = sDescription
+                    .map(|sValue| format!("<summary type=\"html\">{}</summary>", html_escape::encode_text(&sValue)))
+                    .unwrap_or_default(),
             ));
         }
         body.push_str("</feed>");
@@ -727,14 +719,68 @@ fn render_replies_feed(
         );
         for e in events {
             let link = format!("{}{}", state.config.public_url, e.link());
+            let sDescription = sNotificationFeedDescription(e)
+                .map(|sValue| {
+                    format!(
+                        "<description>{}</description>",
+                        html_escape::encode_text(&sValue)
+                    )
+                })
+                .unwrap_or_default();
+            let sAuthor = e
+                .cid
+                .map(|_| {
+                    format!(
+                        "<author>{}</author>",
+                        html_escape::encode_text(&e.author_nick)
+                    )
+                })
+                .unwrap_or_default();
             body.push_str(&format!(
-                "<item><title>{}</title><link>{link}</link><guid>{link}</guid><pubDate>{}</pubDate></item>",
-                html_escape::encode_text(&e.subj), e.event_date.to_rfc2822(),
+                "<item><title>{}</title><link>{}</link><guid isPermaLink=\"false\">{}</guid><pubDate>{}</pubDate>{author}{description}</item>",
+                html_escape::encode_text(&html_escape::decode_html_entities(&e.subj)),
+                html_escape::encode_text(&link),
+                e.id,
+                e.event_date.to_rfc2822(),
+                author = sAuthor,
+                description = sDescription,
             ));
         }
         body.push_str("</channel></rss>");
         body
     }
+}
+
+fn sNotificationFeedDescription(stEvent: &crate::routes::api::NotificationEvent) -> Option<String> {
+    let sRendered = markup::render_message_with_markup(
+        &stEvent.message_text,
+        Some(&stEvent.message_markup),
+        None,
+    );
+    let sRendered = sRemoveInvalidXmlChars(&sRendered);
+    if stEvent.event_type == "REACTION" {
+        Some(format!(
+            "@{} поставил {}<br>{sRendered}",
+            stEvent.author_nick,
+            stEvent.reaction.as_deref().unwrap_or("X")
+        ))
+    } else if sRendered.is_empty() {
+        None
+    } else {
+        Some(sRendered)
+    }
+}
+
+fn sRemoveInvalidXmlChars(sValue: &str) -> String {
+    sValue
+        .chars()
+        .filter(|cValue| {
+            matches!(*cValue, '\u{9}' | '\u{A}' | '\u{D}')
+                || ('\u{20}'..='\u{D7FF}').contains(cValue)
+                || ('\u{E000}'..='\u{FFFD}').contains(cValue)
+                || ('\u{10000}'..='\u{10FFFF}').contains(cValue)
+        })
+        .collect()
 }
 
 #[derive(Deserialize)]
@@ -808,7 +854,7 @@ fn sRenderDeletedComment(stPrepared: &StPreparedDeletedComment) -> String {
             markup::render_message_with_markup(&stComment.message, Some(&stComment.markup), None),
         author_url = urlencoding::encode(&stComment.author),
         author = html_escape::encode_text(&stComment.author),
-        date = stComment.postdate,
+        date = crate::request_timezone::sTimeTag("default", stComment.postdate),
     )
 }
 
@@ -1098,6 +1144,11 @@ mod notification_click_tests {
             dtNow - chrono::Duration::days(1),
             dtNow,
         ));
+    }
+
+    #[test]
+    fn notification_feed_removes_invalid_xml_characters() {
+        assert_eq!(sRemoveInvalidXmlChars("ok\u{0} text\n"), "ok text\n");
     }
 }
 
@@ -1425,12 +1476,14 @@ fn verify_activation_code(
 }
 
 pub async fn addphoto_form(
+    State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
 ) -> Result<Html<String>> {
     let Some(user) = user else {
         return Err(AppError::Forbidden);
     };
+    vCheckLoadUserpic(&state, &user).await?;
     Ok(Html(format!(
         r#"
 <h1>Загрузить userpic для {nick}</h1>
@@ -1449,10 +1502,11 @@ pub async fn upload_userpic(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
     mut multipart: Multipart,
-) -> Result<Redirect> {
+) -> Result<Response> {
     let Some(user) = user else {
         return Err(AppError::Forbidden);
     };
+    vCheckLoadUserpic(&state, &user).await?;
     let mut upload: Option<(String, bytes::Bytes)> = None;
     while let Some(field) = multipart
         .next_field()
@@ -1473,33 +1527,128 @@ pub async fn upload_userpic(
     let (_original_name, bytes) =
         upload.ok_or_else(|| AppError::BadRequest("изображение не задано".into()))?;
     let extension = validate_userpic_bytes(&bytes)?;
-    let filename = format!("{}-{}.{}", user.id, uuid::Uuid::new_v4(), extension);
     let dir = format!("{}/photos", state.config.upload_dir);
     tokio::fs::create_dir_all(&dir)
         .await
         .map_err(|e| AppError::Anyhow(e.into()))?;
-    let path = format!("{dir}/{filename}");
+    // UserpicController uses `<userid>:<signed-random-int>.<extension>`.
+    // Preserve that filename contract because UserpicPermissionInterceptor
+    // derives the owner id from the public URL.
+    let (filename, path) = loop {
+        let filename = format!("{}:{}.{}", user.id, rand::random::<i32>(), extension);
+        let path = format!("{dir}/{filename}");
+        if !tokio::fs::try_exists(&path)
+            .await
+            .map_err(|e| AppError::Anyhow(e.into()))?
+        {
+            break (filename, path);
+        }
+    };
     tokio::fs::write(&path, &bytes)
         .await
         .map_err(|e| AppError::Anyhow(e.into()))?;
-    sqlx::query("UPDATE users SET photo=$2 WHERE id=$1")
-        .bind(user.id)
-        .bind(&filename)
-        .execute(&state.pool)
+    let mut stTransaction = match state.pool.begin().await {
+        Ok(stTransaction) => stTransaction,
+        Err(stError) => {
+            let _ = tokio::fs::remove_file(&path).await;
+            return Err(stError.into());
+        }
+    };
+    let stPersistResult: Result<()> = async {
+        sqlx::query("UPDATE users SET photo=$2 WHERE id=$1")
+            .bind(user.id)
+            .bind(&filename)
+            .execute(&mut *stTransaction)
+            .await?;
+        crate::audit::log_user_action_tx(
+            &mut stTransaction,
+            user.id,
+            user.id,
+            "set_userpic",
+            &[("new_userpic", filename.as_str())],
+        )
         .await?;
-    crate::audit::log_user_action(
-        &state.pool,
-        user.id,
-        user.id,
-        "set_userpic",
-        &[("file", filename.as_str())],
+        stTransaction.commit().await?;
+        Ok(())
+    }
+    .await;
+    if let Err(stError) = stPersistResult {
+        let _ = tokio::fs::remove_file(&path).await;
+        return Err(stError);
+    }
+    Ok(crate::routes::admin::stProfileRedirect(&user.nick))
+}
+
+fn bMayLoadUserpic(
+    iScore: i32,
+    bFrozen: bool,
+    iRecentSetCount: i64,
+    bRecentlyResetByModerator: bool,
+    iRecentScoreLoss: i32,
+) -> bool {
+    !bFrozen
+        && iScore >= 45
+        && iRecentSetCount < 3
+        && !bRecentlyResetByModerator
+        && iRecentScoreLoss < 20
+}
+
+#[cfg(test)]
+mod userpic_policy_tests {
+    use super::bMayLoadUserpic;
+
+    #[test]
+    fn java_userpic_thresholds_are_exact() {
+        assert!(bMayLoadUserpic(45, false, 2, false, 19));
+        assert!(!bMayLoadUserpic(44, false, 2, false, 19));
+        assert!(!bMayLoadUserpic(45, true, 2, false, 19));
+        assert!(!bMayLoadUserpic(45, false, 3, false, 19));
+        assert!(!bMayLoadUserpic(45, false, 2, true, 19));
+        assert!(!bMayLoadUserpic(45, false, 2, false, 20));
+    }
+}
+
+/// Exact `EditProfileChecker.checkLoadUserpic` policy. This must run on both
+/// GET and POST because hiding the form alone does not protect the mutation.
+async fn vCheckLoadUserpic(stState: &AppState, stUser: &crate::models::UserSummary) -> Result<()> {
+    let (bFrozen, iRecentSetCount, bRecentlyResetByModerator, iRecentScoreLoss): (
+        bool,
+        i64,
+        bool,
+        i32,
+    ) = sqlx::query_as(
+        r#"SELECT COALESCE(u.frozen_until > CURRENT_TIMESTAMP,false),
+                  (SELECT count(*) FROM user_log ul
+                   WHERE ul.userid=u.id
+                     AND ul.action='set_userpic'::user_log_action
+                     AND ul.action_date>CURRENT_TIMESTAMP-interval '1 hour'),
+                  EXISTS(SELECT 1 FROM user_log ul
+                         WHERE ul.userid=u.id
+                           AND ul.action='reset_userpic'::user_log_action
+                           AND ul.action_date>CURRENT_TIMESTAMP-interval '30 days'
+                           AND ul.userid<>ul.action_userid),
+                  abs(COALESCE((SELECT sum(di.bonus) FROM del_info di
+                                WHERE di.deldate>CURRENT_TIMESTAMP-interval '3 days'
+                                  AND di.msgid IN (
+                                    SELECT c.id FROM comments c WHERE c.userid=u.id
+                                    UNION ALL
+                                    SELECT t.id FROM topics t WHERE t.userid=u.id
+                                  )),0))::int
+           FROM users u WHERE u.id=$1"#,
     )
+    .bind(stUser.id)
+    .fetch_one(&stState.pool)
     .await?;
-    Ok(Redirect::to(&format!(
-        "/people/{}/profile?nocache={}",
-        urlencoding::encode(&user.nick),
-        uuid::Uuid::new_v4()
-    )))
+    if !bMayLoadUserpic(
+        stUser.score.unwrap_or(0),
+        bFrozen,
+        iRecentSetCount,
+        bRecentlyResetByModerator,
+        iRecentScoreLoss,
+    ) {
+        return Err(AppError::Forbidden);
+    }
+    Ok(())
 }
 
 fn validate_userpic_bytes(data: &[u8]) -> Result<&'static str> {

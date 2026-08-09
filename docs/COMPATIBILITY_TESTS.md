@@ -53,13 +53,41 @@ OpenSearch + Rust stack and runs this matrix after the release-image build.
 
 ## HTTP checks against old and new apps
 
-Run the original Scala app on one port and the Rust port on another, then:
+The repository includes a guarded local comparator launcher. It clones only
+the fixed disposable `lor_java_parity` database, runs Java on port 8081 and
+uses an independent ephemeral OpenSearch node so Java's canonical mapping is
+not confused with an index created by the Rust runtime:
+
+```bash
+ORIGINAL_ROOT=/path/to/original/lorsource \
+  ./scripts/run-java-parity-runtime.sh recreate
+```
+
+The normal Rust Compose stack must already be running. The clone command
+refuses to target `lor`, and Java background jobs affect only the cloned
+database. The launcher also creates the empty `messages` index using the exact
+analysis, mapping and term-vector definition from Java's `MessageIndex`; this
+keeps passive search requests valid without invoking a write-side reindex.
+`recreate` waits for a successful Java HTTP response and prints the final
+startup logs on failure. Once it returns, run:
 
 ```bash
 OLD_BASE_URL=http://localhost:8081 \
 NEW_BASE_URL=http://localhost:8181 \
 python3 compat/test_http_compat.py --report /tmp/http-compat.json
 ```
+
+Use `scripts/run-java-parity-runtime.sh stop` after the comparison. The Java
+index is intentionally ephemeral; each fresh comparator creates its exact
+mapping before search checks run.
+
+The compatibility workflow performs the same comparison in CI. It checks out
+`maxcom/lorsource` at the explicit `JAVA_BASELINE_SHA`, regenerates the static
+route/schema inventory from that tree, starts the isolated Java comparator and
+runs all 80 cases against both runtimes. The resulting credential-free
+`java-rust-http.json` is retained as the `java-rust-http-parity` artifact.
+Updating the baseline SHA is therefore an explicit reviewed compatibility
+change rather than an unobserved move of the upstream default branch.
 
 The comparator keeps an independent cookie jar for each application and adds
 the double-submit `CSRF_TOKEN` value to POST form data by default. A case can
@@ -87,6 +115,18 @@ The optional JSON report records statuses, media types, redirect targets and
 cookie names, but deliberately excludes bodies and cookie values so it is safe
 to retain as rehearsal evidence.
 
+Static-asset cases additionally compare exact `Cache-Control` values for theme
+CSS, query cachebusters, OpenSans, webjars, ordinary images, advertisement
+images and the original queried-PNG regex edge case. Fresh-session cases also
+assert the exact cookie-name set: Spring Security-excluded CSS/JS/image/font
+responses must not create `CSRF_TOKEN`, while `manifest.json`, `robots.txt` and
+`qrerror` resources remain inside the security chain. The Java-generated
+runtime bundles and error-page assets can be refreshed reproducibly with
+`ORIGINAL_ROOT=... make static-sync` after building the original webapp.
+The seed matrix also locks the intentionally different access contracts for
+topic and comment edit-history pages and verifies both diff scripts and their
+DOM loader hooks.
+
 For a production-clone rehearsal, `scripts/run-cutover-gate.sh` combines the
 static inventory, dual-runtime matrix, critical browser probes, Java/Liquibase
 database validation and the guarded posting/reaction and moderation stateful
@@ -98,17 +138,34 @@ identifiers, a redacted configuration manifest and media/external-adapter
 evidence files. Skipping either stateful flow or release evidence produces a
 dry-run result, never a cutover go/no-go pass.
 
+The moderation verifier normally reads assertion rows through the local
+Compose PostgreSQL service. When the Rust runtime is pointed at an external
+isolated clone, set `STATEFUL_DATABASE_URL_FILE`,
+`STATEFUL_DATABASE_IS_DISPOSABLE=yes` and `STATEFUL_EXPECTED_DATABASE`. The URL
+file must be private and contain one PostgreSQL URL line. The verifier checks
+the URL database name and the connected `current_database()` before issuing
+the HTTP mutations; credentials are not placed in the `psql` argument list.
+
 ## Stateful write-flow regression
 
 `compat/test_write_flows.py` exercises the migration-critical browser path on
 a disposable database: two logins, topic creation, canonical redirect, comma-
 separated tag persistence, comment creation, reaction add/list/remove, the
-collapsed/expanded reaction DOM, real multipart gallery upload, and both the
-single-image and multi-image slider DOM modes. Its CI author is a disposable
+collapsed/expanded reaction DOM, real multipart gallery upload, both the
+single-image and slider DOM modes, authenticated-only preview access, and the
+direct-image visibility transition after topic deletion. The test asserts
+that an anonymous direct URL is rejected while the author retains history
+access. Its CI author is a disposable
 moderator, so new-tag creation is covered through the previously fragile
 moderator permission path. It refuses to mutate unless
 `WRITE_FLOW_ALLOW_MUTATION=yes` is explicitly set. CI seeds two throw-away
 accounts in the Compose volume and runs this check before deleting the volume.
+The reaction part also verifies that the owner notification RSS contains the
+original reaction note and rendered target-message body. The comment is posted
+by the second account so the same flow proves that tracker activity shows the
+last-comment author, links with the matching `lastmod=<cid>`, and that an
+anonymous `/tracker.jsp` request preserves Java's default `filter=all` through
+an exact 302 redirect.
 The flow deliberately waits out the original per-IP 30-second topic flood
 interval between its forum and gallery writes; a faster search-index refresh
 must not make the regression nondeterministic.
@@ -136,3 +193,13 @@ The flow also verifies the rendered warning message/section/author, strikeout
 after clearing, DEL reason and score bonus, notification click-through to
 `/view-deleted?id=...`, and the original 14-day non-frozen-author access path
 to the deleted comment body.
+
+`scripts/test-adv-counter.sh` sends three successful advertisement requests
+and one 404, performs a graceful app stop, verifies the exact `adv_counts`
+delta, and starts the application again. It requires
+`ADV_COUNTER_ALLOW_MUTATION=yes` because the canonical counter table changes.
+
+`scripts/test-lastlogin-interceptor.sh` authenticates a disposable user and
+requests `/about`, whose handler does not extract `CurrentUser`. It proves that
+the global interceptor refreshes a two-hour-old `lastlogin` while leaving a
+30-minute-old value byte-for-byte unchanged, matching Java's one-hour gate.

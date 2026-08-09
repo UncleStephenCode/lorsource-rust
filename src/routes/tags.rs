@@ -2,6 +2,7 @@ use crate::{
     auth::CurrentUser,
     error::{AppError, Result},
     models::{TagItem, TopicSummary},
+    request_timezone::stRequestTimezone,
     state::AppState,
 };
 use askama::Template;
@@ -10,6 +11,8 @@ use axum::{
     extract::{Path, Query, State},
     response::{Html, IntoResponse, Redirect},
 };
+use axum_extra::extract::cookie::CookieJar;
+use chrono::{Datelike, TimeZone};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::Deserialize;
@@ -25,12 +28,19 @@ struct TagsTemplate {
 struct TagSectionGroup {
     section_prefix: String,
     section_name: String,
-    topics: Vec<TopicSummary>,
+    topic_columns: Vec<Vec<TagDateGroup>>,
     full_news: Vec<crate::routes::topics::NewsTopicView>,
     gallery: Vec<TagGalleryItem>,
+    newest_date: Option<chrono::DateTime<chrono::Utc>>,
     add_url: Option<String>,
     add_reason: String,
     add_label: String,
+}
+
+#[derive(Debug, Clone)]
+struct TagDateGroup {
+    label: String,
+    topics: Vec<TopicSummary>,
 }
 
 #[derive(Debug, Clone)]
@@ -47,6 +57,7 @@ struct TagPageTemplate {
     title: String,
     counter: i64,
     sections: Vec<TagSectionGroup>,
+    related_tags: Vec<TagLink>,
     synonyms: Vec<String>,
     show_favorite_button: bool,
     show_unfavorite_button: bool,
@@ -56,6 +67,12 @@ struct TagPageTemplate {
     csrf_token: String,
     favorites_count: i64,
     ignored_count: i64,
+}
+
+#[derive(Debug, Clone)]
+struct TagLink {
+    name: String,
+    url: String,
 }
 
 #[derive(Deserialize)]
@@ -145,11 +162,107 @@ fn section_topic_limit(section_prefix: &str) -> i64 {
 
 const TAG_SECTION_ORDER: &[(&str, &str)] = &[
     ("news", "Новости"),
-    ("gallery", "Галерея"),
     ("forum", "Форум"),
     ("polls", "Опросы"),
+    ("gallery", "Галерея"),
     ("articles", "Статьи"),
 ];
+
+fn sTagDatePartition(
+    dtDate: chrono::DateTime<chrono::Utc>,
+    stTimezone: chrono_tz::Tz,
+    dtNow: chrono::DateTime<chrono::Utc>,
+) -> String {
+    let dtLocalNow = dtNow.with_timezone(&stTimezone);
+    let dtToday = stTimezone
+        .with_ymd_and_hms(
+            dtLocalNow.year(),
+            dtLocalNow.month(),
+            dtLocalNow.day(),
+            0,
+            0,
+            0,
+        )
+        .earliest()
+        .expect("timezone start of day");
+    let dtYesterday = dtToday - chrono::Duration::days(1);
+    // `withDayOfMonth(1).minusYears(1)`: the first day of the current
+    // month one year ago (not "now minus 365 days").
+    let dtYearAgo = stTimezone
+        .with_ymd_and_hms(dtLocalNow.year() - 1, dtLocalNow.month(), 1, 0, 0, 0)
+        .earliest()
+        .expect("timezone start of month");
+    let dtLocal = dtDate.with_timezone(&stTimezone);
+    if dtDate > dtToday.with_timezone(&chrono::Utc) {
+        "Сегодня".to_owned()
+    } else if dtDate > dtYesterday.with_timezone(&chrono::Utc) {
+        "Вчера".to_owned()
+    } else if dtDate > dtYearAgo.with_timezone(&chrono::Utc) {
+        const MONTHS: [&str; 12] = [
+            "Январь",
+            "Февраль",
+            "Март",
+            "Апрель",
+            "Май",
+            "Июнь",
+            "Июль",
+            "Август",
+            "Сентябрь",
+            "Октябрь",
+            "Ноябрь",
+            "Декабрь",
+        ];
+        format!("{} {}", MONTHS[dtLocal.month0() as usize], dtLocal.year())
+    } else {
+        dtLocal.year().to_string()
+    }
+}
+
+fn vecGroupedTagTopics(vecValues: Vec<(String, TopicSummary)>) -> Vec<TagDateGroup> {
+    let mut vecGroups: Vec<TagDateGroup> = Vec::new();
+    for (sLabel, stTopic) in vecValues {
+        if let Some(stLast) = vecGroups.last_mut()
+            && stLast.label == sLabel
+        {
+            stLast.topics.push(stTopic);
+        } else {
+            vecGroups.push(TagDateGroup {
+                label: sLabel,
+                topics: vec![stTopic],
+            });
+        }
+    }
+    vecGroups
+}
+
+/// `TopicListTools.split`: insert one spacer between date groups before
+/// splitting so a heading and its first topic are not separated merely by
+/// the midpoint calculation, then group each half independently.
+fn vecTagTopicColumns(
+    vecTopics: Vec<TopicSummary>,
+    stTimezone: chrono_tz::Tz,
+    dtNow: chrono::DateTime<chrono::Utc>,
+) -> Vec<Vec<TagDateGroup>> {
+    if vecTopics.is_empty() {
+        return Vec::new();
+    }
+    let mut vecSlots: Vec<Option<(String, TopicSummary)>> = Vec::new();
+    let mut optPrevious: Option<String> = None;
+    for stTopic in vecTopics {
+        let sLabel = sTagDatePartition(stTopic.postdate, stTimezone, dtNow);
+        if optPrevious.as_deref().is_some_and(|sOld| sOld != sLabel) {
+            vecSlots.push(None);
+        }
+        optPrevious = Some(sLabel.clone());
+        vecSlots.push(Some((sLabel, stTopic)));
+    }
+    let iSplit = vecSlots.len().div_ceil(2);
+    let vecSecond = vecSlots.split_off(iSplit);
+    [vecSlots, vecSecond]
+        .into_iter()
+        .map(|vecColumn| vecGroupedTagTopics(vecColumn.into_iter().flatten().collect()))
+        .collect()
+}
 
 /// TagPageController.tagPage: aggregates the tag's topics across all 5
 /// sections (news/gallery/forum/polls/articles) on one page instead of a
@@ -160,6 +273,7 @@ const TAG_SECTION_ORDER: &[(&str, &str)] = &[
 pub async fn tag_page(
     State(state): State<AppState>,
     Path(tag): Path<String>,
+    stJar: CookieJar,
     CurrentUser(user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
 ) -> Result<axum::response::Response> {
@@ -195,6 +309,8 @@ pub async fn tag_page(
         };
     };
 
+    let stTimezone = stRequestTimezone(&stJar);
+    let dtNow = chrono::Utc::now();
     let mut sections = Vec::new();
     for (prefix, name) in TAG_SECTION_ORDER {
         let limit = section_topic_limit(prefix);
@@ -202,7 +318,9 @@ pub async fn tag_page(
             r#"SELECT id,COALESCE(restrict_topics,-9999) FROM sections WHERE CASE id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(name) END=$1"#,
         ).bind(prefix).fetch_one(&state.pool).await?;
         let topics = sqlx::query_as::<_, TopicSummary>(
-            r#"SELECT t.id, t.title, t.url, t.postdate, t.lastmod, u.id AS author_id, u.nick AS author,
+            r#"SELECT t.id, t.title, t.url,
+                      CASE WHEN t.moderate AND t.commitdate IS NOT NULL THEN t.commitdate ELSE t.postdate END AS postdate,
+                      t.lastmod, u.id AS author_id, u.nick AS author,
                       g.id AS group_id, g.title AS group_title, g.urlname AS group_urlname,
                       s.id AS section_id, s.name AS section_name,
                       $1::text AS section_prefix,
@@ -218,7 +336,8 @@ pub async fn tag_page(
                WHERE (CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(s.name) END) = $1
                  AND NOT t.deleted AND NOT COALESCE(t.draft,false)
                  AND ($3 OR t.moderate OR NOT s.moderate)
-               ORDER BY t.postdate DESC LIMIT $4"#,
+               ORDER BY CASE WHEN t.moderate AND t.commitdate IS NOT NULL THEN t.commitdate ELSE t.postdate END DESC
+               LIMIT $4"#,
         )
         .bind(prefix)
         .bind(tag_id)
@@ -227,10 +346,11 @@ pub async fn tag_page(
         .fetch_all(&state.pool)
         .await?;
         if !topics.is_empty() {
+            let newest_date = topics.first().map(|topic| topic.postdate);
             let recent_news = *prefix == "news"
-                && topics.first().is_some_and(|topic| {
-                    topic.postdate > chrono::Utc::now() - chrono::Duration::days(365)
-                });
+                && topics
+                    .first()
+                    .is_some_and(|topic| topic.postdate > dtNow - chrono::Duration::days(365));
             let full_news = if recent_news {
                 crate::routes::topics::prepare_news_topics(&state, vec![topics[0].clone()], true)
                     .await?
@@ -253,11 +373,12 @@ pub async fn tag_page(
                     }
                 }
             }
-            let topics = if recent_news {
+            let brief_topics = if recent_news {
                 topics.into_iter().skip(1).collect()
             } else {
                 topics
             };
+            let topic_columns = vecTagTopicColumns(brief_topics, stTimezone, dtNow);
             let add_reason =
                 crate::routes::topics::posting_reason_for_port(&state, restriction, &user).await?;
             let add_url = add_reason.is_none().then(|| {
@@ -276,15 +397,49 @@ pub async fn tag_page(
             sections.push(TagSectionGroup {
                 section_prefix: prefix.to_string(),
                 section_name: name.to_string(),
-                topics,
+                topic_columns,
                 full_news,
                 gallery,
+                newest_date,
                 add_url,
                 add_reason: add_reason.unwrap_or_default(),
                 add_label,
             });
         }
     }
+
+    // TagPageController renders the freshest of news/forum first, places
+    // polls/gallery/articles in the middle, then renders the other one.
+    let mut optNews = sections
+        .iter()
+        .position(|stSection| stSection.section_prefix == "news")
+        .map(|iPosition| sections.remove(iPosition));
+    let mut optForum = sections
+        .iter()
+        .position(|stSection| stSection.section_prefix == "forum")
+        .map(|iPosition| sections.remove(iPosition));
+    let bNewsFirst = optNews.as_ref().is_some_and(|stNews| {
+        stNews.newest_date.is_some_and(|dtNews| {
+            dtNews > dtNow - chrono::Duration::days(365)
+                || optForum
+                    .as_ref()
+                    .and_then(|stForum| stForum.newest_date)
+                    .is_some_and(|dtForum| dtNews > dtForum)
+        })
+    });
+    let mut vecOrdered = Vec::new();
+    if bNewsFirst {
+        vecOrdered.extend(optNews.take());
+    } else {
+        vecOrdered.extend(optForum.take());
+    }
+    vecOrdered.append(&mut sections);
+    if bNewsFirst {
+        vecOrdered.extend(optForum.take());
+    } else {
+        vecOrdered.extend(optNews.take());
+    }
+    sections = vecOrdered;
 
     let synonyms: Vec<String> =
         sqlx::query_scalar("SELECT value FROM tags_synonyms WHERE tagid=$1 ORDER BY value")
@@ -319,12 +474,36 @@ pub async fn tag_page(
             .fetch_one(&state.pool)
             .await?;
 
+    let related_tags = match tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        crate::search_index::vecRelatedTags(&state, &tag),
+    )
+    .await
+    {
+        Ok(Ok(vecTags)) => vecTags
+            .into_iter()
+            .map(|name| TagLink {
+                url: format!("/tag/{}", urlencoding::encode(&name)),
+                name,
+            })
+            .collect(),
+        Ok(Err(stError)) => {
+            tracing::warn!(error = %stError, tag = %tag, "unable to find related tags");
+            Vec::new()
+        }
+        Err(_) => {
+            tracing::warn!(tag = %tag, "tag related search timed out");
+            Vec::new()
+        }
+    };
+
     Ok(Html(
         TagPageTemplate {
             tag: tag.clone(),
             title: format!("Метка: {}", capitalize_first(&tag)),
             counter,
             sections,
+            related_tags,
             synonyms,
             show_favorite_button,
             show_unfavorite_button,
@@ -441,6 +620,30 @@ fn can_create_tag_by_role(canmod: bool, score: i32, section_premoderated: bool) 
 #[cfg(test)]
 mod create_tag_permission_tests {
     use super::*;
+    use chrono::{TimeZone, Utc};
+
+    fn stTopic(iId: i32, dtPostdate: chrono::DateTime<Utc>) -> TopicSummary {
+        TopicSummary {
+            id: iId,
+            title: format!("topic-{iId}"),
+            url: None,
+            postdate: dtPostdate,
+            lastmod: None,
+            author_id: 1,
+            author: "author".to_owned(),
+            group_id: 2,
+            group_title: "group".to_owned(),
+            group_urlname: "general".to_owned(),
+            section_id: 2,
+            section_name: "Форум".to_owned(),
+            section_prefix: "forum".to_owned(),
+            comments: 0,
+            deleted: false,
+            sticky: false,
+            resolved: None,
+            tags: None,
+        }
+    }
 
     #[test]
     fn comma_and_pipe_separated_tags_remain_individual() {
@@ -456,6 +659,62 @@ mod create_tag_permission_tests {
         assert!(!can_create_tag_by_role(false, CREATE_TAG_SCORE - 1, false));
         assert!(can_create_tag_by_role(false, CREATE_TAG_SCORE, false));
         assert!(can_create_tag_by_role(false, 0, true));
+    }
+
+    #[test]
+    fn tag_date_partition_matches_java_boundaries_and_two_column_split() {
+        let stTimezone = chrono_tz::Europe::Moscow;
+        let dtNow = Utc.with_ymd_and_hms(2026, 8, 8, 12, 0, 0).unwrap();
+        assert_eq!(
+            sTagDatePartition(
+                Utc.with_ymd_and_hms(2026, 8, 8, 8, 0, 0).unwrap(),
+                stTimezone,
+                dtNow
+            ),
+            "Сегодня"
+        );
+        assert_eq!(
+            sTagDatePartition(
+                Utc.with_ymd_and_hms(2026, 8, 7, 8, 0, 0).unwrap(),
+                stTimezone,
+                dtNow
+            ),
+            "Вчера"
+        );
+        assert_eq!(
+            sTagDatePartition(
+                Utc.with_ymd_and_hms(2026, 7, 1, 8, 0, 0).unwrap(),
+                stTimezone,
+                dtNow
+            ),
+            "Июль 2026"
+        );
+        assert_eq!(
+            sTagDatePartition(
+                Utc.with_ymd_and_hms(2025, 7, 1, 8, 0, 0).unwrap(),
+                stTimezone,
+                dtNow
+            ),
+            "2025"
+        );
+
+        let vecColumns = vecTagTopicColumns(
+            vec![
+                stTopic(1, Utc.with_ymd_and_hms(2026, 8, 8, 8, 0, 0).unwrap()),
+                stTopic(2, Utc.with_ymd_and_hms(2026, 8, 8, 7, 0, 0).unwrap()),
+                stTopic(3, Utc.with_ymd_and_hms(2026, 8, 8, 6, 0, 0).unwrap()),
+                stTopic(4, Utc.with_ymd_and_hms(2026, 8, 7, 8, 0, 0).unwrap()),
+                stTopic(5, Utc.with_ymd_and_hms(2026, 8, 7, 7, 0, 0).unwrap()),
+                stTopic(6, Utc.with_ymd_and_hms(2026, 7, 1, 8, 0, 0).unwrap()),
+            ],
+            stTimezone,
+            dtNow,
+        );
+        assert_eq!(vecColumns.len(), 2);
+        assert_eq!(vecColumns[0][0].label, "Сегодня");
+        assert_eq!(vecColumns[0][0].topics.len(), 3);
+        assert_eq!(vecColumns[1][0].label, "Вчера");
+        assert_eq!(vecColumns[1][1].label, "Июль 2026");
     }
 }
 
@@ -520,9 +779,10 @@ pub async fn change_tag(
     CurrentUser(user): CurrentUser,
     Form(form): Form<TagChangeForm>,
 ) -> Result<Redirect> {
-    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) {
-        return Err(AppError::Forbidden);
-    }
+    let moderator = user
+        .as_ref()
+        .filter(|u| u.canmod)
+        .ok_or(AppError::Forbidden)?;
     let old_tag_name = form.old_tag_name.trim();
     let tag_name = form.tag_name.trim();
 
@@ -558,6 +818,12 @@ pub async fn change_tag(
     // for every topic carrying this tag - the indexed tag value would
     // otherwise stay stale under the old name forever.
     reindex_topics_with_tag(&state, old_tag_id).await;
+    tracing::info!(
+        old_tag = %old_tag_name,
+        new_tag = %tag_name,
+        moderator = %moderator.nick,
+        "tag changed"
+    );
 
     Ok(Redirect::to(&format!(
         "/tags/{}",
@@ -638,9 +904,10 @@ pub async fn delete_tag(
     CurrentUser(user): CurrentUser,
     Form(form): Form<TagDeleteForm>,
 ) -> Result<Redirect> {
-    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) {
-        return Err(AppError::Forbidden);
-    }
+    let moderator = user
+        .as_ref()
+        .filter(|u| u.canmod)
+        .ok_or(AppError::Forbidden)?;
     let old_tag_name = form.old_tag_name.trim();
 
     // A synonym entry isn't a real tag - deleting it just drops the redirect.
@@ -654,6 +921,11 @@ pub async fn delete_tag(
             .bind(old_tag_name)
             .execute(&state.pool)
             .await?;
+        tracing::info!(
+            tag = %old_tag_name,
+            moderator = %moderator.nick,
+            "tag synonym deleted"
+        );
         return Ok(Redirect::to(&format!(
             "/tags/{}",
             urlencoding::encode(&first_letter_of(old_tag_name))
@@ -704,6 +976,11 @@ pub async fn delete_tag(
         for id in affected_topics {
             crate::search_index::index_topic(&state, id, true).await;
         }
+        tracing::info!(
+            tag = %old_tag_name,
+            moderator = %moderator.nick,
+            "tag deleted"
+        );
         return Ok(Redirect::to(&format!(
             "/tags/{}",
             urlencoding::encode(&first_letter_of(old_tag_name))
@@ -768,6 +1045,13 @@ pub async fn delete_tag(
 
     // TagModificationService.merge: reindex every topic now carrying the merge target's tag.
     reindex_topics_with_tag(&state, new_tag_id).await;
+    tracing::info!(
+        old_tag = %old_tag_name,
+        new_tag = %tag_name,
+        create_synonym,
+        moderator = %moderator.nick,
+        "tag merged"
+    );
 
     Ok(Redirect::to(&format!(
         "/tags/{}",

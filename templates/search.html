@@ -14,6 +14,13 @@
       <option value="COMMENTS"{% if range == "COMMENTS" %} selected{% endif %}>только комментарии</option>
     </select>
   </div>
+  {% if dt > 0 %}
+  <div class="control-group">
+    <label>на дату</label>
+    <input id="selectedDt" name="dt" type="hidden" value="{{ dt }}">
+    <input id="selectDt" class="input" type="text" readonly value="{{ selected_date }}">
+  </div>
+  {% else %}
   <div class="control-group"><label>За:
     <select name="interval">
       <option value="ALL"{% if interval == "ALL" %} selected{% endif %}>весь период</option>
@@ -23,8 +30,11 @@
       <option value="THREE_YEAR"{% if interval == "THREE_YEAR" %} selected{% endif %}>три года</option>
     </select>
   </label></div>
-  <input type="hidden" name="section" value="{{ section }}">
-  <input type="hidden" name="group" value="{{ group }}">
+  {% endif %}
+  <div class="control-group">
+    <label>Пользователь: <input name="user" type="text" size="20" value="{{ user }}"></label>
+    <label>В темах пользователя <input name="usertopic" type="checkbox" value="true"{% if usertopic %} checked{% endif %}></label>
+  </div>
   {% match error %}{% when Some with (msg) %}<div class="error">{{ msg }}</div>{% when None %}{% endmatch %}
 
   {% if searched && error.is_none() %}
@@ -37,22 +47,27 @@
       </select>
     </label></div>{% endif %}
     {% if section_facet.len() > 0 %}<div style="display: inline-block">Раздел:
-      <select name="section" onchange="submit()">{% for f in section_facet %}<option value="{{ f.key }}">{{ f.label }}</option>{% endfor %}</select>
-    </div>{% endif %}
+      <select name="section" onchange="submit()">{% for f in section_facet %}<option value="{{ f.key }}"{% if f.selected %} selected{% endif %}>{{ f.label }}</option>{% endfor %}</select>
+    </div>{% else %}<input type="hidden" name="section" value="{{ section }}">{% endif %}
     {% if group_facet.len() > 0 %}<div style="display: inline-block">Группа:
-      <select name="group" onchange="submit()">{% for f in group_facet %}<option value="{{ f.key }}">{{ f.label }}</option>{% endfor %}</select>
+      <select name="group" onchange="submit()">{% for f in group_facet %}<option value="{{ f.key }}"{% if f.selected %} selected{% endif %}>{{ f.label }}</option>{% endfor %}</select>
     </div>{% endif %}
-    <div>Всего найдено {{ total }} результатов</div>
+    <div>Всего найдено {{ total }} результатов{% if total > shown_count %}, показаны {{ shown_count }}{% endif %}</div>
   </div>
+
+  {% if found_tags.len() > 0 %}<div class="infoblock">Найдены теги:
+    {% for tag in found_tags %}<a class="tag" href="{{ tag.url }}">{{ tag.name }}</a>{% endfor %}
+  </div>{% endif %}
 
   <div class="messages">
   {% for item in items %}
     <article class="msg">
-      <h1>{% if item.is_comment %}<i class="icon-comment"></i>{% endif %}<a href="{{ item.url }}">{{ item.title }}</a></h1>
+      <h1>{% if item.is_comment %}<i class="icon-comment"></i>{% endif %}<a href="{{ item.url }}">{{ item.title_html|safe }}</a></h1>
       <div class="msg_body">
-        <p>{{ item.message_excerpt }}</p>
-        {% if item.tags.len() > 0 %}<div class="tags">{% for tag in item.tags %}<a class="tag" href="/tag/{{ tag }}">{{ tag }}</a>{% endfor %}</div>{% endif %}
-        <div class="sign"><a href="/people/{{ item.author }}/profile">{{ item.author }}</a> {{ item.postdate }}</div>
+        <p>{{ item.message_html|safe }}</p>
+        {% if item.tags.len() > 0 %}<div class="tags">{% for tag in item.tags %}<a class="tag" href="{{ tag.url }}">{{ tag.name }}</a>{% endfor %}</div>{% endif %}
+        <div class="sign"><a href="/people/{{ item.author }}/profile">{{ item.author }}</a> <time data-format="default" datetime="{{ item.postdate_iso }}">{{ item.postdate }}</time></div>
+        {% if debug %}<div>Rank: {{ item.score }}</div>{% endif %}
       </div>
     </article>
   {% endfor %}

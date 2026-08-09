@@ -12,6 +12,7 @@ use crate::{
         email_domain_block_repository::CEmailDomainBlockPgRepository,
         warning_repository::CWarningPgRepository,
     },
+    request_timezone::stRequestTimezone,
     state::AppState,
 };
 use askama::Template;
@@ -119,20 +120,6 @@ struct StEmailDomainsTemplate {
     previous_offset: i32,
     has_more: bool,
     next_offset: i32,
-}
-
-fn stRequestTimezone(stJar: &CookieJar) -> chrono_tz::Tz {
-    stJar
-        .get("tz")
-        .map(|stCookie| stCookie.value())
-        .filter(|sTimezone| !matches!(*sTimezone, "Factory" | "Etc/Unknown"))
-        .and_then(|sTimezone| sTimezone.parse().ok())
-        .or_else(|| {
-            std::env::var("TZ")
-                .ok()
-                .and_then(|sTimezone| sTimezone.parse().ok())
-        })
-        .unwrap_or(chrono_tz::Europe::Moscow)
 }
 
 fn stPreparedEmailDomainBlock(
@@ -585,11 +572,13 @@ async fn same_ip(
 
     html.push_str(&format!("<h2>Сообщения ({})</h2><ul>", posts.len()));
     for (id, nick, kind, date, ip, ua) in &posts {
+        let sDate = crate::request_timezone::sTimeTag("compact-interval", *date);
         html.push_str(&format!(
             "<li>#{id} <a href=\"/people/{nick}/profile\">{nick}</a> — {kind}, {date} · {} {}</li>",
             ip.as_deref().unwrap_or(""),
             ua.map(|u| format!("ua#{u}")).unwrap_or_default(),
             nick = html_escape::encode_double_quoted_attribute(nick),
+            date = sDate,
         ));
     }
     html.push_str("</ul>");

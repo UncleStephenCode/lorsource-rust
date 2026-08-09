@@ -1,0 +1,58 @@
+{
+  "settings": {
+    "analysis": {
+      "analyzer": {
+        "text_analyzer": {
+          "type": "custom",
+          "tokenizer": "text_tokenizer",
+          "filter": ["m_long_word", "lowercase", "m_my_snow_ru", "m_my_snow_en"],
+          "char_filter": ["html_strip", "m_ee"]
+        },
+        "exact_analyzer": {
+          "type": "custom",
+          "tokenizer": "text_tokenizer",
+          "filter": ["m_long_word", "lowercase"],
+          "char_filter": ["html_strip", "m_ee"]
+        }
+      },
+      "tokenizer": {
+        "text_tokenizer": {"type": "standard"}
+      },
+      "filter": {
+        "m_long_word": {"type": "length", "max": 100},
+        "m_my_snow_ru": {"type": "snowball", "language": "Russian"},
+        "m_my_snow_en": {"type": "snowball", "language": "English"}
+      },
+      "char_filter": {
+        "m_ee": {"type": "mapping", "mappings": ["ё => е", "Ё => Е"]}
+      }
+    }
+  },
+  "mappings": {
+    "properties": {
+      "group": {"type": "keyword"},
+      "section": {"type": "keyword"},
+      "is_comment": {"type": "boolean"},
+      "postdate": {"type": "date"},
+      "author": {"type": "keyword"},
+      "tag": {"type": "keyword"},
+      "topic_author": {"type": "keyword"},
+      "topic_id": {"type": "long"},
+      "topic_title": {"type": "text", "index": false},
+      "title": {"type": "text", "analyzer": "text_analyzer"},
+      "message": {
+        "type": "text",
+        "analyzer": "text_analyzer",
+        "term_vector": "with_positions_offsets",
+        "fields": {
+          "raw": {
+            "type": "text",
+            "analyzer": "exact_analyzer",
+            "term_vector": "with_positions_offsets"
+          }
+        }
+      },
+      "topic_awaits_commit": {"type": "boolean"}
+    }
+  }
+}

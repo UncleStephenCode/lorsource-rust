@@ -5,13 +5,14 @@ use crate::{
     models::{PagerQuery, TopicSummary, UserSummary},
     pagination::Pager,
     profile::{ChoiceOption, NumberOption, ProfileSettings, ThemeOption},
+    request_timezone::stRequestTimezone,
     security,
     state::AppState,
 };
 use askama::Template;
 use axum::{
     Form, Json,
-    extract::{OriginalUri, Path, Query, RawQuery, State},
+    extract::{Path, Query, RawQuery, State},
     response::{Html, IntoResponse, Redirect, Response},
 };
 use axum_extra::extract::cookie::CookieJar;
@@ -36,8 +37,8 @@ struct UserProfileData {
     corrector: bool,
     blocked: bool,
     activated: bool,
-    regdate_text: Option<String>,
-    lastlogin_text: Option<String>,
+    regdate: Option<chrono::DateTime<chrono::Utc>>,
+    lastlogin: Option<chrono::DateTime<chrono::Utc>>,
     userinfo_markup: Option<String>,
 }
 
@@ -59,15 +60,15 @@ impl UserProfileData {
 struct UserStats {
     topic_count: i64,
     comment_count: i64,
-    first_topic: Option<String>,
-    last_topic: Option<String>,
-    first_comment: Option<String>,
-    last_comment: Option<String>,
+    first_topic: Option<chrono::DateTime<chrono::Utc>>,
+    last_topic: Option<chrono::DateTime<chrono::Utc>>,
+    first_comment: Option<chrono::DateTime<chrono::Utc>>,
+    last_comment: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone)]
 struct BanInfo {
-    bandate_text: String,
+    bandate: chrono::DateTime<chrono::Utc>,
     reason: String,
     moderator_nick: String,
 }
@@ -75,7 +76,7 @@ struct BanInfo {
 #[derive(Debug, Clone)]
 struct UserLogEntry {
     action: String,
-    date_text: String,
+    action_date: chrono::DateTime<chrono::Utc>,
     actor_nick: String,
 }
 
@@ -96,7 +97,7 @@ struct UserTemplate {
     /// `|safe`; it's raw user input.
     userinfo_html: Option<String>,
     ban_info: Option<BanInfo>,
-    frozen_until_text: Option<String>,
+    frozen_until: Option<chrono::DateTime<chrono::Utc>>,
     is_frozen: bool,
     long_freeze_durations: bool,
     blockable: bool,
@@ -327,21 +328,6 @@ fn bHasRequestParameter(optRawQuery: Option<&str>, sName: &str) -> bool {
         .is_some_and(|mapQuery| mapQuery.contains_key(sName))
 }
 
-fn stRequestTimezone(stJar: &CookieJar) -> chrono_tz::Tz {
-    stJar
-        .get("tz")
-        .map(|stCookie| stCookie.value())
-        .filter(|sTimezone| !sTimezone.is_empty())
-        .filter(|sTimezone| !matches!(*sTimezone, "Factory" | "Etc/Unknown"))
-        .and_then(|sTimezone| sTimezone.parse().ok())
-        .or_else(|| {
-            std::env::var("TZ")
-                .ok()
-                .and_then(|sTimezone| sTimezone.parse().ok())
-        })
-        .unwrap_or(chrono_tz::Europe::Moscow)
-}
-
 async fn render_profile(
     state: AppState,
     nick: String,
@@ -401,7 +387,11 @@ async fn render_profile(
         .bind(profile.id)
         .fetch_optional(&state.pool)
         .await?
-        .map(|(bandate, reason, moderator_nick)| BanInfo { bandate_text: bandate.to_string(), reason, moderator_nick })
+        .map(|(bandate, reason, moderator_nick)| BanInfo {
+            bandate,
+            reason,
+            moderator_nick,
+        })
     } else {
         None
     };
@@ -418,7 +408,7 @@ async fn render_profile(
     let long_freeze_durations = frozen_until
         .and_then(|dtUntil| dtUntil.checked_add_months(chrono::Months::new(24)))
         .is_some_and(|dtTwoYearsAfterFreeze| dtTwoYearsAfterFreeze > chrono::Utc::now());
-    let frozen_until_text = is_frozen.then(|| frozen_until.unwrap().to_string());
+    let frozen_until = is_frozen.then(|| frozen_until.expect("is_frozen requires a timestamp"));
 
     // UserService.isBlockable/isFreezable: reuse the exact same rules
     // enforced server-side in usermod.jsp so the profile page never shows
@@ -463,7 +453,7 @@ async fn render_profile(
         .into_iter()
         .map(|(action, date, actor_nick)| UserLogEntry {
             action,
-            date_text: date.to_string(),
+            action_date: date,
             actor_nick,
         })
         .collect()
@@ -523,7 +513,7 @@ async fn render_profile(
             can_view_private,
             userinfo_html,
             ban_info,
-            frozen_until_text,
+            frozen_until,
             is_frozen,
             long_freeze_durations,
             blockable,
@@ -796,6 +786,7 @@ async fn reactions_view(
             .get(&item.comment_id.unwrap_or(item.topic_id))
             .map(|s| s.as_str())
             .unwrap_or("");
+        let sDate = crate::request_timezone::sTimeTag("compact-interval", item.set_date);
         html.push_str(&format!(
             r#"<a class="reactions-view-item" href="{}">
                  <div class="reactions-view-reaction"><p>{}</p></div>
@@ -807,7 +798,7 @@ async fn reactions_view(
             html_escape::encode_text(&item.reaction),
             if item.comment_id.is_some() { "<i class=\"icon-comment\"></i> " } else { "" },
             html_escape::encode_text(&item.title),
-            item.set_date.format("%d.%m.%Y %H:%M"),
+            sDate,
             html_escape::encode_text(target_nick),
             html_escape::encode_text(preview),
         ));
@@ -899,8 +890,7 @@ async fn get_user_profile(state: &AppState, nick: &str) -> Result<UserProfileDat
                   COALESCE(corrector,false) AS corrector,
                   COALESCE(blocked,false) AS blocked,
                   COALESCE(activated,true) AS activated,
-                  to_char(regdate, 'YYYY-MM-DD HH24:MI') AS regdate_text,
-                  to_char(lastlogin, 'YYYY-MM-DD HH24:MI') AS lastlogin_text,
+                  regdate, lastlogin,
                   userinfo_markup::text AS userinfo_markup
            FROM users WHERE lower(nick)=lower($1)"#,
     )
@@ -940,14 +930,22 @@ async fn user_topics(
 }
 
 async fn user_stats(state: &AppState, user_id: i32) -> Result<UserStats> {
-    let (topic_count, first_topic, last_topic): (i64, Option<String>, Option<String>) = sqlx::query_as(
-        "SELECT count(*)::bigint, to_char(min(postdate), 'YYYY-MM-DD HH24:MI'), to_char(max(postdate), 'YYYY-MM-DD HH24:MI') FROM topics WHERE userid=$1 AND NOT COALESCE(deleted,false) AND NOT COALESCE(draft,false)",
+    let (topic_count, first_topic, last_topic): (
+        i64,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    ) = sqlx::query_as(
+        "SELECT count(*)::bigint, min(postdate), max(postdate) FROM topics WHERE userid=$1 AND NOT COALESCE(deleted,false) AND NOT COALESCE(draft,false)",
     )
     .bind(user_id)
     .fetch_one(&state.pool)
     .await?;
-    let (comment_count, first_comment, last_comment): (i64, Option<String>, Option<String>) = sqlx::query_as(
-        "SELECT count(*)::bigint, to_char(min(postdate), 'YYYY-MM-DD HH24:MI'), to_char(max(postdate), 'YYYY-MM-DD HH24:MI') FROM comments WHERE userid=$1 AND NOT COALESCE(deleted,false)",
+    let (comment_count, first_comment, last_comment): (
+        i64,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    ) = sqlx::query_as(
+        "SELECT count(*)::bigint, min(postdate), max(postdate) FROM comments WHERE userid=$1 AND NOT COALESCE(deleted,false)",
     )
     .bind(user_id)
     .fetch_one(&state.pool)
@@ -1110,7 +1108,7 @@ fn simple_topic_list(title: &str, topics: &[TopicSummary]) -> String {
         html_escape::encode_text(title)
     );
     for t in topics {
-        html.push_str(&format!("<article class=\"topic-card\"><h3><a href=\"{}\">{}</a></h3><div class=\"meta\">{} · {} комментариев</div></article>", t.topic_url(), html_escape::encode_text(&t.title), t.postdate, t.comments));
+        html.push_str(&format!("<article class=\"topic-card\"><h3><a href=\"{}\">{}</a></h3><div class=\"meta\">{} · {} комментариев</div></article>", t.topic_url(), html_escape::encode_text(&t.title), crate::request_timezone::sTimeTag("default", t.postdate), t.comments));
     }
     html.push_str("</div>");
     html
@@ -1131,13 +1129,10 @@ pub struct ProfileForm {
 pub async fn edit_profile_form(
     State(state): State<AppState>,
     Path(nick): Path<String>,
-    OriginalUri(stUri): OriginalUri,
     current: CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
 ) -> Result<Response> {
-    if let Some(stResponse) = optSelfServiceLoginRedirect(&current.0, &nick, &stUri)? {
-        return Ok(stResponse);
-    }
+    ensure_self_service_actor(&current.0, &nick)?;
     let user = get_user(&state, &nick).await?;
     let profile = get_user_profile(&state, &nick).await?;
     ensure_self(&current.0, &user)?;
@@ -1158,6 +1153,7 @@ pub async fn edit_profile(
     current: CurrentUser,
     Form(form): axum::Form<ProfileForm>,
 ) -> Result<impl axum::response::IntoResponse> {
+    ensure_self_service_actor(&current.0, &nick)?;
     let user = get_user(&state, &nick).await?;
     // Java's EditProfileController is strictly self-service (no moderator
     // override) and requires the current password before touching anything.
@@ -1264,13 +1260,10 @@ pub async fn edit_profile(
 pub async fn settings(
     State(state): State<AppState>,
     Path(nick): Path<String>,
-    OriginalUri(stUri): OriginalUri,
     current: CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
 ) -> Result<Response> {
-    if let Some(stResponse) = optSelfServiceLoginRedirect(&current.0, &nick, &stUri)? {
-        return Ok(stResponse);
-    }
+    ensure_self_service_actor(&current.0, &nick)?;
     let user = get_user(&state, &nick).await?;
     // Java's EditSettingsController is strictly self-service, no moderator override.
     ensure_self(&current.0, &user)?;
@@ -1303,6 +1296,7 @@ pub async fn save_settings(
     current: CurrentUser,
     Form(form): axum::Form<HashMap<String, String>>,
 ) -> Result<Redirect> {
+    ensure_self_service_actor(&current.0, &nick)?;
     let user = get_user(&state, &nick).await?;
     ensure_self(&current.0, &user)?;
     let settings_text: Option<String> =
@@ -1467,26 +1461,17 @@ fn ensure_self_or_moderator(current: &Option<UserSummary>, target: &UserSummary)
     }
 }
 
-/// Repository compatibility policy for the two self-service browser forms.
-/// Anonymous visitors are sent through the login form with the complete local
-/// request target, while an authenticated user requesting somebody else's
-/// form remains a real authorization failure (403).
-fn optSelfServiceLoginRedirect(
-    optCurrent: &Option<UserSummary>,
-    sTargetNick: &str,
-    stUri: &axum::http::Uri,
-) -> Result<Option<Response>> {
+/// Java's `AuthorizedOnly` wraps both profile self-service controllers and
+/// raises `AccessViolationException` for anonymous visitors as well as for a
+/// different account. Check this before any target-user database lookup.
+fn ensure_self_service_actor(optCurrent: &Option<UserSummary>, sTargetNick: &str) -> Result<()> {
     let Some(stCurrent) = optCurrent else {
-        let sFrom = stUri
-            .path_and_query()
-            .map(|stPathAndQuery| stPathAndQuery.as_str())
-            .unwrap_or_else(|| stUri.path());
-        return Ok(Some(crate::routes::auth::login_redirect(sFrom)));
+        return Err(AppError::Forbidden);
     };
     if stCurrent.nick != sTargetNick {
         return Err(AppError::Forbidden);
     }
-    Ok(None)
+    Ok(())
 }
 
 /// Strictly self-service, no moderator override - matches Java controllers
@@ -1505,7 +1490,7 @@ fn ensure_self(current: &Option<UserSummary>, target: &UserSummary) -> Result<()
 
 #[cfg(test)]
 mod tests {
-    use super::{bHasRequestParameter, edit_profile_form, optSelfServiceLoginRedirect, settings};
+    use super::{bHasRequestParameter, edit_profile_form, ensure_self_service_actor, settings};
     use crate::{config::StConfig, error::AppError, models::UserSummary, state::AppState};
     use axum::{Router, http::header, routing::get};
 
@@ -1530,10 +1515,9 @@ mod tests {
     #[test]
     fn authenticated_user_cannot_open_another_users_self_service_form() {
         let optCurrent = Some(stUser(1, "maxcom"));
-        let stUri = "/people/other/settings".parse().expect("valid URI");
 
         assert!(matches!(
-            optSelfServiceLoginRedirect(&optCurrent, "other", &stUri),
+            ensure_self_service_actor(&optCurrent, "other"),
             Err(AppError::Forbidden)
         ));
     }
@@ -1541,12 +1525,8 @@ mod tests {
     #[test]
     fn authenticated_owner_passes_self_service_entrypoint() {
         let optCurrent = Some(stUser(1, "maxcom"));
-        let stUri = "/people/maxcom/settings".parse().expect("valid URI");
 
-        assert!(matches!(
-            optSelfServiceLoginRedirect(&optCurrent, "maxcom", &stUri),
-            Ok(None)
-        ));
+        assert!(ensure_self_service_actor(&optCurrent, "maxcom").is_ok());
     }
 
     #[test]
@@ -1568,7 +1548,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn anonymous_settings_and_edit_gets_redirect_before_database_lookup() {
+    async fn anonymous_settings_and_edit_gets_forbidden_before_database_lookup() {
         let oPool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
             .expect("lazy test pool");
@@ -1620,29 +1600,14 @@ mod tests {
             .build()
             .expect("test client");
 
-        for (sPath, sLocation) in [
-            (
-                "/people/maxcom/settings?tab=display",
-                "/login.jsp?from=%2Fpeople%2Fmaxcom%2Fsettings%3Ftab%3Ddisplay",
-            ),
-            (
-                "/people/maxcom/edit",
-                "/login.jsp?from=%2Fpeople%2Fmaxcom%2Fedit",
-            ),
-        ] {
+        for sPath in ["/people/maxcom/settings?tab=display", "/people/maxcom/edit"] {
             let stResponse = cClient
                 .get(format!("http://{stAddress}{sPath}"))
                 .send()
                 .await
                 .expect("request to test router");
-            assert_eq!(stResponse.status(), reqwest::StatusCode::SEE_OTHER);
-            assert_eq!(
-                stResponse
-                    .headers()
-                    .get(header::LOCATION)
-                    .and_then(|stValue| stValue.to_str().ok()),
-                Some(sLocation)
-            );
+            assert_eq!(stResponse.status(), reqwest::StatusCode::FORBIDDEN);
+            assert!(stResponse.headers().get(header::LOCATION).is_none());
         }
 
         hServer.abort();

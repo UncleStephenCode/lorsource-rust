@@ -34,7 +34,7 @@
     <div class="msg_body"><div class="sign">
       <a href="/{{ t.section_prefix }}/{{ t.group_urlname }}">{{ t.group_title }}</a> ·
       <a href="/people/{{ t.author }}/profile">{{ t.author }}</a> ·
-      {{ t.postdate }} · {{ t.comments }} комм.
+      <time data-format="default" datetime="{{ t.postdate.to_rfc3339() }}">{{ t.postdate }}</time> · {{ t.comments }} комм.
     </div></div>
   </article>
 {% endfor %}
@@ -63,7 +63,7 @@
         <td>{{ d.reason_display() }}</td>
         {% if show_dates %}
         <td>{{ d.bonus.unwrap_or(0) }}</td>
-        <td>написано {{ d.postdate }}<br>удалено {{ d.deldate_display() }}</td>
+        <td>написано <time data-format="interval" datetime="{{ d.postdate.to_rfc3339() }}">{{ d.postdate }}</time><br>удалено {% match d.deldate %}{% when Some with (deldate) %}<time data-format="interval" datetime="{{ deldate.to_rfc3339() }}">{{ deldate }}</time>{% when None %}—{% endmatch %}</td>
         {% endif %}
       </tr>
     {% endfor %}

@@ -5,13 +5,25 @@ COPY Cargo.toml Cargo.lock* ./
 COPY src ./src
 COPY templates ./templates
 COPY compat/java-db/schema-contract.tsv ./compat/java-db/schema-contract.tsv
+COPY compat/java-runtime/messages-index.json ./compat/java-runtime/messages-index.json
 COPY static ./static
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
     cargo build --release --locked && \
     cp /app/target/release/lorsource-rust /app/lorsource-rust
 
-FROM debian:bookworm-slim
+# Optional reproducible quality target for hosts without a local Rust
+# toolchain. It is not part of the release image.
+FROM build AS quality
+RUN rustup component add rustfmt clippy
+RUN cargo fmt --all -- --check
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo check --locked --all-targets --all-features && \
+    cargo test --locked --all-targets --all-features && \
+    cargo clippy --locked --all-targets --all-features -- -D warnings
+
+FROM debian:bookworm-slim AS runtime
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gosu && \
     rm -rf /var/lib/apt/lists/* && \
@@ -28,6 +40,6 @@ ENV LOR_HOST=0.0.0.0 LOR_PORT=8181 STATIC_DIR=/app/static UPLOAD_DIR=/app/upload
 EXPOSE 8181
 STOPSIGNAL SIGTERM
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl --fail --silent --show-error http://127.0.0.1:8181/healthz >/dev/null || exit 1
+    CMD curl --fail --silent --show-error http://127.0.0.1:8181/readyz >/dev/null || exit 1
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["/usr/local/bin/lorsource-rust"]

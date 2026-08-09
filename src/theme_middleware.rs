@@ -1,7 +1,7 @@
 //! Resolves the saved Java-compatible profile style and applies the exact
 //! stylesheet/data-theme mapping used by `WEB-INF/jsp/head.jsp`.
 
-use crate::{profile::is_style, state::AppState};
+use crate::{profile::is_style, request_timezone, state::AppState};
 use axum::{
     body::Body,
     extract::{Request, State},
@@ -285,6 +285,9 @@ pub async fn apply_theme(
         ),
         1,
     );
+    let stTimezone = request_timezone::stRequestTimezone(&jar);
+    text = text.replacen("<!-- LOR_TIMEZONE -->", stTimezone.name(), 1);
+    text = request_timezone::sRewriteHtmlTimes(&text, stTimezone, chrono::Utc::now());
     if style == "black" && main_page {
         text = text.replacen("<body>", "<body style=\"margin-top: 0\">", 1);
     }

@@ -42,7 +42,46 @@ Rust v4: `/check-login` now implements the same semantic check and returns a JSO
 
 Original: `UserpicController` accepts multipart `/addphoto.jsp`, checks file size and dimensions, stores a generated photo name and updates `users.photo`.
 
-Rust v4: `/addphoto.jsp` now accepts multipart upload, validates PNG/JPEG/WEBP size and 50–300 px dimensions, stores files under `UPLOAD_DIR/photos`, serves them as `/photos/*` and updates `users.photo`.
+Rust: `/addphoto.jsp` accepts multipart upload, validates PNG/JPEG/WEBP size
+and 50–300 px dimensions, enforces the complete `checkLoadUserpic` policy
+(freeze, score, hourly limit, moderator reset and recent score loss), and
+atomically updates `users.photo` with the canonical `set_userpic` audit row.
+New names match Java's `<userid>:<signed-int>.<extension>` contract. The
+permission-aware `/photos/*` handler implements active/historical userpic
+visibility and the original 302 fallback behavior.
+
+Finalized `/images/*` and temporary `/gallery/preview/*` files are no longer
+mounted as unrestricted static directories. They implement
+`GalleryPermissionInterceptor`: preview access requires authentication, while
+finalized files inherit topic visibility and deleted-image history rules.
+
+Static delivery reproduces the current Tuckey/Spring cache contract rather
+than inheriting the dynamic-page `private` default: theme and ordinary assets
+use the original one-hour/ten-year split, `/webjars` and OpenSans use ten
+years, advertisements use `no-cache`, and uploaded media retain their separate
+`31556926`-second resource-handler value. The Java/Rust differential matrix
+asserts the exact headers, including the historical queried-PNG regex edge.
+Successful resources excluded by Spring Security do not hydrate a user or
+create a CSRF cookie; secured top-level and `qrerror` resources retain the
+dynamic chain. Generated browser bundles, manifest/robots/verification files
+and reverse-proxy error assets are served on their original paths.
+
+The HTML head loads the synchronized `lor.js` and `plugins.js` bundles after
+jQuery, as the original JSP does. The shared request-timezone implementation
+validates `tz`, formats `default`, `date`, `interval` and `compact-interval`
+time elements using the Java rules (including historical offsets), and passes
+the resolved server ZoneId to `fixTimezone`; this also removed four divergent
+route-local timezone parsers. All currently identified browser-facing raw date
+surfaces now use this contract, including profiles/statistics, edit and user
+logs, deleted content, reactions, notifications, same-IP moderation results and
+OpenSearch results.
+
+Topic and comment edit-history pages now reconstruct changes from
+`edit_info` by object type, retain the original topic/comment access-policy
+difference, render the JSP-compatible `.messages/.msg` structure, and load the
+original diff controller. Authenticated dual-runtime probes also verify the
+same number of current/original versions and identical `fromHistory` form
+prefill behavior.
 
 ### Deregistration
 
@@ -55,6 +94,24 @@ Rust v4: `/deregister.jsp` implements the same high-level policy: permission gat
 Original: admin and moderation controllers cover GeoIP, search reindex, IP bans, group editing, user moderation and warnings.
 
 Rust: previous broad admin stubs were replaced by concrete handlers that operate on the canonical tables (`b_ips`, `ban_info`, `groups`, `users`, `message_warnings`). Search reindex runs the Java-compatible current-three-month or full month sequence, while normal writes use an atomic persistent spool with retry after restart. Real GeoIP remains an adapter point requiring live verification.
+
+The browser search now mirrors `SearchController`/`SearchService`: legacy enum
+ids, user and topic-author filters, timezone-aware selected dates, exact
+interval bounds, recency function-score, fast-vector highlighting, significant
+tag terms, section/group post-filters and original facet-selection behavior.
+Indexed bodies are rendered and sanitized HTML selected from `msgbase.markup`,
+rather than a plain-text approximation. Topic pages also execute the original
+two-field `MoreLikeThisService` query (title, indexed body and optional tags),
+render the two-column `related-topics` block and retain Java's one-hour cache
+and 500 ms page deadline. Tag pages use the original topic-only
+`significant_terms` aggregation for «См. также» with the same 500 ms limit,
+plus effective-date grouping, spacer-aware two-column partitioning and the
+original news/forum freshness ordering. Forum group pages select the last
+visible non-ignored branch comment and honor ignored tags with favorite-tag
+override. Moderator tracker pages include the original recent user/IP and
+userpic operational lists.
+Production startup rejects an incompatible existing `messages` mapping instead
+of deferring the failure to the first search request.
 
 
 ## v5 current Java-source parity fixes
@@ -96,8 +153,14 @@ Production equivalence is still not proven for:
   creation/clearing, active moderator/corrector events, counters and rate limit
   are covered in the same flow. Warning/delete payload rendering, closed
   strikeout, delete bonus, DEL click-through and the original recent-author
-  `/view-deleted?id=` path are also covered; uncommon expired tracker/realtime
-  edges still require production-clone evidence;
+  `/view-deleted?id=` path are also covered. Tracker now renders activity from
+  the same last visible comment as `GroupListDao`, uses profile pagination and
+  default filters, emits Java's legacy redirect, hides counts for
+  `POSTSCORE_HIDE_COMMENTS`, and supports both `oldTracker` DOM variants.
+  `RealtimeEventHub`, `TopicDao` and `CommentReadService` were audited for
+  deleted/draft/expired/hidden topics and missed-comment/ignore-list behavior;
+  the Rust repository/service contract matches them. Production-clone
+  timing/load evidence is still required;
 - every JSP model attribute and theme/page combination;
 - the isolated demo dual-runtime HTTP matrix passes, including canonical
   paths, legacy redirects, comment jumps, RSS and an initialized OpenSearch;

@@ -32,8 +32,8 @@
   {% match profile.town %}{% when Some with (town) %}<b>Город:</b> {{ town }}
     {% if is_moderator %}<form method="post" action="/usermod.jsp" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="id" value="{{ profile.id }}"><input type="hidden" name="action" value="remove_town"><button type="submit" class="btn btn-danger btn-small">Удалить город</button></form>{% endif %}<br>
   {% when None %}{% endmatch %}
-  {% match profile.regdate_text %}{% when Some with (regdate) %}<b>Дата регистрации:</b> {{ regdate }}<br>{% when None %}{% endmatch %}
-  {% match profile.lastlogin_text %}{% when Some with (lastlogin) %}<b>Последнее посещение:</b> {{ lastlogin }}<br>{% when None %}{% endmatch %}
+  {% match profile.regdate %}{% when Some with (regdate) %}<b>Дата регистрации:</b> <time data-format="default" datetime="{{ regdate.to_rfc3339() }}">{{ regdate }}</time><br>{% when None %}{% endmatch %}
+  {% match profile.lastlogin %}{% when Some with (lastlogin) %}<b>Последнее посещение:</b> <time data-format="default" datetime="{{ lastlogin.to_rfc3339() }}">{{ lastlogin }}</time><br>{% when None %}{% endmatch %}
   <b>Статус:</b> {{ profile.status() }}{% if profile.canmod %} (модератор){% endif %}{% if profile.candel %} (администратор){% endif %}{% if profile.corrector %} (корректор){% endif %}{% if profile.blocked %} (заблокирован){% endif %}<br>
   {% if can_view_private %}<b>Score:</b> {{ profile.score }} MaxScore: {{ profile.max_score }}<br>{% endif %}
   {% if is_moderator && profile.score < 50 && !profile.anonymous %}
@@ -50,10 +50,10 @@
 {% if can_view_private %}
 {% match ban_info %}
 {% when Some with (b) %}
-<div class="infoblock ban-info"><b>Заблокирован</b> {{ b.bandate_text }} модератором {{ b.moderator_nick }} · причина: {{ b.reason }}</div>
+<div class="infoblock ban-info"><b>Заблокирован</b> <time data-format="default" datetime="{{ b.bandate.to_rfc3339() }}">{{ b.bandate }}</time> модератором {{ b.moderator_nick }} · причина: {{ b.reason }}</div>
 {% when None %}{% endmatch %}
-{% match frozen_until_text %}
-{% when Some with (until) %}<div class="infoblock freeze-info"><b>Заморожен до:</b> {{ until }}</div>
+{% match frozen_until %}
+{% when Some with (until) %}<div class="infoblock freeze-info"><b>Заморожен до:</b> <time data-format="default" datetime="{{ until.to_rfc3339() }}">{{ until }}</time></div>
 {% when None %}{% endmatch %}
 {% if can_view_private && (blockable || freezable) %}
 <nav>
@@ -154,7 +154,7 @@
 {% if can_view_private && user_log.len() > 0 %}
 <h2>Журнал действий</h2>
 <ul class="userlog">
-{% for entry in user_log %}<li>{{ entry.date_text }} · {{ entry.action }} · {{ entry.actor_nick }}</li>{% endfor %}
+{% for entry in user_log %}<li><time data-format="interval" datetime="{{ entry.action_date.to_rfc3339() }}">{{ entry.action_date }}</time> · {{ entry.action }} · {{ entry.actor_nick }}</li>{% endfor %}
 </ul>
 {% endif %}
 
@@ -171,10 +171,10 @@
 
 <h2>Статистика</h2>
 <div id="cal-heatmap" data-stats-url="{{ year_stats_url }}" data-search-user="{{ year_stats_user }}"></div>
-{% match stats.first_topic %}{% when Some with (v) %}<b>Первая созданная тема:</b> {{ v }}<br>{% when None %}{% endmatch %}
-{% match stats.last_topic %}{% when Some with (v) %}<b>Последняя созданная тема:</b> {{ v }}<br>{% when None %}{% endmatch %}
-{% match stats.first_comment %}{% when Some with (v) %}<b>Первый комментарий:</b> {{ v }}<br>{% when None %}{% endmatch %}
-{% match stats.last_comment %}{% when Some with (v) %}<b>Последний комментарий:</b> {{ v }}<br>{% when None %}{% endmatch %}
+{% match stats.first_topic %}{% when Some with (v) %}<b>Первая созданная тема:</b> <time data-format="default" datetime="{{ v.to_rfc3339() }}">{{ v }}</time><br>{% when None %}{% endmatch %}
+{% match stats.last_topic %}{% when Some with (v) %}<b>Последняя созданная тема:</b> <time data-format="default" datetime="{{ v.to_rfc3339() }}">{{ v }}</time><br>{% when None %}{% endmatch %}
+{% match stats.first_comment %}{% when Some with (v) %}<b>Первый комментарий:</b> <time data-format="default" datetime="{{ v.to_rfc3339() }}">{{ v }}</time><br>{% when None %}{% endmatch %}
+{% match stats.last_comment %}{% when Some with (v) %}<b>Последний комментарий:</b> <time data-format="default" datetime="{{ v.to_rfc3339() }}">{{ v }}</time><br>{% when None %}{% endmatch %}
 {% if stats.comment_count > 0 %}<b>Число комментариев:</b> {{ stats.comment_count }}<br>{% endif %}
 <b>Число тем:</b> {{ stats.topic_count }}
 
@@ -186,6 +186,6 @@
   <a href="/people/{{ profile.nick }}/tracked" class="btn btn-default">Отслеживаемое</a>
 </nav>
 {% for t in topics %}
-<article class="msg"><h1><a href="{{ t.topic_url() }}">{{ t.title }}</a></h1><div class="msg_body"><div class="sign">{{ t.postdate }} · {{ t.comments }} комментариев</div></div></article>
+<article class="msg"><h1><a href="{{ t.topic_url() }}">{{ t.title }}</a></h1><div class="msg_body"><div class="sign"><time data-format="default" datetime="{{ t.postdate.to_rfc3339() }}">{{ t.postdate }}</time> · {{ t.comments }} комментариев</div></div></article>
 {% endfor %}
 {% endblock %}

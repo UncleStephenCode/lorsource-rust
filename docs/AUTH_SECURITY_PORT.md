@@ -22,12 +22,18 @@ Rust port state:
   - `unclestephen / demo`
 - Registration stores BCrypt hashes.
 
-Still pending:
+Current compatibility evidence additionally covers Spring remember-me cookie
+generation/verification (including legacy three-part cookies), legacy Jasypt
+and BCrypt password verification, login/topic/comment flood caches, hCaptcha,
+IP blocks/slow mode, trusted proxy handling and the write-handler permission
+checks exercised by the stateful posting/moderation flows. Production CAPTCHA
+keys and outbound connectivity, plus exhaustive proof for every uncommon
+permission branch on a current production clone, remain cutover evidence rather
+than missing implementation.
 
-- exact Spring remember-me token generation compatibility;
-- legacy Jasypt password verification or an offline rehash migration;
-- rate limiting/flood protection from `FloodProtector`;
-- captcha flow;
-- IP block enforcement;
-- all permission checks from `rights/*Checker.scala` and `*PermissionService.scala` wired into write handlers;
-- request-wide context equivalent of `CommonContextFilter`.
+Uploaded media is also inside the authorization boundary. `/images/{id}/*`
+checks the owning topic before reading a file, `/gallery/preview/*` requires an
+authenticated session, and `/photos/*` reproduces the original active versus
+historical userpic policy. The stateful gallery regression proves that an
+anonymous direct image URL changes from 200 to 403 after its topic is deleted,
+while the author retains the history access granted by Java.

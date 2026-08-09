@@ -11,6 +11,35 @@ use chrono::Utc;
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 
+/// Paths excluded from the main Spring Security filter chain by the current
+/// `springapp-security.xml`. MVC response interceptors still run for these
+/// resources, but CommonContextFilter (session hydration, CSRF-cookie creation
+/// and the default `Cache-Control: private`) does not.
+pub fn bSpringSecurityIgnoredPath(sPath: &str) -> bool {
+    let bIgnoredPrefix = [
+        "/css/",
+        "/img/",
+        "/js/",
+        "/tango/",
+        "/tango-auto/",
+        "/tango-light/",
+        "/waltz/",
+        "/white/",
+        "/zomg_ponies/",
+        "/white2/",
+        "/black/",
+        "/adv/",
+        "/fontello/",
+        "/font/",
+    ]
+    .iter()
+    .any(|sPrefix| sPath.starts_with(sPrefix));
+    let bTopLevel = sPath
+        .strip_prefix('/')
+        .is_some_and(|sName| !sName.contains('/'));
+    bIgnoredPrefix || (bTopLevel && (sPath.ends_with(".css") || sPath.ends_with(".ico")))
+}
+
 pub mod password {
     use base64::{Engine, engine::general_purpose::STANDARD};
     use md5::{Digest, Md5};
@@ -470,7 +499,30 @@ pub mod secret_tokens {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_secure_request, password, remember_me, stClientIp};
+    use super::{bSpringSecurityIgnoredPath, is_secure_request, password, remember_me, stClientIp};
+
+    #[test]
+    fn spring_security_static_exclusions_match_current_xml_patterns() {
+        for sPath in [
+            "/js/lor.js",
+            "/tango/combined.css",
+            "/font/open.woff2",
+            "/adv/banner.png",
+            "/favicon.ico",
+            "/site.css",
+        ] {
+            assert!(bSpringSecurityIgnoredPath(sPath), "{sPath}");
+        }
+        for sPath in [
+            "/webjars/jquery/jquery.js",
+            "/manifest.json",
+            "/qrerror/combined.css",
+            "/nested/site.css",
+            "/favicon.png",
+        ] {
+            assert!(!bSpringSecurityIgnoredPath(sPath), "{sPath}");
+        }
+    }
 
     #[test]
     fn verifies_java_jasypt_basic_password_encryptor_fixture() {

@@ -51,6 +51,7 @@ fn sContentSecurityPolicy(sPublicUrl: &str, sWsUrl: &str) -> String {
 }
 
 pub async fn apply(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    let bSecurityIgnored = crate::security::bSpringSecurityIgnoredPath(req.uri().path());
     let optPeerIp = req
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
@@ -62,6 +63,7 @@ pub async fn apply(State(state): State<AppState>, req: Request, next: Next) -> R
     );
 
     let mut response = next.run(req).await;
+    let bSuccessful = response.status().as_u16() >= 200 && response.status().as_u16() < 400;
     let headers = response.headers_mut();
 
     headers.insert(
@@ -74,7 +76,9 @@ pub async fn apply(State(state): State<AppState>, req: Request, next: Next) -> R
     );
     // CommonContextFilter marks every response private. Preserve an explicit
     // handler policy (for example no-store), otherwise add the Java default.
-    if !headers.contains_key(axum::http::header::CACHE_CONTROL) {
+    if !headers.contains_key(axum::http::header::CACHE_CONTROL)
+        && !(bSecurityIgnored && bSuccessful)
+    {
         headers.insert(
             axum::http::header::CACHE_CONTROL,
             HeaderValue::from_static("private"),

@@ -9,10 +9,15 @@
 > use `compat/java-db/` and `docs/DATABASE_COMPATIBILITY.md` for current
 > database operations.
 
-## Re-audited current subsystems (2026-08-08)
+## Re-audited current subsystems (2026-08-09)
 
 | Java subsystem | Current Rust implementation | Evidence status |
 |---|---|---|
+| `AdvCounterInterceptor` / `AdvCounterActor` / `AdvCounterDao` | `src/routes/adv.rs`, `src/application/adv_counter.rs`, background transactional batch flush | ported; status/path unit coverage and stateful HTTP→`adv_counts` verification |
+| `LastLoginInterceptor` / `UserDao.updateLastlogin` | global session hydration middleware in `src/auth.rs`, one-hour throttled canonical update and request-local identity cache | ported; authenticated route without `CurrentUser` statefully verified |
+| Spring Security static exclusions / Tuckey cache filters | `src/security.rs`, `src/auth.rs`, `src/csrf.rs`, `src/security_headers.rs`, `src/routes/static_cache.rs` | ported; fresh-session dual-runtime cookie/cache matrix covers excluded and secured resources plus error dispatch behavior |
+| `CommonContextFilter` / `DateFormats` / `head.jsp` browser bootstrap | `src/request_timezone.rs`, `src/theme_middleware.rs`, `templates/base.html` | ported; bad-zone filtering, system fallback, all four Java date modes across topic/profile/history/deleted/reaction/notification/search surfaces, and original `fixTimezone`/bundle order |
+| `EditHistoryController` / `EditHistoryService` / `EditHistoryDao` | `src/application/edit_history.rs`, `src/domain/edit_history.rs`, `src/infra/postgres/edit_history_repository.rs`, `templates/history.html` | ported; type-scoped reconstruction, original diff JS/DOM, access split and `fromHistory` verified against both runtimes |
 | `AddTopicChecker`, `SlowModeChecker`, `IpBlockChecker` | `src/application/topic/posting.rs`, `src/domain/topic/posting.rs`, PostgreSQL repository | ported; unit and stateful write-flow coverage |
 | `CaptchaService` | `src/application/auth/mod.rs`, login/registration/comment/topic handlers | ported; negative HTTP and unit coverage |
 | `CommentCreateService`, delete/edit services | `src/routes/comments.rs`, flood cache and transactional SQL | ported; unit and stateful write-flow coverage |

@@ -1,14 +1,18 @@
 pub mod admin;
+pub mod adv;
 pub mod api;
 pub mod auth;
 pub mod boxlets;
+pub mod canonical_host;
 pub mod comments;
 pub mod groups;
 pub mod legacy;
 pub mod legacy_redirects;
+pub mod media;
 pub mod realtime;
 pub mod rss;
 pub mod search;
+pub mod static_cache;
 pub mod tags;
 pub mod topics;
 pub mod users;
@@ -17,7 +21,7 @@ use crate::{error::AppError, state::AppState};
 use askama::Template;
 use axum::{
     Router,
-    extract::DefaultBodyLimit,
+    extract::{DefaultBodyLimit, State},
     http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
     routing::{any, get, post},
@@ -58,6 +62,11 @@ pub fn router() -> Router<AppState> {
             get(topics::topic_page_with_page),
         )
         .route("/gallery/", get(topics::section_topics))
+        .route("/gallery/preview/{file}", get(media::gallery_preview))
+        .route(
+            "/gallery-uploads/preview/{file}",
+            get(media::gallery_preview),
+        )
         .route("/gallery/{group}", get(topics::section_group_topics))
         .route("/gallery/{group}/{id}", get(topics::topic_page))
         .route(
@@ -71,6 +80,8 @@ pub fn router() -> Router<AppState> {
             "/polls/{group}/{id}/{page_marker}",
             get(topics::topic_page_with_page),
         )
+        .route("/images/{id}/{file}", get(media::finalized_image))
+        .route("/photos/{file}", get(media::userpic))
         .route("/show-topics.jsp", get(topics::legacy_show_topics))
         .route("/view-all.jsp", get(topics::view_all))
         .route("/view-message.jsp", get(topics::legacy_view_message))
@@ -379,6 +390,50 @@ async fn about(
 
 pub async fn healthz() -> impl IntoResponse {
     (StatusCode::OK, axum::Json(json!({"status":"ok"})))
+}
+
+pub async fn readyz(State(stState): State<AppState>) -> impl IntoResponse {
+    let futDatabase = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        sqlx::query_scalar::<_, i32>("SELECT 1").fetch_one(&stState.pool),
+    );
+    let futOpenSearch = async {
+        let sBaseUrl = stState.config.opensearch_url.as_deref()?;
+        Some(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                stState
+                    .http
+                    .head(format!("{sBaseUrl}/{}", crate::search_index::INDEX))
+                    .send(),
+            )
+            .await
+            .is_ok_and(|stResult| {
+                stResult.is_ok_and(|stResponse| stResponse.status().is_success())
+            }),
+        )
+    };
+    let (stDatabaseResult, optOpenSearchReady) = tokio::join!(futDatabase, futOpenSearch);
+    let bDatabaseReady = stDatabaseResult.is_ok_and(|stResult| stResult.is_ok());
+    let bOpenSearchReady = optOpenSearchReady.unwrap_or(true);
+    let bReady = bDatabaseReady && bOpenSearchReady;
+    let stStatus = if bReady {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (
+        stStatus,
+        axum::Json(json!({
+            "status": if bReady { "ready" } else { "not_ready" },
+            "database": if bDatabaseReady { "ok" } else { "unavailable" },
+            "opensearch": match optOpenSearchReady {
+                None => "disabled",
+                Some(true) => "ok",
+                Some(false) => "unavailable",
+            }
+        })),
+    )
 }
 
 pub async fn not_found(uri: axum::http::Uri) -> Response {

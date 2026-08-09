@@ -122,6 +122,7 @@ struct TopicTemplate {
     require_comment_captcha: bool,
     captcha_site_key: String,
     realtime_bootstrap_html: String,
+    related_topics: Vec<Vec<crate::search_index::StSimilarTopic>>,
 }
 
 fn sRealtimeTopicBootstrap(
@@ -170,8 +171,18 @@ mod realtime_browser_contract_tests {
         let iJquery = sBase
             .find("/webjars/jquery/3.7.1/jquery.min.js")
             .expect("original jQuery WebJar URL");
+        let iLor = sBase
+            .find("$script('/js/lor.js'")
+            .expect("original LOR bundle");
+        let iPlugins = sBase
+            .find("$script('/js/plugins.js'")
+            .expect("original plugin bundle");
         let iRealtime = sBase.find("/js/realtime.js").expect("realtime client");
-        assert!(iScriptLoader < iJquery && iJquery < iRealtime);
+        assert!(iScriptLoader < iJquery && iJquery < iLor && iLor < iRealtime);
+        assert!(iJquery < iPlugins);
+        assert!(sBase.contains("$script.ready('lorjs'"));
+        assert!(sBase.contains("fixTimezone('<!-- LOR_TIMEZONE -->')"));
+        assert!(sTopic.contains("data-format=\"default\""));
         assert_eq!(sTopic.matches("id=\"realtime\"").count(), 1);
         assert!(sTopic.contains("{{ realtime_bootstrap_html|safe }}"));
     }
@@ -256,18 +267,6 @@ pub(crate) struct NewsTopicView {
     pub(crate) show_group: bool,
 }
 
-fn upload_image_url(path: &str) -> String {
-    if path.starts_with('/') || path.starts_with("http://") || path.starts_with("https://") {
-        path.to_string()
-    } else if path.starts_with("images/") {
-        format!("/{path}")
-    } else if let Some(path) = path.strip_prefix("gallery/") {
-        format!("/gallery-uploads/{path}")
-    } else {
-        format!("/gallery-uploads/{path}")
-    }
-}
-
 pub(crate) async fn load_topic_images(
     state: &AppState,
     topic_id: i32,
@@ -311,8 +310,8 @@ pub(crate) async fn load_topic_images(
             .map(|size| (format!("/images/{id}/{size}px.jpg"), size))
             .collect::<Vec<_>>();
         prepared.push(TopicImageView {
-            medium_url: upload_image_url(&medium),
-            original_url: upload_image_url(&original),
+            medium_url: format!("/{medium}"),
+            original_url: format!("/{original}"),
             width,
             height,
             medium_width,
@@ -430,8 +429,8 @@ mod image_view_tests {
 
     fn image(id: i32) -> TopicImageView {
         TopicImageView {
-            medium_url: format!("/gallery-uploads/{id}/medium.jpg"),
-            original_url: format!("/gallery-uploads/{id}/original.jpg"),
+            medium_url: format!("/images/{id}/1000px.jpg"),
+            original_url: format!("/images/{id}/original.png"),
             width: 1920,
             height: 1080,
             medium_width: 800,
@@ -461,8 +460,8 @@ mod image_view_tests {
         assert!(html.contains("swiffy-slider"));
         assert!(html.contains("slider-nav-next"));
         assert!(html.contains("slider-indicators"));
-        assert!(html.contains("/gallery-uploads/1/medium.jpg"));
-        assert!(html.contains("/gallery-uploads/2/medium.jpg"));
+        assert!(html.contains("/images/1/1000px.jpg"));
+        assert!(html.contains("/images/2/1000px.jpg"));
     }
 }
 
@@ -1394,10 +1393,6 @@ impl DeletedTopicRow {
     fn reason_display(&self) -> &str {
         self.reason.as_deref().unwrap_or_default()
     }
-
-    fn deldate_display(&self) -> String {
-        self.deldate.map(|dt| dt.to_string()).unwrap_or_default()
-    }
 }
 
 #[derive(Template)]
@@ -1692,6 +1687,8 @@ pub async fn view_all(
 #[derive(Deserialize)]
 pub struct ViewMessageQuery {
     msgid: i32,
+    #[serde(rename = "fromHistory")]
+    from_history: Option<i32>,
     page: Option<i32>,
     lastmod: Option<i64>,
     filter: Option<String>,
@@ -1949,6 +1946,25 @@ async fn render_topic_view(
         return resolve_comment_jump(&state, &topic, cid, is_moderator, &current_user).await;
     }
 
+    // TopicController starts MoreLikeThis immediately and gives the JSP only
+    // the remainder of a 500 ms deadline after the main page work. Keep the
+    // OpenSearch request running after a page-timeout so it can populate the
+    // one-hour cache for the next view, matching the original async service.
+    let stSimilarStarted = std::time::Instant::now();
+    let stSimilarState = state.clone();
+    let iSimilarTopicId = topic.id;
+    let sSimilarTitle = html_escape::decode_html_entities(&topic.title).into_owned();
+    let vecSimilarTags = topic.tags_vec();
+    let stSimilarTask = tokio::spawn(async move {
+        crate::search_index::vecSimilarTopics(
+            &stSimilarState,
+            iSimilarTopicId,
+            &sSimilarTitle,
+            &vecSimilarTags,
+        )
+        .await
+    });
+
     let topic_html = markup::render_message_with_markup(&topic.message, Some(&topic.markup), None);
 
     let all_comments: Vec<CommentItem> = if want_deleted {
@@ -2186,6 +2202,26 @@ async fn render_topic_view(
         iRealtimeLastCommentId,
         &state.config.ws_url,
     );
+    let stSimilarRemaining =
+        std::time::Duration::from_millis(500).saturating_sub(stSimilarStarted.elapsed());
+    let related_topics = match tokio::time::timeout(stSimilarRemaining, stSimilarTask).await {
+        Ok(Ok(Ok(vecTopics))) => vecTopics,
+        Ok(Ok(Err(stError))) => {
+            tracing::warn!(error = %stError, topic_id = topic.id, "unable to find similar topics");
+            Vec::new()
+        }
+        Ok(Err(stError)) => {
+            tracing::warn!(error = %stError, topic_id = topic.id, "similar topics task failed");
+            Vec::new()
+        }
+        Err(_) => {
+            tracing::warn!(
+                topic_id = topic.id,
+                "similar topics lookup exceeded the page deadline"
+            );
+            Vec::new()
+        }
+    };
 
     Ok(Html(
         TopicTemplate {
@@ -2211,6 +2247,7 @@ async fn render_topic_view(
             require_comment_captcha,
             captcha_site_key: state.config.captcha_public_key.clone().unwrap_or_default(),
             realtime_bootstrap_html,
+            related_topics,
         }
         .render()?,
     )
@@ -3469,6 +3506,18 @@ pub async fn edit_topic_form(
             .bind(q.msgid)
             .fetch_one(&state.pool)
             .await?;
+    let form_msg = if let Some(iRecordId) = q.from_history {
+        let cHistoryService = crate::application::edit_history::CEditHistoryService::new(
+            crate::infra::postgres::edit_history_repository::CEditHistoryPgRepository::new(
+                state.pool.clone(),
+            ),
+        );
+        cHistoryService
+            .sRestorableTopicMessage(topic.id, iRecordId)
+            .await?
+    } else {
+        topic.message.clone()
+    };
     // PollDao.getPollByTopicId/EditTopicController: pre-fill existing
     // variants (blank if the topic has no poll yet, e.g. a topic moved
     // into the Опросы section after creation) plus a handful of empty
@@ -3521,7 +3570,7 @@ pub async fn edit_topic_form(
             },
             uploaded_images: Vec::new(),
             form_title: topic.title.clone(),
-            form_msg: topic.message.clone(),
+            form_msg,
             form_url: topic.url.clone().unwrap_or_default(),
             form_linktext: topic.linktext.clone().unwrap_or_default(),
             form_tags: topic.tags_vec().join(", "),
@@ -3544,13 +3593,16 @@ pub async fn edit_topic_form(
 
 const TOPIC_EDIT_WINDOW_DAYS: i64 = 14;
 
-struct TopicEditRules {
+pub(crate) struct TopicEditRules {
     expired: bool,
     postscore: i32,
     commitdate: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-async fn load_topic_edit_rules(state: &AppState, topic_id: i32) -> Result<TopicEditRules> {
+pub(crate) async fn load_topic_edit_rules(
+    state: &AppState,
+    topic_id: i32,
+) -> Result<TopicEditRules> {
     let (expired, postscore, commitdate): (
         bool,
         i32,
@@ -3624,7 +3676,7 @@ fn b_topic_editable_by_author(
     chrono::Utc::now() <= dtBase + chrono::Duration::days(TOPIC_EDIT_WINDOW_DAYS)
 }
 
-fn b_topic_content_editable(
+pub(crate) fn b_topic_content_editable(
     topic: &TopicDetail,
     rules: &TopicEditRules,
     user: &UserSummary,

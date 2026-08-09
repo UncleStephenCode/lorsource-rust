@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     application::{
+        adv_counter::CAdvCounter,
         auth::{CCommentFloodCache, CLoginAttemptCache},
         exception_reporting::CExceptionReporter,
         realtime::CRealtimeService,
@@ -26,6 +27,7 @@ pub struct StAppState {
     pub login_attempts: Arc<CLoginAttemptCache>,
     pub comment_flood: Arc<CCommentFloodCache>,
     pub exception_reporter: CExceptionReporter,
+    pub adv_counter: Arc<CAdvCounter>,
 }
 
 pub type AppState = StAppState;
@@ -66,6 +68,7 @@ impl StAppState {
             login_attempts: Arc::new(CLoginAttemptCache::default()),
             comment_flood: Arc::new(oCommentFlood),
             exception_reporter: cExceptionReporter,
+            adv_counter: Arc::new(CAdvCounter::default()),
         }
     }
 

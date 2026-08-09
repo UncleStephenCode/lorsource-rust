@@ -17,8 +17,10 @@
 
 use crate::state::AppState;
 use chrono::{Datelike, TimeZone};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 
 pub const INDEX: &str = "messages";
 
@@ -123,7 +125,7 @@ async fn vEnsureIndex(state: &AppState) -> Result<(), String> {
         .await
         .map_err(|stError| stError.to_string())?;
     if stExistsResponse.status().is_success() {
-        return Ok(());
+        return vValidateIndexContract(state, &url).await;
     }
     if stExistsResponse.status() != reqwest::StatusCode::NOT_FOUND {
         return Err(format!(
@@ -141,13 +143,80 @@ async fn vEnsureIndex(state: &AppState) -> Result<(), String> {
         .map_err(|stError| stError.to_string())?
         .error_for_status()
         .map_err(|stError| stError.to_string())?;
-    Ok(())
+    vValidateIndexContract(state, &url).await
 }
 
-pub async fn ensure_index(state: &AppState) {
-    if let Err(stError) = vEnsureIndex(state).await {
-        tracing::warn!(error = %stError, "failed to ensure opensearch index");
+fn vecIndexContractProblems(stIndex: &Value) -> Vec<String> {
+    let sRoot = format!("/{INDEX}/mappings/properties");
+    let vecExpected = [
+        ("section/type", json!("keyword")),
+        ("group/type", json!("keyword")),
+        ("topic_author/type", json!("keyword")),
+        ("author/type", json!("keyword")),
+        ("topic_id/type", json!("long")),
+        ("title/type", json!("text")),
+        ("title/analyzer", json!("text_analyzer")),
+        ("topic_title/type", json!("text")),
+        ("topic_title/index", json!(false)),
+        ("message/type", json!("text")),
+        ("message/analyzer", json!("text_analyzer")),
+        ("message/term_vector", json!("with_positions_offsets")),
+        ("message/fields/raw/type", json!("text")),
+        ("message/fields/raw/analyzer", json!("exact_analyzer")),
+        (
+            "message/fields/raw/term_vector",
+            json!("with_positions_offsets"),
+        ),
+        ("postdate/type", json!("date")),
+        ("tag/type", json!("keyword")),
+        ("is_comment/type", json!("boolean")),
+        ("topic_awaits_commit/type", json!("boolean")),
+    ];
+    vecExpected
+        .into_iter()
+        .filter_map(|(sPath, stExpected)| {
+            let sPointer = format!("{sRoot}/{sPath}");
+            (stIndex.pointer(&sPointer) != Some(&stExpected)).then(|| {
+                format!(
+                    "{sPath}: expected {stExpected}, got {}",
+                    stIndex
+                        .pointer(&sPointer)
+                        .map_or_else(|| "<missing>".to_owned(), Value::to_string)
+                )
+            })
+        })
+        .collect()
+}
+
+async fn vValidateIndexContract(state: &AppState, sUrl: &str) -> Result<(), String> {
+    let stResponse = state
+        .http
+        .get(sUrl)
+        .send()
+        .await
+        .map_err(|stError| stError.to_string())?
+        .error_for_status()
+        .map_err(|stError| stError.to_string())?;
+    let stIndex: Value = stResponse
+        .json()
+        .await
+        .map_err(|stError| stError.to_string())?;
+    let vecProblems = vecIndexContractProblems(&stIndex);
+    if vecProblems.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "OpenSearch index {INDEX:?} is incompatible with the Java search contract; rebuild it from PostgreSQL before serving traffic:\n- {}",
+            vecProblems.join("\n- ")
+        ))
     }
+}
+
+pub async fn ensure_index(state: &AppState) -> Result<(), String> {
+    if base_url(state).is_none() {
+        return Ok(());
+    }
+    vEnsureIndex(state).await
 }
 
 struct TopicRow {
@@ -156,6 +225,7 @@ struct TopicRow {
     author: String,
     title: String,
     message: String,
+    markup: String,
     postdate: chrono::DateTime<chrono::Utc>,
     tags: Vec<String>,
     deleted: bool,
@@ -173,9 +243,20 @@ struct CommentRow {
     title: String,
     author: String,
     message: String,
+    markup: String,
     postdate: chrono::DateTime<chrono::Utc>,
     deleted: bool,
 }
+
+type TySearchCommentRow = (
+    i32,
+    String,
+    String,
+    String,
+    String,
+    chrono::DateTime<chrono::Utc>,
+    bool,
+);
 
 fn stCommentIndexDocument(stTopic: &TopicRow, stComment: &CommentRow) -> MessageIndexDocument {
     let optTitle =
@@ -191,7 +272,14 @@ fn stCommentIndexDocument(stTopic: &TopicRow, stComment: &CommentRow) -> Message
         group: stTopic.group.clone(),
         title: optTitle,
         topic_title: stTopic.title.clone(),
-        message: markup::plain_text_for_index(&stComment.message),
+        // OpenSearchIndexService stores MessageTextService's sanitized HTML,
+        // not a plain-text approximation. The analyzer strips tags while the
+        // search page can retain safe formatting around highlighted text.
+        message: markup::render_message_with_markup(
+            &stComment.message,
+            Some(&stComment.markup),
+            None,
+        ),
         postdate: stComment.postdate.to_rfc3339(),
         tag: stTopic.tags.clone(),
         is_comment: true,
@@ -217,6 +305,7 @@ type TySearchTopicRow = (
     i32,
     String,
     String,
+    String,
     chrono::DateTime<chrono::Utc>,
     bool,
     bool,
@@ -228,7 +317,8 @@ type TySearchTopicRow = (
 async fn optLoadTopicRow(state: &AppState, topic_id: i32) -> Result<Option<TopicRow>, String> {
     let row: Option<TySearchTopicRow> = sqlx::query_as(
         r#"SELECT CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(s.name) END,
-                  g.urlname, u.nick, u.id, t.title, m.message, t.postdate, t.deleted, COALESCE(t.draft,false), t.moderate,
+                  g.urlname, u.nick, u.id, t.title, m.message, m.markup::text,
+                  t.postdate, t.deleted, COALESCE(t.draft,false), t.moderate,
                   COALESCE(t.postscore, -9999), s.moderate
            FROM topics t
            JOIN msgbase m ON m.id=t.id
@@ -251,6 +341,7 @@ async fn optLoadTopicRow(state: &AppState, topic_id: i32) -> Result<Option<Topic
         author_id,
         title,
         message,
+        markup,
         postdate,
         deleted,
         draft,
@@ -274,8 +365,9 @@ async fn optLoadTopicRow(state: &AppState, topic_id: i32) -> Result<Option<Topic
         section,
         group,
         author,
-        title,
+        title: html_escape::decode_html_entities(&title).into_owned(),
         message,
+        markup,
         postdate,
         tags,
         deleted,
@@ -306,7 +398,7 @@ async fn vIndexTopic(state: &AppState, topic_id: i32, with_comments: bool) -> Re
             group: row.group.clone(),
             title: Some(row.title.clone()),
             topic_title: row.title.clone(),
-            message: markup::plain_text_for_index(&row.message),
+            message: markup::render_message_with_markup(&row.message, Some(&row.markup), None),
             postdate: row.postdate.to_rfc3339(),
             tag: row.tags.clone(),
             is_comment: false,
@@ -344,15 +436,8 @@ async fn vIndexComment(state: &AppState, comment_id: i32) -> Result<(), String> 
     let Some(base) = base_url(state) else {
         return Ok(());
     };
-    let row: Option<(
-        i32,
-        String,
-        String,
-        String,
-        chrono::DateTime<chrono::Utc>,
-        bool,
-    )> = sqlx::query_as(
-        r#"SELECT c.topic,c.title,u.nick,m.message,c.postdate,c.deleted
+    let row: Option<TySearchCommentRow> = sqlx::query_as(
+        r#"SELECT c.topic,c.title,u.nick,m.message,m.markup::text,c.postdate,c.deleted
            FROM comments c
            JOIN users u ON u.id=c.userid
            JOIN msgbase m ON m.id=c.id
@@ -362,7 +447,7 @@ async fn vIndexComment(state: &AppState, comment_id: i32) -> Result<(), String> 
     .fetch_optional(&state.pool)
     .await
     .map_err(|stError| stError.to_string())?;
-    let Some((topic_id, title, author, message, postdate, deleted)) = row else {
+    let Some((topic_id, title, author, message, markup, postdate, deleted)) = row else {
         return Ok(());
     };
     let comment = CommentRow {
@@ -370,6 +455,7 @@ async fn vIndexComment(state: &AppState, comment_id: i32) -> Result<(), String> 
         title,
         author,
         message,
+        markup,
         postdate,
         deleted,
     };
@@ -756,6 +842,10 @@ pub struct SearchParams {
     pub interval: SearchInterval,
     pub range: SearchRange,
     pub offset: i64,
+    /// Java sends selected day bounds to OpenSearch as epoch-millisecond
+    /// strings.  When present this filter takes precedence over `interval`.
+    pub selected_day_ms: Option<(i64, i64)>,
+    pub timezone: chrono_tz::Tz,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -801,6 +891,8 @@ struct EsHit {
     _id: String,
     _score: Option<f64>,
     _source: EsSource,
+    #[serde(default)]
+    highlight: HashMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -819,18 +911,26 @@ struct EsSource {
 }
 
 pub struct SearchItem {
-    pub title: String,
+    pub title_html: String,
     pub url: String,
     pub author: String,
     pub postdate: String,
-    pub message_excerpt: String,
+    pub postdate_iso: String,
+    pub message_html: String,
     pub is_comment: bool,
-    pub tags: Vec<String>,
+    pub tags: Vec<SearchTag>,
+    pub score: f64,
+}
+
+pub struct SearchTag {
+    pub name: String,
+    pub url: String,
 }
 
 pub struct FacetItem {
     pub key: String,
     pub label: String,
+    pub selected: bool,
 }
 
 pub struct SearchResult {
@@ -839,18 +939,337 @@ pub struct SearchResult {
     pub took_ms: i64,
     pub section_facet: Vec<FacetItem>,
     pub group_facet: Vec<FacetItem>,
+    pub found_tags: Vec<SearchTag>,
+    /// SearchService mutates an empty section when only one section bucket
+    /// exists, so pagination and the group selector retain that section.
+    pub effective_section: String,
 }
 
-pub async fn search(state: &AppState, p: &SearchParams) -> Result<SearchResult, String> {
-    let Some(base) = base_url(state) else {
-        return Err("Поиск временно недоступен: не сконфигурирован OPENSEARCH_URL".into());
-    };
+#[derive(Debug, Clone)]
+pub struct StSimilarTopic {
+    pub title: String,
+    pub link: String,
+    pub year: i32,
+    pub section: String,
+}
 
-    // SearchService.performSearch: only section/group go into postFilter
-    // (applied after aggregations are computed, so switching sections
-    // doesn't zero out every other section's facet count) - range/
-    // interval/user narrow the query (and therefore the aggregations)
-    // itself, same as the free-text query.
+type TySimilarCache = HashMap<i32, (std::time::Instant, Vec<Vec<StSimilarTopic>>)>;
+static ST_SIMILAR_CACHE: Lazy<tokio::sync::RwLock<TySimilarCache>> =
+    Lazy::new(|| tokio::sync::RwLock::new(HashMap::new()));
+const SIMILAR_CACHE_SIZE: usize = 10_000;
+const SIMILAR_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+#[derive(Debug, Deserialize)]
+struct StSimilarHit {
+    _id: String,
+    _source: StSimilarSource,
+}
+
+#[derive(Debug, Deserialize)]
+struct StSimilarSource {
+    title: Option<String>,
+    postdate: String,
+    section: String,
+    group: String,
+}
+
+// Lucene RussianAnalyzer's default stop set after the same empty-stop-set
+// RussianAnalyzer normalization performed by MoreLikeThisService. Duplicates
+// are intentional: Java collects every emitted token into a Vector.
+const RUSSIAN_STOP_WORDS: &[&str] = &[
+    "а",
+    "без",
+    "бол",
+    "бы",
+    "был",
+    "был",
+    "был",
+    "был",
+    "быт",
+    "в",
+    "вам",
+    "вас",
+    "ве",
+    "во",
+    "вот",
+    "все",
+    "всег",
+    "всех",
+    "вы",
+    "где",
+    "да",
+    "даж",
+    "для",
+    "до",
+    "ег",
+    "е",
+    "есл",
+    "ест",
+    "ещ",
+    "же",
+    "за",
+    "зде",
+    "и",
+    "из",
+    "ил",
+    "им",
+    "их",
+    "к",
+    "как",
+    "ко",
+    "когд",
+    "кто",
+    "ли",
+    "либ",
+    "мне",
+    "может",
+    "мы",
+    "на",
+    "над",
+    "наш",
+    "не",
+    "нег",
+    "не",
+    "нет",
+    "ни",
+    "них",
+    "но",
+    "ну",
+    "о",
+    "об",
+    "однак",
+    "он",
+    "он",
+    "он",
+    "он",
+    "от",
+    "очен",
+    "по",
+    "под",
+    "при",
+    "с",
+    "со",
+    "так",
+    "так",
+    "там",
+    "те",
+    "тем",
+    "то",
+    "тог",
+    "тож",
+    "то",
+    "тольк",
+    "том",
+    "ты",
+    "у",
+    "уж",
+    "хот",
+    "чег",
+    "че",
+    "чем",
+    "что",
+    "чтоб",
+    "чье",
+    "чья",
+    "эт",
+    "эт",
+    "эт",
+    "я",
+];
+
+fn stSimilarRequestBody(iTopicId: i32, sTitle: &str, vecTags: &[String]) -> Value {
+    let mut vecShould = vec![
+        json!({"more_like_this": {
+            "fields": ["title"],
+            "like": [sTitle],
+            "min_term_freq": 1,
+            "min_doc_freq": 2,
+            "stop_words": RUSSIAN_STOP_WORDS,
+            "max_doc_freq": 5000
+        }}),
+        json!({"more_like_this": {
+            "fields": ["message"],
+            "like": [{"_index": INDEX, "_id": iTopicId.to_string()}],
+            "min_term_freq": 1,
+            "min_word_length": 3,
+            "max_doc_freq": 100000
+        }}),
+    ];
+    if !vecTags.is_empty() {
+        vecShould.push(json!({"terms": {"tag": vecTags}}));
+    }
+    json!({
+        "_source": ["title", "postdate", "section", "group"],
+        "query": {"bool": {
+            "should": vecShould,
+            "filter": [
+                {"term": {"is_comment": "false"}},
+                {"term": {"topic_awaits_commit": "false"}}
+            ],
+            "minimum_should_match": "1",
+            "must_not": [{"ids": {"values": [iTopicId.to_string()]}}]
+        }}
+    })
+}
+
+fn stRelatedTagsRequestBody(sTag: &str) -> Value {
+    json!({
+        "size": 0,
+        "query": {"bool": {"filter": [
+            {"term": {"is_comment": "false"}},
+            {"term": {"tag": sTag}}
+        ]}},
+        "aggregations": {
+            "related": {
+                "significant_terms": {
+                    "field": "tag",
+                    "background_filter": {"term": {"is_comment": "false"}}
+                }
+            }
+        }
+    })
+}
+
+/// `TagService.getRelatedTags`: significant tag terms among topic documents
+/// carrying the selected tag, using all topic documents as the background.
+pub async fn vecRelatedTags(stState: &AppState, sTag: &str) -> Result<Vec<String>, String> {
+    let Some(sBase) = base_url(stState) else {
+        return Ok(Vec::new());
+    };
+    let stResponse = stState
+        .http
+        .post(format!("{sBase}/{INDEX}/_search"))
+        .json(&stRelatedTagsRequestBody(sTag))
+        .send()
+        .await
+        .map_err(|stError| stError.to_string())?;
+    if !stResponse.status().is_success() {
+        let stStatus = stResponse.status();
+        let sBody = stResponse.text().await.unwrap_or_default();
+        return Err(format!("related-tags OpenSearch error {stStatus}: {sBody}"));
+    }
+    let stPayload: Value = stResponse
+        .json()
+        .await
+        .map_err(|stError| stError.to_string())?;
+    let mut vecTags: Vec<String> = stPayload
+        .pointer("/aggregations/related/buckets")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|stBucket| stBucket.get("key").and_then(Value::as_str))
+        .filter(|sRelated| *sRelated != sTag)
+        .map(str::to_owned)
+        .collect();
+    vecTags.sort();
+    Ok(vecTags)
+}
+
+pub async fn vecSimilarTopics(
+    stState: &AppState,
+    iTopicId: i32,
+    sTitle: &str,
+    vecTags: &[String],
+) -> Result<Vec<Vec<StSimilarTopic>>, String> {
+    if let Some((stCreated, vecCached)) = ST_SIMILAR_CACHE.read().await.get(&iTopicId)
+        && stCreated.elapsed() < SIMILAR_CACHE_TTL
+    {
+        return Ok(vecCached.clone());
+    }
+    let Some(sBase) = base_url(stState) else {
+        return Ok(Vec::new());
+    };
+    let stResponse = stState
+        .http
+        .post(format!("{sBase}/{INDEX}/_search"))
+        .json(&stSimilarRequestBody(iTopicId, sTitle, vecTags))
+        .send()
+        .await
+        .map_err(|stError| stError.to_string())?;
+    if !stResponse.status().is_success() {
+        let stStatus = stResponse.status();
+        let sBody = stResponse.text().await.unwrap_or_default();
+        return Err(format!(
+            "similar-topics OpenSearch error {stStatus}: {sBody}"
+        ));
+    }
+    let stPayload: Value = stResponse
+        .json()
+        .await
+        .map_err(|stError| stError.to_string())?;
+    let vecHits: Vec<StSimilarHit> = stPayload
+        .pointer("/hits/hits")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|stError| stError.to_string())?
+        .unwrap_or_default();
+    let vecSectionRows: Vec<(i32, String)> = sqlx::query_as("SELECT id,name FROM sections")
+        .fetch_all(&stState.pool)
+        .await
+        .map_err(|stError| stError.to_string())?;
+    let mapSections: HashMap<String, String> = vecSectionRows
+        .into_iter()
+        .map(|(iId, sName)| {
+            let sUrl = match iId {
+                1 => "news".to_owned(),
+                2 => "forum".to_owned(),
+                3 => "gallery".to_owned(),
+                5 => "polls".to_owned(),
+                6 => "articles".to_owned(),
+                _ => sName.to_lowercase(),
+            };
+            (sUrl, sName)
+        })
+        .collect();
+    let stTimezone = stServerTimezone();
+    let vecTopics: Vec<StSimilarTopic> = vecHits
+        .into_iter()
+        .map(|stHit| {
+            let stSource = stHit._source;
+            let iYear = chrono::DateTime::parse_from_rfc3339(&stSource.postdate)
+                .map(|dtValue| dtValue.with_timezone(&stTimezone).year())
+                .unwrap_or_default();
+            StSimilarTopic {
+                title: stSource.title.unwrap_or_default(),
+                link: format!("/{}/{}/{}", stSource.section, stSource.group, stHit._id),
+                year: iYear,
+                section: mapSections
+                    .get(&stSource.section)
+                    .cloned()
+                    .unwrap_or(stSource.section),
+            }
+        })
+        .collect();
+    let iHalf = vecTopics.len().div_ceil(2);
+    let vecColumns = if iHalf == 0 {
+        Vec::new()
+    } else {
+        vecTopics.chunks(iHalf).map(<[_]>::to_vec).collect()
+    };
+    let mut mapCache = ST_SIMILAR_CACHE.write().await;
+    mapCache.retain(|_, (stCreated, _)| stCreated.elapsed() < SIMILAR_CACHE_TTL);
+    if mapCache.len() >= SIMILAR_CACHE_SIZE
+        && let Some(iOldestKey) = mapCache
+            .iter()
+            .max_by_key(|(_, (stCreated, _))| stCreated.elapsed())
+            .map(|(iKey, _)| *iKey)
+    {
+        mapCache.remove(&iOldestKey);
+    }
+    mapCache.insert(iTopicId, (std::time::Instant::now(), vecColumns.clone()));
+    Ok(vecColumns)
+}
+
+fn stAndFilter(mut vecFilters: Vec<Value>) -> Value {
+    match vecFilters.len() {
+        0 => json!({"match_all": {}}),
+        1 => vecFilters.pop().expect("one filter"),
+        _ => json!({"bool": {"must": vecFilters}}),
+    }
+}
+
+fn stSearchRequestBody(p: &SearchParams) -> Value {
     let mut query_filters: Vec<Value> = Vec::new();
     match p.range {
         SearchRange::Topics => query_filters.push(json!({"term": {"is_comment": false}})),
@@ -865,8 +1284,13 @@ pub async fn search(state: &AppState, p: &SearchParams) -> Result<SearchResult, 
         };
         query_filters.push(json!({"term": {field: user}}));
     }
-    if let Some(gte) = p.interval.gte_expr() {
-        query_filters.push(json!({"range": {"postdate": {"gte": gte}}}));
+    if let Some((iStart, iEnd)) = p.selected_day_ms {
+        query_filters.push(json!({"range": {"postdate": {
+            "gte": iStart.to_string(),
+            "lt": iEnd.to_string()
+        }}}));
+    } else if let Some(gte) = p.interval.gte_expr() {
+        query_filters.push(json!({"range": {"postdate": {"gt": gte}}}));
     }
 
     let mut post_filters: Vec<Value> = Vec::new();
@@ -877,20 +1301,41 @@ pub async fn search(state: &AppState, p: &SearchParams) -> Result<SearchResult, 
         post_filters.push(json!({"term": {"group": group}}));
     }
 
-    let text_query = if p.q.trim().is_empty() {
+    let text_query = if p.q.is_empty() {
         json!({"match_all": {}})
     } else {
         json!({
             "bool": {
+                "must": [{"bool": {
+                    "should": [
+                        {"match": {"title": {"query": p.q, "minimum_should_match": "2"}}},
+                        {"match": {"message": {"query": p.q, "minimum_should_match": "2"}}}
+                    ],
+                    "minimum_should_match": "1"
+                }}],
                 "should": [
-                    {"match": {"title": {"query": p.q, "minimum_should_match": "2"}}},
-                    {"match": {"message": {"query": p.q, "minimum_should_match": "2"}}},
                     {"match_phrase": {"message": p.q}},
-                    {"match_phrase": {"title": p.q}}
+                    {"match_phrase": {"title": p.q}},
+                    {"match": {"message.raw": {"query": p.q, "minimum_should_match": "2"}}}
                 ],
-                "minimum_should_match": 1
+                "minimum_should_match": "0"
             }
         })
+    };
+
+    let boosted_query = json!({
+        "function_score": {
+            "query": text_query,
+            "functions": [{
+                "weight": 2.0,
+                "filter": {"range": {"postdate": {"gte": "now/d-3y"}}}
+            }]
+        }
+    });
+    let query = if query_filters.is_empty() {
+        boosted_query
+    } else {
+        json!({"bool": {"must": [boosted_query], "filter": query_filters}})
     };
 
     let sort = match p.sort {
@@ -902,7 +1347,11 @@ pub async fn search(state: &AppState, p: &SearchParams) -> Result<SearchResult, 
     };
 
     let mut body = json!({
-        "query": {"bool": {"must": text_query, "filter": query_filters}},
+        "_source": [
+            "title", "topic_title", "author", "postdate", "topic_id",
+            "section", "message", "group", "is_comment", "tag"
+        ],
+        "query": query,
         "sort": sort,
         "from": p.offset,
         "size": SEARCH_ROWS,
@@ -910,13 +1359,59 @@ pub async fn search(state: &AppState, p: &SearchParams) -> Result<SearchResult, 
             "sections": {
                 "terms": {"field": "section", "size": 50},
                 "aggs": {"groups": {"terms": {"field": "group", "size": 50}}}
+            },
+            "tags": {
+                "significant_terms": {"field": "tag", "min_doc_count": 30}
             }
         },
+        "highlight": {
+            "pre_tags": ["<em class=search-hl>"],
+            "post_tags": ["</em>"],
+            "require_field_match": false,
+            "fields": {
+                "title": {"number_of_fragments": 0},
+                "topicTitle": {"number_of_fragments": 0},
+                "message": {
+                    "type": "fvh",
+                    "number_of_fragments": 1,
+                    "fragment_size": 16384
+                }
+            }
+        },
+        "timeout": "60s",
         "track_total_hits": true
     });
-    if !post_filters.is_empty() {
-        body["post_filter"] = json!({"bool": {"filter": post_filters}});
+    // Java always serializes post_filter: match_all for the empty case, the
+    // sole query as-is, and bool.must for multiple filters.
+    body["post_filter"] = stAndFilter(post_filters);
+    body
+}
+
+fn sSanitizeSearchHtml(sHtml: &str) -> String {
+    let mut stBuilder = ammonia::Builder::default();
+    stBuilder.add_generic_attributes(&["class"]);
+    stBuilder.clean(sHtml).to_string()
+}
+
+fn sFirstHighlight(mapHighlight: &HashMap<String, Vec<String>>, sField: &str) -> Option<String> {
+    mapHighlight
+        .get(sField)
+        .and_then(|vecFragments| vecFragments.first())
+        .cloned()
+}
+
+fn stTag(sName: String) -> SearchTag {
+    SearchTag {
+        url: format!("/tag/{}", urlencoding::encode(&sName)),
+        name: sName,
     }
+}
+
+pub async fn search(state: &AppState, p: &SearchParams) -> Result<SearchResult, String> {
+    let Some(base) = base_url(state) else {
+        return Err("Поиск временно недоступен: не сконфигурирован OPENSEARCH_URL".into());
+    };
+    let body = stSearchRequestBody(p);
 
     let resp = state
         .http
@@ -954,29 +1449,118 @@ pub async fn search(state: &AppState, p: &SearchParams) -> Result<SearchResult, 
             } else {
                 format!("/{}/{}/{}", s.section, s.group, s.topic_id)
             };
-            let title = s
-                .title
-                .filter(|t| !t.trim().is_empty())
-                .unwrap_or(s.topic_title);
-            let excerpt: String = s.message.chars().take(300).collect();
+            let title_html = sFirstHighlight(&h.highlight, "title")
+                .or_else(|| {
+                    s.title
+                        .map(|sTitle| html_escape::encode_text(&sTitle).into_owned())
+                })
+                .filter(|sTitle| !sTitle.trim().is_empty())
+                .or_else(|| sFirstHighlight(&h.highlight, "topic_title"))
+                .unwrap_or_else(|| html_escape::encode_text(&s.topic_title).into_owned());
+            let sMessage = sFirstHighlight(&h.highlight, "message")
+                .unwrap_or_else(|| s.message.chars().take(16384).collect());
+            let tags = if s.is_comment {
+                Vec::new()
+            } else {
+                s.tag.into_iter().map(stTag).collect()
+            };
+            let (postdate, postdate_iso) = match chrono::DateTime::parse_from_rfc3339(&s.postdate) {
+                Ok(dtPostdate) => (
+                    dtPostdate
+                        .with_timezone(&p.timezone)
+                        .format("%d.%m.%y %H:%M:%S %Z")
+                        .to_string(),
+                    dtPostdate.to_rfc3339(),
+                ),
+                Err(_) => (s.postdate.clone(), s.postdate),
+            };
             SearchItem {
-                title,
+                title_html: sSanitizeSearchHtml(&title_html),
                 url,
                 author: s.author,
-                postdate: s.postdate,
-                message_excerpt: excerpt,
+                postdate,
+                postdate_iso,
+                message_html: sSanitizeSearchHtml(&sMessage),
                 is_comment: s.is_comment,
-                tags: s.tag,
+                tags,
+                score: h._score.unwrap_or(0.0),
             }
         })
         .collect();
 
+    let vecSections: Vec<(i32, String)> = sqlx::query_as("SELECT id,name FROM sections")
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|stError| stError.to_string())?;
+    let mapSectionNames: HashMap<String, String> = vecSections
+        .into_iter()
+        .map(|(iId, sName)| {
+            let sKey = match iId {
+                1 => "news".to_owned(),
+                2 => "forum".to_owned(),
+                3 => "gallery".to_owned(),
+                5 => "polls".to_owned(),
+                6 => "articles".to_owned(),
+                _ => sName.to_lowercase(),
+            };
+            (sKey, sName.to_lowercase())
+        })
+        .collect();
+    let vecGroups: Vec<(String, String, String)> = sqlx::query_as(
+        r#"SELECT CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum'
+                    WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls'
+                    WHEN 6 THEN 'articles' ELSE lower(s.name) END,
+                  g.urlname, lower(g.title)
+             FROM groups g JOIN sections s ON s.id=g.section"#,
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|stError| stError.to_string())?;
+    let mapGroupNames: HashMap<(String, String), String> = vecGroups
+        .into_iter()
+        .map(|(sSection, sGroup, sTitle)| ((sSection, sGroup), sTitle))
+        .collect();
+
     let mut section_facet = Vec::new();
     let mut group_facet = Vec::new();
+    let mut effective_section = p.section.clone().unwrap_or_default();
     if let Some(buckets) = payload
         .pointer("/aggregations/sections/buckets")
         .and_then(|v| v.as_array())
     {
+        let iAllCount = buckets
+            .iter()
+            .filter_map(|stBucket| stBucket.get("doc_count").and_then(Value::as_i64))
+            .sum::<i64>();
+        if buckets.len() > 1 || !effective_section.is_empty() {
+            section_facet.push(FacetItem {
+                key: String::new(),
+                label: format!("все ({iAllCount})"),
+                selected: effective_section.is_empty(),
+            });
+            if !effective_section.is_empty()
+                && !buckets.iter().any(|b| {
+                    b.get("key").and_then(Value::as_str) == Some(effective_section.as_str())
+                })
+            {
+                let sLabel = mapSectionNames
+                    .get(&effective_section)
+                    .cloned()
+                    .unwrap_or_else(|| effective_section.clone());
+                section_facet.push(FacetItem {
+                    key: effective_section.clone(),
+                    label: format!("{sLabel} (0)"),
+                    selected: true,
+                });
+            }
+        } else if effective_section.is_empty() && buckets.len() == 1 {
+            effective_section = buckets[0]
+                .get("key")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+        }
+
         for b in buckets {
             let key = b
                 .get("key")
@@ -984,11 +1568,18 @@ pub async fn search(state: &AppState, p: &SearchParams) -> Result<SearchResult, 
                 .unwrap_or_default()
                 .to_string();
             let count = b.get("doc_count").and_then(|v| v.as_i64()).unwrap_or(0);
-            section_facet.push(FacetItem {
-                key: key.clone(),
-                label: format!("{key} ({count})"),
-            });
-            if p.section.as_deref() == Some(key.as_str())
+            if !section_facet.is_empty() {
+                let sLabel = mapSectionNames
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_else(|| key.clone());
+                section_facet.push(FacetItem {
+                    key: key.clone(),
+                    label: format!("{sLabel} ({count})"),
+                    selected: effective_section == key,
+                });
+            }
+            if effective_section == key
                 && let Some(gbuckets) = b.pointer("/groups/buckets").and_then(|v| v.as_array())
             {
                 for gb in gbuckets {
@@ -998,14 +1589,70 @@ pub async fn search(state: &AppState, p: &SearchParams) -> Result<SearchResult, 
                         .unwrap_or_default()
                         .to_string();
                     let gcount = gb.get("doc_count").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let sLabel = mapGroupNames
+                        .get(&(key.clone(), gkey.clone()))
+                        .cloned()
+                        .unwrap_or_else(|| gkey.clone());
                     group_facet.push(FacetItem {
-                        key: gkey.clone(),
-                        label: format!("{gkey} ({gcount})"),
+                        selected: p.group.as_deref() == Some(gkey.as_str()),
+                        key: gkey,
+                        label: format!("{sLabel} ({gcount})"),
                     });
                 }
             }
         }
+
+        if !effective_section.is_empty() {
+            let sSelectedGroup = p.group.clone().unwrap_or_default();
+            if !sSelectedGroup.is_empty()
+                && !group_facet
+                    .iter()
+                    .any(|stFacet| stFacet.key == sSelectedGroup)
+            {
+                let sLabel = mapGroupNames
+                    .get(&(effective_section.clone(), sSelectedGroup.clone()))
+                    .cloned()
+                    .unwrap_or_else(|| sSelectedGroup.clone());
+                group_facet.push(FacetItem {
+                    key: sSelectedGroup,
+                    label: format!("{sLabel} (0)"),
+                    selected: true,
+                });
+            }
+            if group_facet.len() > 1 || !p.group.as_deref().unwrap_or_default().is_empty() {
+                group_facet.insert(
+                    0,
+                    FacetItem {
+                        key: String::new(),
+                        label: format!(
+                            "все ({})",
+                            buckets
+                                .iter()
+                                .find(|b| {
+                                    b.get("key").and_then(Value::as_str)
+                                        == Some(effective_section.as_str())
+                                })
+                                .and_then(|b| b.get("doc_count"))
+                                .and_then(Value::as_i64)
+                                .unwrap_or(0)
+                        ),
+                        selected: p.group.as_deref().unwrap_or_default().is_empty(),
+                    },
+                );
+            } else {
+                group_facet.clear();
+            }
+        }
     }
+
+    let found_tags = payload
+        .pointer("/aggregations/tags/buckets")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|stBucket| stBucket.get("key").and_then(Value::as_str))
+        .map(|sName| stTag(sName.to_owned()))
+        .collect();
 
     Ok(SearchResult {
         items,
@@ -1013,6 +1660,8 @@ pub async fn search(state: &AppState, p: &SearchParams) -> Result<SearchResult, 
         took_ms,
         section_facet,
         group_facet,
+        found_tags,
+        effective_section,
     })
 }
 
@@ -1023,13 +1672,23 @@ mod moderation_semantics_tests {
     use chrono::{TimeZone, Utc};
 
     use super::{
-        CommentRow, EnSearchQueueJob, StReindexMonth, TopicRow, stCommentIndexDocument,
-        stIndexDefinition, topic_awaits_commit, vecAllReindexMonths, vecRecentReindexMonths,
+        CommentRow, EnSearchQueueJob, SearchInterval, SearchParams, SearchRange, SearchSort,
+        StReindexMonth, TopicRow, stCommentIndexDocument, stIndexDefinition,
+        stRelatedTagsRequestBody, stSearchRequestBody, stSimilarRequestBody, topic_awaits_commit,
+        vecAllReindexMonths, vecIndexContractProblems, vecRecentReindexMonths,
     };
 
     #[test]
     fn index_definition_matches_java_analysis_and_term_vectors() {
         let stDefinition = stIndexDefinition();
+        let stOperationalDefinition: serde_json::Value =
+            serde_json::from_str(include_str!("../compat/java-runtime/messages-index.json"))
+                .unwrap();
+
+        assert_eq!(
+            stDefinition, stOperationalDefinition,
+            "runtime creation and guarded rebuild must use one Java-compatible mapping"
+        );
 
         assert_eq!(
             stDefinition.pointer("/settings/analysis/analyzer/text_analyzer/filter"),
@@ -1056,6 +1715,23 @@ mod moderation_semantics_tests {
             stDefinition.pointer("/mappings/properties/message/fields/raw/analyzer"),
             Some(&serde_json::json!("exact_analyzer"))
         );
+    }
+
+    #[test]
+    fn existing_index_must_match_the_java_mapping_before_search_is_served() {
+        let stDefinition = stIndexDefinition();
+        let mut stExisting = serde_json::json!({
+            "messages": {"mappings": stDefinition["mappings"].clone()}
+        });
+        assert!(vecIndexContractProblems(&stExisting).is_empty());
+
+        stExisting["messages"]["mappings"]["properties"]["message"]
+            .as_object_mut()
+            .unwrap()
+            .remove("term_vector");
+        let vecProblems = vecIndexContractProblems(&stExisting);
+        assert_eq!(vecProblems.len(), 1);
+        assert!(vecProblems[0].starts_with("message/term_vector:"));
     }
 
     #[test]
@@ -1147,6 +1823,7 @@ mod moderation_semantics_tests {
             author: "topic-author".to_owned(),
             title: "Topic".to_owned(),
             message: String::new(),
+            markup: "LORCODE".to_owned(),
             postdate: Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap(),
             tags: vec!["rust".to_owned()],
             deleted: false,
@@ -1159,7 +1836,8 @@ mod moderation_semantics_tests {
             topic_id: 42,
             title: "Комментарий".to_owned(),
             author: "comment-author".to_owned(),
-            message: "Body".to_owned(),
+            message: "[b]Body[/b]".to_owned(),
+            markup: "LORCODE".to_owned(),
             postdate: Utc.with_ymd_and_hms(2026, 2, 3, 4, 5, 6).unwrap(),
             deleted: false,
         };
@@ -1169,5 +1847,125 @@ mod moderation_semantics_tests {
         assert_eq!(stDocument.author, "comment-author");
         assert_eq!(stDocument.topic_author, "topic-author");
         assert_eq!(stDocument.postdate, "2026-02-03T04:05:06+00:00");
+        assert_eq!(stDocument.message, "<p><strong>Body</strong></p>");
+    }
+
+    fn stSearchParams() -> SearchParams {
+        SearchParams {
+            q: "rust search".to_owned(),
+            section: Some("forum".to_owned()),
+            group: Some("linux-org-ru".to_owned()),
+            user: Some("tester".to_owned()),
+            usertopic: true,
+            sort: SearchSort::Relevance,
+            interval: SearchInterval::Month,
+            range: SearchRange::Topics,
+            offset: 25,
+            selected_day_ms: None,
+            timezone: chrono_tz::Europe::Moscow,
+        }
+    }
+
+    #[test]
+    fn search_request_matches_java_query_boost_highlight_and_aggregations() {
+        let stBody = stSearchRequestBody(&stSearchParams());
+
+        assert_eq!(
+            stBody.pointer("/query/bool/must/0/function_score/functions/0/weight"),
+            Some(&serde_json::json!(2.0))
+        );
+        assert_eq!(
+            stBody.pointer(
+                "/query/bool/must/0/function_score/query/bool/should/2/match/message.raw/minimum_should_match"
+            ),
+            Some(&serde_json::json!("2"))
+        );
+        assert_eq!(
+            stBody.pointer("/highlight/fields/message/type"),
+            Some(&serde_json::json!("fvh"))
+        );
+        assert_eq!(
+            stBody.pointer("/aggs/tags/significant_terms/min_doc_count"),
+            Some(&serde_json::json!(30))
+        );
+        assert_eq!(
+            stBody.pointer("/post_filter/bool/must/1/term/group"),
+            Some(&serde_json::json!("linux-org-ru"))
+        );
+        assert_eq!(stBody.pointer("/timeout"), Some(&serde_json::json!("60s")));
+    }
+
+    #[test]
+    fn selected_date_replaces_interval_filter_with_java_epoch_millisecond_bounds() {
+        let mut stParams = stSearchParams();
+        stParams.selected_day_ms = Some((1_700_000_000_000, 1_700_086_400_000));
+        let stBody = stSearchRequestBody(&stParams);
+        let vecFilters = stBody
+            .pointer("/query/bool/filter")
+            .and_then(serde_json::Value::as_array)
+            .unwrap();
+
+        assert!(vecFilters.iter().any(|stFilter| {
+            stFilter.pointer("/range/postdate/gte") == Some(&serde_json::json!("1700000000000"))
+                && stFilter.pointer("/range/postdate/lt")
+                    == Some(&serde_json::json!("1700086400000"))
+        }));
+        assert!(!vecFilters.iter().any(|stFilter| {
+            stFilter.pointer("/range/postdate/gt") == Some(&serde_json::json!("now/h-1M"))
+        }));
+    }
+
+    #[test]
+    fn similar_topics_query_matches_java_mlt_tags_visibility_and_self_exclusion() {
+        let stBody = stSimilarRequestBody(
+            42,
+            "Rust search topic",
+            &["rust".to_owned(), "opensearch".to_owned()],
+        );
+
+        assert_eq!(
+            stBody.pointer("/query/bool/should/0/more_like_this/fields/0"),
+            Some(&serde_json::json!("title"))
+        );
+        assert_eq!(
+            stBody.pointer("/query/bool/should/1/more_like_this/like/0/_id"),
+            Some(&serde_json::json!("42"))
+        );
+        assert_eq!(
+            stBody.pointer("/query/bool/should/2/terms/tag"),
+            Some(&serde_json::json!(["rust", "opensearch"]))
+        );
+        assert_eq!(
+            stBody.pointer("/query/bool/filter/1/term/topic_awaits_commit"),
+            Some(&serde_json::json!("false"))
+        );
+        assert_eq!(
+            stBody.pointer("/query/bool/must_not/0/ids/values/0"),
+            Some(&serde_json::json!("42"))
+        );
+    }
+
+    #[test]
+    fn related_tags_query_matches_java_significant_terms_scope() {
+        let stBody = stRelatedTagsRequestBody("rust");
+        assert_eq!(stBody["size"], serde_json::json!(0));
+        assert_eq!(
+            stBody.pointer("/query/bool/filter/0/term/is_comment"),
+            Some(&serde_json::json!("false"))
+        );
+        assert_eq!(
+            stBody.pointer("/query/bool/filter/1/term/tag"),
+            Some(&serde_json::json!("rust"))
+        );
+        assert_eq!(
+            stBody.pointer("/aggregations/related/significant_terms/field"),
+            Some(&serde_json::json!("tag"))
+        );
+        assert_eq!(
+            stBody.pointer(
+                "/aggregations/related/significant_terms/background_filter/term/is_comment"
+            ),
+            Some(&serde_json::json!("false"))
+        );
     }
 }

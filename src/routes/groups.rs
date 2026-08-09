@@ -27,7 +27,7 @@ struct GroupsTemplate {
 struct GroupTopicsTemplate {
     title: String,
     group: Group,
-    topics: Vec<TopicSummary>,
+    topics: Vec<GroupTopicView>,
     quick_groups: Vec<crate::routes::topics::QuickGroupLink>,
     new_url: String,
     active_url: String,
@@ -38,6 +38,99 @@ struct GroupTopicsTemplate {
     prev_url: Option<String>,
     next_url: Option<String>,
     is_moderator: bool,
+}
+
+#[derive(Debug)]
+struct GroupTopicView {
+    topic: TopicSummary,
+    last_author: String,
+    last_postdate: chrono::DateTime<chrono::Utc>,
+    last_url: String,
+    comments: i32,
+    comments_closed: bool,
+}
+
+impl GroupTopicView {
+    fn vecTags(&self) -> Vec<String> {
+        self.topic.vecTags()
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct GroupTopicActivityRow {
+    topic_id: i32,
+    last_comment_id: Option<i32>,
+    last_author: String,
+    last_postdate: chrono::DateTime<chrono::Utc>,
+    postscore: i32,
+}
+
+async fn vecPrepareGroupTopics(
+    stState: &AppState,
+    vecTopics: Vec<TopicSummary>,
+    optIgnoreUserId: Option<i32>,
+    iMessages: i32,
+) -> Result<Vec<GroupTopicView>> {
+    if vecTopics.is_empty() {
+        return Ok(Vec::new());
+    }
+    let vecTopicIds: Vec<i32> = vecTopics.iter().map(|stTopic| stTopic.id).collect();
+    let vecActivity = sqlx::query_as::<_, GroupTopicActivityRow>(
+        r#"SELECT t.id AS topic_id,lc.id AS last_comment_id,
+                  COALESCE(lu.nick,tu.nick) AS last_author,
+                  COALESCE(lc.postdate,t.postdate) AS last_postdate,
+                  COALESCE(t.postscore,-9999) AS postscore
+           FROM topics t
+           JOIN users tu ON tu.id=t.userid
+           LEFT JOIN LATERAL (
+             SELECT c.id,c.userid,c.postdate
+               FROM comments c
+              WHERE c.topic=t.id AND NOT c.deleted
+                AND ($2::int IS NULL OR t.sticky OR NOT EXISTS (
+                  SELECT ignored FROM ignore_list WHERE userid=$2
+                  INTERSECT SELECT get_branch_authors(c.id)
+                ))
+              ORDER BY c.postdate DESC
+              LIMIT 1
+           ) lc ON t.postscore IS DISTINCT FROM 10002
+           LEFT JOIN users lu ON lu.id=lc.userid
+           WHERE t.id=ANY($1)"#,
+    )
+    .bind(&vecTopicIds)
+    .bind(optIgnoreUserId)
+    .fetch_all(&stState.pool)
+    .await?;
+    let mapActivity: std::collections::HashMap<i32, GroupTopicActivityRow> = vecActivity
+        .into_iter()
+        .map(|stRow| (stRow.topic_id, stRow))
+        .collect();
+    let iMessages = iMessages.max(1);
+    Ok(vecTopics
+        .into_iter()
+        .filter_map(|stTopic| {
+            let stActivity = mapActivity.get(&stTopic.id)?;
+            let iPages = ((stTopic.comments.max(0) + iMessages - 1) / iMessages).max(0);
+            let sCanonical = stTopic.sTopicUrl();
+            let iLastCommentId = stActivity.last_comment_id.unwrap_or(0);
+            let sLastUrl = if iPages > 1 {
+                format!("{sCanonical}/page{}?lastmod={iLastCommentId}", iPages - 1)
+            } else {
+                format!("{sCanonical}?lastmod={iLastCommentId}")
+            };
+            Some(GroupTopicView {
+                comments: if stActivity.postscore == 10002 {
+                    0
+                } else {
+                    stTopic.comments
+                },
+                comments_closed: stActivity.postscore >= 10000,
+                last_author: stActivity.last_author.clone(),
+                last_postdate: stActivity.last_postdate,
+                last_url: sLastUrl,
+                topic: stTopic,
+            })
+        })
+        .collect())
 }
 
 pub async fn forum_index(State(state): State<AppState>) -> Result<Html<String>> {
@@ -151,7 +244,7 @@ pub async fn group_page(
     let lastmod = q.lastmod.unwrap_or(false);
 
     let order_by = if lastmod {
-        "COALESCE(t.lastmod, t.postdate) DESC"
+        "GREATEST(t.postdate,COALESCE(lc_visible.postdate,t.postdate)) DESC"
     } else {
         "t.postdate DESC"
     };
@@ -174,10 +267,35 @@ pub async fn group_page(
            JOIN users u ON u.id=t.userid
            JOIN groups g ON g.id=t.groupid
            JOIN sections s ON s.id=g.section
+           LEFT JOIN LATERAL (
+             SELECT c.id,c.postdate
+               FROM comments c
+              WHERE c.topic=t.id AND NOT c.deleted
+                AND ($6::int IS NULL OR NOT EXISTS (
+                  SELECT ignored FROM ignore_list WHERE userid=$6
+                  INTERSECT SELECT get_branch_authors(c.id)
+                ))
+              ORDER BY c.postdate DESC
+              LIMIT 1
+           ) lc_visible ON t.postscore IS DISTINCT FROM 10002
            WHERE t.groupid=$1 AND NOT t.sticky AND (NOT t.deleted OR $5) AND NOT t.draft
              AND (t.moderate OR NOT s.moderate) AND {date_filter}
              AND ($4::int IS NULL OR t.id IN (SELECT msgid FROM tags WHERE tagid=$4))
              AND ($6::int IS NULL OR NOT EXISTS (SELECT 1 FROM ignore_list il WHERE il.userid=$6 AND il.ignored=u.id))
+             AND ($6::int IS NULL OR NOT (
+               EXISTS (
+                 SELECT 1 FROM tags topic_tag
+                 JOIN user_tags ignored_tag ON ignored_tag.tag_id=topic_tag.tagid
+                 WHERE topic_tag.msgid=t.id AND ignored_tag.user_id=$6
+                   AND NOT ignored_tag.is_favorite
+               )
+               AND NOT EXISTS (
+                 SELECT 1 FROM tags topic_tag
+                 JOIN user_tags favorite_tag ON favorite_tag.tag_id=topic_tag.tagid
+                 WHERE topic_tag.msgid=t.id AND favorite_tag.user_id=$6
+                   AND favorite_tag.is_favorite
+               )
+             ))
            ORDER BY {order_by}
            OFFSET $2 LIMIT $3"#,
         date_filter = date_filter,
@@ -219,6 +337,18 @@ pub async fn group_page(
         sticky.extend(topics);
         topics = sticky;
     }
+
+    let stProfile = if let Some(stUser) = user.as_ref() {
+        let optSettings: Option<String> =
+            sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
+                .bind(stUser.id)
+                .fetch_optional(&state.pool)
+                .await?;
+        crate::profile::ProfileSettings::from_hstore_text(optSettings)
+    } else {
+        crate::profile::ProfileSettings::default()
+    };
+    let topics = vecPrepareGroupTopics(&state, topics, ignore_user_id, stProfile.messages).await?;
 
     let restriction: i32 = sqlx::query_scalar("SELECT GREATEST(COALESCE(g.restrict_topics,-9999),COALESCE(s.restrict_topics,-9999)) FROM groups g JOIN sections s ON s.id=g.section WHERE g.id=$1")
         .bind(group_id).fetch_one(&state.pool).await?;
@@ -267,7 +397,10 @@ pub async fn group_page(
             selected: item.id == group_id,
         })
         .collect();
-    let non_sticky_count = topics.iter().filter(|topic| !topic.sticky).count() as i64;
+    let non_sticky_count = topics
+        .iter()
+        .filter(|stTopic| !stTopic.topic.sticky)
+        .count() as i64;
     let prev_url = (offset > 0).then(|| {
         group_mode_url(
             &group_urlname,

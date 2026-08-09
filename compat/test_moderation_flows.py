@@ -14,6 +14,7 @@ import subprocess
 import sys
 import time
 
+from stateful_database import psql_target
 from test_write_flows import login, post, require, text, wait_for_topic_interval
 
 
@@ -22,30 +23,25 @@ last_comment_created_at = 0.0
 
 
 def db(sql: str) -> str:
+    command, child_env, _ = psql_target()
     result = subprocess.run(
-        [
-            "docker",
-            "compose",
-            "exec",
-            "-T",
-            "postgres",
-            "psql",
-            "-U",
-            "postgres",
-            "-d",
-            "lor",
-            "-At",
-            "-v",
-            "ON_ERROR_STOP=1",
-            "-c",
-            sql,
-        ],
+        [*command, "-At", "-v", "ON_ERROR_STOP=1", "-c", sql],
         check=True,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=child_env,
     )
     return result.stdout.strip()
+
+
+def verify_database_target() -> None:
+    _, _, expected_database = psql_target()
+    if expected_database is not None:
+        require(
+            db("SELECT current_database()") == expected_database,
+            "connected PostgreSQL database differs from STATEFUL_EXPECTED_DATABASE",
+        )
 
 
 def action(client, target_id: int, name: str, *extra: tuple[str, str]):
@@ -135,9 +131,17 @@ def create_comment(
 
 def main() -> int:
     global last_comment_created_at, last_topic_created_at
+    if sys.argv[1:] == ["--verify-database-only"]:
+        verify_database_target()
+        print("Stateful external database target verified")
+        return 0
+    if sys.argv[1:]:
+        print("usage: test_moderation_flows.py [--verify-database-only]", file=sys.stderr)
+        return 2
     if os.environ.get("MODERATION_FLOW_ALLOW_MUTATION") != "yes":
         print("MODERATION_FLOW_ALLOW_MUTATION=yes is required", file=sys.stderr)
         return 2
+    verify_database_target()
 
     base = os.environ.get("NEW_BASE_URL", "http://127.0.0.1:8181")
     moderator_nick = os.environ["MODERATION_FLOW_MODERATOR_NICK"]
@@ -666,6 +670,17 @@ def main() -> int:
         == "compat defrost|f",
         "defrost audit payload differs from Java",
     )
+
+    tracker = moderator.request("/tracker/", "GET")
+    tracker_body = text(tracker)
+    require(tracker.status == 200, f"moderator tracker returned {tracker.status}")
+    for marker in (
+        "<h2>Пользователи</h2>",
+        "Заблокированные пользователи за последние 3 дня:",
+        "Разблокированные пользователи за последние 3 дня:",
+        "Размороженные пользователи за последние 3 дня:",
+    ):
+        require(marker in tracker_body, f"moderator tracker is missing {marker!r}")
 
     print(
         f"moderation flow passed: moderator={moderator_id} target={target_id} low={low_id} "

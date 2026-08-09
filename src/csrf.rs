@@ -94,6 +94,7 @@ where
 }
 
 pub async fn apply(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
+    let bSecurityIgnored = crate::security::bSpringSecurityIgnoredPath(req.uri().path());
     let jar = CookieJar::from_headers(req.headers());
     let existing = jar
         .get(COOKIE_NAME)
@@ -159,7 +160,11 @@ pub async fn apply(State(state): State<AppState>, mut req: Request, next: Next) 
 
     let mut response = next.run(req).await;
 
-    if existing.is_none() {
+    if existing.is_none()
+        && !(bSecurityIgnored
+            && response.status().as_u16() >= 200
+            && response.status().as_u16() < 400)
+    {
         let cookie = Cookie::build((COOKIE_NAME, token))
             .path("/")
             .max_age(Duration::seconds(60 * 60 * 24 * 31 * 24))

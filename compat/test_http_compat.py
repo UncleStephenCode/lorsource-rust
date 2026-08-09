@@ -34,6 +34,7 @@ class Response:
     location_path: str | None
     location_target: str | None
     location_fragment: str | None
+    location_raw: str | None
     body: bytes
     set_cookie_names: frozenset[str]
     cache_control: str
@@ -71,6 +72,7 @@ class HttpClient:
         method: str,
         data: str | None = None,
         csrf_mode: str = "auto",
+        extra_headers: dict[str, str] | None = None,
     ) -> Response:
         method = method.upper()
         if method == "POST" and csrf_mode != "omit":
@@ -82,6 +84,7 @@ class HttpClient:
 
         url = urllib.parse.urljoin(self.base, path.lstrip("/"))
         headers = {"User-Agent": "lorsource-rust-compat/2"}
+        headers.update(extra_headers or {})
         body = None
         if data is not None:
             body = data.encode("utf-8")
@@ -114,6 +117,7 @@ def response_value(status: int, headers, body: bytes) -> Response:
         location_path=location_path,
         location_target=location_target,
         location_fragment=parsed_location.fragment if parsed_location else None,
+        location_raw=location,
         body=body,
         set_cookie_names=cookie_names,
         cache_control=headers.get("cache-control", ""),
@@ -142,7 +146,9 @@ def report_response(response: Response) -> dict[str, object]:
         "status": response.status,
         "content_type": response.content_type,
         "location": response.location_target,
+        "location_raw": response.location_raw,
         "set_cookie_names": sorted(response.set_cookie_names),
+        "cache_control": response.cache_control,
     }
 
 
@@ -183,6 +189,24 @@ def validate_expected(
     missing_cookies = set(map(str, expected_cookies)) - response.set_cookie_names
     if missing_cookies:
         failures.append(f"{label} missing Set-Cookie values {sorted(missing_cookies)!r}")
+    exact_cookies = expected(case, side, "expected_cookie_names_exact")
+    if exact_cookies is not None:
+        exact_cookie_set = frozenset(map(str, exact_cookies))
+        if response.set_cookie_names != exact_cookie_set:
+            failures.append(
+                f"{label} Set-Cookie values {sorted(response.set_cookie_names)!r}, "
+                f"expected exactly {sorted(exact_cookie_set)!r}"
+            )
+    expected_cache_control = expected(case, side, "expected_cache_control")
+    if expected_cache_control is not None and response.cache_control != str(expected_cache_control):
+        failures.append(
+            f"{label} Cache-Control {response.cache_control!r}, expected {expected_cache_control!r}"
+        )
+    expected_location_raw = expected(case, side, "expected_location_raw")
+    if expected_location_raw is not None and response.location_raw != str(expected_location_raw):
+        failures.append(
+            f"{label} raw redirect {response.location_raw!r}, expected {expected_location_raw!r}"
+        )
     return failures
 
 
@@ -221,6 +245,16 @@ def compare_responses(
             f"{case['name']}: cookies old={sorted(old_response.set_cookie_names)!r} "
             f"new={sorted(new_response.set_cookie_names)!r}"
         )
+    if case.get("compare_cache_control") and old_response.cache_control != new_response.cache_control:
+        failures.append(
+            f"{case['name']}: Cache-Control old={old_response.cache_control!r} "
+            f"new={new_response.cache_control!r}"
+        )
+    if case.get("compare_location_raw") and old_response.location_raw != new_response.location_raw:
+        failures.append(
+            f"{case['name']}: raw redirect old={old_response.location_raw!r} "
+            f"new={new_response.location_raw!r}"
+        )
     return failures
 
 
@@ -239,10 +273,17 @@ def main() -> int:
     results: list[dict[str, object]] = []
 
     for case in matrix:
+        if case.get("fresh_session"):
+            case_new_client = HttpClient(args.new)
+            case_old_client = HttpClient(args.old) if args.old else None
+        else:
+            case_new_client = new_client
+            case_old_client = old_client
         method = case.get("method", "GET")
         data = case.get("data")
         csrf_mode = str(case.get("csrf_mode", "auto"))
-        new_resp = new_client.request(case["new"], method, data, csrf_mode)
+        case_headers = {str(key): str(value) for key, value in case.get("headers", {}).items()}
+        new_resp = case_new_client.request(case["new"], method, data, csrf_mode, case_headers)
         result: dict[str, object] = {
             "name": case["name"],
             "method": method,
@@ -252,8 +293,8 @@ def main() -> int:
         failures.extend(validate_expected(case, "new", new_resp))
         if expected(case, "new", "expected_status") is None and new_resp.status == 404:
             failures.append(f"{case['name']}: new endpoint unexpectedly 404: {case['new']}")
-        if old_client and case.get("compare", True):
-            old_resp = old_client.request(case["old"], method, data, csrf_mode)
+        if case_old_client and case.get("compare", True):
+            old_resp = case_old_client.request(case["old"], method, data, csrf_mode, case_headers)
             result["old_path"] = case["old"]
             result["old"] = report_response(old_resp)
             failures.extend(validate_expected(case, "old", old_resp))

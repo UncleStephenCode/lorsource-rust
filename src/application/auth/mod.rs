@@ -94,7 +94,11 @@ pub async fn stResolvePostingIdentity(
     }
 
     let stAnonymous = stAnonymousPostingIdentity(stState).await?;
-    let sNick = optNick.unwrap_or("anonymous").trim();
+    // UserPropertyEditor passes the form value verbatim to UserDao. In
+    // particular whitespace is not trimmed into the anonymous identity: a
+    // whitespace-padded nick is an invalid/unknown user and must remain a
+    // form error.
+    let sNick = optNick.unwrap_or("anonymous");
     if sNick.is_empty() || sNick == stAnonymous.stUser.nick {
         return Ok(StPostingResolution {
             stIdentity: stAnonymous,
@@ -273,7 +277,10 @@ pub async fn sValidateCaptcha(
     optResponse: Option<&str>,
     sRemoteIp: &str,
 ) -> std::result::Result<(), String> {
-    let Some(sResponse) = optResponse.filter(|sValue| !sValue.trim().is_empty()) else {
+    // CaptchaService distinguishes a missing parameter (local validation
+    // error) from a present-but-empty parameter (sent to hCaptcha, whose
+    // error-codes are then shown). Preserve that distinction.
+    let Some(sResponse) = optResponse else {
         return Err("Код проверки защиты от роботов не указан".to_owned());
     };
     if stConfig.enable_dev_bypasses && sResponse == "dev-captcha" {
@@ -314,7 +321,68 @@ pub async fn sValidateCaptcha(
 
 #[cfg(test)]
 mod tests {
-    use super::{CCommentFloodCache, CLoginAttemptCache};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use super::{CCommentFloodCache, CLoginAttemptCache, sValidateCaptcha};
+
+    fn stCaptchaConfig(sVerifyUrl: String) -> crate::config::Config {
+        crate::config::Config {
+            host: "127.0.0.1".to_owned(),
+            port: 8181,
+            database_url: "postgres://unused".to_owned(),
+            public_url: "https://example.test".to_owned(),
+            ws_url: "wss://example.test/".to_owned(),
+            static_dir: "static".to_owned(),
+            upload_dir: "uploads".to_owned(),
+            cookie_secret: "unused-cookie-secret".to_owned(),
+            site_secret: "unused-site-secret".to_owned(),
+            opensearch_url: None,
+            captcha_public_key: Some("public-key".to_owned()),
+            captcha_private_key: Some("private-key".to_owned()),
+            captcha_verify_url: sVerifyUrl,
+            admin_email: None,
+            smtp_host: "localhost".to_owned(),
+            smtp_port: 25,
+            smtp_helo_name: "localhost".to_owned(),
+            telegram_token: None,
+            fallback_proxy_url: None,
+            enable_background_jobs: false,
+            clean_old_userpics: false,
+            trusted_proxy_cidrs: Vec::new(),
+            page_size: 30,
+            enable_hsts: false,
+            enable_dev_bypasses: false,
+        }
+    }
+
+    async fn stCaptchaEndpoint(
+        sResponseBody: &str,
+    ) -> (crate::config::Config, tokio::task::JoinHandle<String>) {
+        let stListener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("captcha test listener");
+        let stAddress = stListener.local_addr().expect("captcha listener address");
+        let sResponseBody = sResponseBody.to_owned();
+        let hServer = tokio::spawn(async move {
+            let (mut stStream, _) = stListener.accept().await.expect("captcha request");
+            let mut vecRequest = vec![0_u8; 4096];
+            let iRead = stStream.read(&mut vecRequest).await.expect("read request");
+            let sRequest = String::from_utf8_lossy(&vecRequest[..iRead]).to_string();
+            let sResponse = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{sResponseBody}",
+                sResponseBody.len()
+            );
+            stStream
+                .write_all(sResponse.as_bytes())
+                .await
+                .expect("write captcha response");
+            sRequest
+        });
+        (
+            stCaptchaConfig(format!("http://{stAddress}/siteverify")),
+            hServer,
+        )
+    }
 
     #[test]
     fn failed_attempt_is_keyed_by_ip_and_case_insensitive_username() {
@@ -340,5 +408,48 @@ mod tests {
         let cDisabled = CCommentFloodCache::new("http://127.0.0.1:8181");
         assert!(cDisabled.optCheck("192.0.2.1", 30).await.is_none());
         assert!(cDisabled.optCheck("192.0.2.1", 30).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn captcha_posts_the_java_parameter_contract() {
+        let (stConfig, hServer) = stCaptchaEndpoint(r#"{"success":true}"#).await;
+        sValidateCaptcha(
+            &stConfig,
+            &reqwest::Client::new(),
+            Some("captcha answer"),
+            "192.0.2.10",
+        )
+        .await
+        .expect("successful captcha");
+
+        let sRequest = hServer.await.unwrap();
+        assert!(sRequest.starts_with("POST /siteverify HTTP/1.1"));
+        assert!(sRequest.contains("secret=private-key"));
+        assert!(sRequest.contains("response=captcha+answer"));
+        assert!(sRequest.contains("remoteip=192.0.2.10"));
+        assert!(sRequest.contains("sitekey=public-key"));
+    }
+
+    #[tokio::test]
+    async fn captcha_distinguishes_missing_from_api_rejection_like_java() {
+        let stUnusedConfig = stCaptchaConfig("http://127.0.0.1:1/unused".to_owned());
+        assert_eq!(
+            sValidateCaptcha(&stUnusedConfig, &reqwest::Client::new(), None, "192.0.2.10").await,
+            Err("Код проверки защиты от роботов не указан".to_owned())
+        );
+
+        let (stConfig, hServer) = stCaptchaEndpoint(
+            r#"{"success":false,"error-codes":["missing-input-response","bad-request"]}"#,
+        )
+        .await;
+        assert_eq!(
+            sValidateCaptcha(&stConfig, &reqwest::Client::new(), Some(""), "192.0.2.10").await,
+            Err(
+                "Код проверки защиты от роботов не совпадает (missing-input-response,bad-request)"
+                    .to_owned()
+            )
+        );
+        let sRequest = hServer.await.unwrap();
+        assert!(sRequest.contains("response=&"));
     }
 }

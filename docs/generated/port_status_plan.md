@@ -46,13 +46,13 @@
 - Личный игнор-лист пользователей и WARNING-уведомления (см. P1 ниже) исправлены и протестированы в этом же заходе.
 
 #### P1 — функциональные баги (ЗАВЕРШЕНО, всё протестировано)
-1. ~~Login flood-protection отсутствовал целиком~~ — реализован random-delay 1-3с на каждый ответ `/login_process` (успех/провал/frozen одинаково, чтобы сама задержка не была доп. timing-сигналом), плюс различение frozen-аккаунта (тихий редирект в профиль, без штрафа) от неверных данных. Капча (`LoginAttemptCache`) осталась не реализована — без hCaptcha-бэкенда это чистый no-op, задокументированное упрощение.
+1. ~~Login flood-protection отсутствовал целиком~~ — реализован random-delay 1-3с на каждый ответ `/login_process` (успех/провал/frozen одинаково, чтобы сама задержка не была доп. timing-сигналом), плюс различение frozen-аккаунта (тихий редирект в профиль, без штрафа) от неверных данных. `LoginAttemptCache` требует CAPTCHA после первой ошибки по IP и lower-case username на 30 минут; hCaptcha-адаптер повторяет Java-параметры и различает отсутствие ответа, API-отказ и transport/parse error.
 2. ~~`WARNING`-события никогда не создавались~~ — исправлено вместе с находкой выше; теперь уведомляются модераторы всегда, плюс корректоры для типов tag/spelling, как в `WarningService.postWarning`.
 3. ~~Memories/watch: уникальность `(userid,topic)` вместо `(userid,topic,watch)`~~ — исправлено миграцией `0016_fix_memories_unique.sql` + переписан `/memories.jsp` под реальный контракт Java (`add`/`remove`, независимые строки favorite/watch, JSON-ответы `{id,count}`/число, matching `static/js/lor/memories.js`, который был неподключен и нерабочим).
 4. ~~Список "Избранное" протекал watched-only темами~~ — добавлен `AND NOT mem.watch`.
 5. ~~Модераторам ошибочно запрещено пользоваться личным игнор-листом~~ — убрана лишняя проверка `canmod` (осталась только на игнор тегов, где она и должна быть).
 6. ~~Сохранение настроек молча сбрасывало невалидные/отсутствующие поля на дефолт~~ — переписан `apply_form`: старт от текущих сохранённых настроек (не от дефолта), hard-error на невалидные style/format/avatar, grace-период для topics/messages (старое нестандартное значение проходит, если не меняется), soft-fallback только для trackerMode. Заодно исправлен `from_hstore_text`, который тоже отфильтровывал нестандартные topics/messages при каждом чтении — тем самым обесценивая grace-период на запись.
-7. ~~Формат разметки `LorcodeUlb` ("ntobr") отсутствовал в списке~~ — добавлен с тем же score-гейтом (≥500 или уже выбран), что у deprecated-тем. Рендерится как обычный lorcode (реальное упрощение: Java дополнительно авто-конвертирует одиночные `\n` в `<br>` в этом режиме).
+7. ~~Формат разметки `LorcodeUlb` ("ntobr") отсутствовал в списке~~ — добавлен с тем же score-гейтом (≥500 или уже выбран), что у deprecated-тем; режим `BBCODE_ULB` отдельно конвертирует одиночные `\n` в `<br>`, как `LorCodeService.prepareUlb`.
 8. ~~Теги не нормализовались при сохранении темы~~ — исправлено вместе с P0.3 (`parse_and_validate_tags`/`check_can_create_new_tags`), лимит 5 тегов, обязателен хотя бы один — как в `AddTopicRequestValidator`/`EditTopicRequestValidator`.
 9. ~~Трекер не учитывал роль corrector при показе неподтверждённых тем~~ — добавлено `|| is_corrector`.
 10. ~~Трекер отдавал анонимам темы с превышением `open_warnings`~~ — добавлен `AND t.open_warnings <= 2` только для анонимных запросов.
@@ -73,24 +73,35 @@
 ~~6. Полноценные archive-страницы с индексом по годам/месяцам (сейчас плоский список).~~ — `/{section}/archive` и `/forum/{group}/archive` теперь показывают год/месяц с количеством тем (`ArchiveDao.getArchiveStats`), с переходом на уже существовавший drill-down (`/{section}/archive/{year}/{month}`, `/forum/{group}/{year}/{month}`) - последний ранее не имел точки входа. Сознательное упрощение: счётчики считаются live-запросом `GROUP BY EXTRACT(YEAR/MONTH)` по `topics`, а не через таблицу `monthly_stats` (в этом порте она не заполняется - нет триггеров), что функционально эквивалентно на текущем объёме данных. Проверено live для всех 5 разделов + drill-down, несуществующая forum-группа → 404.
 
 #### P3 — косметика / низкий приоритет
-- `/admin/geoip` — заглушка без реального geo-бэкенда (принято ранее как допустимый no-op).
-- Нет страницы-подтверждения перед модераторским сбросом пароля (сам сброс работает).
-- Облако/список тегов не взвешен по частоте использования, нет лог-масштабирования шрифта, нет ролевого порога видимости по буквам.
-- Нет audit-логирования при rename/delete тега.
-- В трекере нет модераторской боковой панели (новые/frozen/blocked юзеры, счётчик неподтверждённых).
-- Поиск: нет точного поиска по дате, границы интервала `gt` vs `gte` не совпадают, разница в весах релевантности — мелкие детали.
-- "Недавно заблокирован" grace-period захардкожен в 90 дней — не подтверждено сравнение с реальной константой Java.
-- Пагинация уведомлений не группирует подряд идущие события одного типа/темы (WARNING и REACTION события теперь создаются штатно, см. P1 пп.2,53 — группировка всё равно не реализована).
+- ~~`/admin/geoip` был заглушкой~~ — подключён Java-совместимый `ipwho.is` adapter; isolated success/API-error/non-2xx/parse tests проходят, production-egress evidence всё ещё обязательно.
+- ~~Не было страницы-подтверждения модераторского сброса пароля~~ — профиль распознаёт bare/encoded `?reset-password`, рендерит `usermod_reset_confirmation.html` и отправляет Java-совместимый POST `/usermod.jsp`.
+- ~~Облако/список тегов не было взвешено~~ — `CBoxletService::vecTagCloud` повторяет Java log-weight, сортировку, URL и пороги; DOM boxlet покрыт тестами.
+- ~~Rename/delete/merge тега не оставляли operational audit-log~~ — после успешного commit пишутся структурированные `tracing`-события с именами тегов, actor и режимом synonym, как Java `TagController` logger.
+- ~~В tracker отсутствовали moderator operational lists~~ — перенесены восемь Java-выборок: новые, frozen/unfrozen, blocked/unblocked пользователи, последние userpic, blocked/unblocked IP; исходные окна 1/3 дня, порядок, bold/strike и moderator-only видимость сохранены. Счётчики неподтверждённых доступны модераторам и корректорам.
+- ~~Поиск: нет точного поиска по дате, границы интервала `gt` vs `gte` не совпадают, разница в весах релевантности.~~ Закрыто: `dt` применяет границы дня в timezone из cookie, интервалы и function-score совпадают с `SearchService`.
+- ~~Повторное использование e-mail заблокированного пользователя было привязано к `lastlogin` за 90 дней~~ — исправлено по `RegisterController`/`UserService.wasRecentlyBlocker`: `normalize_email`, active-first/newest-id выбор и только событие `block_user` за последние 14 дней.
+- ~~Уведомления не группировались~~ — новый режим группирует REACTION/WATCH по цели и read-state как `UserEventPrepareService`; `oldNotifications` сохраняет отдельные строки и применяется до display-offset.
 
 ## ЗАВЕРШЕНО в этой сессии
 
 ### Security (критические уязвимости, все закрыты и протестированы)
-- **CSRF защита отсутствовала полностью** — у Java есть глобальный `CSRFHandlerInterceptor`, применяемый к каждому POST (double-submit cookie `CSRF_TOKEN` + скрытое поле `csrf`), в Rust-порте не было ни middleware, ни проверки, ни единого поля в формах (хотя фронтенд-JS, скопированный из оригинала, уже ожидал cookie `CSRF_TOKEN` и поле `csrf` - `getCsrf()` в `static/js/add-form.js` был мёртвым кодом). Реализован `src/csrf.rs`: глобальный middleware ставит `CSRF_TOKEN` (не-`HttpOnly`, как и в оригинале - иначе JS-инжектируемая форма логаута в `base.html` не смогла бы прочитать токен), сверяет поле `csrf` на каждом POST с `application/x-www-form-urlencoded`-телом (совпадает с cookie), 403 при несовпадении/отсутствии. Добавлено скрытое поле `csrf` во **все** ~30 форм на сайте (шаблоны + инлайн-HTML в обработчиках). Найден и закрыт обходной путь собственного дизайна: bodyless POST без `Content-Type` (например `fetch(url,{method:"POST"})`) изначально проскакивал проверку, потому что она была условна на `Content-Type: ...-urlencoded`; исправлено на "проверять всегда, кроме multipart". Сознательное упрощение: multipart-загрузка (`/addphoto.jsp`) не защищена полем `csrf` (не буферизуем/не парсим multipart-тело в middleware) - остаётся на `SameSite=Lax` сессионной куки.
+- **CSRF защита отсутствовала полностью** — у Java есть глобальный `CSRFHandlerInterceptor`, применяемый к каждому POST (double-submit cookie `CSRF_TOKEN` + скрытое поле `csrf`). Реализован `src/csrf.rs`: глобальный middleware ставит `CSRF_TOKEN` (не-`HttpOnly`, как в оригинале), сверяет cookie с полем `csrf` для URL-encoded и multipart POST и отвечает 403 при несовпадении/отсутствии. Добавлено скрытое поле во все формы. Bodyless POST без `Content-Type`, ранее обходивший условную проверку, также закрыт; multipart-парсер и отрицательный контракт покрыты тестами.
 - **Cookie `Secure` не выставлялся никогда** — `lor_session`/`lor_user`/`lor_theme` (и новый `CSRF_TOKEN`) ставились без `Secure` даже по HTTPS. Добавлен `security::is_secure_request()` (тот же `X-Forwarded-Proto`-чек, что уже был в `security_headers`/`csrf`) и `.secure(is_secure)` на все куки, выставляемые при логине/активации/CSRF.
 - `CSRF_TOKEN` из входящей cookie валидируется по алфавиту (`generate_token`'s base64url) перед тем, как попасть в raw-HTML `format!`-формы (не все формы в проекте — Askama-шаблоны, которые эскейпят `{{ }}` сами); невалидное значение (например HTML-мета-символы, если кука была подставлена вручную) отбрасывается и перевыпускается новый токен - защита от отражённой инъекции через это единственное неэскейпленное поле.
 
 ### Итог сессии
-Полный порт функционала завершён (все пункты «Крупное»/«Среднее» закрыты, кроме двух принятых внешних ограничений: GeoIP без реальной БД, legacy Jasypt-хеши без прод-дампа). Отдельный security-проход этой сессии нашёл и закрыл: полное отсутствие CSRF-защиты (при уже готовом, но неиспользуемом фронтенд-JS под неё) и отсутствие `Secure` на всех cookie. Все изменения протестированы end-to-end через живой Docker-стек (позитивные и негативные сценарии), тестовые данные каждый раз подчищены.
+Намеченный локальный behavioral-parity scope по пунктам
+«Крупное»/«Среднее» закрыт и проверен на disposable Java/Rust
+runtime. Это не является доказательством полной миграционной
+готовности: обязательны rehearsal на клоне production-БД, проверка
+реального media storage/CDN, внешних адаптеров и rollback. Cutover-gate
+намеренно fail-closed без этих evidence. Security-проход закрыл
+CSRF-защиту и `Secure` cookie; изменения прошли unit,
+stateful HTTP+DB и differential Java/Rust проверки.
+Дополнительно собран и запущен hardened production Compose: pinned-image
+preflight, read-only rootfs, SELinux-aware media/secret mounts, tmpfs secret
+staging, UID/GID 8181, zero effective capabilities, production-config startup,
+dependency failure/recovery readiness и clean SIGTERM exit 0.
 - delete/undelete/edit комментариев и тем — не было проверки авторизации вообще
 - email hijack — смена email без пароля и подтверждения, теперь через `oldpass` + `new_email`/activation
 - `/people/{nick}/profile/wipe` — деструктивный GET без подтверждения → модератор-only confirmation-страница
@@ -115,9 +126,9 @@
 
 ### Крупное (архитектурные пробелы, не косметика)
 1. ~~**Tracker**~~ — ЗАВЕРШЕНО: реализован реальный `TrackerFilterEnum` (all/main/notalks/tech), читает сохранённый `trackerMode`, сортировка по активности за 7 дней.
-2. ~~**Поиск**~~ — ЗАВЕРШЕНО: подключён OpenSearch (индекс `messages`, поля точно как в `MessageIndexDocument`), реальные facets (section/group), sort (relevance/date/date-reverse), interval/range фильтры, пагинация. Индексация на всех write-путях (создание/правка/удаление/commit темы и коммента), `/admin/search-reindex` делает настоящий bulk-reindex. Упрощения относительно оригинала: без highlighting (excerpt вместо `<em>`-подсветки), без significant_terms по тегам, без function_score recency-буста.
-3. ~~**`/tag/{tag}`**~~ — ЗАВЕРШЕНО: агрегация по секциям с лимитами как в оригинале (21/6/20/20/20), резолвинг synonym через redirect, список синонимов, кнопки избранное/игнор, rename/delete для модератора. Без related tags и full/brief news date-partition — сознательное упрощение.
-4. ~~**`/forum/{group}`**~~ — ЗАВЕРШЕНО: фильтр по тегу (404 на несуществующий), sticky-темы вперёд, lastmod-режим, redirect на архив при offset>300; `showDeleted` (GroupController.forum: только модератор, только на POST — обычный GET с флагом отбрасывается редиректом на URL без него, добавлен POST-роут) и `showignored` (GroupListDao.queryPartIgnored: скрывает темы автора из ignore_list текущего пользователя, если не указан showignored=true) теперь реально фильтруют список темы. Упрощение: фильтр по ignore_list последнего коммента (`queryPartCommentIgnored`, зависящий от `get_branch_authors`) не воспроизведён — только фильтр по автору темы.
+2. ~~**Поиск**~~ — ЗАВЕРШЕНО: подключён OpenSearch (индекс `messages`, поля как в `MessageIndexDocument`), реальные facets (section/group), sort (relevance/date/date-reverse), interval/range/date/user фильтры, пагинация, Java-совместимый `function_score`, `message.raw`, fast-vector highlighting и `significant_terms` по тегам. Индекс хранит очищенный HTML, отрендеренный с учётом `msgbase.markup`; страница темы выполняет совместимый `MoreLikeThisService`-запрос и выводит двухколоночный блок похожих тем с часовым cache и 500 ms deadline. Индексация на всех write-путях (создание/правка/удаление/commit темы и коммента), `/admin/search-reindex` делает настоящий bulk-reindex. Старт production теперь fail-closed при несовместимом mapping.
+3. ~~**`/tag/{tag}`**~~ — ЗАВЕРШЕНО: агрегация по секциям с лимитами как в оригинале (21/6/20/20/20), резолвинг synonym через redirect, список синонимов, OpenSearch `significant_terms` для «См. также» с 500 ms timeout, кнопки избранное/игнор, rename/delete для модератора. Новости используют effective date, recent full item, русскую date-partition, Java spacer-aware two-column split и динамический порядок Новости/Форум.
+4. ~~**`/forum/{group}`**~~ — ЗАВЕРШЕНО: фильтр по тегу (404 на несуществующий), sticky-темы вперёд, lastmod-режим, redirect на архив при offset>300; `showDeleted` (GroupController.forum: только модератор, только на POST — обычный GET с флагом отбрасывается редиректом на URL без него, добавлен POST-роут) и `showignored` повторяют три Java-фильтра: автор темы, ignored-tag с favorite override и последний видимый комментарий вне игнорируемой ветки через `get_branch_authors`. Последний автор/дата, last-page URL, active-order, hidden comment count и closed marker теперь строятся как `PreparedTopicsListItem`.
 5. ~~**Rename/delete тега**~~ — ЗАВЕРШЕНО: поля формы приведены к оригиналу (oldTagName/tagName/firstLetter/createSynonym), реализован merge с созданием synonym, починена схема `tags_synonyms`.
 6. ~~**`/people/{nick}`**~~ — ЗАВЕРШЕНО: теперь реальная лента сообщений (с фильтром по секции, 404 на пустую ленту), не алиас профиля.
 7. ~~**Топик-вью** (`TopicController`)~~ — ЗАВЕРШЕНО: реальная пагинация комментариев (messages-per-page из настроек, редирект при overflow), canonical-редирект при несовпадении group/section, thread-режим — реальная фильтрация поддерева (не просто якорь), `?cid=` резолвит страницу+якорь (с fallback на удалённые для модератора), `?deleted=` только для модераторов, скрытие комментариев из ignore_list с "показать" оверрайдом.
@@ -127,7 +138,7 @@
 11. ~~**`/groupmod.jsp`**~~ — ЗАВЕРШЕНО: добавлено поле `candel` (администратор) в `UserSummary`, `require_admin` переведён с эвристики `max_score>=100` на реальный флаг; `urlName`/`title` теперь редактируются только администратором (для модератора отправленные значения молча игнорируются, форма показывает их как disabled), реализован `validateUrlName` (пустое/`/`/недопустимые символы), preview-режим, checkbox `resolvable` (presence-based, как в оригинале), success-страница «Параметры изменены».
 12. ~~**`/help/{page}`**~~ — ЗАВЕРШЕНО: подключён реальный markdown-контент (lorcode/markdown/rules), 404 на остальные.
 13. ~~**`/sameip.jsp`**~~ — ЗАВЕРШЕНО: CIDR-маска, UA-фильтр, score-фильтр, список пользователей, block-info для точного IP.
-14. **`GeoLocationController`** — заглушка, нет реального geo-бэкенда (возможно, ок как no-op).
+14. ~~**`GeoLocationController`**~~ — ЗАВЕРШЕНО локально: реальный `ipwho.is` adapter и обработка Java `Either`-ветвей; для release остаётся production-egress evidence.
 
 ### Среднее
 - ~~`/show-replies.jsp`~~ — ЗАВЕРШЕНО: режим модератора + RSS/Atom-фид.
@@ -141,7 +152,7 @@
 ### Мелкое
 - ~~`/logout` разрешает GET~~ — ЗАВЕРШЕНО: теперь только POST (форма в base.html), закрыт CSRF-через-ссылку вектор.
 - ~~`DeregisterController` frozen-статус~~ — ЗАВЕРШЕНО.
-- `password` legacy Jasypt-хеши (до миграции на bcrypt) не верифицируются — нужно проверить реальный прод-дамп.
+- ~~Legacy Jasypt password~~ — реализована совместимая проверка `BasicPasswordEncryptor`, включая Java fixture; распределение реальных алгоритмов/значений всё равно проверяется на production clone без публикации хешей.
 - ~~`users.style` — мёртвая колонка~~ — ЗАВЕРШЕНО: удалена миграцией `0014_drop_users_style.sql` (значение уже копировалось в `user_settings.settings->'style'` миграцией 0004; реальная Java-БД этой колонки не имеет с момента переноса стиля в hstore).
 
 ## Как читать этот список

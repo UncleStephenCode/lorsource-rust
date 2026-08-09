@@ -7,6 +7,7 @@
 pub mod boxlet;
 pub mod comment;
 pub mod common;
+pub mod edit_history;
 pub mod email;
 pub mod email_domain_block;
 pub mod forum;

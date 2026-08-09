@@ -1,6 +1,7 @@
 # lorsource-rust
 
-Экспериментальный перенос ядра сайта LOR/lorsource со Scala/Spring MVC на Rust.
+Перенос движка LOR/lorsource со Scala/Spring MVC на Rust с
+приоритетом поведенческой и миграционной совместимости.
 
 Стек проекта:
 
@@ -45,6 +46,7 @@ function, extension и оставшиеся Java triggers только чере�
 
 ```bash
 curl -fsS http://localhost:8181/healthz
+curl -fsS http://localhost:8181/readyz
 curl -fsS http://localhost:8181/rss | head
 ```
 
@@ -52,6 +54,13 @@ curl -fsS http://localhost:8181/rss | head
 
 ```bash
 ./scripts/run-compatibility-suite.sh
+```
+
+На хосте без Rust toolchain полный fmt/check/test/clippy-набор
+запускается как отдельная, не входящая в release-образ стадия:
+
+```bash
+docker build --target quality .
 ```
 
 HTTP smoke-тесты по Rust-порту:
@@ -68,14 +77,43 @@ NEW_BASE_URL=http://localhost:8181 \
 python3 compat/test_http_compat.py
 ```
 
+Воспроизводимый Java comparator и release/cutover gate описаны в
+[`docs/COMPATIBILITY_TESTS.md`](docs/COMPATIBILITY_TESTS.md) и
+[`docs/PRODUCTION_CUTOVER.md`](docs/PRODUCTION_CUTOVER.md).
+Requirement-by-requirement границы локальных доказательств и обязательных
+operator evidence собраны в
+[`docs/PRODUCTION_READINESS_EVIDENCE.md`](docs/PRODUCTION_READINESS_EVIDENCE.md).
+Готовый hardened runtime-манифест находится в
+[`deploy/compose.production.yml`](deploy/compose.production.yml); его preflight
+выполняет `scripts/check-production-runtime.sh`, а локальную
+форму runtime без подключения к production-сервисам проверяет
+`scripts/test-production-runtime-shape.sh`.
+
 ## Что уже перенесено / подготовлено
 
 - главная лента;
 - разделы `news`, `forum`, `articles`, `gallery`, `polls`;
 - группы и списки тем;
 - страница темы с комментариями;
-- создание/редактирование тем в dev-режиме;
-- добавление/редактирование/удаление комментариев в dev-режиме;
+- создание/редактирование тем с тегами, markup, polls и media;
+- защищённая выдача `/gallery/preview`, `/images` и `/photos` с Java-совместимыми
+  проверками доступа к preview, удалённым темам и историческим userpic;
+- Java-совместимый минутный batch-счётчик успешных запросов `/adv/**` в
+  канонической таблице `adv_counts`;
+- глобальное обновление `users.lastlogin` для авторизованной сессии с
+  оригинальным часовым throttle, включая handlers без `CurrentUser`;
+- Java/Tuckey-совместимые browser/CDN cache headers для CSS, JS, fonts,
+  webjars, изображений и `/adv/**`;
+- Spring Security-совместимый bypass для публичных CSS/JS/font/image
+  resources: успешные прямые ответы не создают CSRF-cookie и не
+  получают dynamic `private` cache policy;
+- Java/Tuckey-совместимая canonical-host/HTTPS нормализация с сохранением
+  path и query;
+- добавление/редактирование/удаление комментариев;
+- Java-совместимая история правок тем и комментариев с
+  визуальным diff, типизацией `TOPIC`/`COMMENT` и `fromHistory`
+  восстановлением текста;
+- реакции, скрытие и игнорирование веток;
 - теги и страницы тегов;
 - профили пользователей;
 - поиск через OpenSearch с персистентной очередью индексации;
@@ -98,7 +136,12 @@ python3 compat/test_http_compat.py
 
 ## Важное ограничение
 
-Исходный проект большой. Этот архив — рабочий Rust-порт ядра, маршрутов и схемы совместимости, пригодный как основа для дальнейшего переноса, но **не production-ready замена исходного Scala/Spring приложения**.
+Локальный behavioral-parity scope значительно закрыт, но **порт ещё не
+production-ready замена исходного Scala/Spring приложения**. Для
+go/no-go нужна репетиция на клоне production-БД и media storage с
+реальными snapshot/WAL identifiers, проверка внешних адаптеров и
+отработанный rollback. `scripts/run-cutover-gate.sh` отказывается
+давать зелёный статус без этих доказательств.
 
 Сейчас все извлечённые URL-формы объявлены в Rust-router, и явных `legacy::not_implemented` маршрутов больше нет. SMTP-доставка activation/change-email/password-reset писем и асинхронных administrator exception reports совместима с локальным MTA Java-приложения; детали описаны в `docs/EMAIL_COMPATIBILITY.md`. OpenSearch reindex выполняет оригинальное помесячное разбиение, а write-события проходят через персистентный filesystem spool с retry после рестарта. Перенесены Java-планировщики статистики, тегов, событий, рейтинга, чёрных списков, Telegram и очистки старых файлов. Gallery поддерживает preview/reuse и трёхдневную очистку временных файлов. Это всё ещё не означает production parity: остаются live-проверка production storage/CDN и внешних адаптеров, а также обязательная репетиция на клоне реальной Java-БД и хранилища медиа.
 
@@ -179,3 +222,11 @@ This archive contains the v9 architectural refactor: Rust 2024 / Rust 1.97 toolc
 The Rust port includes a whois-like `/people/{nick}/profile` page and Java-compatible profile settings in `/people/{nick}/settings`. The settings are stored in `user_settings.settings` using the same keys as the Java `DefaultProfile`: `style`, `format.mode`, `topics`, `messages`, `photos`, `hideAdsense`, `mainGallery`, `avatar`, `trackerMode`, `oldTracker`, `oldNotifications`, `reactionNotification`.
 
 Original webapp assets from the Java project are served under `/img`, `/font`, `/js`, `/black`, `/tango`, `/white2`, `/waltz`, `/zomg_ponies` and `/adv`. Supported theme IDs are `tango`, `tango-light`, `tango-auto`, `black`, `white2`, `waltz`, and `zomg_ponies`.
+
+Generated Java browser bundles plus `manifest.json`, `robots.txt` and the
+`qrerror` assets are checked into `static/`. To reproduce them after changing
+the original webapp, build Java first and run:
+
+```bash
+ORIGINAL_ROOT=../lorsource-java make static-sync
+```

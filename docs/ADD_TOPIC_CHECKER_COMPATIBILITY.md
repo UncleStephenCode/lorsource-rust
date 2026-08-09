@@ -37,11 +37,14 @@ The variable named `dupeProtector` in `AddTopicController` is an instance of
 topics. The Rust port therefore preserves its actual action-plus-IP/time
 semantics rather than inventing content deduplication.
 
-## Remaining deliberate gap
+## Anonymous and credentialed public posting
 
-Java permits a non-authorized request to become a posting session through the
-dedicated anonymous database user or through form `nick`/`password`, with
-request-dependent CAPTCHA validation (`AuthUtil.postingUser` and
-`captchaRequired`). The Rust form does not yet implement that complete
-identity/CAPTCHA contract. Anonymous GET/POST `/add.jsp` therefore remains
-forbidden; the port does not fabricate a user id or bypass the CAPTCHA.
+The public GET/POST flow now uses the canonical password-less `anonymous`
+database user, or authenticates form `nick`/`password` for that single write
+without creating a remember-me session, matching `AuthUtil.postingUser`.
+Anonymous requests and IP blocks with `captcha_required` render hCaptcha and
+POST the original `secret`, `response`, `remoteip`, and `sitekey` contract.
+Missing and API-rejected responses remain distinct validation errors. Preview
+does not require CAPTCHA, and the default profile/markup is retained for a
+credentialed public-form post just as in Java. Isolated adapter tests cover the
+wire contract; real production keys/egress still require cutover evidence.

@@ -27,3 +27,6 @@ Bcrypt/сессии, права, `user_events`, image/gallery storage и
 production-топологией SMTP, OpenSearch, GeoIP, blacklist feeds и Telegram.
 Исполняемый порядок и fail-closed gate описаны в
 `docs/PRODUCTION_CUTOVER.md` и `scripts/run-cutover-gate.sh`.
+Локально проверен hardened production-shape runtime: read-only rootfs,
+secret-file staging в tmpfs, Rust PID 1 с UID/GID 8181 и нулевыми effective
+capabilities, dependency-aware `/readyz` и clean SIGTERM exit code 0.

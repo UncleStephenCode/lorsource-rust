@@ -3,7 +3,7 @@
 {% block content %}
 {% match preview_html %}{% when Some with (html) %}<h1>Предпросмотр</h1><div class="messages"><article class="msg"><div class="msg-container"><div class="msg_body"><div class="msg-text">{{ html|safe }}</div></div></div></article></div>{% when None %}{% endmatch %}
 <h1>Изменить комментарий</h1>
-<p><a href="{{ topic_url }}?cid={{ comment_id }}">Комментарий</a> написан {{ postdate }}. Редактирование возможно до {{ deadline }}.</p>
+<p><a href="{{ topic_url }}?cid={{ comment_id }}">Комментарий</a> написан <time data-format="default" datetime="{{ postdate.to_rfc3339() }}">{{ postdate }}</time>. Редактирование возможно до <time data-format="default" datetime="{{ deadline.to_rfc3339() }}">{{ deadline }}</time>.</p>
 {% match form_error %}{% when Some with (error) %}<div class="error">{{ error }}</div>{% when None %}{% endmatch %}
 <form method="post" action="/edit_comment" class="form wide" id="commentForm">
   <input type="hidden" name="csrf" value="{{ csrf_token }}">

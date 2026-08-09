@@ -660,17 +660,36 @@ async fn email_in_use_for_active_or_recently_blocked_user(
     state: &AppState,
     email: &str,
 ) -> Result<bool> {
-    let found: Option<i32> = sqlx::query_scalar(
-        r#"SELECT id FROM users
-           WHERE lower(COALESCE(email,''))=lower($1)
-             AND (NOT COALESCE(blocked,false) OR COALESCE(lastlogin, regdate) > CURRENT_TIMESTAMP - interval '90 days')
-           LIMIT 1"#,
-    )
-    .bind(email)
-    .fetch_optional(&state.pool)
-    .await?;
-    Ok(found.is_some())
+    // RegisterController first resolves exactly one account through
+    // UserDao.getByEmail(searchBlocked=true): normalized address, active
+    // account first, otherwise newest id. A blocked account reserves the
+    // address only when UserService.wasRecentlyBlocker sees a block_user
+    // audit event in the last 14 days; lastlogin is deliberately irrelevant.
+    let found: bool = sqlx::query_scalar(EMAIL_IN_USE_SQL)
+        .bind(email)
+        .fetch_one(&state.pool)
+        .await?;
+    Ok(found)
 }
+
+const EMAIL_IN_USE_SQL: &str = r#"
+SELECT EXISTS(
+  SELECT 1
+    FROM (
+      SELECT id, COALESCE(blocked,false) AS blocked
+        FROM users
+       WHERE normalize_email(email)=normalize_email($1)
+       ORDER BY blocked ASC, id DESC
+       LIMIT 1
+    ) candidate
+   WHERE NOT candidate.blocked
+      OR EXISTS (
+        SELECT 1 FROM user_log ul
+         WHERE ul.userid=candidate.id
+           AND ul.action='block_user'::user_log_action
+           AND ul.action_date>CURRENT_TIMESTAMP-'14 days'::interval
+      )
+)"#;
 
 #[derive(Template)]
 #[template(path = "lost_password.html")]
@@ -977,7 +996,7 @@ fn generate_java_like_password() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{login_redirect, safe_redirect_url};
+    use super::{EMAIL_IN_USE_SQL, login_redirect, safe_redirect_url};
     use axum::{
         http::{StatusCode, header},
         response::IntoResponse,
@@ -1020,5 +1039,14 @@ mod tests {
                 .and_then(|stValue| stValue.to_str().ok()),
             Some("/login.jsp?from=%2F")
         );
+    }
+
+    #[test]
+    fn registration_email_reuse_matches_java_block_audit_window() {
+        assert!(EMAIL_IN_USE_SQL.contains("normalize_email(email)=normalize_email($1)"));
+        assert!(EMAIL_IN_USE_SQL.contains("ORDER BY blocked ASC, id DESC"));
+        assert!(EMAIL_IN_USE_SQL.contains("'block_user'::user_log_action"));
+        assert!(EMAIL_IN_USE_SQL.contains("'14 days'::interval"));
+        assert!(!EMAIL_IN_USE_SQL.contains("lastlogin"));
     }
 }

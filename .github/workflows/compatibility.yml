@@ -10,8 +10,20 @@ permissions:
 jobs:
   rust-and-static-contracts:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      JAVA_BASELINE_REPOSITORY: maxcom/lorsource
+      JAVA_BASELINE_SHA: 2ddf930005adac28077cb6ad74d1481485f44096
+      ORIGINAL_ROOT: ${{ github.workspace }}/.ci/lorsource-java
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout pinned Java parity baseline
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.JAVA_BASELINE_REPOSITORY }}
+          ref: ${{ env.JAVA_BASELINE_SHA }}
+          path: .ci/lorsource-java
+          persist-credentials: false
       - name: Install pinned Rust toolchain
         run: rustup show
       - name: Rust format
@@ -22,12 +34,10 @@ jobs:
         run: cargo test --locked --all-features
       - name: Rust lints
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
-      - name: Python contract tests
+      - name: Static Java/Rust compatibility contracts
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-        run: python3 -m unittest discover -s tools/tests -p 'test_*.py'
-      - name: CSRF surface audit
-        run: python3 tools/audit_csrf_surface.py .
+        run: scripts/run-compatibility-suite.sh
       - name: Shell syntax
         run: |
           for file in scripts/*.sh .devcontainer/*.sh compat/java-db/*.sh; do
@@ -37,6 +47,26 @@ jobs:
         run: node --check static/js/lor/forms-and-reactions.js
       - name: Docker release build
         run: docker compose build app
+      - name: Production Compose model
+        env:
+          LORSOURCE_IMAGE: example.invalid/lorsource@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          UPLOAD_HOST_PATH: /srv/lorsource/uploads
+          DATABASE_URL_SECRET_FILE: /dev/null
+          COOKIE_SECRET_SOURCE: /dev/null
+          SITE_SECRET_SOURCE: /dev/null
+          CAPTCHA_PRIVATE_KEY_SOURCE: /dev/null
+          PUBLIC_URL: https://www.linux.org.ru
+          WS_URL: wss://www.linux.org.ru/
+          TRUSTED_PROXY_CIDRS: 127.0.0.1/32
+          OPENSEARCH_URL: https://search.example.invalid
+          CAPTCHA_PUBLIC_KEY: ci-public-key
+          SMTP_HOST: smtp.example.invalid
+          SMTP_HELO_NAME: www.linux.org.ru
+          ADMIN_EMAIL: operations@example.invalid
+          ENABLE_BACKGROUND_JOBS: "false"
+        run: docker compose -f deploy/compose.production.yml config --quiet
+      - name: Production runtime hardening and secret staging
+        run: scripts/test-production-runtime-shape.sh
       - name: Start Java-schema compatibility stack
         env:
           # Java's FloodProtector intentionally disables its in-memory delay
@@ -48,7 +78,7 @@ jobs:
       - name: Wait for application health
         run: |
           for attempt in $(seq 1 90); do
-            if curl --fail --silent http://127.0.0.1:8181/healthz >/dev/null; then
+            if curl --fail --silent http://127.0.0.1:8181/readyz >/dev/null; then
               exit 0
             fi
             sleep 2
@@ -59,6 +89,15 @@ jobs:
         env:
           NEW_BASE_URL: http://127.0.0.1:8181
         run: python3 compat/test_http_compat.py
+      - name: Start pinned Java comparator
+        run: scripts/run-java-parity-runtime.sh recreate
+      - name: Differential Java/Rust HTTP matrix
+        run: |
+          mkdir -p test-results
+          python3 compat/test_http_compat.py \
+            --old http://127.0.0.1:8081 \
+            --new http://127.0.0.1:8181 \
+            --report test-results/java-rust-http.json
       - name: Seed disposable write-flow users
         run: |
           docker compose exec -T postgres psql -U postgres -d lor --set ON_ERROR_STOP=1 <<'SQL'
@@ -67,6 +106,13 @@ jobs:
             (nextval('s_uid')::int,'rust-ci-author','$2b$12$Ru.keTlZ2jORV8uWKwQJ9.KnPTv8iFVh0wla7jCnwSxul4KGryElK','rust-ci-author@example.invalid',1000,1000,now(),now(),true,true),
             (nextval('s_uid')::int,'rust-ci-reactor','$2b$12$FHB9so4OyGyXlGasu5UpROuAKwPAaUooWUuoYkBwwU.LS4.CwZyRG','rust-ci-reactor@example.invalid',1000,1000,now(),now(),true,false);
           SQL
+      - name: Stateful global last-login interceptor regression
+        env:
+          NEW_BASE_URL: http://127.0.0.1:8181
+          LASTLOGIN_ALLOW_MUTATION: "yes"
+          LASTLOGIN_TEST_NICK: rust-ci-author
+          LASTLOGIN_TEST_PASSWORD: CompatAuthor123!
+        run: scripts/test-lastlogin-interceptor.sh
       - name: Stateful topic, tag, comment and reaction regression
         env:
           NEW_BASE_URL: http://127.0.0.1:8181
@@ -104,9 +150,26 @@ jobs:
           MODERATION_FLOW_CORRECTOR_PASSWORD: CompatReactor123!
           MODERATION_FLOW_GROUP_ID: "126"
         run: python3 compat/test_moderation_flows.py
+      - name: Stateful advertisement counter and graceful flush regression
+        env:
+          NEW_BASE_URL: http://127.0.0.1:8181
+          ADV_COUNTER_ALLOW_MUTATION: "yes"
+        run: scripts/test-adv-counter.sh
       - name: Runtime logs
         if: always()
-        run: docker compose logs --no-color app db-bootstrap
+        run: |
+          docker compose logs --no-color app db-bootstrap
+          docker logs --tail 200 lorsource-java-parity 2>/dev/null || true
+      - name: Upload differential parity evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-rust-http-parity
+          path: test-results/java-rust-http.json
+          if-no-files-found: warn
+      - name: Stop Java comparator
+        if: always()
+        run: scripts/run-java-parity-runtime.sh stop
       - name: Stop compatibility stack
         if: always()
         run: docker compose down -v

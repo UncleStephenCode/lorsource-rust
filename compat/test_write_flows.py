@@ -200,6 +200,20 @@ def main() -> int:
     require(reaction_list.status == 200, f"reaction list returned {reaction_list.status}")
     require(reactor_nick in text(reaction_list), "authoritative reaction list omits reactor")
 
+    notification_feed = author.request(
+        "/show-replies.jsp?" + urllib.parse.urlencode({"output": "rss", "nick": author_nick}),
+        "GET",
+    )
+    notification_feed_xml = text(notification_feed)
+    require(
+        notification_feed.status == 200
+        and notification_feed.content_type.startswith("application/rss+xml")
+        and f"Уведомления пользователя {author_nick}" in notification_feed_xml
+        and f"@{reactor_nick} поставил 🎉" in notification_feed_xml
+        and body in notification_feed_xml,
+        "notification RSS omits Java-compatible reaction note or rendered message body",
+    )
+
     notifications = author.request("/notifications?filter=reaction", "GET")
     notifications_html = text(notifications)
     require(notifications.status == 200, f"reaction notifications returned {notifications.status}")
@@ -221,7 +235,7 @@ def main() -> int:
     require(clicked.status == 302, f"reaction notification click returned {clicked.status}")
 
     comment = post(
-        author,
+        reactor,
         "/add_comment_ajax",
         [("topic", str(topic_id)), ("replyto", "0"), ("msg", f"Comment body {suffix}")],
     )
@@ -236,6 +250,30 @@ def main() -> int:
     require(comment_jump.location_target is not None, "comment jump has no target")
     comment_page = author.request(comment_jump.location_target, "GET")
     require(comment_page.status == 200 and f"Comment body {suffix}" in text(comment_page), "created comment is missing")
+
+    comment_id_match = re.search(r"[?&]cid=(\d+)", comment_payload["url"])
+    require(comment_id_match is not None, "comment URL omits the Java cid parameter")
+    tracker = author.request("/tracker/?filter=all", "GET")
+    tracker_html = text(tracker)
+    require(tracker.status == 200 and title in tracker_html, "created topic is absent from tracker")
+    tracker_item = re.search(
+        rf'<a href="([^"]*lastmod={comment_id_match.group(1)})" class="tracker-item">(.*?)</a>',
+        tracker_html,
+        re.S,
+    )
+    require(tracker_item is not None, "tracker does not link to the last visible comment")
+    require(
+        reactor_nick in tracker_item.group(2),
+        "tracker shows the topic author instead of the last-comment author",
+    )
+
+    anonymous = HttpClient(base)
+    legacy_tracker = anonymous.request("/tracker.jsp", "GET")
+    require(
+        legacy_tracker.status == 302
+        and legacy_tracker.location_target == "/tracker/?filter=all",
+        f"anonymous legacy tracker redirect differs from Java: {legacy_tracker.location_target!r}",
+    )
 
     removed = post(
         reactor,
@@ -253,6 +291,8 @@ def main() -> int:
     # pipeline and the Java FIT_TO_WIDTH derivative layout for both.
     image = png(400, 800, (0, 128, 255, 128))
     gallery_topics: list[int] = []
+    protected_gallery_topic: int | None = None
+    protected_gallery_image: str | None = None
     for image_count, expected_fragment, forbidden_fragment in [
         (1, 'class="medium-image-container"', 'class="swiffy-slider'),
         (2, 'class="swiffy-slider', 'class="medium-image-container"'),
@@ -282,7 +322,12 @@ def main() -> int:
                 r'name="uploadedImages\[0\]" value="([\w.-]+)"', preview_html
             )
             require(hidden is not None, "gallery preview has no reusable hidden filename")
-            preview_url = f"/gallery-uploads/preview/{hidden.group(1)}"
+            preview_url = f"/gallery/preview/{hidden.group(1)}"
+            anonymous_preview = HttpClient(base).request(preview_url, "GET")
+            require(
+                anonymous_preview.status == 403,
+                "anonymous user can read a staged gallery preview",
+            )
             preview_image = author.request(preview_url, "GET")
             require(
                 preview_image.status == 200 and preview_image.content_type.startswith("image/"),
@@ -320,6 +365,33 @@ def main() -> int:
                 derivative.status == 200 and derivative.content_type.startswith("image/jpeg"),
                 f"gallery derivative {image_url} is not served",
             )
+        if image_count == 1:
+            protected_gallery_topic = int(link.group(2))
+            protected_gallery_image = next(iter(image_urls))
+
+    require(protected_gallery_topic is not None, "protected gallery topic was not recorded")
+    require(protected_gallery_image is not None, "protected gallery image was not recorded")
+    public_image = HttpClient(base).request(protected_gallery_image, "GET")
+    require(
+        public_image.status == 200 and public_image.content_type.startswith("image/jpeg"),
+        "visible gallery image is not public",
+    )
+    deleted_gallery = post(
+        author,
+        "/delete.jsp",
+        [("msgid", str(protected_gallery_topic)), ("reason", "media visibility regression")],
+    )
+    require(deleted_gallery.status == 200, f"gallery deletion returned {deleted_gallery.status}")
+    hidden_image = HttpClient(base).request(protected_gallery_image, "GET")
+    require(
+        hidden_image.status == 403,
+        "anonymous direct URL exposed an image from a deleted topic",
+    )
+    author_history_image = author.request(protected_gallery_image, "GET")
+    require(
+        author_history_image.status == 200,
+        "topic author cannot access an image from their recently deleted topic",
+    )
 
     print(
         f"write flow passed: topic={topic_id} gallery={','.join(map(str, gallery_topics))} "

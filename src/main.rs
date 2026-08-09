@@ -14,6 +14,7 @@ mod markup;
 mod models;
 mod pagination;
 mod profile;
+mod request_timezone;
 mod routes;
 mod search_index;
 mod security;
@@ -43,11 +44,10 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let config = Config::from_env();
+    let config = Config::from_env().context("failed to load runtime configuration")?;
+    let sEnvironment = std::env::var("LOR_ENV").unwrap_or_else(|_| "development".to_owned());
     config
-        .vValidateForEnvironment(
-            &std::env::var("LOR_ENV").unwrap_or_else(|_| "development".to_owned()),
-        )
+        .vValidateForEnvironment(&sEnvironment)
         .context("invalid runtime configuration")?;
     let pool = db::connect(&config.database_url).await?;
     db::verify_schema(&pool).await?;
@@ -69,15 +69,36 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let state = AppState::new(config.clone(), pool);
-    search_index::ensure_index(&state).await;
+    if let Err(sError) = search_index::ensure_index(&state).await {
+        if matches!(
+            sEnvironment.trim().to_ascii_lowercase().as_str(),
+            "production" | "prod"
+        ) {
+            anyhow::bail!(sError);
+        }
+        tracing::warn!(error = %sError, "failed to validate the OpenSearch index");
+    }
     let (oShutdownSender, oShutdownReceiver) = tokio::sync::watch::channel(false);
     let vecBackgroundJobs = bootstrap::background::vecSpawn(state.clone(), oShutdownReceiver);
     let app = Router::new()
         .merge(routes::router())
         .route("/healthz", get(routes::healthz))
+        .route("/readyz", get(routes::readyz))
         .route_service(
             "/favicon.ico",
             ServeFile::new(format!("{}/favicon.ico", config.static_dir)),
+        )
+        .route_service(
+            "/manifest.json",
+            ServeFile::new(format!("{}/manifest.json", config.static_dir)),
+        )
+        .route_service(
+            "/robots.txt",
+            ServeFile::new(format!("{}/robots.txt", config.static_dir)),
+        )
+        .route_service(
+            "/googlea3fb422736ed276d.html",
+            ServeFile::new(format!("{}/googlea3fb422736ed276d.html", config.static_dir)),
         )
         .nest_service("/static", ServeDir::new(&config.static_dir))
         .nest_service("/img", ServeDir::new(format!("{}/img", config.static_dir)))
@@ -112,18 +133,18 @@ async fn main() -> anyhow::Result<()> {
         )
         .nest_service("/adv", ServeDir::new(format!("{}/adv", config.static_dir)))
         .nest_service(
-            "/photos",
-            ServeDir::new(format!("{}/photos", config.upload_dir)),
-        )
-        .nest_service(
-            "/gallery-uploads",
-            ServeDir::new(format!("{}/gallery", config.upload_dir)),
-        )
-        .nest_service(
-            "/images",
-            ServeDir::new(format!("{}/images", config.upload_dir)),
+            "/qrerror",
+            ServeDir::new(format!("{}/qrerror", config.static_dir)),
         )
         .fallback(routes::not_found)
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            routes::adv::apply,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::hydrate,
+        ))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             exception_report::apply,
@@ -132,6 +153,7 @@ async fn main() -> anyhow::Result<()> {
             state.clone(),
             security_headers::apply,
         ))
+        .layer(axum::middleware::from_fn(routes::static_cache::apply))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             theme_middleware::apply_theme,
@@ -142,6 +164,10 @@ async fn main() -> anyhow::Result<()> {
         ))
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            routes::canonical_host::apply,
+        ))
         // This is the outermost application middleware, matching web.xml where
         // UrlRewriteFilter runs before Spring Security and DispatcherServlet.
         .layer(axum::middleware::from_fn(routes::legacy_redirects::apply))

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
-{% match preview_html %}{% when Some with (html) %}<h1>Предпросмотр</h1><div class="messages"><article class="msg"><div class="msg-container"><div class="msg_body">{% for image in uploaded_images %}<img class="topic-upload-preview" src="/gallery-uploads/preview/{{ image }}" alt="Предпросмотр изображения">{% endfor %}<div class="msg-text">{{ html|safe }}</div></div></div></article></div>{% when None %}{% endmatch %}
+{% match preview_html %}{% when Some with (html) %}<h1>Предпросмотр</h1><div class="messages"><article class="msg"><div class="msg-container"><div class="msg_body">{% for image in uploaded_images %}<img class="topic-upload-preview" src="/gallery/preview/{{ image }}" alt="Предпросмотр изображения">{% endfor %}<div class="msg-text">{{ html|safe }}</div></div></div></article></div>{% when None %}{% endmatch %}
 <h1>{{ title }}</h1>
 {% match add_info_html %}{% when Some with (html) %}{{ html|safe }}{% when None %}{% endmatch %}
 <form method="post" action="{{ action }}" id="messageForm"{% if image_allowed %} enctype="multipart/form-data"{% endif %}>

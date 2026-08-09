@@ -30,7 +30,7 @@
           {% if !p.authorized && !p.pending %}<div class="infoblock">Для участия в опросе <a href="/login.jsp">войдите</a> или <a href="/register.jsp">зарегистрируйтесь</a>.</div>{% endif %}
         {% endif %}
       {% when None %}{% endmatch %}
-      <footer><div class="sign" style="margin-left:0"><a href="/people/{{ topic.author }}/profile">{{ topic.author }}</a><br>{{ topic.postdate }}</div></footer>
+      <footer><div class="sign" style="margin-left:0"><a href="/people/{{ topic.author }}/profile">{{ topic.author }}</a><br><time data-format="default" datetime="{{ topic.postdate.to_rfc3339() }}">{{ topic.postdate }}</time></div></footer>
       {% if can_comment || topic_show_reactions_link %}<div class="reply"><ul id="topicMenu">{% if can_comment %}<li><a href="/comment-message.jsp?topic={{ topic.id }}">Ответить</a></li>{% endif %}{% if topic_show_reactions_link %}<li><a class="reaction-show" href="/reactions?topic={{ topic.id }}">Реакции</a></li>{% endif %}</ul></div>{% endif %}
       {{ topic_reactions_html|safe }}
     </div>
@@ -48,7 +48,7 @@
     {% if c.item.deleted %}<div class="title"><strong>Сообщение удалено</strong></div>{% endif %}
     <div class="msg-container"><div class="msg_body">
       <div class="msg-text">{% if c.item.deleted %}[комментарий удалён]{% else %}{{ c.html|safe }}{% endif %}</div>
-      <div class="sign"><a href="/people/{{ c.item.author }}/profile">{{ c.item.author }}</a><br>{{ c.item.postdate }}</div>
+      <div class="sign"><a href="/people/{{ c.item.author }}/profile">{{ c.item.author }}</a><br><time data-format="default" datetime="{{ c.item.postdate.to_rfc3339() }}">{{ c.item.postdate }}</time></div>
       {% if !c.item.deleted %}<div class="reply"><ul><li><a href="/add_comment.jsp?topic={{ topic.id }}&replyto={{ c.item.id }}">Ответить</a></li>{% if c.can_edit %}<li><a href="/edit_comment?topic={{ topic.id }}&amp;original={{ c.item.id }}">Изменить</a></li>{% endif %}{% if !thread_mode %}<li><a href="/{{ topic.section_prefix }}/{{ topic.group_urlname }}/{{ topic.id }}/thread/{{ c.item.id }}">Показать ответы</a></li>{% endif %}<li><a href="{{ topic.topic_url() }}?cid={{ c.item.id }}">Ссылка</a></li>{% if c.show_reactions_link %}<li><a class="reaction-show" href="/reactions?topic={{ topic.id }}&comment={{ c.item.id }}">Реакции</a></li>{% endif %}</ul></div>{{ c.reactions_html|safe }}{% endif %}
     </div></div>
   </article>
@@ -60,6 +60,13 @@
 
 {% if pages.len() > 1 %}<div class="nav">{% for p in pages %}{% if p.current %}<b class="page-number">{{ p.page + 1 }}</b>{% else %}<a class="page-number" href="{% if p.page == 0 %}{{ topic.topic_url() }}{% else %}{{ topic.topic_url() }}/page{{ p.page }}{% endif %}">{{ p.page + 1 }}</a>{% endif %}{% endfor %}</div>{% endif %}
 {% if show_deleted_button %}<p><a href="?deleted=true">Показать удалённые комментарии</a></p>{% endif %}
+
+{% if related_topics.len() > 0 %}<section id="related-topics">
+  <h2>Похожие темы</h2>
+  <div id="related-topics-list">
+    {% for column in related_topics %}<ul>{% for related in column %}<li><span class="group-label">{{ related.section }}</span> <a href="{{ related.link }}">{{ related.title }}</a> ({{ related.year }})</li>{% endfor %}</ul>{% endfor %}
+  </div>
+</section>{% endif %}
 
 {% if can_comment %}<div id="comment-form-container" style="display:none">
 <form id="commentForm" method="post" action="/add_comment.jsp">
