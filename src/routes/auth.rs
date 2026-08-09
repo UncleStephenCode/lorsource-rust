@@ -12,7 +12,6 @@ use axum::{
     response::{Html, IntoResponse, Redirect, Response},
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar};
-use rand::Rng;
 use serde::Deserialize;
 use std::net::SocketAddr;
 use time::Duration;
@@ -203,7 +202,7 @@ pub async fn login_form(
 /// distinguishable). Applied uniformly instead of only-on-success/failure
 /// so the delay itself never becomes an extra timing signal.
 async fn delay_response() {
-    let millis = rand::thread_rng().gen_range(1000..3000);
+    let millis = rand::random_range(1000..3000);
     tokio::time::sleep(std::time::Duration::from_millis(millis)).await;
 }
 
@@ -608,7 +607,7 @@ fn check_register_permit(state: &AppState, permit: Option<&str>) -> bool {
     )
 }
 
-async fn validate_registration_email(state: &AppState, email: &str) -> Result<()> {
+pub(crate) async fn validate_registration_email(state: &AppState, email: &str) -> Result<()> {
     let Some((_local, domain)) = email.rsplit_once('@') else {
         return Err(AppError::BadRequest("Некорректный e-mail".into()));
     };
@@ -988,9 +987,8 @@ pub async fn reset_password_with_code(
 }
 
 fn generate_java_like_password() -> String {
-    let mut oRng = rand::thread_rng();
     (0..12)
-        .map(|_| char::from(oRng.gen_range(33u8..126u8)))
+        .map(|_| char::from(rand::random_range(33u8..126u8)))
         .collect()
 }
 

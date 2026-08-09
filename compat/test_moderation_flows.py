@@ -671,6 +671,52 @@ def main() -> int:
         "defrost audit payload differs from Java",
     )
 
+    # EditProfileChecker: for 24 hours after a moderator reset the browser
+    # form is readonly and POST may update only password/email, never restore
+    # the moderated profile fields.
+    db(f"UPDATE users SET userinfo='temporary moderated info' WHERE id={low_id}")
+    action(moderator, low_id, "remove_userinfo")
+    restricted_edit = warning_author.request(
+        f"/people/{low_nick}/edit", "GET"
+    )
+    restricted_html = text(restricted_edit)
+    require(
+        restricted_edit.status == 200
+        and "Сейчас доступна только смена пароля и email" in restricted_html
+        and re.search(r'<textarea id="info" name="info"\s+readonly', restricted_html)
+        is not None,
+        "recent moderator reset did not make profile-info fields readonly",
+    )
+    low_email = db(f"SELECT email FROM users WHERE id={low_id}")
+    self_set_info_before = int(
+        db(
+            f"SELECT count(*) FROM user_log WHERE userid={low_id} "
+            "AND userid=action_userid AND action='set_info'"
+        )
+    )
+    restricted_post = post(
+        warning_author,
+        f"/people/{low_nick}/edit",
+        [
+            ("email", low_email),
+            ("info", "must not be restored"),
+            ("infoMarkup", "markdown"),
+            ("oldpass", low_password),
+        ],
+    )
+    require(restricted_post.status == 302, "restricted profile update did not complete")
+    require(
+        db(f"SELECT COALESCE(userinfo,'') FROM users WHERE id={low_id}") == ""
+        and int(
+            db(
+                f"SELECT count(*) FROM user_log WHERE userid={low_id} "
+                "AND userid=action_userid AND action='set_info'"
+            )
+        )
+        == self_set_info_before,
+        "restricted profile POST changed info or wrote a false set_info audit",
+    )
+
     tracker = moderator.request("/tracker/", "GET")
     tracker_body = text(tracker)
     require(tracker.status == 200, f"moderator tracker returned {tracker.status}")

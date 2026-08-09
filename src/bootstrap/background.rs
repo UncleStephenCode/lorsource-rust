@@ -558,7 +558,7 @@ async fn vDeleteInactiveUserBatch(
         "DELETE FROM user_settings WHERE id=ANY($1)",
         "DELETE FROM users WHERE id=ANY($1)",
     ] {
-        sqlx::query(sSql)
+        sqlx::query(sqlx::AssertSqlSafe(sSql))
             .bind(vecUserIds)
             .execute(&mut **stTransaction)
             .await?;
@@ -566,7 +566,7 @@ async fn vDeleteInactiveUserBatch(
     Ok(())
 }
 
-async fn vExecuteLocked(oPool: &PgPool, iLock: i64, sSql: &str) -> anyhow::Result<()> {
+async fn vExecuteLocked(oPool: &PgPool, iLock: i64, sSql: &'static str) -> anyhow::Result<()> {
     let mut stTransaction = oPool.begin().await?;
     if bLock(&mut stTransaction, iLock).await? {
         sqlx::query(sSql).execute(&mut *stTransaction).await?;

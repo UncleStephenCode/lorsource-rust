@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Фильтрация сообщений{% endblock %}
+{% block head_extra %}<script src="/js/tagsAutocomplete.js" defer></script>{% endblock %}
+{% block content %}
+<h1>Фильтрация сообщений</h1>
+
+{% if optNewFavoriteTagName.is_none() && optNewIgnoreTagName.is_none() %}
+<fieldset>
+<legend>Список игнорируемых пользователей</legend>
+<form action="/user-filter/ignore-user" method="post">
+  <input type="hidden" name="csrf" value="{{ sCsrfToken }}">
+  <label>Ник: <input type="text" name="nick" size="20" maxlength="80"></label>
+  <button type="submit" name="add" class="btn btn-default">Добавить</button>
+</form>
+{% if vecIgnoredUsers.len() > 0 %}<ul>
+{% for stIgnored in vecIgnoredUsers %}<li><form action="/user-filter/ignore-user" method="post">
+  <input type="hidden" name="csrf" value="{{ sCsrfToken }}">
+  <input type="hidden" name="id" value="{{ stIgnored.iId }}">
+  <span style="white-space: nowrap">@<a href="/people/{{ stIgnored.sNick }}/profile">{{ stIgnored.sNick }}</a></span>
+  {% match stIgnored.optRemark %}{% when Some with (sRemark) %} {{ sRemark }}{% when None %}{% endmatch %}
+  <button type="submit" name="del" class="btn btn-default btn-small">Удалить</button>
+</form></li>{% endfor %}
+</ul>{% endif %}
+</fieldset>
+{% endif %}
+
+{% if optNewIgnoreTagName.is_none() %}
+<fieldset>
+<legend>Список избранных тегов</legend>
+<form action="/user-filter/favorite-tag" method="post">
+  <input type="hidden" name="csrf" value="{{ sCsrfToken }}">
+  <label>Тег: <input autocapitalize="off" data-tags-autocomplete="data-tags-autocomplete" type="text" name="tagName" id="newFavoriteTagName" size="20" maxlength="80" value="{% match optNewFavoriteTagName %}{% when Some with (sTag) %}{{ sTag }}{% when None %}{% endmatch %}"></label>
+  <button type="submit" name="add" class="btn btn-default">Добавить</button>
+  {% if vecFavoriteErrors.len() > 0 %}<div class="error">{% for sError in vecFavoriteErrors %}{{ sError }}<br>{% endfor %}</div>{% endif %}
+</form>
+{% if vecFavoriteTags.len() > 0 %}<ul>{% for sTag in vecFavoriteTags %}<li><form action="/user-filter/favorite-tag" method="post">
+  <input type="hidden" name="csrf" value="{{ sCsrfToken }}"><input type="hidden" name="tagName" value="{{ sTag }}"><span style="white-space: nowrap">{{ sTag }}</span>
+  <button type="submit" name="del" class="btn btn-default btn-small">Удалить</button>
+</form></li>{% endfor %}</ul>{% endif %}
+</fieldset>
+{% endif %}
+
+{% if optNewFavoriteTagName.is_none() %}
+<fieldset>
+<legend>Список игнорируемых тегов</legend>
+{% if bModerator %}Модераторам нельзя игнорировать теги{% else %}
+<form action="/user-filter/ignore-tag" method="post">
+  <input type="hidden" name="csrf" value="{{ sCsrfToken }}">
+  <label>Тег: <input autocapitalize="off" data-tags-autocomplete="data-tags-autocomplete" type="text" name="tagName" id="newIgnoreTagName" size="20" maxlength="80" value="{% match optNewIgnoreTagName %}{% when Some with (sTag) %}{{ sTag }}{% when None %}{% endmatch %}"></label>
+  <button type="submit" name="add" class="btn btn-default">Добавить</button>
+  {% if vecIgnoreErrors.len() > 0 %}<div class="error">{% for sError in vecIgnoreErrors %}{{ sError }}<br>{% endfor %}</div>{% endif %}
+</form>
+{% if vecIgnoreTags.len() > 0 %}<ul>{% for sTag in vecIgnoreTags %}<li><form action="/user-filter/ignore-tag" method="post">
+  <input type="hidden" name="csrf" value="{{ sCsrfToken }}"><input type="hidden" name="tagName" value="{{ sTag }}"><span style="white-space: nowrap">{{ sTag }}</span>
+  <button type="submit" name="del" class="btn btn-default btn-small">Удалить</button>
+</form></li>{% endfor %}</ul>{% endif %}
+{% endif %}
+</fieldset>
+{% endif %}
+{% endblock %}

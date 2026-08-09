@@ -57,16 +57,16 @@
     }
   },
   "summary": {
-    "sql_literals": 549,
-    "clean_queries": 508,
-    "review_queries": 41,
+    "sql_literals": 563,
+    "clean_queries": 514,
+    "review_queries": 49,
     "invalid_queries": 0,
     "findings": 0,
     "findings_by_criticality": {},
     "findings_by_kind": {},
     "intentional_absence_probes": 23,
-    "dynamic_queries": 14,
-    "sql_fragments": 30,
+    "dynamic_queries": 17,
+    "sql_fragments": 35,
     "queries_with_unresolved_qualifiers": 0
   },
   "findings": [],
@@ -314,10 +314,10 @@
     {
       "criticality": "P0",
       "runtime_surface": "comment create/render/moderation",
-      "sql_literals": 66,
+      "sql_literals": 69,
       "invalid_queries": 0,
       "findings": 0,
-      "review_queries": 0
+      "review_queries": 4
     },
     {
       "criticality": "P0",
@@ -370,10 +370,10 @@
     {
       "criticality": "P1",
       "runtime_surface": "legacy routes",
-      "sql_literals": 49,
+      "sql_literals": 47,
       "invalid_queries": 0,
       "findings": 0,
-      "review_queries": 0
+      "review_queries": 1
     },
     {
       "criticality": "P1",
@@ -402,10 +402,10 @@
     {
       "criticality": "P1",
       "runtime_surface": "users routes",
-      "sql_literals": 42,
+      "sql_literals": 55,
       "invalid_queries": 0,
       "findings": 0,
-      "review_queries": 11
+      "review_queries": 14
     },
     {
       "criticality": "P2",
@@ -9903,36 +9903,103 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "04bd0598a14e",
+      "id": "b9e28b21da00",
       "source": "src/routes/comments.rs",
-      "line": 1886,
-      "symbol": "deleted_comments_by_user",
+      "line": 1953,
+      "symbol": "MAX_OFFSET",
       "criticality": "P0",
       "runtime_surface": "comment create/render/moderation",
       "dynamic": false,
+      "fragment": true,
+      "status": "review",
+      "sql_preview": "di.bonus IS NOT NULL AND di.bonus<>0",
+      "relations": [],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
+      "id": "ddab7529d6b7",
+      "source": "src/routes/comments.rs",
+      "line": 1954,
+      "symbol": "MAX_OFFSET",
+      "criticality": "P0",
+      "runtime_surface": "comment create/render/moderation",
+      "dynamic": false,
+      "fragment": true,
+      "status": "review",
+      "sql_preview": "c.deleted AND di.reason IS NOT NULL AND di.reason NOT ILIKE '%(авто%'",
+      "relations": [],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
+      "id": "62d6df2aef4f",
+      "source": "src/routes/comments.rs",
+      "line": 1955,
+      "symbol": "MAX_OFFSET",
+      "criticality": "P0",
+      "runtime_surface": "comment create/render/moderation",
+      "dynamic": false,
+      "fragment": true,
+      "status": "review",
+      "sql_preview": "di.delby=c.userid",
+      "relations": [],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
+      "id": "df9e2b57cc50",
+      "source": "src/routes/comments.rs",
+      "line": 1959,
+      "symbol": "MAX_OFFSET",
+      "criticality": "P0",
+      "runtime_surface": "comment create/render/moderation",
+      "dynamic": true,
       "fragment": false,
-      "status": "clean",
-      "sql_preview": "SELECT c.id, c.topic, c.replyto, c.title, m.message, m.markup::text AS markup, c.postdate, u.id AS author_id, u.nick AS author, c.deleted FROM comments c JOIN msgbase m ON m.id=c.id JOIN users u ON u.id=c.userid WHERE l…",
+      "status": "review",
+      "sql_preview": "SELECT g.title AS group_title, CASE WHEN trim(COALESCE(t.title,''))='' THEN 'Без заглавия' ELSE t.title END AS topic_title, t.id AS topic_id, di.reason, COALESCE(di.deldate, topic_di.deldate) AS delete_date, COALESCE(di…",
       "relations": [
         {
-          "table": "comments",
-          "alias": "c",
+          "table": "groups",
+          "alias": "g",
           "schema": null,
           "context": "from",
           "virtual": false,
           "system": false
         },
         {
-          "table": "msgbase",
-          "alias": "m",
+          "table": "topics",
+          "alias": "t",
           "schema": null,
           "context": "join",
           "virtual": false,
           "system": false
         },
         {
-          "table": "users",
-          "alias": "u",
+          "table": "comments",
+          "alias": "c",
+          "schema": null,
+          "context": "join",
+          "virtual": false,
+          "system": false
+        },
+        {
+          "table": "del_info",
+          "alias": "di",
+          "schema": null,
+          "context": "join",
+          "virtual": false,
+          "system": false
+        },
+        {
+          "table": "del_info",
+          "alias": "topic_di",
           "schema": null,
           "context": "join",
           "virtual": false,
@@ -11120,10 +11187,10 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "ff034283ecb0",
+      "id": "46fc7c0eb80d",
       "source": "src/routes/legacy.rs",
-      "line": 1620,
-      "symbol": "vCheckLoadUserpic",
+      "line": 1623,
+      "symbol": "bCanLoadUserpic",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
       "dynamic": false,
@@ -11186,9 +11253,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "29504ea00174",
+      "id": "d9fa97bea038",
       "source": "src/routes/legacy.rs",
-      "line": 1754,
+      "line": 1761,
       "symbol": "deregister_post",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -11212,9 +11279,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "0c8a18b6500f",
+      "id": "b17531de1e4d",
       "source": "src/routes/legacy.rs",
-      "line": 1793,
+      "line": 1800,
       "symbol": "ensure_deregister_allowed",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -11238,9 +11305,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "639820c9a097",
+      "id": "0b005348e909",
       "source": "src/routes/legacy.rs",
-      "line": 1809,
+      "line": 1816,
       "symbol": "user_exists_or_similar",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -11264,9 +11331,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "387c5096a508",
+      "id": "abd0406f4c54",
       "source": "src/routes/legacy.rs",
-      "line": 1817,
+      "line": 1824,
       "symbol": "user_exists_or_similar",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -11290,9 +11357,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "ca7702443649",
+      "id": "018e4939fe68",
       "source": "src/routes/legacy.rs",
-      "line": 1933,
+      "line": 1940,
       "symbol": "memories",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -11316,9 +11383,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "55232b3f84b1",
+      "id": "3996cb6d6c2b",
       "source": "src/routes/legacy.rs",
-      "line": 1943,
+      "line": 1950,
       "symbol": "memories",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -11342,9 +11409,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "7ff76b9d2f70",
+      "id": "985304a57abc",
       "source": "src/routes/legacy.rs",
-      "line": 1948,
+      "line": 1955,
       "symbol": "memories",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -11368,9 +11435,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "5e989564d39d",
+      "id": "76447a8e197a",
       "source": "src/routes/legacy.rs",
-      "line": 1960,
+      "line": 1967,
       "symbol": "memories",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -11394,9 +11461,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "bc423d368587",
+      "id": "6d8e11ff223d",
       "source": "src/routes/legacy.rs",
-      "line": 1969,
+      "line": 1976,
       "symbol": "memories",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -11420,9 +11487,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "cdea9f05c594",
+      "id": "e1dfb3b5cd83",
       "source": "src/routes/legacy.rs",
-      "line": 1975,
+      "line": 1982,
       "symbol": "memories",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -11446,50 +11513,16 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "32722d55e797",
+      "id": "c1811dccfd16",
       "source": "src/routes/legacy.rs",
-      "line": 1991,
-      "symbol": "user_filter",
+      "line": 2028,
+      "symbol": "stRenderUserFilter",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
       "dynamic": false,
       "fragment": false,
       "status": "clean",
-      "sql_preview": "SELECT tv.value, ut.is_favorite FROM user_tags ut JOIN tags_values tv ON tv.id=ut.tag_id WHERE ut.user_id=$1 ORDER BY tv.value",
-      "relations": [
-        {
-          "table": "user_tags",
-          "alias": "ut",
-          "schema": null,
-          "context": "from",
-          "virtual": false,
-          "system": false
-        },
-        {
-          "table": "tags_values",
-          "alias": "tv",
-          "schema": null,
-          "context": "join",
-          "virtual": false,
-          "system": false
-        }
-      ],
-      "ctes": [],
-      "unresolved_qualifiers": [],
-      "findings": [],
-      "intentional_absence_probes": []
-    },
-    {
-      "id": "f24c640024aa",
-      "source": "src/routes/legacy.rs",
-      "line": 1994,
-      "symbol": "user_filter",
-      "criticality": "P1",
-      "runtime_surface": "legacy routes",
-      "dynamic": false,
-      "fragment": false,
-      "status": "clean",
-      "sql_preview": "SELECT u.nick FROM ignore_list il JOIN users u ON u.id=il.ignored WHERE il.userid=$1 ORDER BY u.nick",
+      "sql_preview": "SELECT u.id,u.nick,r.remark_text FROM ignore_list il JOIN users u ON u.id=il.ignored LEFT JOIN user_remarks r ON r.user_id=il.userid AND r.ref_user_id=il.ignored WHERE il.userid=$1 ORDER BY u.nick",
       "relations": [
         {
           "table": "ignore_list",
@@ -11506,6 +11539,14 @@
           "context": "join",
           "virtual": false,
           "system": false
+        },
+        {
+          "table": "user_remarks",
+          "alias": "r",
+          "schema": null,
+          "context": "join",
+          "virtual": false,
+          "system": false
         }
       ],
       "ctes": [],
@@ -11514,16 +11555,16 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "ad872198fac2",
+      "id": "5cc33ba27adf",
       "source": "src/routes/legacy.rs",
-      "line": 2048,
+      "line": 2168,
       "symbol": "save_or_delete_user_tag",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
-      "dynamic": false,
+      "dynamic": true,
       "fragment": false,
-      "status": "clean",
-      "sql_preview": "SELECT id FROM tags_values WHERE lower(value)=lower($1)",
+      "status": "review",
+      "sql_preview": "SELECT id FROM tags_values WHERE lower(value)=lower($1){sCounterFilter}",
       "relations": [
         {
           "table": "tags_values",
@@ -11540,35 +11581,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "4433a680dd4d",
+      "id": "c518a5f2573f",
       "source": "src/routes/legacy.rs",
-      "line": 2055,
-      "symbol": "save_or_delete_user_tag",
-      "criticality": "P1",
-      "runtime_surface": "legacy routes",
-      "dynamic": false,
-      "fragment": false,
-      "status": "clean",
-      "sql_preview": "INSERT INTO tags_values(value,counter) VALUES($1,0) ON CONFLICT(value) DO UPDATE SET value=EXCLUDED.value RETURNING id",
-      "relations": [
-        {
-          "table": "tags_values",
-          "alias": null,
-          "schema": null,
-          "context": "into",
-          "virtual": false,
-          "system": false
-        }
-      ],
-      "ctes": [],
-      "unresolved_qualifiers": [],
-      "findings": [],
-      "intentional_absence_probes": []
-    },
-    {
-      "id": "4dbe93edcf91",
-      "source": "src/routes/legacy.rs",
-      "line": 2063,
+      "line": 2178,
       "symbol": "save_or_delete_user_tag",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -11592,9 +11607,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "1c7c98d20754",
+      "id": "4223745a100c",
       "source": "src/routes/legacy.rs",
-      "line": 2070,
+      "line": 2185,
       "symbol": "save_or_delete_user_tag",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -11618,9 +11633,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "a0e92e4e8327",
+      "id": "463605b7da2f",
       "source": "src/routes/legacy.rs",
-      "line": 2079,
+      "line": 2193,
       "symbol": "save_or_delete_user_tag",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -11644,9 +11659,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "bfbb7c242fd9",
+      "id": "f3768c4b7f99",
       "source": "src/routes/legacy.rs",
-      "line": 2112,
+      "line": 2259,
       "symbol": "ignore_user",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -11670,9 +11685,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "21f152ce7ae0",
+      "id": "669ce673b8a5",
       "source": "src/routes/legacy.rs",
-      "line": 2124,
+      "line": 2271,
       "symbol": "ignore_user",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -11696,9 +11711,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "7c64b67856eb",
+      "id": "a82328d478bf",
       "source": "src/routes/legacy.rs",
-      "line": 2130,
+      "line": 2277,
       "symbol": "ignore_user",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -11722,9 +11737,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "09f5ba2c69f2",
+      "id": "f6f6fb7e5581",
       "source": "src/routes/legacy.rs",
-      "line": 2184,
+      "line": 2343,
       "symbol": "set_post_score",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -11748,9 +11763,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "bbbc40c27c1b",
+      "id": "95812aaa6a01",
       "source": "src/routes/legacy.rs",
-      "line": 2227,
+      "line": 2386,
       "symbol": "delete_image",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -11790,9 +11805,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "72a4dacd3103",
+      "id": "206df528d786",
       "source": "src/routes/legacy.rs",
-      "line": 2246,
+      "line": 2405,
       "symbol": "delete_image",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -11816,9 +11831,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "09c34b7d3837",
+      "id": "e11ae5c47e9d",
       "source": "src/routes/legacy.rs",
-      "line": 2250,
+      "line": 2409,
       "symbol": "delete_image",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -14581,9 +14596,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "1f182ac64aa7",
+      "id": "14198bc6cb89",
       "source": "src/routes/topics.rs",
-      "line": 4273,
+      "line": 4276,
       "symbol": "CAN_VIEW_ALL_DELETED_SCORE",
       "criticality": "P1",
       "runtime_surface": "topic browser flow",
@@ -14607,9 +14622,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "6156c38f7c4c",
+      "id": "6d64ada8ea14",
       "source": "src/routes/topics.rs",
-      "line": 4304,
+      "line": 4307,
       "symbol": "POSTSCORE_HIDE_COMMENTS",
       "criticality": "P1",
       "runtime_surface": "topic browser flow",
@@ -14649,9 +14664,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "7c8600f3f2bd",
+      "id": "7444592aa8f9",
       "source": "src/routes/topics.rs",
-      "line": 4329,
+      "line": 4332,
       "symbol": "POSTSCORE_HIDE_COMMENTS",
       "criticality": "P1",
       "runtime_surface": "topic browser flow",
@@ -14675,9 +14690,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "b918ed756c3d",
+      "id": "e16896447185",
       "source": "src/routes/topics.rs",
-      "line": 4341,
+      "line": 4344,
       "symbol": "POSTSCORE_HIDE_COMMENTS",
       "criticality": "P1",
       "runtime_surface": "topic browser flow",
@@ -14709,9 +14724,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "3a7db9902f52",
+      "id": "46fa9039f461",
       "source": "src/routes/topics.rs",
-      "line": 4370,
+      "line": 4373,
       "symbol": "check_topic_viewable",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -14759,9 +14774,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "59a93ff6e445",
+      "id": "200aabce8289",
       "source": "src/routes/topics.rs",
-      "line": 4396,
+      "line": 4399,
       "symbol": "check_topic_viewable",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -14785,9 +14800,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "b3db6bd5229c",
+      "id": "0c7de497310a",
       "source": "src/routes/topics.rs",
-      "line": 4408,
+      "line": 4411,
       "symbol": "check_topic_viewable",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -14811,9 +14826,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "3d20f461c6f8",
+      "id": "a38c1b85d7a4",
       "source": "src/routes/topics.rs",
-      "line": 4446,
+      "line": 4449,
       "symbol": "load_topic_delete_meta",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -14853,9 +14868,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "a8196454996e",
+      "id": "654e8035fa7b",
       "source": "src/routes/topics.rs",
-      "line": 4494,
+      "line": 4497,
       "symbol": "delete_topic",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -14879,9 +14894,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "1ccc9d016763",
+      "id": "8f4c242cc0ad",
       "source": "src/routes/topics.rs",
-      "line": 4506,
+      "line": 4509,
       "symbol": "delete_topic",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -14905,9 +14920,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "b9d9f8a0906e",
+      "id": "6b31fc0e27b4",
       "source": "src/routes/topics.rs",
-      "line": 4510,
+      "line": 4513,
       "symbol": "delete_topic",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -14931,9 +14946,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "aa92989fdae4",
+      "id": "35d53fb5ab7a",
       "source": "src/routes/topics.rs",
-      "line": 4513,
+      "line": 4516,
       "symbol": "delete_topic",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -14957,9 +14972,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "e13a6e4c9f53",
+      "id": "eb8dbb2427a0",
       "source": "src/routes/topics.rs",
-      "line": 4548,
+      "line": 4551,
       "symbol": "vDeleteTopicEventsTx",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -14983,9 +14998,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "0025598ea87e",
+      "id": "609663a439e1",
       "source": "src/routes/topics.rs",
-      "line": 4556,
+      "line": 4559,
       "symbol": "vDeleteTopicEventsTx",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -15009,9 +15024,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "7fe17adef965",
+      "id": "879c1cd2e95b",
       "source": "src/routes/topics.rs",
-      "line": 4565,
+      "line": 4568,
       "symbol": "vDeleteTopicEventsTx",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -15043,9 +15058,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "7405008d7255",
+      "id": "11a94cd91014",
       "source": "src/routes/topics.rs",
-      "line": 4594,
+      "line": 4597,
       "symbol": "undelete_topic",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -15069,9 +15084,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "7ce0cd669051",
+      "id": "335af6d54607",
       "source": "src/routes/topics.rs",
-      "line": 4600,
+      "line": 4603,
       "symbol": "undelete_topic",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -15095,9 +15110,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "6ce83632b69e",
+      "id": "ed34e036a407",
       "source": "src/routes/topics.rs",
-      "line": 4606,
+      "line": 4609,
       "symbol": "undelete_topic",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -15121,9 +15136,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "02aea682d97b",
+      "id": "e77e9c758123",
       "source": "src/routes/topics.rs",
-      "line": 4610,
+      "line": 4613,
       "symbol": "undelete_topic",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -15147,9 +15162,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "ae32bbb0dacf",
+      "id": "7639f2c8508d",
       "source": "src/routes/topics.rs",
-      "line": 4722,
+      "line": 4725,
       "symbol": "save_poll",
       "criticality": "P1",
       "runtime_surface": "topic browser flow",
@@ -15173,9 +15188,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "8cf77bc7a28a",
+      "id": "bd2c40a547c4",
       "source": "src/routes/topics.rs",
-      "line": 4728,
+      "line": 4731,
       "symbol": "save_poll",
       "criticality": "P1",
       "runtime_surface": "topic browser flow",
@@ -15199,9 +15214,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "0f687fe7eb5d",
+      "id": "f1e2184df984",
       "source": "src/routes/topics.rs",
-      "line": 4736,
+      "line": 4739,
       "symbol": "save_poll",
       "criticality": "P1",
       "runtime_surface": "topic browser flow",
@@ -15216,9 +15231,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "bfe3b2af2615",
+      "id": "1b40f508bc89",
       "source": "src/routes/topics.rs",
-      "line": 4739,
+      "line": 4742,
       "symbol": "save_poll",
       "criticality": "P1",
       "runtime_surface": "topic browser flow",
@@ -15242,9 +15257,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "1abb5b364de9",
+      "id": "6e55d6ad1976",
       "source": "src/routes/topics.rs",
-      "line": 4752,
+      "line": 4755,
       "symbol": "save_poll",
       "criticality": "P1",
       "runtime_surface": "topic browser flow",
@@ -15268,9 +15283,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "ef46bd4b2c06",
+      "id": "2d2cadcba6dc",
       "source": "src/routes/topics.rs",
-      "line": 4755,
+      "line": 4758,
       "symbol": "save_poll",
       "criticality": "P1",
       "runtime_surface": "topic browser flow",
@@ -15294,9 +15309,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "ca2e2c69d482",
+      "id": "0c8e03f7a278",
       "source": "src/routes/topics.rs",
-      "line": 4761,
+      "line": 4764,
       "symbol": "save_poll",
       "criticality": "P1",
       "runtime_surface": "topic browser flow",
@@ -15320,9 +15335,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "a0935167e97a",
+      "id": "c4e05b091f7a",
       "source": "src/routes/topics.rs",
-      "line": 4787,
+      "line": 4790,
       "symbol": "notify_topic_users_tx",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -15362,9 +15377,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "d88fc409ebfa",
+      "id": "56c5bdcc5bf2",
       "source": "src/routes/topics.rs",
-      "line": 4803,
+      "line": 4806,
       "symbol": "notify_topic_users_tx",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -15388,9 +15403,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "94a4d2bff92d",
+      "id": "b85376f5e544",
       "source": "src/routes/topics.rs",
-      "line": 4810,
+      "line": 4813,
       "symbol": "notify_topic_users_tx",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -15414,9 +15429,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "55d7d55e8b3f",
+      "id": "5eebc8c9fc96",
       "source": "src/routes/topics.rs",
-      "line": 4820,
+      "line": 4823,
       "symbol": "notify_topic_users_tx",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -15480,9 +15495,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "f0d2a3758f50",
+      "id": "955cd396ce18",
       "source": "src/routes/topics.rs",
-      "line": 4850,
+      "line": 4853,
       "symbol": "notify_topic_users_tx",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -15506,9 +15521,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "06425ba622f2",
+      "id": "6dc47e06cf53",
       "source": "src/routes/topics.rs",
-      "line": 4857,
+      "line": 4860,
       "symbol": "notify_topic_users_tx",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -15532,9 +15547,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "21ce4eb5c65e",
+      "id": "c0a092f601d3",
       "source": "src/routes/topics.rs",
-      "line": 4869,
+      "line": 4872,
       "symbol": "notify_topic_users_tx",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -15566,9 +15581,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "eb75a4ad272a",
+      "id": "213caa62f995",
       "source": "src/routes/topics.rs",
-      "line": 4918,
+      "line": 4921,
       "symbol": "delete_topic_form",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -15592,9 +15607,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "9d5f9c23510b",
+      "id": "1606939caf80",
       "source": "src/routes/topics.rs",
-      "line": 4991,
+      "line": 4994,
       "symbol": "bTopicUndeletable",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -15618,9 +15633,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "9516743f6969",
+      "id": "1d205c92de2d",
       "source": "src/routes/topics.rs",
-      "line": 5022,
+      "line": 5025,
       "symbol": "commit_topic_form",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -15644,9 +15659,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "176c86714e94",
+      "id": "ab523aa40654",
       "source": "src/routes/topics.rs",
-      "line": 5049,
+      "line": 5052,
       "symbol": "commit_topic",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -15670,9 +15685,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "937c46e586fd",
+      "id": "088086ba1548",
       "source": "src/routes/users.rs",
-      "line": 188,
+      "line": 221,
       "symbol": "topic_feed",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -15736,9 +15751,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "875c4d1fcd3d",
+      "id": "e47b30f0514f",
       "source": "src/routes/users.rs",
-      "line": 205,
+      "line": 238,
       "symbol": "topic_feed",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -15753,9 +15768,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "00a2f8fd91ee",
+      "id": "d47495c468c7",
       "source": "src/routes/users.rs",
-      "line": 223,
+      "line": 256,
       "symbol": "topic_feed",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -15795,9 +15810,147 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "58bc48efe40f",
+      "id": "f5c73bd53f23",
       "source": "src/routes/users.rs",
-      "line": 385,
+      "line": 418,
+      "symbol": "render_profile",
+      "criticality": "P1",
+      "runtime_surface": "users routes",
+      "dynamic": false,
+      "fragment": false,
+      "status": "clean",
+      "sql_preview": "SELECT remark_text FROM user_remarks WHERE user_id=$1 AND ref_user_id=$2",
+      "relations": [
+        {
+          "table": "user_remarks",
+          "alias": null,
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        }
+      ],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
+      "id": "d470071c1cb7",
+      "source": "src/routes/users.rs",
+      "line": 430,
+      "symbol": "render_profile",
+      "criticality": "P1",
+      "runtime_surface": "users routes",
+      "dynamic": false,
+      "fragment": false,
+      "status": "clean",
+      "sql_preview": "SELECT EXISTS(SELECT 1 FROM ignore_list WHERE userid=$1 AND ignored=$2)",
+      "relations": [
+        {
+          "table": "ignore_list",
+          "alias": null,
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        }
+      ],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
+      "id": "417c66e87adb",
+      "source": "src/routes/users.rs",
+      "line": 448,
+      "symbol": "render_profile",
+      "criticality": "P1",
+      "runtime_surface": "users routes",
+      "dynamic": false,
+      "fragment": false,
+      "status": "clean",
+      "sql_preview": "SELECT EXISTS(SELECT 1 FROM user_remarks WHERE user_id=$1)",
+      "relations": [
+        {
+          "table": "user_remarks",
+          "alias": null,
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        }
+      ],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
+      "id": "ae1d313ce630",
+      "source": "src/routes/users.rs",
+      "line": 464,
+      "symbol": "render_profile",
+      "criticality": "P1",
+      "runtime_surface": "users routes",
+      "dynamic": false,
+      "fragment": false,
+      "status": "clean",
+      "sql_preview": "SELECT EXISTS(SELECT 1 FROM memories WHERE userid=$1 AND watch), EXISTS(SELECT 1 FROM memories WHERE userid=$1 AND NOT watch)",
+      "relations": [
+        {
+          "table": "memories",
+          "alias": null,
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        },
+        {
+          "table": "memories",
+          "alias": null,
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        }
+      ],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
+      "id": "5a7355d032d5",
+      "source": "src/routes/users.rs",
+      "line": 478,
+      "symbol": "render_profile",
+      "criticality": "P1",
+      "runtime_surface": "users routes",
+      "dynamic": false,
+      "fragment": false,
+      "status": "clean",
+      "sql_preview": "SELECT COALESCE(frozen_until>CURRENT_TIMESTAMP,false) FROM users WHERE id=$1",
+      "relations": [
+        {
+          "table": "users",
+          "alias": null,
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        }
+      ],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
+      "id": "8745767f0dc6",
+      "source": "src/routes/users.rs",
+      "line": 521,
       "symbol": "render_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -15829,9 +15982,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "4eed7cc9ba3d",
+      "id": "30ad9b13f48a",
       "source": "src/routes/users.rs",
-      "line": 400,
+      "line": 536,
       "symbol": "render_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -15855,9 +16008,93 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "5c152254d622",
+      "id": "37bacb1a8363",
       "source": "src/routes/users.rs",
-      "line": 430,
+      "line": 545,
+      "symbol": "render_profile",
+      "criticality": "P1",
+      "runtime_surface": "users routes",
+      "dynamic": false,
+      "fragment": false,
+      "status": "clean",
+      "sql_preview": "SELECT COALESCE(frozen_until>CURRENT_TIMESTAMP-interval '3 days',false), COALESCE(abs((SELECT sum(di.bonus)::bigint FROM del_info di WHERE di.deldate>CURRENT_TIMESTAMP-interval '3 days' AND di.msgid IN ( SELECT c.id FRO…",
+      "relations": [
+        {
+          "table": "del_info",
+          "alias": "di",
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        },
+        {
+          "table": "comments",
+          "alias": "c",
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        },
+        {
+          "table": "topics",
+          "alias": "t",
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        },
+        {
+          "table": "users",
+          "alias": null,
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        }
+      ],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
+      "id": "5128c7cdee68",
+      "source": "src/routes/users.rs",
+      "line": 570,
+      "symbol": "render_profile",
+      "criticality": "P1",
+      "runtime_surface": "users routes",
+      "dynamic": false,
+      "fragment": false,
+      "status": "clean",
+      "sql_preview": "SELECT freezer.nick, target.freezing_reason FROM users target LEFT JOIN users freezer ON freezer.id=target.frozen_by WHERE target.id=$1",
+      "relations": [
+        {
+          "table": "users",
+          "alias": "target",
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        },
+        {
+          "table": "users",
+          "alias": "freezer",
+          "schema": null,
+          "context": "join",
+          "virtual": false,
+          "system": false
+        }
+      ],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
+      "id": "f9dce03d8f09",
+      "source": "src/routes/users.rs",
+      "line": 604,
       "symbol": "render_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -15881,9 +16118,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "eaf79eef4f7e",
+      "id": "50b55d6e3a23",
       "source": "src/routes/users.rs",
-      "line": 445,
+      "line": 619,
       "symbol": "render_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -15915,9 +16152,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "9995f70b3577",
+      "id": "d258be1fb097",
       "source": "src/routes/users.rs",
-      "line": 469,
+      "line": 643,
       "symbol": "render_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -15941,9 +16178,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "439bf04498b2",
+      "id": "a215dfeb86c8",
       "source": "src/routes/users.rs",
-      "line": 489,
+      "line": 664,
       "symbol": "render_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -15975,9 +16212,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "32c96f429adc",
+      "id": "b608de870aae",
       "source": "src/routes/users.rs",
-      "line": 545,
+      "line": 745,
       "symbol": "SECTION_PREFIX_CASE",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -15992,9 +16229,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "4fe62825d8c7",
+      "id": "aa30ac74c655",
       "source": "src/routes/users.rs",
-      "line": 630,
+      "line": 830,
       "symbol": "reactions_view",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -16009,9 +16246,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "21d6410a2694",
+      "id": "df6ec2510959",
       "source": "src/routes/users.rs",
-      "line": 635,
+      "line": 835,
       "symbol": "reactions_view",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -16026,9 +16263,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "09974c158875",
+      "id": "8b1e234966d9",
       "source": "src/routes/users.rs",
-      "line": 638,
+      "line": 838,
       "symbol": "reactions_view",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -16116,9 +16353,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "0fc6beb49c59",
+      "id": "e452b4cfbd3a",
       "source": "src/routes/users.rs",
-      "line": 670,
+      "line": 870,
       "symbol": "reactions_view",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -16133,9 +16370,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "66324f7832a2",
+      "id": "113b5a9cdefb",
       "source": "src/routes/users.rs",
-      "line": 673,
+      "line": 873,
       "symbol": "reactions_view",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -16191,9 +16428,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "cf7d774f920a",
+      "id": "907a7f232e43",
       "source": "src/routes/users.rs",
-      "line": 703,
+      "line": 903,
       "symbol": "reactions_view",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -16217,9 +16454,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "0eddbf9f8b25",
+      "id": "5674c6cd66de",
       "source": "src/routes/users.rs",
-      "line": 718,
+      "line": 918,
       "symbol": "reactions_view",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -16243,16 +16480,76 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "1bd78ffe12f1",
+      "id": "44951a5103a4",
       "source": "src/routes/users.rs",
-      "line": 851,
+      "line": 1079,
       "symbol": "remarks",
       "criticality": "P1",
       "runtime_surface": "users routes",
       "dynamic": false,
       "fragment": false,
       "status": "clean",
-      "sql_preview": "SELECT u.nick, r.remark_text FROM user_remarks r JOIN users u ON u.id=r.ref_user_id WHERE r.user_id=$1 ORDER BY lower(u.nick)",
+      "sql_preview": "SELECT count(*) FROM user_remarks WHERE user_id=$1",
+      "relations": [
+        {
+          "table": "user_remarks",
+          "alias": null,
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        }
+      ],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
+      "id": "7f97e2b02f64",
+      "source": "src/routes/users.rs",
+      "line": 1088,
+      "symbol": "remarks",
+      "criticality": "P1",
+      "runtime_surface": "users routes",
+      "dynamic": false,
+      "fragment": true,
+      "status": "review",
+      "sql_preview": "r.remark_text ASC",
+      "relations": [],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
+      "id": "67383ddb6255",
+      "source": "src/routes/users.rs",
+      "line": 1090,
+      "symbol": "remarks",
+      "criticality": "P1",
+      "runtime_surface": "users routes",
+      "dynamic": false,
+      "fragment": true,
+      "status": "review",
+      "sql_preview": "u.nick ASC",
+      "relations": [],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
+      "id": "bbeaca2f36ef",
+      "source": "src/routes/users.rs",
+      "line": 1093,
+      "symbol": "remarks",
+      "criticality": "P1",
+      "runtime_surface": "users routes",
+      "dynamic": true,
+      "fragment": false,
+      "status": "review",
+      "sql_preview": "SELECT u.nick, r.remark_text FROM user_remarks r JOIN users u ON u.id=r.ref_user_id WHERE r.user_id=$1 ORDER BY {sOrder} LIMIT $2 OFFSET $3",
       "relations": [
         {
           "table": "user_remarks",
@@ -16277,9 +16574,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "7703fd120ee1",
+      "id": "e9c2da687bae",
       "source": "src/routes/users.rs",
-      "line": 873,
+      "line": 1119,
       "symbol": "get_user",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -16303,9 +16600,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "e60d6f2b4746",
+      "id": "83b43a2b3332",
       "source": "src/routes/users.rs",
-      "line": 883,
+      "line": 1129,
       "symbol": "get_user_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -16329,75 +16626,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "d28a1954232e",
+      "id": "880ef9ac8941",
       "source": "src/routes/users.rs",
-      "line": 910,
-      "symbol": "user_topics",
-      "criticality": "P1",
-      "runtime_surface": "users routes",
-      "dynamic": false,
-      "fragment": false,
-      "status": "clean",
-      "sql_preview": "SELECT t.id, t.title, t.url, t.postdate, t.lastmod, u.id AS author_id, u.nick AS author, g.id AS group_id, g.title AS group_title, g.urlname AS group_urlname, s.id AS section_id, s.name AS section_name, CASE s.id WHEN 1…",
-      "relations": [
-        {
-          "table": "tags",
-          "alias": "tg",
-          "schema": null,
-          "context": "from",
-          "virtual": false,
-          "system": false
-        },
-        {
-          "table": "tags_values",
-          "alias": "tv",
-          "schema": null,
-          "context": "join",
-          "virtual": false,
-          "system": false
-        },
-        {
-          "table": "topics",
-          "alias": "t",
-          "schema": null,
-          "context": "from",
-          "virtual": false,
-          "system": false
-        },
-        {
-          "table": "users",
-          "alias": "u",
-          "schema": null,
-          "context": "join",
-          "virtual": false,
-          "system": false
-        },
-        {
-          "table": "groups",
-          "alias": "g",
-          "schema": null,
-          "context": "join",
-          "virtual": false,
-          "system": false
-        },
-        {
-          "table": "sections",
-          "alias": "s",
-          "schema": null,
-          "context": "join",
-          "virtual": false,
-          "system": false
-        }
-      ],
-      "ctes": [],
-      "unresolved_qualifiers": [],
-      "findings": [],
-      "intentional_absence_probes": []
-    },
-    {
-      "id": "8a81967b5b9c",
-      "source": "src/routes/users.rs",
-      "line": 938,
+      "line": 1155,
       "symbol": "user_stats",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -16421,9 +16652,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "65f44d2ef07c",
+      "id": "c5d69197e838",
       "source": "src/routes/users.rs",
-      "line": 948,
+      "line": 1165,
       "symbol": "user_stats",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -16447,9 +16678,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "f8ecd130646e",
+      "id": "fe4363ddb570",
       "source": "src/routes/users.rs",
-      "line": 965,
+      "line": 1186,
       "symbol": "user_tags",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -16481,9 +16712,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "a09ab6e69c63",
+      "id": "f112b87d4a17",
       "source": "src/routes/users.rs",
-      "line": 975,
+      "line": 1196,
       "symbol": "count_drafts",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -16507,9 +16738,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "1a0e9843547d",
+      "id": "1aceffdc055f",
       "source": "src/routes/users.rs",
-      "line": 987,
+      "line": 1211,
       "symbol": "deleted_topics",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -16524,9 +16755,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "9220f4284b85",
+      "id": "31b433bfaea6",
       "source": "src/routes/users.rs",
-      "line": 995,
+      "line": 1222,
       "symbol": "drafts",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -16541,9 +16772,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "ba586694a586",
+      "id": "44abdc181b78",
       "source": "src/routes/users.rs",
-      "line": 1006,
+      "line": 1233,
       "symbol": "favs",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -16615,9 +16846,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "42035bcc6c2f",
+      "id": "1e8b777bb39c",
       "source": "src/routes/users.rs",
-      "line": 1041,
+      "line": 1270,
       "symbol": "tracked",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -16689,9 +16920,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "381cf5feb29f",
+      "id": "03c3d8c4e2d8",
       "source": "src/routes/users.rs",
-      "line": 1078,
+      "line": 1307,
       "symbol": "render_user_topic_list",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -16755,9 +16986,85 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "85c044d4c545",
+      "id": "96ebebb63f6e",
       "source": "src/routes/users.rs",
-      "line": 1168,
+      "line": 1370,
+      "symbol": "optEditProfileInfoRestrictionForUser",
+      "criticality": "P1",
+      "runtime_surface": "users routes",
+      "dynamic": false,
+      "fragment": false,
+      "status": "clean",
+      "sql_preview": "SELECT COALESCE(u.frozen_until>CURRENT_TIMESTAMP,false), EXISTS(SELECT 1 FROM user_log l WHERE l.userid=u.id AND l.action::text='reset_info' AND l.action_date>CURRENT_TIMESTAMP-interval '1 day' AND l.userid<>l.action_us…",
+      "relations": [
+        {
+          "table": "user_log",
+          "alias": "l",
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        },
+        {
+          "table": "user_log",
+          "alias": "l",
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        },
+        {
+          "table": "user_log",
+          "alias": "l",
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        },
+        {
+          "table": "users",
+          "alias": "u",
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        }
+      ],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
+      "id": "bb983682b03e",
+      "source": "src/routes/users.rs",
+      "line": 1455,
+      "symbol": "edit_profile_form",
+      "criticality": "P1",
+      "runtime_surface": "users routes",
+      "dynamic": false,
+      "fragment": false,
+      "status": "clean",
+      "sql_preview": "SELECT settings::text FROM user_settings WHERE id=$1",
+      "relations": [
+        {
+          "table": "user_settings",
+          "alias": null,
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        }
+      ],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
+      "id": "cb519c089b1b",
+      "source": "src/routes/users.rs",
+      "line": 1520,
       "symbol": "edit_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -16781,42 +17088,16 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "2de1d0938eeb",
+      "id": "a145ab50d5e0",
       "source": "src/routes/users.rs",
-      "line": 1196,
+      "line": 1581,
       "symbol": "edit_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
       "dynamic": false,
       "fragment": false,
       "status": "clean",
-      "sql_preview": "UPDATE users SET passwd=$2 WHERE id=$1",
-      "relations": [
-        {
-          "table": "users",
-          "alias": null,
-          "schema": null,
-          "context": "update",
-          "virtual": false,
-          "system": false
-        }
-      ],
-      "ctes": [],
-      "unresolved_qualifiers": [],
-      "findings": [],
-      "intentional_absence_probes": []
-    },
-    {
-      "id": "28f2f199151e",
-      "source": "src/routes/users.rs",
-      "line": 1208,
-      "symbol": "edit_profile",
-      "criticality": "P1",
-      "runtime_surface": "users routes",
-      "dynamic": false,
-      "fragment": false,
-      "status": "clean",
-      "sql_preview": "SELECT email,regdate FROM users WHERE id=$1",
+      "sql_preview": "SELECT id FROM users WHERE normalize_email(email)=normalize_email($1) AND NOT blocked ORDER BY id DESC LIMIT 1",
       "relations": [
         {
           "table": "users",
@@ -16833,19 +17114,19 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "7e5dc287a191",
+      "id": "3844b3805258",
       "source": "src/routes/users.rs",
-      "line": 1221,
+      "line": 1600,
       "symbol": "edit_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
       "dynamic": false,
       "fragment": false,
       "status": "clean",
-      "sql_preview": "SELECT id FROM users WHERE lower(email)=$1 AND id<>$2",
+      "sql_preview": "SELECT (ban_date IS NULL OR ban_date>CURRENT_TIMESTAMP), COALESCE(allow_posting,false) FROM b_ips WHERE ip=$1::inet",
       "relations": [
         {
-          "table": "users",
+          "table": "b_ips",
           "alias": null,
           "schema": null,
           "context": "from",
@@ -16859,16 +17140,42 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "48f6ac8c405e",
+      "id": "dc7c03178e7a",
       "source": "src/routes/users.rs",
-      "line": 1231,
+      "line": 1636,
       "symbol": "edit_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
       "dynamic": false,
       "fragment": false,
       "status": "clean",
-      "sql_preview": "UPDATE users SET name=$2,town=$3,url=$4,userinfo=$5,new_email=COALESCE($6,new_email) WHERE id=$1",
+      "sql_preview": "SELECT settings::text FROM user_settings WHERE id=$1",
+      "relations": [
+        {
+          "table": "user_settings",
+          "alias": null,
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        }
+      ],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
+      "id": "4cfba0e29ada",
+      "source": "src/routes/users.rs",
+      "line": 1650,
+      "symbol": "edit_profile",
+      "criticality": "P1",
+      "runtime_surface": "users routes",
+      "dynamic": false,
+      "fragment": false,
+      "status": "clean",
+      "sql_preview": "UPDATE users SET passwd=$2,lostpwd='epoch' WHERE id=$1",
       "relations": [
         {
           "table": "users",
@@ -16885,9 +17192,61 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "5de741e4f9f1",
+      "id": "9be57d3e7ffb",
       "source": "src/routes/users.rs",
-      "line": 1271,
+      "line": 1665,
+      "symbol": "edit_profile",
+      "criticality": "P1",
+      "runtime_surface": "users routes",
+      "dynamic": false,
+      "fragment": false,
+      "status": "clean",
+      "sql_preview": "UPDATE users SET new_email=$2 WHERE id=$1",
+      "relations": [
+        {
+          "table": "users",
+          "alias": null,
+          "schema": null,
+          "context": "update",
+          "virtual": false,
+          "system": false
+        }
+      ],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
+      "id": "d8e7ddbf892e",
+      "source": "src/routes/users.rs",
+      "line": 1673,
+      "symbol": "edit_profile",
+      "criticality": "P1",
+      "runtime_surface": "users routes",
+      "dynamic": false,
+      "fragment": false,
+      "status": "clean",
+      "sql_preview": "UPDATE users SET name=$2,town=$3,url=$4,userinfo=$5, userinfo_markup=$6::markup_type WHERE id=$1",
+      "relations": [
+        {
+          "table": "users",
+          "alias": null,
+          "schema": null,
+          "context": "update",
+          "virtual": false,
+          "system": false
+        }
+      ],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
+      "id": "1fd1a9947b8e",
+      "source": "src/routes/users.rs",
+      "line": 1737,
       "symbol": "settings",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -16911,9 +17270,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "6f23c356bdef",
+      "id": "8084bfc08820",
       "source": "src/routes/users.rs",
-      "line": 1303,
+      "line": 1769,
       "symbol": "save_settings",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -16937,9 +17296,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "9b72af2683ca",
+      "id": "804d4d393aa9",
       "source": "src/routes/users.rs",
-      "line": 1313,
+      "line": 1779,
       "symbol": "save_settings",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -16963,9 +17322,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "081bd761d9aa",
+      "id": "a490564420c0",
       "source": "src/routes/users.rs",
-      "line": 1347,
+      "line": 1817,
       "symbol": "remark_form",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -16989,9 +17348,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "de824898c555",
+      "id": "809d73465b2a",
       "source": "src/routes/users.rs",
-      "line": 1385,
+      "line": 1855,
       "symbol": "save_remark",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -17015,9 +17374,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "fff9f57091fc",
+      "id": "8df9d76efdb2",
       "source": "src/routes/users.rs",
-      "line": 1392,
+      "line": 1862,
       "symbol": "save_remark",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -17041,9 +17400,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "31d34768136e",
+      "id": "6e52db29b8da",
       "source": "src/routes/users.rs",
-      "line": 1430,
+      "line": 1904,
       "symbol": "profile_wipe",
       "criticality": "P1",
       "runtime_surface": "users routes",

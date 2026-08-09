@@ -12,12 +12,13 @@ use crate::{
 use askama::Template;
 use axum::{
     Form, Json,
-    extract::{Path, Query, RawQuery, State},
-    response::{Html, IntoResponse, Redirect, Response},
+    extract::{ConnectInfo, Path, Query, RawQuery, State},
+    http::{HeaderMap, StatusCode, header},
+    response::{Html, IntoResponse, Response},
 };
 use axum_extra::extract::cookie::CookieJar;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::{collections::HashMap, net::SocketAddr, sync::OnceLock};
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct UserProfileData {
@@ -85,7 +86,6 @@ struct UserLogEntry {
 struct UserTemplate {
     profile: UserProfileData,
     stats: UserStats,
-    topics: Vec<TopicSummary>,
     favorite_tags: Vec<String>,
     ignore_tags: Vec<String>,
     drafts_count: i64,
@@ -105,6 +105,22 @@ struct UserTemplate {
     other_accounts: Vec<String>,
     user_log: Vec<UserLogEntry>,
     invited_users: Vec<String>,
+    lastlogin_fuzzy: Option<String>,
+    show_url: bool,
+    show_userinfo: bool,
+    url_nofollow: bool,
+    remark: Option<String>,
+    can_remark: bool,
+    ignored: bool,
+    can_ignore: bool,
+    has_remarks: bool,
+    can_load_userpic: bool,
+    watch_present: bool,
+    fav_present: bool,
+    slow_mode: bool,
+    slow_mode_reason: String,
+    freezer_nick: Option<String>,
+    freezing_reason: Option<String>,
     /// `UserService.getUserpic(user, viewer.avatarMode, misteryMan=true)` -
     /// always renders as an `<img>`, falling back to a 1x1 transparent gif
     /// (`DisabledUserpic`) rather than a "no photo" box when the viewer has
@@ -134,6 +150,11 @@ struct SettingsTemplate {
 struct EditProfileTemplate {
     user: UserSummary,
     profile: UserProfileData,
+    can_load_userpic: bool,
+    can_edit_info: bool,
+    can_edit_info_reason: String,
+    info_markup_form_id: String,
+    info_markup_title: String,
     csrf_token: String,
 }
 
@@ -169,6 +190,7 @@ struct UserTopicsTemplate {
 pub struct UserTopicFeedQuery {
     pub offset: Option<i64>,
     pub section: Option<i32>,
+    pub output: Option<String>,
 }
 
 /// UserTopicListController.showUserTopics: `/people/{nick}` (bare, no
@@ -180,8 +202,19 @@ pub async fn topic_feed(
     State(state): State<AppState>,
     Path(nick): Path<String>,
     Query(q): Query<UserTopicFeedQuery>,
-) -> Result<Html<String>> {
+    current: CurrentUser,
+) -> Result<Response> {
+    if q.output.as_deref() == Some("rss") {
+        return Ok(StatusCode::GONE.into_response());
+    }
     let user = get_user(&state, &nick).await?;
+    if user.id == crate::routes::comments::ANONYMOUS_USER_ID
+        && !current.0.as_ref().is_some_and(|stUser| stUser.canmod)
+    {
+        return Err(AppError::BadRequest(
+            "Лента для пользователя anonymous не доступна".into(),
+        ));
+    }
     let pager = Pager::new(q.offset.unwrap_or(0).max(0), state.config.page_size);
 
     let sql = format!(
@@ -207,7 +240,7 @@ pub async fn topic_feed(
             ""
         },
     );
-    let mut query = sqlx::query_as::<_, TopicSummary>(&sql)
+    let mut query = sqlx::query_as::<_, TopicSummary>(sqlx::AssertSqlSafe(sql))
         .bind(user.id)
         .bind(pager.offset)
         .bind(pager.limit);
@@ -262,7 +295,8 @@ pub async fn topic_feed(
             next_link,
         }
         .render()?,
-    ))
+    )
+    .into_response())
 }
 
 pub async fn profile_full(
@@ -317,9 +351,12 @@ pub async fn profile_full(
         )
         .into_response());
     }
-    Ok(render_profile(state, nick, q, current, csrf_token)
-        .await?
-        .into_response())
+    let stTimezone = stRequestTimezone(&stJar);
+    Ok(
+        render_profile(state, nick, q, current, stTimezone, csrf_token)
+            .await?
+            .into_response(),
+    )
 }
 
 fn bHasRequestParameter(optRawQuery: Option<&str>, sName: &str) -> bool {
@@ -328,14 +365,34 @@ fn bHasRequestParameter(optRawQuery: Option<&str>, sName: &str) -> bool {
         .is_some_and(|mapQuery| mapQuery.contains_key(sName))
 }
 
+fn sFuzzyDate(
+    dtValue: chrono::DateTime<chrono::Utc>,
+    stTimezone: chrono_tz::Tz,
+    dtNow: chrono::DateTime<chrono::Utc>,
+) -> String {
+    let stElapsed = dtNow - dtValue;
+    if stElapsed < chrono::Duration::days(3) {
+        "недавно".to_owned()
+    } else if stElapsed < chrono::Duration::days(365) {
+        dtValue
+            .with_timezone(&stTimezone)
+            .format("%d.%m.%y")
+            .to_string()
+    } else {
+        dtValue.with_timezone(&stTimezone).format("%Y").to_string()
+    }
+}
+
 async fn render_profile(
     state: AppState,
     nick: String,
-    q: PagerQuery,
+    _q: PagerQuery,
     current: CurrentUser,
+    stTimezone: chrono_tz::Tz,
     csrf_token: String,
 ) -> Result<Html<String>> {
     let profile = get_user_profile(&state, &nick).await?;
+    let target_summary = get_user(&state, &nick).await?;
     if profile.blocked && current.0.is_none() {
         return Err(AppError::Forbidden);
     }
@@ -343,17 +400,9 @@ async fn render_profile(
         return Err(AppError::NotFound);
     }
 
-    let pager = Pager::new(
-        q.offset
-            .or(q.page.map(|p| p.saturating_sub(1) * state.config.page_size))
-            .unwrap_or(0),
-        state.config.page_size,
-    );
-    let topics = user_topics(&state, profile.id, pager.offset, pager.limit).await?;
     let stats = user_stats(&state, profile.id).await?;
     let favorite_tags = user_tags(&state, profile.id, true).await?;
     let ignore_tags = user_tags(&state, profile.id, false).await?;
-    let drafts_count = count_drafts(&state, profile.id).await.unwrap_or(0);
     let is_owner = current
         .0
         .as_ref()
@@ -361,6 +410,93 @@ async fn render_profile(
         .unwrap_or(false);
     let is_moderator = current.0.as_ref().map(|u| u.canmod).unwrap_or(false);
     let can_view_private = is_owner || is_moderator;
+    let show_url = current.0.is_some() || profile.max_score >= 50;
+    let show_userinfo = show_url;
+    let remark = match current.0.as_ref().filter(|viewer| viewer.id != profile.id) {
+        Some(viewer) => {
+            sqlx::query_scalar(
+                "SELECT remark_text FROM user_remarks WHERE user_id=$1 AND ref_user_id=$2",
+            )
+            .bind(viewer.id)
+            .bind(profile.id)
+            .fetch_optional(&state.pool)
+            .await?
+        }
+        None => None,
+    };
+    let ignored = match current.0.as_ref().filter(|viewer| viewer.id != profile.id) {
+        Some(viewer) => {
+            sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM ignore_list WHERE userid=$1 AND ignored=$2)",
+            )
+            .bind(viewer.id)
+            .bind(profile.id)
+            .fetch_one(&state.pool)
+            .await?
+        }
+        None => false,
+    };
+    let can_ignore = current
+        .0
+        .as_ref()
+        .is_some_and(|viewer| viewer.id != profile.id && !profile.canmod);
+    let can_remark = current
+        .0
+        .as_ref()
+        .is_some_and(|viewer| viewer.id != profile.id);
+    let has_remarks = if is_owner {
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM user_remarks WHERE user_id=$1)")
+            .bind(profile.id)
+            .fetch_one(&state.pool)
+            .await?
+    } else {
+        false
+    };
+    let can_load_userpic = if is_owner {
+        crate::routes::legacy::bCanLoadUserpic(&state, &target_summary).await?
+    } else {
+        false
+    };
+    let (watch_present, fav_present) = if profile.anonymous {
+        (false, false)
+    } else {
+        sqlx::query_as(
+            r#"SELECT EXISTS(SELECT 1 FROM memories WHERE userid=$1 AND watch),
+                      EXISTS(SELECT 1 FROM memories WHERE userid=$1 AND NOT watch)"#,
+        )
+        .bind(profile.id)
+        .fetch_one(&state.pool)
+        .await?
+    };
+    let drafts_count = if can_view_private {
+        count_drafts(&state, profile.id).await.unwrap_or(0)
+    } else {
+        0
+    };
+    let bViewerFrozen = match current.0.as_ref() {
+        Some(stViewer) => sqlx::query_scalar::<_, bool>(
+            "SELECT COALESCE(frozen_until>CURRENT_TIMESTAMP,false) FROM users WHERE id=$1",
+        )
+        .bind(stViewer.id)
+        .fetch_optional(&state.pool)
+        .await?
+        .unwrap_or(false),
+        None => false,
+    };
+    let bViewerSlowMode = match current.0.as_ref() {
+        Some(stViewer) => {
+            crate::routes::topics::b_user_slow_mode_restricted(&state, stViewer).await?
+        }
+        None => false,
+    };
+    let bShowFuzzyLastLogin = !is_owner
+        && current.0.as_ref().is_none_or(|stViewer| {
+            stViewer.score.unwrap_or(0) < 100 || bViewerFrozen || bViewerSlowMode
+        });
+    let lastlogin_fuzzy = profile
+        .lastlogin
+        .filter(|_| bShowFuzzyLastLogin)
+        .map(|dtLastLogin| sFuzzyDate(dtLastLogin, stTimezone, chrono::Utc::now()));
     // Was rendered with Askama's `|safe` straight from the raw DB column -
     // stored XSS via the "about me" field (POST /people/{nick}/edit). Route
     // it through the same sanitizing markup pipeline as comments/topics.
@@ -405,6 +541,44 @@ async fn render_profile(
     let is_frozen = frozen_until
         .map(|u| u > chrono::Utc::now())
         .unwrap_or(false);
+    let (frozen_within_three_days, recent_score_loss): (bool, i64) = sqlx::query_as(
+        r#"SELECT COALESCE(frozen_until>CURRENT_TIMESTAMP-interval '3 days',false),
+                  COALESCE(abs((SELECT sum(di.bonus)::bigint FROM del_info di
+                    WHERE di.deldate>CURRENT_TIMESTAMP-interval '3 days'
+                      AND di.msgid IN (
+                        SELECT c.id FROM comments c WHERE c.userid=$1
+                        UNION ALL SELECT t.id FROM topics t WHERE t.userid=$1))),0)
+             FROM users WHERE id=$1"#,
+    )
+    .bind(profile.id)
+    .fetch_one(&state.pool)
+    .await?;
+    let slow_mode_reason = if profile.anonymous || profile.blocked || is_frozen {
+        None
+    } else if profile.score < 35 {
+        Some("большое число нарушений правил, score < 35")
+    } else if frozen_within_three_days {
+        Some("заморозка закончилась менее трех дней назад")
+    } else if recent_score_loss >= 30 {
+        Some("превышен лимит нарушений правил за последние 3 дня")
+    } else {
+        None
+    };
+    let slow_mode = slow_mode_reason.is_some();
+    let (freezer_nick, freezing_reason) = if is_frozen && current.0.is_some() && !bViewerFrozen {
+        sqlx::query_as::<_, (Option<String>, Option<String>)>(
+            r#"SELECT freezer.nick, target.freezing_reason
+                 FROM users target LEFT JOIN users freezer ON freezer.id=target.frozen_by
+                WHERE target.id=$1"#,
+        )
+        .bind(profile.id)
+        .fetch_optional(&state.pool)
+        .await?
+        .unwrap_or((None, None))
+    } else {
+        (None, None)
+    };
+    let url_nofollow = profile.score < 100 || profile.blocked || !profile.activated || is_frozen;
     let long_freeze_durations = frozen_until
         .and_then(|dtUntil| dtUntil.checked_add_months(chrono::Months::new(24)))
         .is_some_and(|dtTwoYearsAfterFreeze| dtTwoYearsAfterFreeze > chrono::Utc::now());
@@ -485,14 +659,18 @@ async fn render_profile(
 
     // UserService.getAllInvitedUsers / WhoisController "invitedUsers":
     // shown to everyone, not gated to owner/moderator, matching the original.
-    let invited_users: Vec<String> = sqlx::query_scalar(
-        r#"SELECT u.nick FROM user_invites i JOIN users u ON u.id=i.invited_user
-           WHERE i.owner=$1 AND i.invited_user IS NOT NULL ORDER BY i.issue_date"#,
-    )
-    .bind(profile.id)
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
+    let invited_users: Vec<String> = if can_view_private {
+        sqlx::query_scalar(
+            r#"SELECT u.nick FROM user_invites i JOIN users u ON u.id=i.invited_user
+               WHERE i.owner=$1 AND i.invited_user IS NOT NULL ORDER BY i.issue_date"#,
+        )
+        .bind(profile.id)
+        .fetch_all(&state.pool)
+        .await
+        .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
 
     let year_stats_url = format!(
         "/people/{}/profile?year-stats",
@@ -504,7 +682,6 @@ async fn render_profile(
         UserTemplate {
             profile,
             stats,
-            topics,
             favorite_tags,
             ignore_tags,
             drafts_count,
@@ -521,6 +698,22 @@ async fn render_profile(
             other_accounts,
             user_log,
             invited_users,
+            lastlogin_fuzzy,
+            show_url,
+            show_userinfo,
+            url_nofollow,
+            remark,
+            can_remark,
+            ignored,
+            can_ignore,
+            has_remarks,
+            can_load_userpic,
+            watch_present,
+            fav_present,
+            slow_mode,
+            slow_mode_reason: slow_mode_reason.unwrap_or_default().to_string(),
+            freezer_nick,
+            freezing_reason,
             userpic_url,
             year_stats_url,
             year_stats_user,
@@ -535,8 +728,15 @@ pub struct WhoisQuery {
     nick: String,
 }
 
-pub async fn legacy_whois(Query(q): Query<WhoisQuery>) -> Redirect {
-    Redirect::to(&format!("/people/{}/profile", urlencoding::encode(&q.nick)))
+pub async fn legacy_whois(Query(q): Query<WhoisQuery>) -> Response {
+    (
+        StatusCode::FOUND,
+        [(
+            header::LOCATION,
+            format!("/people/{}/profile", urlencoding::encode(&q.nick)),
+        )],
+    )
+        .into_response()
 }
 
 const REACTIONS_ITEMS_PER_PAGE: i64 = 50;
@@ -657,7 +857,7 @@ async fn reactions_view(
                WHERE c.userid = $1 {not_deleted_comment}
                ORDER BY set_date DESC OFFSET $2 LIMIT $3"#
         );
-        sqlx::query_as(&sql)
+        sqlx::query_as(sqlx::AssertSqlSafe(sql))
             .bind(user.id)
             .bind(offset)
             .bind(limit)
@@ -682,7 +882,7 @@ async fn reactions_view(
                WHERE r.origin_user = $1 {not_deleted}
                ORDER BY r.set_date DESC OFFSET $2 LIMIT $3"#
         );
-        sqlx::query_as(&sql)
+        sqlx::query_as(sqlx::AssertSqlSafe(sql))
             .bind(user.id)
             .bind(offset)
             .bind(limit)
@@ -832,9 +1032,33 @@ async fn reactions_view(
     Ok(Html(html))
 }
 
+#[derive(Deserialize)]
+pub struct StRemarksQuery {
+    pub offset: Option<i64>,
+    pub sort: Option<i32>,
+}
+
+#[derive(Debug)]
+struct StRemarkListRow {
+    sNick: String,
+    sText: String,
+}
+
+#[derive(Template)]
+#[template(path = "remarks.html")]
+struct StRemarksTemplate {
+    sNick: String,
+    vecRemarks: Vec<StRemarkListRow>,
+    iOffset: i64,
+    iLimit: i64,
+    iSort: i32,
+    bHasMore: bool,
+}
+
 pub async fn remarks(
     State(state): State<AppState>,
     Path(nick): Path<String>,
+    Query(stQuery): Query<StRemarksQuery>,
     current: CurrentUser,
 ) -> Result<Html<String>> {
     // Java's ShowRemarkController only ever shows the logged-in user's OWN
@@ -847,25 +1071,47 @@ pub async fn remarks(
     if !me.nick.eq_ignore_ascii_case(&nick) {
         return Err(AppError::Forbidden);
     }
-    let rows = sqlx::query_as::<_, (String, String)>(
-        "SELECT u.nick, r.remark_text FROM user_remarks r JOIN users u ON u.id=r.ref_user_id WHERE r.user_id=$1 ORDER BY lower(u.nick)",
-    )
-    .bind(me.id)
-    .fetch_all(&state.pool)
-    .await?;
-    let mut html = format!(
-        "<h1>Заметки {}</h1><ul>",
-        html_escape::encode_text(&me.nick)
-    );
-    for (target, remark) in rows {
-        html.push_str(&format!(
-            "<li><b>{}</b>: {}</li>",
-            html_escape::encode_text(&target),
-            html_escape::encode_text(&remark)
-        ));
+    let iOffset = stQuery.offset.unwrap_or(0);
+    let iSort = stQuery.sort.unwrap_or(0);
+    if !matches!(iSort, 0 | 1) {
+        return Err(AppError::BadRequest("Wrong sort".into()));
     }
-    html.push_str("</ul>");
-    Ok(Html(html))
+    let iCount: i64 = sqlx::query_scalar("SELECT count(*) FROM user_remarks WHERE user_id=$1")
+        .bind(me.id)
+        .fetch_one(&state.pool)
+        .await?;
+    if iCount > 0 && (iOffset < 0 || iOffset >= iCount) {
+        return Err(AppError::BadRequest("Wrong offset".into()));
+    }
+    let iLimit = crate::routes::topics::messages_per_page(&state, &Some(me.clone())).await;
+    let sOrder = if iSort == 1 {
+        "r.remark_text ASC"
+    } else {
+        "u.nick ASC"
+    };
+    let sSql = format!(
+        "SELECT u.nick, r.remark_text FROM user_remarks r JOIN users u ON u.id=r.ref_user_id WHERE r.user_id=$1 ORDER BY {sOrder} LIMIT $2 OFFSET $3"
+    );
+    let vecRemarks = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sSql))
+        .bind(me.id)
+        .bind(iLimit)
+        .bind(iOffset)
+        .fetch_all(&state.pool)
+        .await?
+        .into_iter()
+        .map(|(sNick, sText)| StRemarkListRow { sNick, sText })
+        .collect();
+    Ok(Html(
+        StRemarksTemplate {
+            sNick: me.nick,
+            vecRemarks,
+            iOffset,
+            iLimit,
+            iSort,
+            bHasMore: iCount > iOffset + iLimit,
+        }
+        .render()?,
+    ))
 }
 
 pub async fn get_user(state: &AppState, nick: &str) -> Result<UserSummary> {
@@ -900,35 +1146,6 @@ async fn get_user_profile(state: &AppState, nick: &str) -> Result<UserProfileDat
     .ok_or(AppError::NotFound)
 }
 
-async fn user_topics(
-    state: &AppState,
-    user_id: i32,
-    offset: i64,
-    limit: i64,
-) -> Result<Vec<TopicSummary>> {
-    Ok(sqlx::query_as::<_, TopicSummary>(
-        r#"SELECT t.id, t.title, t.url, t.postdate, t.lastmod, u.id AS author_id, u.nick AS author,
-                  g.id AS group_id, g.title AS group_title, g.urlname AS group_urlname,
-                  s.id AS section_id, s.name AS section_name,
-                  CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(s.name) END AS section_prefix,
-                  t.stat1 AS comments, t.deleted, t.sticky, t.resolved,
-                  (SELECT string_agg(tv.value, ',' ORDER BY tv.value)
-                     FROM tags tg JOIN tags_values tv ON tv.id=tg.tagid
-                    WHERE tg.msgid=t.id) AS tags
-           FROM topics t
-           JOIN users u ON u.id=t.userid
-           JOIN groups g ON g.id=t.groupid
-           JOIN sections s ON s.id=g.section
-           WHERE u.id=$1 AND NOT t.deleted AND NOT COALESCE(t.draft,false)
-           ORDER BY t.postdate DESC OFFSET $2 LIMIT $3"#,
-    )
-    .bind(user_id)
-    .bind(offset)
-    .bind(limit)
-    .fetch_all(&state.pool)
-    .await?)
-}
-
 async fn user_stats(state: &AppState, user_id: i32) -> Result<UserStats> {
     let (topic_count, first_topic, last_topic): (
         i64,
@@ -960,7 +1177,11 @@ async fn user_stats(state: &AppState, user_id: i32) -> Result<UserStats> {
     })
 }
 
-async fn user_tags(state: &AppState, user_id: i32, favorite: bool) -> Result<Vec<String>> {
+pub(crate) async fn user_tags(
+    state: &AppState,
+    user_id: i32,
+    favorite: bool,
+) -> Result<Vec<String>> {
     Ok(sqlx::query_scalar(
         "SELECT tv.value FROM user_tags ut JOIN tags_values tv ON tv.id=ut.tag_id WHERE ut.user_id=$1 AND ut.is_favorite=$2 ORDER BY tv.value",
     )
@@ -983,7 +1204,10 @@ pub async fn deleted_topics(
     State(state): State<AppState>,
     Path(nick): Path<String>,
     Query(q): Query<PagerQuery>,
+    current: CurrentUser,
 ) -> Result<Html<String>> {
+    let stTarget = get_user(&state, &nick).await?;
+    ensure_self_or_moderator(&current.0, &stTarget)?;
     render_user_topic_list(state, nick, q, "Удалённые темы", "t.deleted").await
 }
 
@@ -991,7 +1215,10 @@ pub async fn drafts(
     State(state): State<AppState>,
     Path(nick): Path<String>,
     Query(q): Query<PagerQuery>,
+    current: CurrentUser,
 ) -> Result<Html<String>> {
+    let stTarget = get_user(&state, &nick).await?;
+    ensure_self_or_moderator(&current.0, &stTarget)?;
     render_user_topic_list(state, nick, q, "Черновики", "t.draft").await
 }
 
@@ -1034,8 +1261,10 @@ pub async fn tracked(
     State(state): State<AppState>,
     Path(nick): Path<String>,
     Query(q): Query<PagerQuery>,
+    current: CurrentUser,
 ) -> Result<Html<String>> {
     let user = get_user(&state, &nick).await?;
+    ensure_self_or_moderator(&current.0, &user)?;
     let pager = Pager::new(q.offset.unwrap_or(0), state.config.page_size);
     let topics = sqlx::query_as::<_, TopicSummary>(
         r#"SELECT t.id, t.title, t.url, t.postdate, t.lastmod, au.id AS author_id, au.nick AS author,
@@ -1070,7 +1299,7 @@ async fn render_user_topic_list(
     nick: String,
     q: PagerQuery,
     title: &str,
-    predicate: &str,
+    predicate: &'static str,
 ) -> Result<Html<String>> {
     let user = get_user(&state, &nick).await?;
     let pager = Pager::new(q.offset.unwrap_or(0), state.config.page_size);
@@ -1090,7 +1319,7 @@ async fn render_user_topic_list(
            WHERE u.id=$1 AND {predicate}
            ORDER BY t.postdate DESC OFFSET $2 LIMIT $3"#
     );
-    let topics = sqlx::query_as::<_, TopicSummary>(&sql)
+    let topics = sqlx::query_as::<_, TopicSummary>(sqlx::AssertSqlSafe(sql))
         .bind(user.id)
         .bind(pager.offset)
         .bind(pager.limit)
@@ -1114,13 +1343,97 @@ fn simple_topic_list(title: &str, topics: &[TopicSummary]) -> String {
     html
 }
 
+fn optEditProfileInfoRestriction(
+    bFrozen: bool,
+    bRecentResetInfo: bool,
+    bRecentResetUrl: bool,
+    bRecentResetTown: bool,
+) -> Option<&'static str> {
+    if bFrozen {
+        Some("установлен режим только для чтения")
+    } else if bRecentResetInfo {
+        Some("текст профиля был сброшен модератором менее 24 часов назад")
+    } else if bRecentResetUrl {
+        Some("url был сброшен модератором менее 24 часов назад")
+    } else if bRecentResetTown {
+        Some("поле города было сброшено модератором менее 24 часов назад")
+    } else {
+        None
+    }
+}
+
+async fn optEditProfileInfoRestrictionForUser(
+    state: &AppState,
+    user_id: i32,
+) -> Result<Option<&'static str>> {
+    let row: (bool, bool, bool, bool) = sqlx::query_as(
+        r#"SELECT COALESCE(u.frozen_until>CURRENT_TIMESTAMP,false),
+                  EXISTS(SELECT 1 FROM user_log l WHERE l.userid=u.id
+                    AND l.action::text='reset_info'
+                    AND l.action_date>CURRENT_TIMESTAMP-interval '1 day'
+                    AND l.userid<>l.action_userid),
+                  EXISTS(SELECT 1 FROM user_log l WHERE l.userid=u.id
+                    AND l.action::text='reset_url'
+                    AND l.action_date>CURRENT_TIMESTAMP-interval '1 day'
+                    AND l.userid<>l.action_userid),
+                  EXISTS(SELECT 1 FROM user_log l WHERE l.userid=u.id
+                    AND l.action::text='reset_town'
+                    AND l.action_date>CURRENT_TIMESTAMP-interval '1 day'
+                    AND l.userid<>l.action_userid)
+             FROM users u WHERE u.id=$1"#,
+    )
+    .bind(user_id)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(optEditProfileInfoRestriction(row.0, row.1, row.2, row.3))
+}
+
+fn bValidProfileUrl(value: &str) -> bool {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(
+            r"(?i)^((((https?)|(ftp))://(([0-9\p{L}.-]+\.[0-9\p{L}]+)|(\d+\.\d+\.\d+\.\d+))(:[0-9]+)?(/[^ ]*)?)|(mailto:[a-z0-9_+-.]+@[0-9a-z.-]+\.[a-z]+)|(news:[a-z0-9.-]+)|(((www)|(ftp))\.(([0-9a-z.-]+\.[a-z]+(:[0-9]+)?(/[^ ]*)?)|([a-z]+(/[^ ]*)?))))$",
+        )
+        .expect("Java-compatible profile URL regex must compile")
+    })
+    .is_match(value)
+}
+
+fn optFixedProfileUrl(value: Option<&str>) -> Result<Option<String>> {
+    let Some(value) = value.filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    if !bValidProfileUrl(value) {
+        return Err(AppError::BadRequest("Некорректный URL".into()));
+    }
+    let value = value.trim();
+    if value.to_ascii_lowercase().starts_with("www.") {
+        Ok(Some(format!("http://{value}")))
+    } else if value.to_ascii_lowercase().starts_with("ftp.") {
+        Ok(Some(format!("ftp://{value}")))
+    } else {
+        Ok(Some(value.to_string()))
+    }
+}
+
+fn sMarkupIdFromForm(value: &str) -> &'static str {
+    match value {
+        "markdown" => "MARKDOWN",
+        "ntobr" => "BBCODE_ULB",
+        _ => "BBCODE_TEX",
+    }
+}
+
 #[derive(Deserialize)]
 pub struct ProfileForm {
     pub name: Option<String>,
     pub town: Option<String>,
     pub url: Option<String>,
     pub email: Option<String>,
-    pub userinfo: Option<String>,
+    #[serde(rename = "info", alias = "userinfo")]
+    pub info: Option<String>,
+    #[serde(rename = "infoMarkup")]
+    pub info_markup: Option<String>,
     pub password: Option<String>,
     pub password2: Option<String>,
     pub oldpass: Option<String>,
@@ -1136,21 +1449,60 @@ pub async fn edit_profile_form(
     let user = get_user(&state, &nick).await?;
     let profile = get_user_profile(&state, &nick).await?;
     ensure_self(&current.0, &user)?;
-    Ok(Html(
+    let can_load_userpic = crate::routes::legacy::bCanLoadUserpic(&state, &user).await?;
+    let opt_restriction = optEditProfileInfoRestrictionForUser(&state, user.id).await?;
+    let settings_text: Option<String> =
+        sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
+            .bind(user.id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let settings = ProfileSettings::from_hstore_text(settings_text);
+    let effective_markup = if profile
+        .userinfo
+        .as_deref()
+        .is_none_or(|value| value.trim().is_empty())
+    {
+        settings.format_mode.clone()
+    } else {
+        crate::routes::topics::markup_form_view(
+            profile.userinfo_markup.as_deref().unwrap_or("BBCODE_TEX"),
+        )
+        .0
+    };
+    let info_markup_title = crate::profile::FORMAT_MODES
+        .iter()
+        .find(|(value, _, _)| *value == effective_markup)
+        .map(|(_, title, _)| (*title).to_string())
+        .unwrap_or_else(|| crate::routes::topics::markup_form_view("BBCODE_TEX").1);
+    let mut response = Html(
         EditProfileTemplate {
             user,
             profile,
+            can_load_userpic,
+            can_edit_info: opt_restriction.is_none(),
+            can_edit_info_reason: opt_restriction.unwrap_or_default().to_string(),
+            info_markup_form_id: effective_markup,
+            info_markup_title,
             csrf_token,
         }
         .render()?,
     )
-    .into_response())
+    .into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        "no-store, no-cache, must-revalidate"
+            .parse()
+            .expect("static cache-control value"),
+    );
+    Ok(response)
 }
 
 pub async fn edit_profile(
     State(state): State<AppState>,
     Path(nick): Path<String>,
     current: CurrentUser,
+    headers: HeaderMap,
+    ConnectInfo(peer_address): ConnectInfo<SocketAddr>,
     Form(form): axum::Form<ProfileForm>,
 ) -> Result<impl axum::response::IntoResponse> {
     ensure_self_service_actor(&current.0, &nick)?;
@@ -1177,66 +1529,177 @@ pub async fn edit_profile(
         return Err(AppError::BadRequest("Неверный пароль".into()));
     }
 
-    if let Some(password) = form.password.as_deref().filter(|s| !s.is_empty()) {
+    let new_password = form.password.as_deref().filter(|s| !s.is_empty());
+    let new_password_hash = if let Some(password) = new_password {
         if password.eq_ignore_ascii_case(&user.nick) {
             return Err(AppError::BadRequest(
                 "пароль не может совпадать с логином".to_string(),
             ));
         }
         if form.password2.as_deref() != Some(password) {
-            return Err(AppError::BadRequest("пароли не совпадают".to_string()));
+            return Err(AppError::BadRequest(
+                "введенные пароли не совпадают".to_string(),
+            ));
         }
         if password.chars().count() < 10 {
             return Err(AppError::BadRequest(
-                "пароль должен быть не короче 10 символов".to_string(),
+                "слишком короткий пароль, минимальная длина: 10".to_string(),
             ));
         }
-        let hash = security::password::hash(password)
-            .map_err(|e| AppError::BadRequest(format!("password hash error: {e}")))?;
-        sqlx::query("UPDATE users SET passwd=$2 WHERE id=$1")
-            .bind(user.id)
-            .bind(hash)
-            .execute(&state.pool)
-            .await?;
-    }
+        Some(
+            security::password::hash(password)
+                .map_err(|e| AppError::BadRequest(format!("password hash error: {e}")))?,
+        )
+    } else {
+        None
+    };
 
     // Email changes are staged into new_email and only take effect once the
     // user follows the activation-code link (see legacy::activate_post),
     // matching Java's UserDao.setNewEmail / acceptNewEmail split - the
     // previous handler wrote straight to `email` with no confirmation at all.
-    let (current_email, regdate): (Option<String>, Option<chrono::DateTime<chrono::Utc>>) =
-        sqlx::query_as("SELECT email,regdate FROM users WHERE id=$1")
-            .bind(user.id)
-            .fetch_one(&state.pool)
-            .await?;
+    let profile = get_user_profile(&state, &nick).await?;
+    let regdate = profile.regdate;
     let requested_email = form
         .email
         .as_deref()
         .map(|e| e.trim().to_lowercase())
         .filter(|e| !e.is_empty());
-    let pending_email = requested_email.filter(|e| Some(e.as_str()) != current_email.as_deref());
+    let Some(requested_email) = requested_email else {
+        return Err(AppError::BadRequest("Не указан e-mail".into()));
+    };
+    if requested_email.matches('@').count() != 1 || requested_email.chars().any(char::is_whitespace)
+    {
+        return Err(AppError::BadRequest("Некорректный e-mail".into()));
+    }
+    crate::routes::auth::validate_registration_email(&state, &requested_email).await?;
+    let pending_email =
+        (Some(requested_email.as_str()) != profile.email.as_deref()).then_some(requested_email);
 
     if let Some(ref new_email) = pending_email {
-        let taken: Option<i32> =
-            sqlx::query_scalar("SELECT id FROM users WHERE lower(email)=$1 AND id<>$2")
-                .bind(new_email)
-                .bind(user.id)
-                .fetch_optional(&state.pool)
-                .await?;
+        let taken: Option<i32> = sqlx::query_scalar(
+            r#"SELECT id FROM users
+               WHERE normalize_email(email)=normalize_email($1) AND NOT blocked
+               ORDER BY id DESC LIMIT 1"#,
+        )
+        .bind(new_email)
+        .fetch_optional(&state.pool)
+        .await?;
         if taken.is_some() {
             return Err(AppError::BadRequest("такой email уже используется".into()));
         }
     }
 
-    sqlx::query("UPDATE users SET name=$2,town=$3,url=$4,userinfo=$5,new_email=COALESCE($6,new_email) WHERE id=$1")
-        .bind(user.id)
-        .bind(form.name)
-        .bind(form.town)
-        .bind(form.url)
-        .bind(form.userinfo)
-        .bind(&pending_email)
-        .execute(&state.pool)
+    let client_ip = crate::security::stClientIp(
+        peer_address.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
+    let ip_block: Option<(bool, bool)> = sqlx::query_as(
+        r#"SELECT (ban_date IS NULL OR ban_date>CURRENT_TIMESTAMP),
+                  COALESCE(allow_posting,false)
+             FROM b_ips WHERE ip=$1::inet"#,
+    )
+    .bind(&client_ip)
+    .fetch_optional(&state.pool)
+    .await?;
+    if ip_block.is_some_and(|(blocked, allow_posting)| blocked && !allow_posting) {
+        return Err(AppError::BadRequest(
+            "постинг с этого IP адреса заблокирован".into(),
+        ));
+    }
+
+    let opt_restriction = optEditProfileInfoRestrictionForUser(&state, user.id).await?;
+    let can_edit_info = opt_restriction.is_none();
+    let fixed_url = optFixedProfileUrl(form.url.as_deref())?;
+    let name = form
+        .name
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .map(|value| html_escape::encode_text(value).into_owned());
+    let town = form
+        .town
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .map(|value| html_escape::encode_text(value).into_owned());
+    if town
+        .as_deref()
+        .is_some_and(|value| value.chars().count() > 100)
+    {
+        return Err(AppError::BadRequest(
+            "Слишком длинное название города (максимум 100 символов)".into(),
+        ));
+    }
+    let info = form.info.filter(|value| !value.is_empty());
+    let settings_text: Option<String> =
+        sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
+            .bind(user.id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let settings = ProfileSettings::from_hstore_text(settings_text);
+    let requested_markup = form
+        .info_markup
+        .as_deref()
+        .filter(|value| crate::profile::is_format_mode(value))
+        .unwrap_or(&settings.format_mode);
+    let info_markup = sMarkupIdFromForm(requested_markup);
+
+    let mut tx = state.pool.begin().await?;
+    if let Some(ref hash) = new_password_hash {
+        sqlx::query("UPDATE users SET passwd=$2,lostpwd='epoch' WHERE id=$1")
+            .bind(user.id)
+            .bind(hash)
+            .execute(&mut *tx)
+            .await?;
+        crate::audit::log_user_action_tx(
+            &mut tx,
+            user.id,
+            user.id,
+            "set_password",
+            &[("ip", client_ip.as_str())],
+        )
         .await?;
+    }
+    if let Some(ref new_email) = pending_email {
+        sqlx::query("UPDATE users SET new_email=$2 WHERE id=$1")
+            .bind(user.id)
+            .bind(new_email)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if can_edit_info {
+        sqlx::query(
+            r#"UPDATE users SET name=$2,town=$3,url=$4,userinfo=$5,
+                       userinfo_markup=$6::markup_type WHERE id=$1"#,
+        )
+        .bind(user.id)
+        .bind(&name)
+        .bind(&town)
+        .bind(&fixed_url)
+        .bind(&info)
+        .bind(info_markup)
+        .execute(&mut *tx)
+        .await?;
+        let mut changed = Vec::new();
+        if profile.name != name {
+            changed.push(("name", name.as_deref().unwrap_or("")));
+        }
+        if profile.url != fixed_url {
+            changed.push(("url", fixed_url.as_deref().unwrap_or("")));
+        }
+        if profile.town != town {
+            changed.push(("town", town.as_deref().unwrap_or("")));
+        }
+        if profile.userinfo != info || profile.userinfo_markup.as_deref() != Some(info_markup) {
+            changed.push(("info", info.as_deref().unwrap_or("")));
+        }
+        if !changed.is_empty() {
+            crate::audit::log_user_action_tx(&mut tx, user.id, user.id, "set_info", &changed)
+                .await?;
+        }
+    }
+    tx.commit().await?;
 
     if let Some(ref new_email) = pending_email {
         let regdate = regdate.ok_or_else(|| {
@@ -1249,11 +1712,14 @@ pub async fn edit_profile(
             "<h1>Обновление регистрации прошло успешно</h1><p>Ожидайте письма с кодом активации смены email.</p>".to_string(),
         ).into_response())
     } else {
-        Ok(Redirect::to(&format!(
-            "/people/{}/profile",
-            urlencoding::encode(&user.nick)
-        ))
-        .into_response())
+        Ok((
+            StatusCode::FOUND,
+            [(
+                header::LOCATION,
+                format!("/people/{}/profile", urlencoding::encode(&user.nick)),
+            )],
+        )
+            .into_response())
     }
 }
 
@@ -1295,7 +1761,7 @@ pub async fn save_settings(
     Path(nick): Path<String>,
     current: CurrentUser,
     Form(form): axum::Form<HashMap<String, String>>,
-) -> Result<Redirect> {
+) -> Result<Response> {
     ensure_self_service_actor(&current.0, &nick)?;
     let user = get_user(&state, &nick).await?;
     ensure_self(&current.0, &user)?;
@@ -1317,15 +1783,19 @@ pub async fn save_settings(
     .bind(values)
     .execute(&state.pool)
     .await?;
-    Ok(Redirect::to(&format!(
-        "/people/{}/profile",
-        urlencoding::encode(&user.nick)
-    )))
+    Ok((
+        StatusCode::FOUND,
+        [(
+            header::LOCATION,
+            format!("/people/{}/profile", urlencoding::encode(&user.nick)),
+        )],
+    )
+        .into_response())
 }
 
 #[derive(Deserialize)]
 pub struct RemarkForm {
-    pub remark: String,
+    pub text: String,
 }
 
 pub async fn remark_form(
@@ -1355,7 +1825,7 @@ pub async fn remark_form(
 <h1>Заметка о {}</h1>
 <form method="post" action="/people/{}/remark">
 <input type="hidden" name="csrf" value="{csrf_token}">
-<textarea name="remark" rows="8">{}</textarea>
+<textarea autofocus id="text" name="text" cols="60" rows="4" maxlength="255">{}</textarea>
 <button type="submit">Сохранить</button>
 </form>
 "#,
@@ -1370,7 +1840,7 @@ pub async fn save_remark(
     Path(nick): Path<String>,
     current: CurrentUser,
     Form(form): axum::Form<RemarkForm>,
-) -> Result<Redirect> {
+) -> Result<Response> {
     let target = get_user(&state, &nick).await?;
     let Some(me) = current.0 else {
         return Err(AppError::Forbidden);
@@ -1380,8 +1850,8 @@ pub async fn save_remark(
             "Нельзя оставить заметку самому себе".into(),
         ));
     }
-    let text: String = form.remark.chars().take(255).collect();
-    if text.trim().is_empty() {
+    let text: String = form.text.chars().take(255).collect();
+    if text.is_empty() {
         sqlx::query("DELETE FROM user_remarks WHERE user_id=$1 AND ref_user_id=$2")
             .bind(me.id)
             .bind(target.id)
@@ -1393,10 +1863,14 @@ pub async fn save_remark(
         )
         .bind(me.id).bind(target.id).bind(text).execute(&state.pool).await?;
     }
-    Ok(Redirect::to(&format!(
-        "/people/{}/remarks",
-        urlencoding::encode(&me.nick)
-    )))
+    Ok((
+        StatusCode::FOUND,
+        [(
+            header::LOCATION,
+            format!("/people/{}/profile", urlencoding::encode(&target.nick)),
+        )],
+    )
+        .into_response())
 }
 
 /// Java's `/people/{nick}/profile/wipe` is GET/HEAD-only and purely a
@@ -1490,7 +1964,10 @@ fn ensure_self(current: &Option<UserSummary>, target: &UserSummary) -> Result<()
 
 #[cfg(test)]
 mod tests {
-    use super::{bHasRequestParameter, edit_profile_form, ensure_self_service_actor, settings};
+    use super::{
+        bHasRequestParameter, edit_profile_form, ensure_self_service_actor,
+        optEditProfileInfoRestriction, optFixedProfileUrl, sMarkupIdFromForm, settings,
+    };
     use crate::{config::StConfig, error::AppError, models::UserSummary, state::AppState};
     use axum::{Router, http::header, routing::get};
 
@@ -1545,6 +2022,28 @@ mod tests {
         ));
         assert!(bHasRequestParameter(Some("year-stats"), "year-stats"));
         assert!(!bHasRequestParameter(Some("year_stats=true"), "year-stats"));
+    }
+
+    #[test]
+    fn edit_profile_restrictions_follow_java_order() {
+        assert_eq!(
+            optEditProfileInfoRestriction(true, true, true, true),
+            Some("установлен режим только для чтения")
+        );
+        assert!(optEditProfileInfoRestriction(false, false, false, false).is_none());
+    }
+
+    #[test]
+    fn profile_url_and_markup_match_original_form_contract() {
+        assert_eq!(
+            optFixedProfileUrl(Some("www.example.org/path")).unwrap(),
+            Some("http://www.example.org/path".into())
+        );
+        assert!(optFixedProfileUrl(Some(" example.org ")).is_err());
+        assert!(optFixedProfileUrl(Some("javascript:alert(1)")).is_err());
+        assert_eq!(sMarkupIdFromForm("markdown"), "MARKDOWN");
+        assert_eq!(sMarkupIdFromForm("ntobr"), "BBCODE_ULB");
+        assert_eq!(sMarkupIdFromForm("lorcode"), "BBCODE_TEX");
     }
 
     #[tokio::test]

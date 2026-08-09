@@ -1874,45 +1874,154 @@ async fn locate_topic_or_comment(
     Ok(row)
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct StDeletedCommentRow {
+    group_title: String,
+    topic_title: String,
+    topic_id: i32,
+    reason: Option<String>,
+    delete_date: Option<chrono::DateTime<chrono::Utc>>,
+    bonus: i32,
+    comment_id: i32,
+    topic_deleted: bool,
+    comment_deleted: bool,
+}
+
+#[derive(Debug, Clone)]
+struct StDeletedCommentFilterView {
+    value: &'static str,
+    label: &'static str,
+    selected: bool,
+    url: String,
+}
+
+#[derive(Template)]
+#[template(path = "deleted_comments.html")]
+struct StDeletedCommentsTemplate {
+    title: String,
+    comments: Vec<StDeletedCommentRow>,
+    filters: Vec<StDeletedCommentFilterView>,
+    prev_link: Option<String>,
+    next_link: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StDeletedCommentsQuery {
+    pub filter: Option<String>,
+    pub offset: Option<i64>,
+}
+
+fn sDeletedCommentsLink(nick: &str, offset: i64, filter: &str) -> String {
+    let mut query = Vec::new();
+    if offset > 0 {
+        query.push(format!("offset={offset}"));
+    }
+    if filter != "all" {
+        query.push(format!("filter={filter}"));
+    }
+    let base = format!("/people/{}/deleted-comments", urlencoding::encode(nick));
+    if query.is_empty() {
+        base
+    } else {
+        format!("{base}?{}", query.join("&"))
+    }
+}
+
 pub async fn deleted_comments_by_user(
     State(state): State<AppState>,
     Path(nick): Path<String>,
+    Query(query): Query<StDeletedCommentsQuery>,
     CurrentUser(user): CurrentUser,
 ) -> Result<Html<String>> {
     if !user.as_ref().map(|u| u.canmod).unwrap_or(false) {
         return Err(AppError::Forbidden);
     }
-    let comments = sqlx::query_as::<_, crate::models::CommentItem>(
-        r#"SELECT c.id, c.topic, c.replyto, c.title, m.message, m.markup::text AS markup, c.postdate, u.id AS author_id, u.nick AS author, c.deleted
-           FROM comments c
-           JOIN msgbase m ON m.id=c.id
-           JOIN users u ON u.id=c.userid
-           WHERE lower(u.nick)=lower($1) AND c.deleted
-           ORDER BY c.postdate DESC LIMIT 100"#,
-    )
-    .bind(&nick)
-    .fetch_all(&state.pool)
-    .await?;
-    let mut html = format!(
-        "<h1>Удалённые комментарии {}</h1>",
-        html_escape::encode_text(&nick)
-    );
-    for c in comments {
-        html.push_str(&format!(
-            "<article id=\"comment-{}\"><h3>{}</h3><p>topic #{} · {}</p><div>{}</div></article>",
-            c.id,
-            html_escape::encode_text(&c.title),
-            c.topic,
-            c.postdate,
-            markup::render_message_with_markup(&c.message, Some(&c.markup), None)
-        ));
+    const PAGE_SIZE: i64 = 50;
+    const MAX_OFFSET: i64 = 300;
+    let offset = query.offset.unwrap_or(0);
+    if !(0..=MAX_OFFSET).contains(&offset) {
+        return Err(AppError::BadRequest("Некорректное значение offset".into()));
     }
-    Ok(Html(html))
+    let target = crate::routes::users::get_user(&state, &nick).await?;
+    let filter = match query.filter.as_deref() {
+        Some("penalty") => "penalty",
+        Some("noauto") => "noauto",
+        Some("self") => "self",
+        _ => "all",
+    };
+    let filter_clause = match filter {
+        "penalty" => "di.bonus IS NOT NULL AND di.bonus<>0",
+        "noauto" => "c.deleted AND di.reason IS NOT NULL AND di.reason NOT ILIKE '%(авто%'",
+        "self" => "di.delby=c.userid",
+        _ => "true",
+    };
+    let sql = format!(
+        r#"SELECT g.title AS group_title,
+                  CASE WHEN trim(COALESCE(t.title,''))='' THEN 'Без заглавия' ELSE t.title END AS topic_title,
+                  t.id AS topic_id, di.reason,
+                  COALESCE(di.deldate, topic_di.deldate) AS delete_date,
+                  COALESCE(di.bonus,0)::int AS bonus, c.id AS comment_id,
+                  t.deleted AS topic_deleted, c.deleted AS comment_deleted
+             FROM groups g JOIN topics t ON g.id=t.groupid
+             JOIN comments c ON c.topic=t.id
+             LEFT JOIN del_info di ON di.msgid=c.id
+             LEFT JOIN del_info topic_di ON topic_di.msgid=t.id
+            WHERE c.userid=$1 AND (c.deleted OR t.deleted) AND {filter_clause}
+            ORDER BY COALESCE(di.deldate, topic_di.deldate) DESC NULLS LAST, c.id DESC
+            LIMIT 50 OFFSET $2"#,
+    );
+    let comments = sqlx::query_as::<_, StDeletedCommentRow>(sqlx::AssertSqlSafe(sql))
+        .bind(target.id)
+        .bind(offset)
+        .fetch_all(&state.pool)
+        .await?;
+    let definitions = [
+        ("all", "все"),
+        ("penalty", "со штрафом"),
+        ("noauto", "без авто"),
+        ("self", "сам удалил"),
+    ];
+    let filters = definitions
+        .into_iter()
+        .map(|(value, label)| StDeletedCommentFilterView {
+            value,
+            label,
+            selected: filter == value,
+            url: sDeletedCommentsLink(&target.nick, 0, value),
+        })
+        .collect();
+    let title = definitions
+        .iter()
+        .find(|(value, _)| *value == filter)
+        .map(|(_, label)| {
+            if filter == "all" {
+                format!("Удаленные комментарии {}", target.nick)
+            } else {
+                format!("Удаленные комментарии {} ({label})", target.nick)
+            }
+        })
+        .expect("known deleted-comment filter");
+    let prev_link = (offset >= PAGE_SIZE)
+        .then(|| sDeletedCommentsLink(&target.nick, offset - PAGE_SIZE, filter));
+    let next_link = (offset < MAX_OFFSET && comments.len() == PAGE_SIZE as usize)
+        .then(|| sDeletedCommentsLink(&target.nick, offset + PAGE_SIZE, filter));
+    Ok(Html(
+        StDeletedCommentsTemplate {
+            title,
+            comments,
+            filters,
+            prev_link,
+            next_link,
+        }
+        .render()?,
+    ))
 }
 
 #[cfg(test)]
 mod deletion_semantics_tests {
-    use super::{iCommentThresholdSeconds, iDeleteScoreDelta, reply_bonus_and_reason};
+    use super::{
+        iCommentThresholdSeconds, iDeleteScoreDelta, reply_bonus_and_reason, sDeletedCommentsLink,
+    };
 
     #[test]
     fn moderator_penalty_is_persisted_as_java_score_delta() {
@@ -1932,5 +2041,17 @@ mod deletion_semantics_tests {
         assert_eq!(iCommentThresholdSeconds(false, 99, None, 0), 30);
         assert_eq!(iCommentThresholdSeconds(false, 100, None, 0), 3);
         assert_eq!(iCommentThresholdSeconds(false, 500, None, 30), 300);
+    }
+
+    #[test]
+    fn deleted_comment_pagination_preserves_java_query_contract() {
+        assert_eq!(
+            sDeletedCommentsLink("some user", 0, "all"),
+            "/people/some%20user/deleted-comments"
+        );
+        assert_eq!(
+            sDeletedCommentsLink("user", 50, "penalty"),
+            "/people/user/deleted-comments?offset=50&filter=penalty"
+        );
     }
 }

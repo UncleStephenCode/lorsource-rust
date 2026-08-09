@@ -23,7 +23,6 @@ use axum_extra::extract::cookie::{Cookie, CookieJar};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use bytes::Bytes;
 use futures_util::stream;
-use rand::RngCore;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use time::Duration;
@@ -36,7 +35,7 @@ pub const FIELD_NAME: &str = "csrf";
 
 fn generate_token() -> String {
     let mut bytes = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::fill(&mut bytes);
     // java.util.Base64.getEncoder(): standard alphabet, with padding.
     STANDARD.encode(bytes)
 }

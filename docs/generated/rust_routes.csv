@@ -160,5 +160,5 @@ GET,/articles/{group}/{id}/thread/{thread_root},"get(topics::topic_thread),",src
 GET,/gallery/{group}/{id}/thread/{thread_root},"get(topics::topic_thread),",src/routes/mod.rs,347
 GET,/polls/{group}/{id}/thread/{thread_root},"get(topics::topic_thread),",src/routes/mod.rs,351
 GET,/ws,get(websocket),src/routes/realtime.rs,322
-GET,/people/{nick}/settings,get(settings),src/routes/users.rs,1586
-GET,/people/{nick}/edit,get(edit_profile_form),src/routes/users.rs,1587
+GET,/people/{nick}/settings,get(settings),src/routes/users.rs,2085
+GET,/people/{nick}/edit,get(edit_profile_form),src/routes/users.rs,2086

@@ -556,7 +556,10 @@ mod tests {
         assert_eq!(arrServed.as_ref(), ARR_JQUERY);
         assert_eq!(ARR_JQUERY.len(), 87_533);
         assert_eq!(
-            format!("{:x}", Sha256::digest(ARR_JQUERY)),
+            Sha256::digest(ARR_JQUERY)
+                .iter()
+                .map(|iByte| format!("{iByte:02x}"))
+                .collect::<String>(),
             "fc9a93dd241f6b045cbff0481cf4e1901becd0e12fb45166a8f17f95823f0b1a"
         );
         hServer.abort();

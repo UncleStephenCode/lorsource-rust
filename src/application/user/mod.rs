@@ -1,5 +1,4 @@
 use chrono::{DateTime, Duration, Months, Utc};
-use rand::Rng;
 
 use crate::{
     domain::user::{
@@ -310,9 +309,8 @@ fn optFreezeUntil(sShift: &str, dtNow: DateTime<Utc>) -> Option<(DateTime<Utc>, 
 }
 
 fn sGenerateJavaPassword() -> String {
-    let mut stRng = rand::thread_rng();
     (0..12)
-        .map(|_| char::from(stRng.gen_range(33u8..126u8)))
+        .map(|_| char::from(rand::random_range(33u8..126u8)))
         .collect()
 }
 

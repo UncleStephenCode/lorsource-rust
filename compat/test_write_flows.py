@@ -9,6 +9,7 @@ silently writes to an operator database.
 from __future__ import annotations
 
 import json
+import html
 import os
 import re
 import struct
@@ -107,6 +108,15 @@ def text(response) -> str:
     return response.body.decode("utf-8", errors="replace")
 
 
+def selected_radio_value(page: str, name: str) -> str:
+    match = re.search(
+        rf'<input[^>]*name="{re.escape(name)}"[^>]*value="([^"]+)"[^>]*checked',
+        page,
+    )
+    require(match is not None, f"settings form has no selected {name} value")
+    return html.unescape(match.group(1))
+
+
 def wait_for_topic_interval(last_created_at: float) -> None:
     """Respect AddTopicFloodCache's original 30-second per-IP contract."""
     interval = float(os.environ.get("WRITE_FLOW_POST_INTERVAL_SECONDS", "30.5"))
@@ -129,6 +139,189 @@ def main() -> int:
 
     author = login(base, author_nick, author_password)
     reactor = login(base, reactor_nick, reactor_password)
+
+    # Exercise every server-side theme against an authenticated session.  The
+    # original themes depend on different header DOMs, not just different CSS
+    # files, so checking the saved hstore value alone is insufficient.
+    reactor_settings_path = f"/people/{urllib.parse.quote(reactor_nick)}/settings"
+    settings_form = reactor.request(reactor_settings_path, "GET")
+    settings_html = text(settings_form)
+    require(settings_form.status == 200, "settings form is unavailable")
+    original_settings = {
+        name: selected_radio_value(settings_html, name)
+        for name in ("style", "topics", "messages", "trackerMode", "avatar", "format_mode")
+    }
+    checked_settings = [
+        name
+        for name in (
+            "photos",
+            "hideAdsense",
+            "mainGallery",
+            "oldTracker",
+            "oldNotifications",
+            "reactionNotification",
+        )
+        if re.search(rf'<input[^>]*name="{name}"[^>]*checked', settings_html)
+    ]
+
+    def save_theme(style: str) -> None:
+        values = [
+            ("style", style),
+            ("topics", original_settings["topics"]),
+            ("messages", original_settings["messages"]),
+            ("trackerMode", original_settings["trackerMode"]),
+            ("avatar", original_settings["avatar"]),
+            ("format_mode", original_settings["format_mode"]),
+            *((name, "on") for name in checked_settings),
+        ]
+        saved = post(reactor, reactor_settings_path, values)
+        require(saved.status == 302, f"saving theme {style} returned {saved.status}")
+
+    theme_contracts = {
+        "tango": ('data-style="tango" data-theme="dark"', "/tango/combined.css", 'id="sitetitle"'),
+        "tango-light": (
+            'data-style="tango-light" data-theme="light"',
+            "/tango/combined.css",
+            'id="sitetitle"',
+        ),
+        "tango-auto": (
+            'data-style="tango-auto" data-theme="auto"',
+            "/tango/combined.css",
+            'id="sitetitle"',
+        ),
+        # Theme.BLACK uses the dedicated head-main.jsp logo on the main page;
+        # lor-new.png belongs to the non-main head.jsp variant.
+        "black": (
+            'data-style="black"',
+            "/black/combined.css",
+            "/black/lorlogo-try.png",
+        ),
+        "white2": ('data-style="white2"', "/white2/combined.css", 'id="hdtux"'),
+        "waltz": ('data-style="waltz"', "/waltz/combined.css", 'id="sitetitle"'),
+        "zomg_ponies": (
+            'data-style="zomg_ponies"',
+            "/zomg_ponies/combined.css",
+            "PONY.ORG.RU",
+        ),
+    }
+    for style, fragments in theme_contracts.items():
+        save_theme(style)
+        themed_home = reactor.request("/", "GET")
+        themed_html = text(themed_home)
+        require(
+            themed_home.status == 200
+            and all(fragment in themed_html for fragment in fragments)
+            and '<main id="bd">' in themed_html
+            and 'id="ft"' in themed_html,
+            f"theme {style} does not expose its original stylesheet/header DOM contract",
+        )
+    save_theme(original_settings["style"])
+
+    reactor_edit_path = f"/people/{urllib.parse.quote(reactor_nick)}/edit"
+    edit_form = reactor.request(reactor_edit_path, "GET")
+    edit_form_html = text(edit_form)
+    email_match = re.search(r'id="email"[^>]*value="([^"]*)"', edit_form_html)
+    require(
+        edit_form.status == 200
+        and "no-store" in edit_form.cache_control
+        and 'name="info"' in edit_form_html
+        and 'name="infoMarkup"' in edit_form_html
+        and 'name="oldpass"' in edit_form_html
+        and email_match is not None,
+        "edit-profile form does not match the Java field/cache contract",
+    )
+    reactor_email = html.unescape(email_match.group(1))
+    profile_info = f"**profile compatibility {int(time.time() * 1000)}**"
+    profile_saved = post(
+        reactor,
+        reactor_edit_path,
+        [
+            ("email", reactor_email),
+            ("info", profile_info),
+            ("infoMarkup", "markdown"),
+            ("oldpass", reactor_password),
+        ],
+    )
+    require(profile_saved.status == 302, f"profile update returned {profile_saved.status}")
+    reactor_profile_path = f"/people/{urllib.parse.quote(reactor_nick)}/profile"
+    updated_profile = text(reactor.request(reactor_profile_path, "GET"))
+    require(
+        "<strong>profile compatibility" in updated_profile,
+        "profile info or selected Markdown mode was not persisted",
+    )
+    profile_cleared = post(
+        reactor,
+        reactor_edit_path,
+        [
+            ("email", reactor_email),
+            ("info", ""),
+            ("infoMarkup", "markdown"),
+            ("oldpass", reactor_password),
+        ],
+    )
+    require(profile_cleared.status == 302, "profile cleanup failed")
+
+    # Profile-side private state uses the original browser forms: remarks are
+    # keyed by `text`, ignore actions by `add`/`del`, and user-filter is HTML
+    # with no-store headers rather than the old Rust JSON shortcut.
+    author_profile_path = f"/people/{urllib.parse.quote(author_nick)}/profile"
+    author_remark_path = f"/people/{urllib.parse.quote(author_nick)}/remark"
+    reactor_view_of_author = reactor.request(author_profile_path, "GET")
+    reactor_view_html = text(reactor_view_of_author)
+    author_id_match = re.search(r"<b>ID:</b>\s*(\d+)", reactor_view_html)
+    require(
+        reactor_view_of_author.status == 200 and author_id_match is not None,
+        "profile does not expose the canonical user ID field",
+    )
+    author_id = author_id_match.group(1)
+    remark_text = f"compat remark {int(time.time() * 1000)}"
+    saved_remark = post(
+        reactor,
+        author_remark_path,
+        [("text", remark_text)],
+    )
+    require(
+        saved_remark.status == 302
+        and saved_remark.location_target == author_profile_path,
+        "remark form did not redirect to the target profile",
+    )
+    remarked_profile = reactor.request(author_profile_path, "GET")
+    require(remark_text in text(remarked_profile), "saved private remark is absent from profile")
+
+    ignored = post(
+        reactor,
+        "/user-filter/ignore-user",
+        [("nick", author_nick), ("add", "")],
+    )
+    require(
+        ignored.status == 302 and ignored.location_target == "/user-filter",
+        "ignore-user add did not use the Java browser redirect",
+    )
+    filter_page = reactor.request("/user-filter", "GET")
+    filter_html = text(filter_page)
+    require(
+        filter_page.status == 200
+        and filter_page.content_type.startswith("text/html")
+        and "no-store" in filter_page.cache_control
+        and author_nick in filter_html,
+        "user-filter is not a private non-cacheable HTML page",
+    )
+    unignored = post(
+        reactor,
+        "/user-filter/ignore-user",
+        [("id", author_id), ("del", "")],
+    )
+    require(unignored.status == 302, "ignore-user cleanup failed")
+    deleted_remark = post(
+        reactor,
+        author_remark_path,
+        [("text", "")],
+    )
+    require(deleted_remark.status == 302, "remark cleanup failed")
+    require(
+        remark_text not in text(reactor.request(author_profile_path, "GET")),
+        "empty remark did not delete the private note",
+    )
 
     form = author.request(f"/add.jsp?group={group_id}", "GET")
     require(form.status == 200, f"GET /add.jsp returned {form.status}")
@@ -162,6 +355,28 @@ def main() -> int:
     require('href="/tag/rust-port-ci"' in topic_html, "first comma-separated tag is missing")
     require('href="/tag/compatibility"' in topic_html, "second comma-separated tag is missing")
     require("rust-port-ci%2C" not in topic_html, "comma-separated tags were stored as one tag")
+
+    favorite_tags = post(
+        author,
+        "/user-filter/favorite-tag",
+        [("tagName", "rust-port-ci, compatibility"), ("add", "")],
+    )
+    require(
+        favorite_tags.status == 302 and favorite_tags.location_target == "/user-filter",
+        "HTML favorite-tag form did not split and redirect",
+    )
+    favorite_filter = text(author.request("/user-filter", "GET"))
+    require(
+        "rust-port-ci" in favorite_filter and "compatibility" in favorite_filter,
+        "comma-separated favorite tags were not stored separately",
+    )
+    for tag_name in ("rust-port-ci", "compatibility"):
+        deleted_favorite = post(
+            author,
+            "/user-filter/favorite-tag",
+            [("tagName", tag_name), ("del", "")],
+        )
+        require(deleted_favorite.status == 302, f"favorite tag cleanup failed for {tag_name}")
 
     # Java commits first and sends a persistent ActiveMQ message. Rust uses a
     # persistent filesystem spool with the same asynchronous contract. Allow

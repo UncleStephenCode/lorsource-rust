@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Просмотр комментариев о пользователях{% endblock %}
+{% block content %}
+<div class="nav"><div id="navPath">Просмотр комментариев о пользователях</div></div>
+<h2>Комментарии пользователя {{ sNick }}</h2>
+{% if vecRemarks.len() > 0 %}
+<div class="forum"><table class="message-table" width="100%"><thead><tr>
+<th><a href="/people/{{ sNick }}/remarks/?offset={{ iOffset }}&amp;sort=0">Ник</a></th>
+<th><a href="/people/{{ sNick }}/remarks/?offset={{ iOffset }}&amp;sort=1">Комментарий</a></th>
+</tr></thead><tbody>
+{% for stRemark in vecRemarks %}<tr><td><a href="/people/{{ stRemark.sNick }}/profile">{{ stRemark.sNick }}</a></td><td><a href="/people/{{ stRemark.sNick }}/remark/">{{ stRemark.sText }}</a></td></tr>{% endfor %}
+</tbody></table></div>
+<div class="nav"><div style="display: table; width: 100%">
+{% if iOffset != 0 %}<div style="display: table-cell; text-align: left"><a href="/people/{{ sNick }}/remarks/?offset={{ iOffset-iLimit }}{% if iSort == 1 %}&amp;sort=1{% endif %}">← предыдущие</a></div>{% endif %}
+{% if bHasMore %}<div style="display: table-cell; text-align: right"><a href="/people/{{ sNick }}/remarks/?offset={{ iOffset+iLimit }}{% if iSort == 1 %}&amp;sort=1{% endif %}">следующие →</a></div>{% endif %}
+</div></div>
+{% else %}<p>Заметок нет.</p>{% endif %}
+{% endblock %}

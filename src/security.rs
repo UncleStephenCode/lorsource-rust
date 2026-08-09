@@ -8,7 +8,7 @@
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::Utc;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
 /// Paths excluded from the main Spring Security filter chain by the current
@@ -290,8 +290,8 @@ pub mod remember_me {
 /// Hex encoded HMAC-SHA256 compatible with the original `SecretTokenService`
 /// activation/reset code strategy.
 pub fn hmac_sha256_hex(secret: &str, payload: &str) -> String {
-    let mut mac =
-        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC accepts keys of any size");
+    let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(secret.as_bytes())
+        .expect("HMAC accepts keys of any size");
     mac.update(payload.as_bytes());
     mac.finalize()
         .into_bytes()
@@ -399,7 +399,7 @@ pub mod secret_tokens {
     use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
     use base64::{Engine, engine::general_purpose::STANDARD};
     use pbkdf2::pbkdf2_hmac;
-    use rand::RngCore;
+    use rand::{TryRng, rngs::SysRng};
     use sha2::Sha256;
 
     const SALT_LEN: usize = 16;
@@ -416,14 +416,19 @@ pub mod secret_tokens {
     pub fn encrypt_java_secret(secret: &str, plaintext: &str) -> Result<String, String> {
         let mut salt = [0u8; SALT_LEN];
         let mut iv = [0u8; IV_LEN];
-        rand::rngs::OsRng.fill_bytes(&mut salt);
-        rand::rngs::OsRng.fill_bytes(&mut iv);
+        SysRng
+            .try_fill_bytes(&mut salt)
+            .map_err(|_| "system random source error".to_string())?;
+        SysRng
+            .try_fill_bytes(&mut iv)
+            .map_err(|_| "system random source error".to_string())?;
 
         let key = derive_key(secret, &salt);
         let cipher =
             Aes256Gcm::new_from_slice(&key).map_err(|_| "aes-gcm key error".to_string())?;
+        let nonce = Nonce::try_from(&iv[..]).map_err(|_| "aes-gcm nonce error".to_string())?;
         let ciphertext = cipher
-            .encrypt(Nonce::from_slice(&iv), plaintext.as_bytes())
+            .encrypt(&nonce, plaintext.as_bytes())
             .map_err(|_| "aes-gcm encrypt error".to_string())?;
 
         let mut out = Vec::with_capacity(SALT_LEN + IV_LEN + ciphertext.len());
@@ -444,7 +449,8 @@ pub mod secret_tokens {
 
         let key = derive_key(secret, salt);
         let cipher = Aes256Gcm::new_from_slice(&key).ok()?;
-        let plaintext = cipher.decrypt(Nonce::from_slice(iv), ciphertext).ok()?;
+        let nonce = Nonce::try_from(iv).ok()?;
+        let plaintext = cipher.decrypt(&nonce, ciphertext).ok()?;
         String::from_utf8(plaintext).ok()
     }
 

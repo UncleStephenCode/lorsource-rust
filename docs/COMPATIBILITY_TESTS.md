@@ -149,13 +149,16 @@ the HTTP mutations; credentials are not placed in the `psql` argument list.
 ## Stateful write-flow regression
 
 `compat/test_write_flows.py` exercises the migration-critical browser path on
-a disposable database: two logins, topic creation, canonical redirect, comma-
-separated tag persistence, comment creation, reaction add/list/remove, the
-collapsed/expanded reaction DOM, real multipart gallery upload, both the
-single-image and slider DOM modes, authenticated-only preview access, and the
-direct-image visibility transition after topic deletion. The test asserts
-that an anonymous direct URL is rejected while the author retains history
-access. Its CI author is a disposable
+a disposable database: two logins, all seven profile themes and their
+stylesheet/header/footer DOM, Java profile-edit fields and Markdown rendering,
+private remarks, ignored users, favorite comma-separated tags, topic creation,
+canonical redirect, comma-separated topic-tag persistence, comment creation,
+reaction add/list/remove, the collapsed/expanded reaction DOM, real multipart
+gallery upload, both the single-image and slider DOM modes, authenticated-only
+preview access, and the direct-image visibility transition after topic
+deletion. The test asserts that private filter state is non-cacheable HTML and
+that an anonymous direct image URL is rejected while the author retains
+history access. Its CI author is a disposable
 moderator, so new-tag creation is covered through the previously fragile
 moderator permission path. It refuses to mutate unless
 `WRITE_FLOW_ALLOW_MUTATION=yes` is explicitly set. CI seeds two throw-away
@@ -193,6 +196,13 @@ The flow also verifies the rendered warning message/section/author, strikeout
 after clearing, DEL reason and score bonus, notification click-through to
 `/view-deleted?id=...`, and the original 14-day non-frozen-author access path
 to the deleted comment body.
+
+`scripts/test-multi-instance-runtime.sh` starts a temporary second Compose app
+replica with the same PostgreSQL, secrets and media volume. It logs in through
+the primary instance and requires the resulting authenticated profile and
+saved theme to resolve through the second instance. The script is guarded by
+`MULTI_INSTANCE_ALLOW_MUTATION=yes` because login updates `lastlogin`, and it
+always removes its cookie fixture and temporary replica.
 
 `scripts/test-adv-counter.sh` sends three successful advertisement requests
 and one 404, performs a graceful app stop, verifies the exact `adv_counts`

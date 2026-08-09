@@ -301,7 +301,7 @@ pub async fn group_page(
         date_filter = date_filter,
         order_by = order_by,
     );
-    let mut topics = sqlx::query_as::<_, TopicSummary>(&sql)
+    let mut topics = sqlx::query_as::<_, TopicSummary>(sqlx::AssertSqlSafe(sql))
         .bind(group_id)
         .bind(offset)
         .bind(limit)

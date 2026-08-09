@@ -12,7 +12,7 @@ use askama::Template;
 use axum::{
     Form, Json,
     extract::{ConnectInfo, Multipart, Path, Query, State},
-    http::{StatusCode, Uri},
+    http::{HeaderMap, StatusCode, Uri, header},
     response::{Html, IntoResponse, Redirect, Response},
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar};
@@ -1610,7 +1610,10 @@ mod userpic_policy_tests {
 
 /// Exact `EditProfileChecker.checkLoadUserpic` policy. This must run on both
 /// GET and POST because hiding the form alone does not protect the mutation.
-async fn vCheckLoadUserpic(stState: &AppState, stUser: &crate::models::UserSummary) -> Result<()> {
+pub(crate) async fn bCanLoadUserpic(
+    stState: &AppState,
+    stUser: &crate::models::UserSummary,
+) -> Result<bool> {
     let (bFrozen, iRecentSetCount, bRecentlyResetByModerator, iRecentScoreLoss): (
         bool,
         i64,
@@ -1639,13 +1642,17 @@ async fn vCheckLoadUserpic(stState: &AppState, stUser: &crate::models::UserSumma
     .bind(stUser.id)
     .fetch_one(&stState.pool)
     .await?;
-    if !bMayLoadUserpic(
+    Ok(bMayLoadUserpic(
         stUser.score.unwrap_or(0),
         bFrozen,
         iRecentSetCount,
         bRecentlyResetByModerator,
         iRecentScoreLoss,
-    ) {
+    ))
+}
+
+async fn vCheckLoadUserpic(stState: &AppState, stUser: &crate::models::UserSummary) -> Result<()> {
+    if !bCanLoadUserpic(stState, stUser).await? {
         return Err(AppError::Forbidden);
     }
     Ok(())
@@ -1980,22 +1987,109 @@ pub async fn memories(
     Ok(Json(serde_json::json!({"id": id, "count": count})))
 }
 
-pub async fn user_filter(
-    State(state): State<AppState>,
-    CurrentUser(user): CurrentUser,
-) -> Result<Json<serde_json::Value>> {
-    let Some(user) = user else {
-        return Err(AppError::Forbidden);
+#[derive(Debug, Deserialize, Default)]
+pub struct StUserFilterQuery {
+    #[serde(rename = "newFavoriteTagName")]
+    pub optNewFavoriteTagName: Option<String>,
+    #[serde(rename = "newIgnoreTagName")]
+    pub optNewIgnoreTagName: Option<String>,
+}
+
+#[derive(Debug)]
+struct StIgnoredUserRow {
+    iId: i32,
+    sNick: String,
+    optRemark: Option<String>,
+}
+
+#[derive(Template)]
+#[template(path = "user_filter.html")]
+struct StUserFilterTemplate {
+    vecIgnoredUsers: Vec<StIgnoredUserRow>,
+    vecFavoriteTags: Vec<String>,
+    vecIgnoreTags: Vec<String>,
+    bModerator: bool,
+    optNewFavoriteTagName: Option<String>,
+    optNewIgnoreTagName: Option<String>,
+    vecFavoriteErrors: Vec<String>,
+    vecIgnoreErrors: Vec<String>,
+    sCsrfToken: String,
+}
+
+async fn stRenderUserFilter(
+    stState: &AppState,
+    stUser: &crate::models::UserSummary,
+    stQuery: StUserFilterQuery,
+    vecFavoriteErrors: Vec<String>,
+    vecIgnoreErrors: Vec<String>,
+    sCsrfToken: String,
+) -> Result<Response> {
+    let vecIgnoredUsers = sqlx::query_as::<_, (i32, String, Option<String>)>(
+        r#"SELECT u.id,u.nick,r.remark_text
+             FROM ignore_list il
+             JOIN users u ON u.id=il.ignored
+             LEFT JOIN user_remarks r ON r.user_id=il.userid AND r.ref_user_id=il.ignored
+            WHERE il.userid=$1 ORDER BY u.nick"#,
+    )
+    .bind(stUser.id)
+    .fetch_all(&stState.pool)
+    .await?
+    .into_iter()
+    .map(|(iId, sNick, optRemark)| StIgnoredUserRow {
+        iId,
+        sNick,
+        optRemark,
+    })
+    .collect();
+    let vecFavoriteTags = crate::routes::users::user_tags(stState, stUser.id, true).await?;
+    let vecIgnoreTags = if stUser.canmod {
+        Vec::new()
+    } else {
+        crate::routes::users::user_tags(stState, stUser.id, false).await?
     };
-    let tags = sqlx::query_as::<_, (String, bool)>(
-        "SELECT tv.value, ut.is_favorite FROM user_tags ut JOIN tags_values tv ON tv.id=ut.tag_id WHERE ut.user_id=$1 ORDER BY tv.value",
-    ).bind(user.id).fetch_all(&state.pool).await?;
-    let ignored = sqlx::query_as::<_, (String,)>(
-        "SELECT u.nick FROM ignore_list il JOIN users u ON u.id=il.ignored WHERE il.userid=$1 ORDER BY u.nick",
-    ).bind(user.id).fetch_all(&state.pool).await?;
-    Ok(Json(
-        json!({"tags": tags.into_iter().map(|(tag, favorite)| json!({"tag": tag, "favorite": favorite})).collect::<Vec<_>>(), "ignoredUsers": ignored.into_iter().map(|(nick,)| nick).collect::<Vec<_>>() }),
-    ))
+    let sHtml = StUserFilterTemplate {
+        vecIgnoredUsers,
+        vecFavoriteTags,
+        vecIgnoreTags,
+        bModerator: stUser.canmod,
+        optNewFavoriteTagName: stQuery
+            .optNewFavoriteTagName
+            .filter(|sTag| crate::routes::tags::is_good_tag(sTag)),
+        optNewIgnoreTagName: stQuery
+            .optNewIgnoreTagName
+            .filter(|sTag| crate::routes::tags::is_good_tag(sTag)),
+        vecFavoriteErrors,
+        vecIgnoreErrors,
+        sCsrfToken,
+    }
+    .render()?;
+    let mut stResponse = Html(sHtml).into_response();
+    stResponse.headers_mut().insert(
+        header::CACHE_CONTROL,
+        "no-store, no-cache, must-revalidate".parse().unwrap(),
+    );
+    stResponse
+        .headers_mut()
+        .insert(header::PRAGMA, "no-cache".parse().unwrap());
+    Ok(stResponse)
+}
+
+pub async fn user_filter(
+    State(stState): State<AppState>,
+    CurrentUser(optUser): CurrentUser,
+    Query(stQuery): Query<StUserFilterQuery>,
+    crate::csrf::CsrfToken(sCsrfToken): crate::csrf::CsrfToken,
+) -> Result<Response> {
+    let stUser = optUser.ok_or(AppError::Forbidden)?;
+    stRenderUserFilter(
+        &stState,
+        &stUser,
+        stQuery,
+        Vec::new(),
+        Vec::new(),
+        sCsrfToken,
+    )
+    .await
 }
 
 #[derive(Deserialize)]
@@ -2004,86 +2098,138 @@ pub struct UserTagForm {
     #[serde(rename = "tagName")]
     pub tag_name: Option<String>,
     pub del: Option<String>,
+    pub add: Option<String>,
 }
 
 pub async fn favorite_tag(
-    State(state): State<AppState>,
-    CurrentUser(user): CurrentUser,
+    State(stState): State<AppState>,
+    CurrentUser(optUser): CurrentUser,
+    stHeaders: HeaderMap,
+    crate::csrf::CsrfToken(sCsrfToken): crate::csrf::CsrfToken,
     Form(form): Form<UserTagForm>,
-) -> Result<Json<serde_json::Value>> {
-    save_or_delete_user_tag(state, user, form, true).await
+) -> Result<Response> {
+    save_or_delete_user_tag(stState, optUser, stHeaders, form, true, sCsrfToken).await
 }
 
 pub async fn ignore_tag(
-    State(state): State<AppState>,
-    CurrentUser(user): CurrentUser,
+    State(stState): State<AppState>,
+    CurrentUser(optUser): CurrentUser,
+    stHeaders: HeaderMap,
+    crate::csrf::CsrfToken(sCsrfToken): crate::csrf::CsrfToken,
     Form(form): Form<UserTagForm>,
-) -> Result<Json<serde_json::Value>> {
-    if user.as_ref().map(|u| u.canmod).unwrap_or(false) {
+) -> Result<Response> {
+    if optUser.as_ref().is_some_and(|stUser| stUser.canmod) {
         return Err(AppError::Forbidden);
     }
-    save_or_delete_user_tag(state, user, form, false).await
+    save_or_delete_user_tag(stState, optUser, stHeaders, form, false, sCsrfToken).await
 }
 
 async fn save_or_delete_user_tag(
-    state: AppState,
-    user: Option<crate::models::UserSummary>,
+    stState: AppState,
+    optUser: Option<crate::models::UserSummary>,
+    stHeaders: HeaderMap,
     form: UserTagForm,
-    is_favorite: bool,
-) -> Result<Json<serde_json::Value>> {
-    let Some(user) = user else {
-        return Err(AppError::Forbidden);
-    };
-    let tag = form
+    bFavorite: bool,
+    sCsrfToken: String,
+) -> Result<Response> {
+    let stUser = optUser.ok_or(AppError::Forbidden)?;
+    let sRawTag = form
         .tag_name
         .or(form.tag)
         .unwrap_or_default()
         .trim()
         .to_string();
-    if tag.is_empty() {
+    if sRawTag.is_empty() {
         return Err(AppError::BadRequest("tagName is required".into()));
     }
-
-    let tag_id: i32 = if form.del.is_some() {
-        sqlx::query_scalar("SELECT id FROM tags_values WHERE lower(value)=lower($1)")
-            .bind(&tag)
-            .fetch_optional(&state.pool)
-            .await?
-            .ok_or(AppError::NotFound)?
-    } else {
-        sqlx::query_scalar(
-            "INSERT INTO tags_values(value,counter) VALUES($1,0) ON CONFLICT(value) DO UPDATE SET value=EXCLUDED.value RETURNING id",
-        )
-        .bind(&tag)
-        .fetch_one(&state.pool)
-        .await?
-    };
-
-    if form.del.is_some() {
-        sqlx::query("DELETE FROM user_tags WHERE user_id=$1 AND tag_id=$2 AND is_favorite=$3")
-            .bind(user.id)
-            .bind(tag_id)
-            .bind(is_favorite)
-            .execute(&state.pool)
-            .await?;
-    } else {
-        sqlx::query("INSERT INTO user_tags(user_id,tag_id,is_favorite) VALUES($1,$2,$3) ON CONFLICT DO NOTHING")
-            .bind(user.id)
-            .bind(tag_id)
-            .bind(is_favorite)
-            .execute(&state.pool)
-            .await?;
+    let bJson = bAcceptsJson(&stHeaders);
+    let bDelete = form.del.is_some();
+    if !bDelete && form.add.is_none() {
+        return Err(AppError::NotFound);
     }
-
-    let count: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM user_tags WHERE tag_id=$1 AND is_favorite=$2")
-            .bind(tag_id)
-            .bind(is_favorite)
-            .fetch_one(&state.pool)
+    let vecTags = if bJson || bDelete {
+        vec![sRawTag.to_lowercase()]
+    } else {
+        crate::routes::tags::parse_tags(&sRawTag)
+    };
+    let mut vecErrors = Vec::new();
+    let mut iLastCount = 0_i64;
+    for sTag in &vecTags {
+        if !crate::routes::tags::is_good_tag(sTag) {
+            vecErrors.push(format!("Некорректный тег: '{sTag}'"));
+            continue;
+        }
+        let sCounterFilter = if bFavorite && !bDelete {
+            " AND counter>0"
+        } else {
+            ""
+        };
+        let sSql =
+            format!("SELECT id FROM tags_values WHERE lower(value)=lower($1){sCounterFilter}");
+        let optTagId: Option<i32> = sqlx::query_scalar(sqlx::AssertSqlSafe(sSql))
+            .bind(sTag)
+            .fetch_optional(&stState.pool)
             .await?;
-    Ok(Json(
-        json!({"count": count, "tag": tag, "favorite": is_favorite}),
-    ))
+        let Some(iTagId) = optTagId else {
+            vecErrors.push(format!("Тег не найден: '{sTag}'"));
+            continue;
+        };
+        if bDelete {
+            sqlx::query("DELETE FROM user_tags WHERE user_id=$1 AND tag_id=$2 AND is_favorite=$3")
+                .bind(stUser.id)
+                .bind(iTagId)
+                .bind(bFavorite)
+                .execute(&stState.pool)
+                .await?;
+        } else {
+            sqlx::query("INSERT INTO user_tags(user_id,tag_id,is_favorite) VALUES($1,$2,$3) ON CONFLICT DO NOTHING")
+                .bind(stUser.id)
+                .bind(iTagId)
+                .bind(bFavorite)
+                .execute(&stState.pool)
+                .await?;
+        }
+        iLastCount =
+            sqlx::query_scalar("SELECT count(*) FROM user_tags WHERE tag_id=$1 AND is_favorite=$2")
+                .bind(iTagId)
+                .bind(bFavorite)
+                .fetch_one(&stState.pool)
+                .await?;
+    }
+    if bJson {
+        if let Some(sError) = vecErrors.first() {
+            return Ok(Json(json!({"error": sError})).into_response());
+        }
+        return Ok(Json(json!({"count": iLastCount})).into_response());
+    }
+    if vecErrors.is_empty() {
+        return Ok((StatusCode::FOUND, [(header::LOCATION, "/user-filter")]).into_response());
+    }
+    let stQuery = if bFavorite {
+        StUserFilterQuery {
+            optNewFavoriteTagName: Some(sRawTag),
+            optNewIgnoreTagName: None,
+        }
+    } else {
+        StUserFilterQuery {
+            optNewFavoriteTagName: None,
+            optNewIgnoreTagName: Some(sRawTag),
+        }
+    };
+    let (vecFavoriteErrors, vecIgnoreErrors) = if bFavorite {
+        (vecErrors, Vec::new())
+    } else {
+        (Vec::new(), vecErrors)
+    };
+    stRenderUserFilter(
+        &stState,
+        &stUser,
+        stQuery,
+        vecFavoriteErrors,
+        vecIgnoreErrors,
+        sCsrfToken,
+    )
+    .await
 }
 
 #[derive(Deserialize)]
@@ -2091,13 +2237,14 @@ pub struct IgnoreUserForm {
     pub id: Option<i32>,
     pub nick: Option<String>,
     pub del: Option<String>,
+    pub add: Option<String>,
 }
 
 pub async fn ignore_user(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
     Form(form): Form<IgnoreUserForm>,
-) -> Result<Json<serde_json::Value>> {
+) -> Result<Response> {
     let Some(user) = user else {
         return Err(AppError::Forbidden);
     };
@@ -2126,16 +2273,28 @@ pub async fn ignore_user(
             .bind(ignored_id)
             .execute(&state.pool)
             .await?;
-    } else {
+    } else if form.add.is_some() {
         sqlx::query("INSERT INTO ignore_list(userid,ignored) VALUES($1,$2) ON CONFLICT DO NOTHING")
             .bind(user.id)
             .bind(ignored_id)
             .execute(&state.pool)
             .await?;
+    } else {
+        return Err(AppError::NotFound);
     }
-    Ok(Json(
-        json!({"ok": true, "ignored": ignored_id, "deleted": form.del.is_some()}),
-    ))
+    Ok((StatusCode::FOUND, [(header::LOCATION, "/user-filter")]).into_response())
+}
+
+fn bAcceptsJson(stHeaders: &HeaderMap) -> bool {
+    stHeaders
+        .get_all(header::ACCEPT)
+        .iter()
+        .filter_map(|stValue| stValue.to_str().ok())
+        .any(|sValue| {
+            sValue
+                .split(',')
+                .any(|sMediaType| sMediaType.trim().starts_with("application/json"))
+        })
 }
 
 #[derive(Deserialize)]

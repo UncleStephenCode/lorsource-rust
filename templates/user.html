@@ -13,27 +13,31 @@
 <h1>Информация о пользователе {{ profile.nick }}</h1>
 {% endif %}
 
+{% if can_view_private && slow_mode %}<div class="infoblock">⚠️ Для учетной записи был автоматически установлен медленный режим: {{ slow_mode_reason }}.</div>{% endif %}
+{% match frozen_until %}{% when Some with (until) %}{% if can_view_private %}<div class="infoblock">⚠️ Для учетной записи установлен режим только для чтения до <time data-format="default" datetime="{{ until.to_rfc3339() }}">{{ until }}</time>.</div>{% endif %}{% when None %}{% endmatch %}
+
 <div id="whois_userpic">
   <div class="userpic"><img src="{{ userpic_url }}" alt="{{ profile.nick }}"></div>
   {% match profile.photo %}
   {% when Some with (_) %}
   {% if can_view_private %}<form name="f_remove_userpic" method="post" action="/remove-userpic.jsp"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="id" value="{{ profile.id }}"><button type="submit" class="btn btn-danger btn-small">Удалить</button></form>{% endif %}
   {% when None %}{% endmatch %}
-  {% if is_owner %}<span><a class="btn btn-small btn-default" href="/addphoto.jsp">Изменить</a></span>{% endif %}
+  {% if is_owner && can_load_userpic %}<span><a class="btn btn-small btn-default" href="/addphoto.jsp">Изменить</a></span>{% endif %}
 </div>
 
 <div class="vcard">
-  <b>Nick:</b> <span class="nickname">{{ profile.nick }}</span><br>
+  <b>Nick:</b> <span class="nickname">{{ profile.nick }}{% if is_frozen %} <span title="заморозка">❄</span>{% endif %}{% if slow_mode %} <span title="медленный режим">🐌</span>{% endif %}</span><br>
   {% match profile.name %}{% when Some with (name) %}<b>Имя:</b> <span class="fn">{{ name }}</span><br>{% when None %}{% endmatch %}
   <b>ID:</b> {{ profile.id }}<br>
-  {% match profile.url %}{% when Some with (url) %}<b>URL:</b> <a class="url" href="{{ url }}">{{ url }}</a>
+  {% if can_remark %}<br><b>Комментарий:</b> {% match remark %}{% when Some with (text) %}{{ text }}{% when None %}{% endmatch %} [<a href="/people/{{ profile.nick }}/remark/">Изменить</a>]<br>{% endif %}
+  {% if show_url %}{% match profile.url %}{% when Some with (url) %}<b>URL:</b> <a class="url" href="{{ url }}"{% if url_nofollow %} rel="nofollow"{% endif %}>{{ url }}</a>
     {% if is_moderator %}<form method="post" action="/usermod.jsp" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="id" value="{{ profile.id }}"><input type="hidden" name="action" value="remove_url"><button type="submit" class="btn btn-danger btn-small">Удалить URL</button></form>{% endif %}<br>
-  {% when None %}{% endmatch %}
+  {% when None %}{% endmatch %}{% endif %}
   {% match profile.town %}{% when Some with (town) %}<b>Город:</b> {{ town }}
     {% if is_moderator %}<form method="post" action="/usermod.jsp" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="id" value="{{ profile.id }}"><input type="hidden" name="action" value="remove_town"><button type="submit" class="btn btn-danger btn-small">Удалить город</button></form>{% endif %}<br>
   {% when None %}{% endmatch %}
   {% match profile.regdate %}{% when Some with (regdate) %}<b>Дата регистрации:</b> <time data-format="default" datetime="{{ regdate.to_rfc3339() }}">{{ regdate }}</time><br>{% when None %}{% endmatch %}
-  {% match profile.lastlogin %}{% when Some with (lastlogin) %}<b>Последнее посещение:</b> <time data-format="default" datetime="{{ lastlogin.to_rfc3339() }}">{{ lastlogin }}</time><br>{% when None %}{% endmatch %}
+  {% match profile.lastlogin %}{% when Some with (lastlogin) %}<b>Последнее посещение:</b> {% match lastlogin_fuzzy %}{% when Some with (fuzzy) %}{{ fuzzy }}{% when None %}<time data-format="default" datetime="{{ lastlogin.to_rfc3339() }}">{{ lastlogin }}</time>{% endmatch %}<br>{% when None %}{% endmatch %}
   <b>Статус:</b> {{ profile.status() }}{% if profile.canmod %} (модератор){% endif %}{% if profile.candel %} (администратор){% endif %}{% if profile.corrector %} (корректор){% endif %}{% if profile.blocked %} (заблокирован){% endif %}<br>
   {% if can_view_private %}<b>Score:</b> {{ profile.score }} MaxScore: {{ profile.max_score }}<br>{% endif %}
   {% if is_moderator && profile.score < 50 && !profile.anonymous %}
@@ -41,11 +45,12 @@
   {% endif %}
   {% match profile.email %}{% when Some with (email) %}{% if can_view_private %}<b>Email:</b> <a href="mailto:{{ email }}">{{ email }}</a> (виден только вам и модераторам)<br>{% endif %}{% when None %}{% endmatch %}
   {% if is_moderator && !profile.anonymous %}<a href="/people/{{ profile.nick }}/profile?reset-password" class="btn btn-small btn-danger">Сбросить пароль</a>{% endif %}
+  {% if is_frozen && !is_owner %}<br><b>Заморожен</b>{% match frozen_until %}{% when Some with (until) %} до <time data-format="default" datetime="{{ until.to_rfc3339() }}">{{ until }}</time>{% when None %}{% endmatch %}{% match freezer_nick %}{% when Some with (freezer) %} модератором <a href="/people/{{ freezer }}/profile">{{ freezer }}</a>{% when None %}{% endmatch %}{% match freezing_reason %}{% when Some with (reason) %} по причине {{ reason }}{% when None %}{% endmatch %}<br>{% endif %}
 </div>
 
-{% match userinfo_html %}{% when Some with (info) %}<div class="infoblock userinfo">{{ info|safe }}</div>
+{% if show_userinfo %}{% match userinfo_html %}{% when Some with (info) %}<div class="infoblock userinfo">{{ info|safe }}</div>
 {% if is_moderator && !profile.anonymous %}<form method="post" action="/usermod.jsp"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="id" value="{{ profile.id }}"><input type="hidden" name="action" value="remove_userinfo"><button type="submit" class="btn btn-danger">Удалить текст</button></form>{% endif %}
-{% when None %}{% endmatch %}
+{% when None %}{% endmatch %}{% endif %}
 
 {% if can_view_private %}
 {% match ban_info %}
@@ -151,6 +156,11 @@
 {% for tag in ignore_tags %}<a class="tag" href="/tag/{{ tag }}">{{ tag }}</a>{% if loop.last %}{% else %}, {% endif %}{% endfor %}</p>
 {% endif %}
 
+{% if can_ignore %}
+{% if ignored %}<form name="i_unblock" method="post" action="/user-filter/ignore-user"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="id" value="{{ profile.id }}">Вы игнорируете этого пользователя &nbsp;<button type="submit" class="btn btn-small btn-default" name="del">не игнорировать</button></form>
+{% else %}<form name="i_block" method="post" action="/user-filter/ignore-user"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="nick" value="{{ profile.nick }}">Вы не игнорируете этого пользователя &nbsp;<button type="submit" class="btn btn-small btn-default" name="add">игнорировать</button></form>{% endif %}
+{% endif %}
+
 {% if can_view_private && user_log.len() > 0 %}
 <h2>Журнал действий</h2>
 <ul class="userlog">
@@ -162,10 +172,7 @@
 <h2>Действия</h2>
 <ul>
   <li><a href="/user-filter">Настройка фильтрации сообщений</a></li>
-  <li><a href="/people/{{ profile.nick }}/favs">Избранные темы</a></li>
-  <li><a href="/people/{{ profile.nick }}/tracked">Отслеживаемые темы</a></li>
-  <li><a href="/people/{{ profile.nick }}/drafts">Черновики{% if drafts_count > 0 %}: {{ drafts_count }}{% endif %}</a></li>
-  <li><a href="/people/{{ profile.nick }}/remarks">Просмотр заметок о пользователях</a></li>
+  {% if has_remarks %}<li><a href="/people/{{ profile.nick }}/remarks">Просмотр заметок о пользователях</a></li>{% endif %}
 </ul>
 {% endif %}
 
@@ -178,14 +185,16 @@
 {% if stats.comment_count > 0 %}<b>Число комментариев:</b> {{ stats.comment_count }}<br>{% endif %}
 <b>Число тем:</b> {{ stats.topic_count }}
 
-<h2>Темы пользователя</h2>
-<nav>
-  <a href="/people/{{ profile.nick }}/profile" class="btn btn-selected">Темы</a>
-  <a href="/people/{{ profile.nick }}/reactions" class="btn btn-default">Реакции</a>
-  <a href="/people/{{ profile.nick }}/favs" class="btn btn-default">Избранное</a>
-  <a href="/people/{{ profile.nick }}/tracked" class="btn btn-default">Отслеживаемое</a>
-</nav>
-{% for t in topics %}
-<article class="msg"><h1><a href="{{ t.topic_url() }}">{{ t.title }}</a></h1><div class="msg_body"><div class="sign"><time data-format="default" datetime="{{ t.postdate.to_rfc3339() }}">{{ t.postdate }}</time> · {{ t.comments }} комментариев</div></div></article>
-{% endfor %}
+{% if !profile.anonymous || is_moderator %}
+<h2>Сообщения пользователя</h2>
+<ul>
+  <li><a href="/people/{{ profile.nick }}/">Темы</a>{% if can_view_private %} (<a href="/people/{{ profile.nick }}/deleted-topics">удаленные</a>){% endif %}</li>
+  {% if stats.comment_count > 0 || is_moderator %}<li>{% if stats.comment_count > 0 %}<a href="/search.jsp?range=COMMENTS&amp;user={{ profile.nick }}&amp;sort=DATE">Комментарии</a>{% else %}Комментарии{% endif %}{% if is_moderator %} (<a href="/people/{{ profile.nick }}/deleted-comments">удаленные</a>){% endif %}</li>{% endif %}
+  {% if can_view_private %}<li><a href="/show-replies.jsp?nick={{ profile.nick }}">Уведомления</a></li>{% endif %}
+  {% if can_view_private && watch_present %}<li><a href="/people/{{ profile.nick }}/tracked">Отслеживаемые темы</a></li>{% endif %}
+  {% if fav_present %}<li><a href="/people/{{ profile.nick }}/favs">Избранные темы</a></li>{% endif %}
+  {% if drafts_count > 0 %}<li><a href="/people/{{ profile.nick }}/drafts">Черновики</a> ({{ drafts_count }})</li>{% endif %}
+  {% if can_view_private %}<li><a href="/people/{{ profile.nick }}/reactions">Реакции</a></li>{% endif %}
+</ul>
+{% endif %}
 {% endblock %}

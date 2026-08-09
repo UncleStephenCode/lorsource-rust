@@ -64,9 +64,13 @@ missing declarations after that migration.
 - Replaced admin stubs with moderation handlers for GeoIP lookup surface, asynchronous monthly search reindexing, IP bans, group editing, user moderation actions and warnings.
 - Fixed `monthly_stats` compatibility migration to match the original demo schema columns.
 
-## Remaining functional gaps
+## Remaining production-evidence gaps
 
-There are no routes left that intentionally return `legacy::not_implemented`, but full production parity still requires endpoint-specific compatibility work for the larger subsystems below:
+There are no routes left that intentionally return `legacy::not_implemented`
+and the current Java-source audit found no whole user-facing subsystem that is
+absent from the Rust port. Full production parity is still not proved: the
+remaining work below requires production-clone, storage, network or load
+evidence rather than another placeholder implementation.
 
 - live verification of gallery preview/reuse/three-day cleanup against the
   production storage/CDN mount;

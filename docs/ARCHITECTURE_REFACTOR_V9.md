@@ -6,7 +6,7 @@
 
 - Rust edition обновлён с `2021` до `2024`.
 - Зафиксирован актуальный toolchain через `rust-toolchain.toml`: `1.97.0`.
-- Dockerfile и `.devcontainer/Dockerfile` переведены с `rust:1.82-*` на `rust:1.97-*`.
+- Dockerfile и `.devcontainer/Dockerfile` переведены с `rust:1.82-*` на `rust:1.97.1-*`.
 - Добавлены Cargo lints, разрешающие венгерские идентификаторы в новом слое.
 - Доменные структуры вынесены из единого `models.rs` в модули:
   - `src/domain/forum/model.rs`

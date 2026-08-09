@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<h1>{{ title }}</h1>
+
+<nav>
+{% for filter in filters %}
+  <a href="{{ filter.url }}" class="btn {% if filter.selected %}btn-selected{% else %}btn-default{% endif %}" data-filter="{{ filter.value }}">{{ filter.label }}</a>
+{% endfor %}
+</nav>
+
+<div class="forum">
+  <table width="100%" class="message-table">
+    <thead><tr><th>Группа</th><th>Заглавие темы</th><th>Причина удаления</th><th>Штраф</th><th>Дата</th></tr></thead>
+    <tbody>
+    {% for item in comments %}
+      <tr>
+        <td>{{ item.group_title }}</td>
+        <td>{% if item.topic_deleted %}<s>{% endif %}{% if item.comment_deleted %}<a href="/view-deleted?id={{ item.comment_id }}#comment-{{ item.comment_id }}">{{ item.topic_title }}</a>{% else %}<a href="/jump-message.jsp?msgid={{ item.topic_id }}&amp;cid={{ item.comment_id }}">{{ item.topic_title }}</a>{% endif %}{% if item.topic_deleted %}</s>{% endif %}</td>
+        <td>{% match item.reason %}{% when Some with (reason) %}{{ reason }}{% when None %}{% endmatch %}</td>
+        <td>{{ item.bonus }}</td>
+        <td>{% match item.delete_date %}{% when Some with (date) %}<time data-format="interval" datetime="{{ date.to_rfc3339() }}">{{ date }}</time>{% when None %}{% endmatch %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="nav"><div style="display:table;width:100%">
+  <div style="display:table-cell;text-align:left">{% match prev_link %}{% when Some with (link) %}<a href="{{ link }}" rel="prev">← предыдущие</a>{% when None %}{% endmatch %}</div>
+  <div style="display:table-cell;text-align:right">{% match next_link %}{% when Some with (link) %}<a href="{{ link }}" rel="next">следующие →</a>{% when None %}{% endmatch %}</div>
+</div></div>
+{% endblock %}

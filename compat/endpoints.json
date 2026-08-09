@@ -274,6 +274,45 @@
     "requires_seed": true
   },
   {
+    "name": "removed user topic rss feed",
+    "method": "GET",
+    "old": "/people/maxcom?output=rss",
+    "new": "/people/maxcom?output=rss",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 410,
+    "requires_seed": true
+  },
+  {
+    "name": "anonymous user filter forbidden",
+    "method": "GET",
+    "old": "/user-filter",
+    "new": "/user-filter",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 403
+  },
+  {
+    "name": "anonymous private remarks forbidden",
+    "method": "GET",
+    "old": "/people/maxcom/remarks",
+    "new": "/people/maxcom/remarks",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 403,
+    "requires_seed": true
+  },
+  {
+    "name": "anonymous deleted comments forbidden",
+    "method": "GET",
+    "old": "/people/maxcom/deleted-comments",
+    "new": "/people/maxcom/deleted-comments",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 403,
+    "requires_seed": true
+  },
+  {
     "name": "anonymous user settings forbidden",
     "method": "GET",
     "old": "/people/maxcom/settings",

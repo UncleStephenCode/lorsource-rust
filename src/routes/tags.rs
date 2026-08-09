@@ -533,7 +533,7 @@ static TAG_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)^[\p{L}\d-](?:[.\p{L}\d \+-]*[\p{L}\d\+-])?$").expect("tag regex")
 });
 
-fn is_good_tag(tag: &str) -> bool {
+pub(crate) fn is_good_tag(tag: &str) -> bool {
     let len = tag.chars().count();
     (1..=32).contains(&len) && TAG_RE.is_match(tag)
 }

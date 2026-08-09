@@ -161,7 +161,9 @@ Production equivalence is still not proven for:
   deleted/draft/expired/hidden topics and missed-comment/ignore-list behavior;
   the Rust repository/service contract matches them. Production-clone
   timing/load evidence is still required;
-- every JSP model attribute and theme/page combination;
+- every JSP model attribute and pixel-level theme/page combination remains an
+  exhaustive diagnostic target; all seven theme IDs, their server-selected
+  stylesheet/header DOM and core layout hooks are covered statefully;
 - the isolated demo dual-runtime HTTP matrix passes, including canonical
   paths, legacy redirects, comment jumps, RSS and an initialized OpenSearch;
   a migration rehearsal on a clone of the real production Java database and

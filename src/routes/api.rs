@@ -991,7 +991,7 @@ pub async fn tracker(
         },
         group_clause = tracker_filter_group_clause(&filter),
     );
-    let vecRows = sqlx::query_as::<_, TrackerTopicRow>(&sql)
+    let vecRows = sqlx::query_as::<_, TrackerTopicRow>(sqlx::AssertSqlSafe(sql))
         .bind(offset)
         .bind(limit)
         .bind(user.as_ref().map(|stUser| stUser.id))

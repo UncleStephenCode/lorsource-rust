@@ -2,51 +2,51 @@
 name = "lorsource-rust"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.97"
+rust-version = "1.97.1"
 license = "Apache-2.0"
 description = "Experimental Rust/Axum port of the LOR engine core"
 
 [dependencies]
-ammonia = "4"
-anyhow = "1"
-aes-gcm = "0.10"
-askama = "0.12"
-async-trait = "0.1"
-axum = { version = "0.8", features = ["macros", "json", "form", "multipart", "ws"] }
-axum-extra = { version = "0.12", features = ["cookie", "typed-header"] }
-base64 = "0.22"
-bcrypt = "0.15"
-bytes = "1"
-chrono = { version = "0.4", features = ["serde"] }
-chrono-tz = "0.10"
-html-escape = "0.2"
-hmac = "0.12"
-http = "1"
-futures-util = { version = "0.3", default-features = false, features = ["std"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
-ipnetwork = "0.20"
-md-5 = "0.10"
-multer = "3"
-once_cell = "1"
-pbkdf2 = "0.12"
-pulldown-cmark = "0.10"
-rand = "0.8"
-regex = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-serde_urlencoded = "0.7"
-sha2 = "0.10"
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "chrono", "uuid", "ipnetwork", "json"] }
-thiserror = "1"
-time = { version = "0.3", features = ["macros", "serde"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net", "io-util"] }
-tower-http = { version = "0.5", features = ["fs", "trace", "compression-gzip", "set-header"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-urlencoding = "2"
-unicode-normalization = "0.1"
-uuid = { version = "1", features = ["v4", "serde"] }
+ammonia = "4.1.4"
+anyhow = "1.0.104"
+aes-gcm = "0.11.0"
+askama = "0.16.0"
+async-trait = "0.1.92"
+axum = { version = "0.8.9", features = ["macros", "json", "form", "multipart", "ws"] }
+axum-extra = { version = "0.12.6", features = ["cookie", "typed-header"] }
+base64 = "0.23.1"
+bcrypt = "0.19.3"
+bytes = "1.12.1"
+chrono = { version = "0.4.45", features = ["serde"] }
+chrono-tz = "0.10.4"
+html-escape = "0.2.15"
+hmac = "0.13.0"
+http = "1.5.0"
+futures-util = { version = "0.3.33", default-features = false, features = ["std"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+ipnetwork = "0.21.1"
+md-5 = "0.11.0"
+multer = "3.1.0"
+once_cell = "1.21.4"
+pbkdf2 = "0.13.0"
+pulldown-cmark = "0.13.4"
+rand = "0.10.2"
+regex = "1.13.1"
+reqwest = { version = "0.13.4", default-features = false, features = ["form", "json", "query", "rustls"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+serde_urlencoded = "0.7.1"
+sha2 = "0.11.0"
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "derive", "chrono", "uuid", "ipnetwork", "json"] }
+thiserror = "2.0.20"
+time = { version = "0.3.55", features = ["macros", "serde"] }
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net", "io-util"] }
+tower-http = { version = "0.7.0", features = ["fs", "trace", "compression-gzip", "set-header"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+urlencoding = "2.1.3"
+unicode-normalization = "0.1.25"
+uuid = { version = "1.24.0", features = ["v4", "serde"] }
 
 [lints.rust]
 non_snake_case = "allow"
@@ -57,7 +57,7 @@ module_name_repetitions = "allow"
 too_many_arguments = "allow"
 
 [dev-dependencies]
-pretty_assertions = "1"
+pretty_assertions = "1.4.1"
 
 [profile.release]
 lto = true

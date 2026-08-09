@@ -198,11 +198,17 @@ mod realtime_browser_contract_tests {
             "/static/js/realtime.js"
         ));
         assert_eq!(
-            format!("{:x}", Sha256::digest(arrScript)),
+            Sha256::digest(arrScript)
+                .iter()
+                .map(|iByte| format!("{iByte:02x}"))
+                .collect::<String>(),
             "09fae4a64dbdfee232042ae76eb3e03f1521b9ecef352c6e8a1b6656c2a55c64"
         );
         assert_eq!(
-            format!("{:x}", Sha256::digest(arrRealtime)),
+            Sha256::digest(arrRealtime)
+                .iter()
+                .map(|iByte| format!("{iByte:02x}"))
+                .collect::<String>(),
             "1665374fa67a2fc27681c6bb9ac92017ef2dbc78539cf947bfb050c70ddfb10a"
         );
     }
@@ -1550,7 +1556,7 @@ pub async fn view_all(
             "SELECT s.id, s.name, COALESCE(s.restrict_topics,-9999) AS restrict_score, {VIEW_ALL_SECTION_PREFIX_CASE} AS section_prefix FROM sections s WHERE s.id=$1"
         );
         Some(
-            sqlx::query_as::<_, ViewAllSection>(&sql)
+            sqlx::query_as::<_, ViewAllSection>(sqlx::AssertSqlSafe(sql))
                 .bind(sid)
                 .fetch_optional(&state.pool)
                 .await?
@@ -1580,7 +1586,7 @@ pub async fn view_all(
              AND ($1::int IS NULL OR s.id=$1)
            ORDER BY t.postdate DESC"#
     );
-    let messages = sqlx::query_as::<_, TopicSummary>(&sql)
+    let messages = sqlx::query_as::<_, TopicSummary>(sqlx::AssertSqlSafe(sql))
         .bind(section.as_ref().map(|s| s.id))
         .fetch_all(&state.pool)
         .await?;
@@ -1601,7 +1607,7 @@ pub async fn view_all(
              {bad_reason_filter}
            ORDER BY di.deldate DESC LIMIT 20"#
     );
-    let deleted_topics = sqlx::query_as::<_, DeletedTopicRow>(&sql)
+    let deleted_topics = sqlx::query_as::<_, DeletedTopicRow>(sqlx::AssertSqlSafe(sql))
         .bind(section.as_ref().map(|s| s.id))
         .fetch_all(&state.pool)
         .await?;
@@ -1617,7 +1623,7 @@ pub async fn view_all(
                GROUP BY s.id
                ORDER BY s.id"#
         );
-        sqlx::query_as::<_, (i32, String, i32, String, i64)>(&sql)
+        sqlx::query_as::<_, (i32, String, i32, String, i64)>(sqlx::AssertSqlSafe(sql))
             .fetch_all(&state.pool)
             .await?
             .into_iter()
@@ -4238,7 +4244,10 @@ type TyTopicDeleteRow = (
     bool,
 );
 
-async fn b_user_slow_mode_restricted(state: &AppState, user: &UserSummary) -> Result<bool> {
+pub(crate) async fn b_user_slow_mode_restricted(
+    state: &AppState,
+    user: &UserSummary,
+) -> Result<bool> {
     let stActor = crate::domain::topic::posting::StAddTopicActor {
         optUserId: Some(user.id),
         bAnonymous: false,

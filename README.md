@@ -215,7 +215,7 @@ See `docs/PARITY_AUDIT_V8.md` and `docs/DEVCONTAINER_PORT.md`.
 
 ## Architecture refactor v9
 
-This archive contains the v9 architectural refactor: Rust 2024 / Rust 1.97 toolchain, Axum 0.8, domain/application/infra split, Hungarian-style identifiers in the new domain/service/repository layer, and PostgreSQL repositories for the forum/topic core flows. Dynamic routes use Axum 0.8's `{parameter}` syntax. See `docs/ARCHITECTURE_REFACTOR_V9.md` and `docs/generated/architecture_report_v9.json`.
+This archive contains the v9 architectural refactor: Rust 2024 / Rust 1.97.1 toolchain, Axum 0.8, domain/application/infra split, Hungarian-style identifiers in the new domain/service/repository layer, and PostgreSQL repositories for the forum/topic core flows. Dynamic routes use Axum 0.8's `{parameter}` syntax. See `docs/ARCHITECTURE_REFACTOR_V9.md` and `docs/generated/architecture_report_v9.json`.
 
 ### Profile and theme parity
 

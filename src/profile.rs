@@ -384,7 +384,10 @@ fn gravatar_url(email: &str, avatar_mode: &str, size: u32) -> String {
     } else {
         avatar_mode
     };
-    let hash = format!("{:x}", Md5::digest(email.trim().to_lowercase().as_bytes()));
+    let hash = Md5::digest(email.trim().to_lowercase().as_bytes())
+        .iter()
+        .map(|iByte| format!("{iByte:02x}"))
+        .collect::<String>();
     format!("https://secure.gravatar.com/avatar/{hash}?s={size}&r=g&d={non_exist}&f=y")
 }
 
