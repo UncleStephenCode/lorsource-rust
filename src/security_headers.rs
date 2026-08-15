@@ -116,6 +116,8 @@ mod tests {
         assert!(sCsp.contains("wss://realtime.example:8443;"));
         assert!(sCsp.contains("form-action 'self' https://www.example.org;"));
         assert!(sCsp.contains("https://*.hcaptcha.com"));
+        assert!(sCsp.contains("img-src 'self' data:"));
+        assert!(sCsp.contains("https://secure.gravatar.com"));
         assert!(!sCsp.contains("socket-prefix"));
     }
 

@@ -20,6 +20,37 @@ struct ThemeView<'a> {
     stylesheet: &'a str,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StThemeProfile {
+    sStyle: String,
+    optNick: Option<String>,
+    sFormatMode: String,
+    iUnreadEvents: i32,
+}
+
+/// Trusted identity selected by an authenticated handler for theming its own
+/// response.  This is needed when the handler has just changed credentials:
+/// the request still carries the old password-bound remember-me cookie, while
+/// the response already carries the refreshed one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StResponseThemeUser {
+    iUserId: i32,
+}
+
+pub(crate) fn vUseAuthenticatedThemeForResponse(stResponse: &mut Response, iUserId: i32) {
+    stResponse
+        .extensions_mut()
+        .insert(StResponseThemeUser { iUserId });
+}
+
+#[cfg(test)]
+pub(crate) fn optResponseThemeUserId(stResponse: &Response) -> Option<i32> {
+    stResponse
+        .extensions()
+        .get::<StResponseThemeUser>()
+        .map(|stIdentity| stIdentity.iUserId)
+}
+
 fn theme_view(style: &str) -> ThemeView<'_> {
     match style {
         "tango" => ThemeView {
@@ -61,61 +92,112 @@ fn theme_view(style: &str) -> ThemeView<'_> {
     }
 }
 
-async fn resolve_profile(state: &AppState, jar: &CookieJar) -> (String, Option<String>, String) {
-    if let Ok(Some(user_id)) =
-        crate::auth::optUserIdFromCookies(&state.pool, jar, &state.config.site_secret).await
-    {
-        let profile: Option<(Option<String>, Option<String>, String)> = sqlx::query_as(
-            "SELECT us.settings->'style', us.settings->'format.mode', u.nick FROM users u LEFT JOIN user_settings us ON us.id=u.id WHERE u.id=$1",
+async fn stResolveProfile(
+    state: &AppState,
+    jar: &CookieJar,
+    optResponseUserId: Option<i32>,
+) -> StThemeProfile {
+    let optUserId = match optResponseUserId {
+        Some(iUserId) => Some(iUserId),
+        None => crate::auth::optUserIdFromCookies(&state.pool, jar, &state.config.site_secret)
+            .await
+            .ok()
+            .flatten(),
+    };
+    if let Some(user_id) = optUserId {
+        let optProfile: Option<(Option<String>, Option<String>, String, i32)> = sqlx::query_as(
+            "SELECT us.settings->'style', us.settings->'format.mode', u.nick, \
+                    COALESCE(u.unread_events,0) \
+             FROM users u LEFT JOIN user_settings us ON us.id=u.id
+             WHERE u.id=$1 AND u.activated AND NOT COALESCE(u.blocked,false)",
         )
         .bind(user_id)
         .fetch_optional(&state.pool)
         .await
         .ok()
         .flatten();
-        if let Some((style, format_mode, nick)) = profile {
-            return (
-                style
+        if let Some((optStyle, optFormatMode, sNick, iUnreadEvents)) = optProfile {
+            return StThemeProfile {
+                sStyle: optStyle
                     .filter(|value| is_style(value))
                     .unwrap_or_else(|| DEFAULT_STYLE.to_string()),
-                Some(nick),
-                format_mode
+                optNick: Some(sNick),
+                sFormatMode: optFormatMode
                     .filter(|value| crate::profile::is_format_mode(value))
                     .unwrap_or_else(|| crate::profile::DEFAULT_FORMAT_MODE.to_string()),
-            );
+                iUnreadEvents,
+            };
         }
     }
-    (
-        DEFAULT_STYLE.to_string(),
-        None,
-        crate::profile::DEFAULT_FORMAT_MODE.to_string(),
-    )
+    StThemeProfile {
+        sStyle: DEFAULT_STYLE.to_string(),
+        optNick: None,
+        sFormatMode: crate::profile::DEFAULT_FORMAT_MODE.to_string(),
+        iUnreadEvents: 0,
+    }
 }
 
-fn login_block(nick: Option<&str>, pony: bool) -> String {
+fn login_block(nick: Option<&str>, pony: bool, regmenu_head_class: bool) -> String {
     match nick {
         Some(nick) => {
-            let greeting = if pony { "дружбомагии тебе" } else { "добро пожаловать" };
+            let greeting = if pony {
+                "дружбомагии тебе"
+            } else {
+                "добро пожаловать"
+            };
             format!(
                 "{greeting}, <a style=\"text-decoration: none\" href=\"/people/{}/profile\">{}</a>",
                 urlencoding::encode(nick),
                 html_escape::encode_text(nick),
             )
         }
-        None => "<div id=\"regmenu\" class=\"head\"><a href=\"/register.jsp\">Регистрация</a> - <a id=\"loginbutton\" href=\"/login.jsp\">Вход</a></div>".to_string(),
+        None => format!(
+            "<div id=\"regmenu\"{}><a href=\"/register.jsp\">Регистрация</a> - <a id=\"loginbutton\" href=\"/login.jsp\">Вход</a></div>",
+            if regmenu_head_class {
+                " class=\"head\""
+            } else {
+                ""
+            }
+        ),
     }
 }
 
-fn modern_header(nick: Option<&str>) -> String {
+fn sLegacyEvents(authenticated: bool, unread_events: i32, disable_event_header: bool) -> String {
+    if disable_event_header {
+        return r#"<a href="notifications">Уведомления</a>"#.to_string();
+    }
+    if !authenticated {
+        return String::new();
+    }
+    let sCount = if unread_events > 0 {
+        format!("({unread_events})")
+    } else {
+        String::new()
+    };
+    format!(
+        r#"<a href="notifications">Уведомления <span id="main_events_count">{sCount}</span></a>"#
+    )
+}
+
+fn modern_header(nick: Option<&str>, unread_events: i32, disable_event_header: bool) -> String {
     let top_profile = nick.map_or_else(String::new, |nick| {
+        let sEvents = if disable_event_header {
+            String::new()
+        } else if unread_events > 0 {
+            format!(
+                r#"<a href="/notifications"> <i class="icon-bell"></i><span id="main_events_count_number" class="set">{unread_events}</span></a>"#
+            )
+        } else {
+            r#"<a href="/notifications"> <i class="icon-bell"></i><span id="main_events_count_number"></span></a>"#.to_string()
+        };
         format!(
-            "<a href=\"/notifications\"><i class=\"icon-bell\"></i><span id=\"main_events_count_number\"></span></a><a title=\"{}\" href=\"/people/{}/profile\"><i class=\"icon-user-circle-o\"></i></a>",
+            "{sEvents}<a title=\"{}\" href=\"/people/{}/profile\"><i class=\"icon-user-circle-o\"></i></a>",
             html_escape::encode_double_quoted_attribute(nick),
             urlencoding::encode(nick),
         )
     });
     let guest = if nick.is_none() {
-        login_block(None, false)
+        login_block(None, false, true)
     } else {
         String::new()
     };
@@ -124,7 +206,7 @@ fn modern_header(nick: Option<&str>) -> String {
     )
 }
 
-fn waltz_header(nick: Option<&str>) -> String {
+fn waltz_header(nick: Option<&str>, unread_events: i32, disable_event_header: bool) -> String {
     let top_profile = nick.map_or_else(String::new, |nick| {
         format!(
             r#"<a style="text-decoration: none" href="/people/{}/profile">{}</a>"#,
@@ -133,76 +215,86 @@ fn waltz_header(nick: Option<&str>) -> String {
         )
     });
     let guest = if nick.is_none() {
-        login_block(None, false)
+        login_block(None, false, true)
     } else {
         String::new()
     };
-    let events = if nick.is_some() {
-        r#"<li><a href="/notifications">Уведомления <span id="main_events_count"></span></a></li>"#
+    let sEvents = sLegacyEvents(nick.is_some(), unread_events, disable_event_header);
+    let events = if sEvents.is_empty() {
+        String::new()
     } else {
-        ""
+        format!("<li>{sEvents}</li>")
     };
     format!(
         r#"<header id="hd"><div id="topProfile">{top_profile}</div><span id="sitetitle"><a href="/">LINUX.ORG.RU</a></span><nav class="menu"><div id="loginGreating">{guest}</div><ul><li><a href="/news/">Новости</a></li> <li><a href="/gallery/">Галерея</a></li> <li><a href="/articles/">Статьи</a></li> <li><a href="/forum/">Форум</a></li> <li><a href="/tracker/">Трекер</a></li> {events} <li><a href="/search.jsp">Поиск</a></li></ul></nav></header><div style="clear: both"></div>"#
     )
 }
 
-fn black_header(nick: Option<&str>, main_page: bool) -> String {
-    let login = login_block(nick, false);
+fn black_header(
+    nick: Option<&str>,
+    unread_events: i32,
+    disable_event_header: bool,
+    main_page: bool,
+) -> String {
+    let login = login_block(nick, false, main_page);
+    let sEvents = sLegacyEvents(nick.is_some(), unread_events, disable_event_header);
     if !main_page {
-        let events = if nick.is_some() {
-            r#"<a style="text-decoration:none" href="/notifications">Уведомления <span id="main_events_count"></span></a> - "#
+        let events = if sEvents.is_empty() {
+            String::new()
         } else {
-            ""
+            format!("{sEvents} - ")
         };
         return format!(
             r#"<table border="0" cellspacing="0" cellpadding="0" width="100%" class="head"><tr><td rowspan="2" align="left"><a href="/"><img src="/black/lor-new.png" width="282" height="60" alt="Linux.org.ru"></a></td><td align="right">{login}</td></tr><tr><td align="right" valign="bottom"><a style="text-decoration:none" href="/news/">Новости</a> - <a style="text-decoration:none" href="/gallery/">Галерея</a> - <a style="text-decoration:none" href="/articles/">Статьи</a> - <a style="text-decoration:none" href="/forum/">Форум</a> - {events}<a style="text-decoration:none" href="/tracker/">Трекер</a> - <a style="text-decoration:none" href="/search.jsp">Поиск</a></td></tr></table>"#,
         );
     }
-    let events = if nick.is_some() {
-        r#"<a href="/notifications">Уведомления <span id="main_events_count"></span></a>"#
-    } else {
-        ""
-    };
     format!(
-        r#"<a href="/"><img style="float:left;border:0" src="/black/lorlogo-try.png" alt="Русская информация об ОС LINUX" width="270" height="208"></a><div id="hd"><div id="head-main"><table><tr><td><a href="/news/">Новости</a></td><td><a href="/tracker/">Трекер</a></td><td><a href="/about">О сервере</a></td></tr><tr><td><a href="/gallery/">Галерея</a></td><td><a href="/forum/">Форум</a></td><td>{events}</td></tr><tr><td><a href="/articles/">Статьи</a></td><td></td><td><a href="/search.jsp">Поиск</a></td></tr></table><br></div><div style="right:5px;text-align:right;top:5px;position:absolute" class="head">{login}</div></div>"#,
+        r#"<a href="/"><img style="float:left;border:0" src="/black/lorlogo-try.png" alt="Русская информация об ОС LINUX" width="270" height="208"></a><div id="hd"><div id="head-main"><table><tr><td><a href="/news/">Новости</a></td><td><a href="/tracker/">Трекер</a></td><td><a href="/about">О сервере</a></td></tr><tr><td><a href="/gallery/">Галерея</a></td><td><a href="/forum/">Форум</a></td><td>{sEvents}</td></tr><tr><td><a href="/articles/">Статьи</a></td><td></td><td><a href="/search.jsp">Поиск</a></td></tr></table><br></div><div style="right:5px;text-align:right;top:5px;position:absolute" class="head">{login}</div></div>"#,
     )
 }
 
-fn white2_header(nick: Option<&str>) -> String {
+fn white2_header(nick: Option<&str>, unread_events: i32, disable_event_header: bool) -> String {
     let login = nick.map_or_else(
-        || login_block(None, false),
+        || login_block(None, false, true),
         |nick| format!(r#"добро пожаловать,&nbsp;<a style="text-decoration: none" href="/people/{}/profile">{}</a>"#, urlencoding::encode(nick), html_escape::encode_text(nick)),
     );
-    let events = if nick.is_some() {
-        r#"<li><a href="/notifications">Уведомления <span id="main_events_count"></span></a></li>"#
+    let sEvents = sLegacyEvents(nick.is_some(), unread_events, disable_event_header);
+    let events = if sEvents.is_empty() {
+        String::new()
     } else {
-        ""
+        format!("<li>{sEvents}</li>")
     };
     format!(
         r#"<div id="hd"><div id="hdtux"><img src="/img/Tux.svg" height="100%" alt="Linux"></div><a id="sitetitle" href="/">LINUX.ORG.RU</a><ul class="menu"><li id="loginGreating">{login}</li> <li><a href="/news/">Новости</a></li> <li><a href="/gallery/">Галерея</a></li> <li><a href="/articles/">Статьи</a></li> <li><a href="/forum/">Форум</a></li> <li><a href="/tracker/">Трекер</a></li> {events} <li><a href="/search.jsp">Поиск</a></li></ul></div><div style="clear: both"></div>"#,
     )
 }
 
-fn pony_header(nick: Option<&str>) -> String {
-    let login = login_block(nick, true);
-    let events = if nick.is_some() {
-        r#"<li><a href="/notifications">Уведомления <span id="main_events_count"></span></a></li>"#
+fn pony_header(nick: Option<&str>, unread_events: i32, disable_event_header: bool) -> String {
+    let login = login_block(nick, true, true);
+    let sEvents = sLegacyEvents(nick.is_some(), unread_events, disable_event_header);
+    let events = if sEvents.is_empty() {
+        String::new()
     } else {
-        ""
+        format!("<li>{sEvents}</li>")
     };
     format!(
         r#"<div id="hd"><a id="sitetitle" href="/"><img src="/zomg_ponies/img/twilight_logo.png" id="twilight_logo" alt="">PONY.ORG.RU</a><div class="menu"><div id="loginGreating">{login}</div><ul><li><a href="/news/">Новости</a></li> <li><a href="/gallery/">Галерея</a></li> <li><a href="/articles/">Статьи</a></li> <li><a href="/forum/">Форум</a></li> <li><a href="/tracker/">Трекер</a></li> {events} <li><a href="/search.jsp">Поиск</a></li></ul></div></div><div style="clear: both"></div>"#,
     )
 }
 
-fn render_header(style: &str, nick: Option<&str>, main_page: bool) -> String {
+fn render_header(
+    style: &str,
+    nick: Option<&str>,
+    unread_events: i32,
+    disable_event_header: bool,
+    main_page: bool,
+) -> String {
     match style {
-        "black" => black_header(nick, main_page),
-        "white2" => white2_header(nick),
-        "waltz" => waltz_header(nick),
-        "zomg_ponies" => pony_header(nick),
-        _ => modern_header(nick),
+        "black" => black_header(nick, unread_events, disable_event_header, main_page),
+        "white2" => white2_header(nick, unread_events, disable_event_header),
+        "waltz" => waltz_header(nick, unread_events, disable_event_header),
+        "zomg_ponies" => pony_header(nick, unread_events, disable_event_header),
+        _ => modern_header(nick, unread_events, disable_event_header),
     }
 }
 
@@ -232,15 +324,15 @@ fn render_footer(
         "c-0.39,0.39-1.03-0.39-1.41,0",
         "c-0.39-0.39-1.03-0.39-1.41,0",
     );
-    let realtime = if authenticated {
+    let realtime_body = if authenticated {
         let sWsUrl = serde_json::to_string(ws_url).expect("serializing a string cannot fail");
-        format!(
-            r#"<script>$script.ready('realtime', function() {{ RealtimeContext.start({sWsUrl}); }});</script>"#
-        )
+        format!(r#"$script.ready('realtime', function() {{ RealtimeContext.start({sWsUrl}); }});"#)
     } else {
         String::new()
     };
-    format!(r#"<footer id="ft">{info}{realtime}{theme_indicator}</footer>"#)
+    format!(
+        r#"<footer id="ft">{info}<script type="text/javascript">{realtime_body}</script>{theme_indicator}</footer>"#
+    )
 }
 
 pub async fn apply_theme(
@@ -250,12 +342,12 @@ pub async fn apply_theme(
     next: Next,
 ) -> Response {
     let main_page = matches!(req.uri().path(), "/" | "/index.jsp");
+    let bNotificationsPage = req.uri().path() == "/notifications";
     let sCurrentUrl = req
         .uri()
         .path_and_query()
         .map_or("/", axum::http::uri::PathAndQuery::as_str)
         .to_owned();
-    let (style, nick, format_mode) = resolve_profile(&state, &jar).await;
     let response = next.run(req).await;
     let is_html = response
         .headers()
@@ -266,7 +358,12 @@ pub async fn apply_theme(
         return response;
     }
 
-    let view = theme_view(&style);
+    let optResponseUserId = response
+        .extensions()
+        .get::<StResponseThemeUser>()
+        .map(|stIdentity| stIdentity.iUserId);
+    let stProfile = stResolveProfile(&state, &jar, optResponseUserId).await;
+    let view = theme_view(&stProfile.sStyle);
     let (mut parts, body) = response.into_parts();
     let Ok(bytes) = axum::body::to_bytes(body, usize::MAX).await else {
         return Response::from_parts(parts, Body::empty());
@@ -294,8 +391,15 @@ pub async fn apply_theme(
         &html_escape::encode_double_quoted_attribute(&sBaseUrl),
         1,
     );
-    let mut sHeader = render_header(&style, nick.as_deref(), main_page);
-    if nick.is_none() {
+    let bDisableEventHeader = bNotificationsPage && stProfile.optNick.is_some();
+    let mut sHeader = render_header(
+        &stProfile.sStyle,
+        stProfile.optNick.as_deref(),
+        stProfile.iUnreadEvents,
+        bDisableEventHeader,
+        main_page,
+    );
+    if stProfile.optNick.is_none() {
         sHeader = sHeader.replacen(
             "href=\"/login.jsp\"",
             &format!(
@@ -311,16 +415,16 @@ pub async fn apply_theme(
         &render_footer(
             &state.config.public_url,
             &state.config.ws_url,
-            nick.is_some(),
+            stProfile.optNick.is_some(),
             main_page,
-            &format_mode,
+            &stProfile.sFormatMode,
         ),
         1,
     );
     let stTimezone = request_timezone::stRequestTimezone(&jar);
     text = text.replacen("<!-- LOR_TIMEZONE -->", stTimezone.name(), 1);
     text = request_timezone::sRewriteHtmlTimes(&text, stTimezone, chrono::Utc::now());
-    if style == "black" && main_page {
+    if stProfile.sStyle == "black" && main_page {
         text = text.replacen("<body>", "<body style=\"margin-top: 0\">", 1);
     }
     parts.headers.remove(header::CONTENT_LENGTH);
@@ -382,13 +486,20 @@ mod tests {
         assert_eq!(base.matches("LOR_THEME_HEADER").count(), 1);
         assert_eq!(base.matches("LOR_THEME_FOOTER").count(), 1);
         assert!(!base.contains("theme-shell.css"));
-        assert_eq!(black_header(None, false).matches("lor-new.png").count(), 1);
         assert_eq!(
-            black_header(None, true).matches("lorlogo-try.png").count(),
+            black_header(None, 0, false, false)
+                .matches("lor-new.png")
+                .count(),
             1
         );
-        assert!(!black_header(None, true).contains("Уведомления"));
-        assert!(black_header(Some("user"), true).contains("Уведомления"));
+        assert_eq!(
+            black_header(None, 0, false, true)
+                .matches("lorlogo-try.png")
+                .count(),
+            1
+        );
+        assert!(!black_header(None, 0, false, true).contains("Уведомления"));
+        assert!(black_header(Some("user"), 0, false, true).contains("Уведомления"));
         assert!(
             !render_footer(
                 "https://example/",
@@ -398,6 +509,16 @@ mod tests {
                 "markdown"
             )
             .contains("RealtimeContext.start")
+        );
+        assert!(
+            render_footer(
+                "https://example/",
+                "wss://example/",
+                false,
+                false,
+                "markdown"
+            )
+            .contains("<script type=\"text/javascript\"></script>")
         );
         let authenticated_footer = render_footer(
             "https://example/",
@@ -414,10 +535,10 @@ mod tests {
     #[test]
     fn inline_menu_items_keep_the_jsp_whitespace_gap() {
         for header in [
-            modern_header(None),
-            waltz_header(None),
-            white2_header(None),
-            pony_header(None),
+            modern_header(None, 0, false),
+            waltz_header(None, 0, false),
+            white2_header(None, 0, false),
+            pony_header(None, 0, false),
         ] {
             assert!(header.contains("</li> <li>"));
             assert!(!header.contains("</li><li>"));
@@ -432,7 +553,47 @@ mod tests {
             "/templates/settings.html"
         ));
         assert!(base.contains("theme === 'dark' || theme === 'light' || theme === 'auto'"));
+        assert!(!base.contains("dataset.style.startsWith('tango')"));
+        assert!(settings.contains("localStorage.removeItem('lor-theme')"));
         assert!(!settings.contains("localStorage.setItem('lor-theme'"));
         assert!(!settings.contains("lor_theme="));
+    }
+
+    #[test]
+    fn unread_event_header_matches_java_theme_variants() {
+        let sModern = modern_header(Some("user"), 3, false);
+        assert!(sModern.contains("main_events_count_number\" class=\"set\">3"));
+        assert!(sModern.contains("/people/user/profile"));
+
+        let sModernNotifications = modern_header(Some("user"), 3, true);
+        assert!(!sModernNotifications.contains("icon-bell"));
+        assert!(sModernNotifications.contains("icon-user-circle-o"));
+
+        let sLegacy = waltz_header(Some("user"), 3, false);
+        assert!(sLegacy.contains("main_events_count\">(3)</span>"));
+        let sLegacyNotifications = waltz_header(Some("user"), 3, true);
+        assert!(sLegacyNotifications.contains("<a href=\"notifications\">Уведомления</a>"));
+        assert!(!sLegacyNotifications.contains("main_events_count"));
+    }
+
+    #[test]
+    fn settings_theme_controls_keep_original_dom_contract() {
+        let settings = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/templates/settings.html"
+        ));
+        for (name, label) in [
+            ("style", "style-label"),
+            ("topics", "topics-label"),
+            ("messages", "messages-label"),
+            ("trackerMode", "trackerMode-label"),
+            ("avatar", "avatar-label"),
+            ("format_mode", "format-mode-label"),
+        ] {
+            assert!(settings.contains(&format!("aria-labelledby=\"{label}\"")));
+            assert!(settings.contains(&format!("name=\"{name}\"")));
+            assert!(settings.contains(&format!("id=\"{name}-{{{{ loop.index0 }}}}\"")));
+        }
+        assert!(!settings.contains("(устаревшая)"));
     }
 }

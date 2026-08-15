@@ -657,9 +657,10 @@ impl TrackerModeratorUser {
 
 #[derive(Debug)]
 struct TrackerModeratorUserpic {
-    nick: String,
     profile_url: String,
     image_url: String,
+    width: i32,
+    height: i32,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -881,13 +882,20 @@ async fn stTrackerModeratorData(
         .into_iter()
         .filter(|(iUserId, _, _)| setRecentPhotoUsers.insert(*iUserId))
         .filter_map(|(_, sNick, optPhoto)| {
-            crate::profile::userpic_url("empty", false, false, optPhoto.as_deref(), None).map(
-                |sImageUrl| TrackerModeratorUserpic {
-                    profile_url: format!("/people/{}/profile", urlencoding::encode(&sNick)),
-                    nick: sNick,
-                    image_url: sImageUrl,
-                },
-            )
+            let stUserpic = crate::profile::stResolveUserpic(
+                std::path::Path::new(&stState.config.upload_dir),
+                "empty",
+                false,
+                false,
+                optPhoto.as_deref(),
+                None,
+            );
+            (stUserpic.sUrl != crate::profile::DISABLED_USERPIC).then(|| TrackerModeratorUserpic {
+                profile_url: format!("/people/{}/profile", urlencoding::encode(&sNick)),
+                image_url: stUserpic.sUrl,
+                width: stUserpic.iWidth,
+                height: stUserpic.iHeight,
+            })
         })
         .collect();
     let vecBlockedIps: Vec<String> = sqlx::query_scalar(
@@ -2008,19 +2016,15 @@ pub async fn reactions_get(
                 .await?;
         let stProfile = crate::profile::ProfileSettings::from_hstore_text(optSettings);
         let (optUserpicUrl, iUserpicWidth, iUserpicHeight) = if stProfile.photos {
-            let optUrl = crate::profile::userpic_url(
+            let stUserpic = crate::profile::stResolveUserpic(
+                std::path::Path::new(&state.config.upload_dir),
                 &stProfile.avatar,
                 false,
                 stComment.author_id == 2,
                 optPhoto.as_deref(),
                 optEmail.as_deref(),
             );
-            let bDisabled = optUrl.is_none();
-            (
-                Some(optUrl.unwrap_or_else(|| crate::profile::DISABLED_USERPIC.to_owned())),
-                if bDisabled { 1 } else { 150 },
-                if bDisabled { 1 } else { 150 },
-            )
+            (Some(stUserpic.sUrl), stUserpic.iWidth, stUserpic.iHeight)
         } else {
             (None, 0, 0)
         };

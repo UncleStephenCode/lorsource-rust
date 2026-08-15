@@ -43,27 +43,52 @@ struct UserProfileData {
 }
 
 impl UserProfileData {
-    fn status(&self) -> &'static str {
-        if self.blocked {
-            "заблокирован"
-        } else if !self.activated {
-            "не активирован"
-        } else if self.score >= 100 {
-            "активный пользователь"
-        } else {
+    /// Exact `User.getStatus`: account flags are appended separately by the
+    /// JSP; the status itself is score/max-score text plus star markup.
+    fn status_html(&self) -> String {
+        let sText = if self.score < 50 {
+            "анонимный"
+        } else if self.score < 100 && self.max_score < 100 {
             "новый пользователь"
+        } else {
+            ""
+        };
+        let sStars = if self.max_score >= 100 {
+            let iGreen = self.score.clamp(0, 599) / 100;
+            let iMax = self.max_score.max(self.score).clamp(0, 599) / 100;
+            format!(
+                "<span class=\"stars\">{}{}</span>",
+                "★".repeat(iGreen as usize),
+                "☆".repeat((iMax - iGreen).max(0) as usize)
+            )
+        } else {
+            String::new()
+        };
+        match (sText.is_empty(), sStars.is_empty()) {
+            (true, _) => sStars,
+            (_, true) => sText.to_owned(),
+            _ => format!("{sText} {sStars}"),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct StUserSectionStat {
+    id: i32,
+    name: String,
+    count: i64,
 }
 
 #[derive(Debug, Clone)]
 struct UserStats {
     topic_count: i64,
     comment_count: i64,
+    ignore_count: i64,
     first_topic: Option<chrono::DateTime<chrono::Utc>>,
     last_topic: Option<chrono::DateTime<chrono::Utc>>,
     first_comment: Option<chrono::DateTime<chrono::Utc>>,
     last_comment: Option<chrono::DateTime<chrono::Utc>>,
+    topics_by_section: Vec<StUserSectionStat>,
 }
 
 #[derive(Debug, Clone)]
@@ -75,9 +100,83 @@ struct BanInfo {
 
 #[derive(Debug, Clone)]
 struct UserLogEntry {
-    action: String,
+    description: String,
     action_date: chrono::DateTime<chrono::Utc>,
     actor_nick: String,
+    is_self: bool,
+    options: Vec<StUserLogOption>,
+}
+
+#[derive(Debug, Clone)]
+struct StUserLogOption {
+    label: String,
+    value_html: String,
+}
+
+fn sUserLogDescription(sAction: &str) -> &'static str {
+    match sAction {
+        "reset_userpic" => "Сброшена фотография",
+        "set_userpic" => "Установлена фотография",
+        "block_user" => "Заблокирован",
+        "score50" => "Задан score=50",
+        "unblock_user" => "Разблокирован",
+        "accept_new_email" => "Установлен новый email",
+        "reset_info" => "Сброшен текст информации",
+        "reset_url" => "Сброшен URL",
+        "reset_town" => "Сброшено поле \"город\"",
+        "reset_password" => "Сброшен пароль",
+        "set_password" => "Установлен новый пароль",
+        "set_info" => "Обновлен профиль",
+        "set_corrector" => "Добавлены права корректора",
+        "unset_corrector" => "Убраны права корректора",
+        "register" => "Зарегистрирован",
+        "frozen" => "Заморожен",
+        "defrosted" => "Разморожен",
+        "sent_password_reset" => "Отправлен код сброса пароля",
+        _ => "Действие с профилем",
+    }
+}
+
+fn sUserLogOptionLabel(sKey: &str) -> String {
+    match sKey {
+        "bonus" => "Изменение score".to_owned(),
+        "new_email" => "Новый email".to_owned(),
+        "new_userpic" => "Новая фотография".to_owned(),
+        "old_email" => "Старый email".to_owned(),
+        "old_info" => "Старый текст информации".to_owned(),
+        "old_userpic" => "Старая фотография".to_owned(),
+        "reason" => "Причина".to_owned(),
+        "until" => "Срок действия".to_owned(),
+        _ => html_escape::encode_text(sKey).into_owned(),
+    }
+}
+
+fn vecPreparedUserLogOptions(stInfo: serde_json::Value) -> Vec<StUserLogOption> {
+    let Some(mapInfo) = stInfo.as_object() else {
+        return Vec::new();
+    };
+    mapInfo
+        .iter()
+        .filter_map(|(sKey, stValue)| {
+            let sValue = stValue.as_str()?;
+            let sEscaped = html_escape::encode_text(sValue);
+            let value_html = match sKey.as_str() {
+                "old_userpic" | "new_userpic" => format!(
+                    "<a href=\"/photos/{}\">{sEscaped}</a>",
+                    urlencoding::encode(sValue)
+                ),
+                "ip" => format!(
+                    "<a href=\"/sameip.jsp?ip={}\">{sEscaped}</a>",
+                    urlencoding::encode(sValue)
+                ),
+                _ => sEscaped.into_owned(),
+            };
+            Some(StUserLogOption {
+                label: sUserLogOptionLabel(sKey),
+                value_html,
+            })
+        })
+        .collect()
 }
 
 #[derive(Template)]
@@ -125,6 +224,9 @@ struct UserTemplate {
     /// (`DisabledUserpic`) rather than a "no photo" box when the viewer has
     /// avatars disabled or the target has neither a local photo nor email.
     userpic_url: String,
+    userpic_width: i32,
+    userpic_height: i32,
+    rel_me: bool,
     year_stats_url: String,
     year_stats_user: String,
     csrf_token: String,
@@ -142,6 +244,8 @@ struct SettingsTemplate {
     format_modes: Vec<ChoiceOption>,
     topic_values: Vec<NumberOption>,
     message_values: Vec<NumberOption>,
+    can_load_userpic: bool,
+    can_deregister: bool,
     csrf_token: String,
 }
 
@@ -149,13 +253,48 @@ struct SettingsTemplate {
 #[template(path = "edit_profile.html")]
 struct EditProfileTemplate {
     user: UserSummary,
-    profile: UserProfileData,
     can_load_userpic: bool,
     can_edit_info: bool,
     can_edit_info_reason: String,
     info_markup_form_id: String,
     info_markup_title: String,
+    form_name: String,
+    form_url: String,
+    form_email: String,
+    form_town: String,
+    form_info: String,
+    global_errors: Vec<String>,
+    name_error: Option<String>,
+    url_error: Option<String>,
+    email_error: Option<String>,
+    town_error: Option<String>,
+    oldpass_error: Option<String>,
     csrf_token: String,
+}
+
+#[derive(Template)]
+#[template(path = "edit_remark.html")]
+struct StEditRemarkTemplate {
+    sNick: String,
+    sRemark: String,
+    sCsrfToken: String,
+}
+
+#[derive(Template)]
+#[template(path = "wipe_user.html")]
+struct StWipeUserTemplate {
+    sNick: String,
+    iUserId: i32,
+    iCommentCount: i64,
+    sCsrfToken: String,
+}
+
+#[derive(Template)]
+#[template(path = "action_done.html")]
+struct StProfileActionDoneTemplate {
+    message: String,
+    big_message: Option<String>,
+    link: Option<String>,
 }
 
 #[derive(Template)]
@@ -665,9 +804,9 @@ async fn render_profile(
     } else {
         (None, None)
     };
-    // whois.jsp always marks the standalone user-supplied homepage URL as
-    // nofollow; the score policy applies only to links inside `userinfo`.
-    let url_nofollow = true;
+    let url_nofollow = profile.score < 100 || profile.blocked || !profile.activated || is_frozen;
+    let rel_me =
+        profile.url.is_some() && profile.score >= 100 && !profile.blocked && profile.activated;
     let long_freeze_durations = frozen_until
         .and_then(|dtUntil| dtUntil.checked_add_months(chrono::Months::new(24)))
         .is_some_and(|dtTwoYearsAfterFreeze| dtTwoYearsAfterFreeze > chrono::Utc::now());
@@ -704,20 +843,35 @@ async fn render_profile(
     };
 
     let user_log = if is_owner || is_moderator {
-        sqlx::query_as::<_, (String, chrono::DateTime<chrono::Utc>, String)>(
-            r#"SELECT l.action::text, l.action_date, u.nick
+        sqlx::query_as::<
+            _,
+            (
+                String,
+                chrono::DateTime<chrono::Utc>,
+                String,
+                bool,
+                serde_json::Value,
+            ),
+        >(
+            r#"SELECT l.action::text, l.action_date, u.nick,
+                      l.userid=l.action_userid,
+                      COALESCE(hstore_to_json(l.info),'{}'::json)
                FROM user_log l JOIN users u ON u.id=l.action_userid
-               WHERE l.userid=$1 ORDER BY l.action_date DESC LIMIT 20"#,
+               WHERE l.userid=$1 AND ($2 OR l.userid<>l.action_userid)
+               ORDER BY l.id DESC"#,
         )
         .bind(profile.id)
+        .bind(is_moderator)
         .fetch_all(&state.pool)
         .await
         .unwrap_or_default()
         .into_iter()
-        .map(|(action, date, actor_nick)| UserLogEntry {
-            action,
+        .map(|(action, date, actor_nick, is_self, info)| UserLogEntry {
+            description: sUserLogDescription(&action).to_owned(),
             action_date: date,
             actor_nick,
+            is_self,
+            options: vecPreparedUserLogOptions(info),
         })
         .collect()
     } else {
@@ -737,17 +891,16 @@ async fn render_profile(
         }
         None => crate::profile::DEFAULT_AVATAR.to_string(),
     };
-    let userpic_url = crate::profile::userpic_url(
+    let stUserpic = crate::profile::stResolveUserpic(
+        std::path::Path::new(&state.config.upload_dir),
         &viewer_avatar_mode,
         true,
         profile.id == crate::routes::comments::ANONYMOUS_USER_ID,
         profile.photo.as_deref(),
         profile.email.as_deref(),
-    )
-    .unwrap_or_else(|| crate::profile::DISABLED_USERPIC.to_string());
+    );
 
-    // UserService.getAllInvitedUsers / WhoisController "invitedUsers":
-    // shown to everyone, not gated to owner/moderator, matching the original.
+    // WhoisController loads `invitedUsers` only in the owner/moderator block.
     let invited_users: Vec<String> = if can_view_private {
         sqlx::query_scalar(
             r#"SELECT u.nick FROM user_invites i JOIN users u ON u.id=i.invited_user
@@ -803,7 +956,10 @@ async fn render_profile(
             slow_mode_reason: slow_mode_reason.unwrap_or_default().to_string(),
             freezer_nick,
             freezing_reason,
-            userpic_url,
+            userpic_url: stUserpic.sUrl,
+            userpic_width: stUserpic.iWidth,
+            userpic_height: stUserpic.iHeight,
+            rel_me,
             year_stats_url,
             year_stats_user,
             csrf_token,
@@ -1275,18 +1431,45 @@ async fn user_stats(state: &AppState, user_id: i32) -> Result<UserStats> {
         Option<chrono::DateTime<chrono::Utc>>,
         Option<chrono::DateTime<chrono::Utc>>,
     ) = sqlx::query_as(
-        "SELECT count(*)::bigint, min(postdate), max(postdate) FROM comments WHERE userid=$1 AND NOT COALESCE(deleted,false)",
+        "SELECT count(*) FILTER (WHERE NOT COALESCE(deleted,false))::bigint, min(postdate), max(postdate) FROM comments WHERE userid=$1",
     )
     .bind(user_id)
     .fetch_one(&state.pool)
     .await?;
+    let ignore_count: i64 = sqlx::query_scalar(
+        r#"SELECT count(*)::bigint
+             FROM ignore_list il JOIN users u ON u.id=il.userid
+            WHERE il.ignored=$1 AND NOT COALESCE(u.blocked,false)"#,
+    )
+    .bind(user_id)
+    .fetch_one(&state.pool)
+    .await?;
+    let topics_by_section = sqlx::query_as::<_, (i32, String, i64)>(
+        r#"SELECT s.id, s.name, count(t.id)::bigint
+             FROM topics t
+             JOIN groups g ON g.id=t.groupid
+             JOIN sections s ON s.id=g.section
+            WHERE t.userid=$1
+              AND NOT COALESCE(t.deleted,false)
+              AND NOT COALESCE(t.draft,false)
+            GROUP BY s.id,s.name
+            ORDER BY s.id"#,
+    )
+    .bind(user_id)
+    .fetch_all(&state.pool)
+    .await?
+    .into_iter()
+    .map(|(id, name, count)| StUserSectionStat { id, name, count })
+    .collect();
     Ok(UserStats {
         topic_count,
         comment_count,
+        ignore_count,
         first_topic,
         last_topic,
         first_comment,
         last_comment,
+        topics_by_section,
     })
 }
 
@@ -1679,7 +1862,7 @@ fn sMarkupIdFromForm(value: &str) -> &'static str {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct ProfileForm {
     pub name: Option<String>,
     pub town: Option<String>,
@@ -1692,6 +1875,70 @@ pub struct ProfileForm {
     pub password: Option<String>,
     pub password2: Option<String>,
     pub oldpass: Option<String>,
+}
+
+#[derive(Default)]
+struct StEditProfileErrors {
+    vecGlobal: Vec<String>,
+    optName: Option<String>,
+    optUrl: Option<String>,
+    optEmail: Option<String>,
+    optTown: Option<String>,
+    optOldpass: Option<String>,
+}
+
+async fn stRenderEditProfileValidation(
+    stState: &AppState,
+    stUser: UserSummary,
+    _sNick: &str,
+    stForm: &ProfileForm,
+    sCsrfToken: String,
+    stErrors: StEditProfileErrors,
+) -> Result<Response> {
+    let bCanLoadUserpic = crate::routes::legacy::bCanLoadUserpic(stState, &stUser).await?;
+    let optRestriction = optEditProfileInfoRestrictionForUser(stState, stUser.id).await?;
+    let optSettings: Option<String> =
+        sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
+            .bind(stUser.id)
+            .fetch_optional(&stState.pool)
+            .await?;
+    let stSettings = ProfileSettings::from_hstore_text(optSettings);
+    let sEffectiveMarkup = stForm
+        .info_markup
+        .as_deref()
+        .filter(|sValue| crate::profile::is_format_mode(sValue))
+        .unwrap_or(&stSettings.format_mode)
+        .to_owned();
+    let sMarkupTitle = crate::profile::FORMAT_MODES
+        .iter()
+        .find(|(sValue, _, _)| *sValue == sEffectiveMarkup)
+        .map(|(_, sTitle, _)| (*sTitle).to_owned())
+        .unwrap_or_else(|| crate::routes::topics::markup_form_view("BBCODE_TEX").1);
+
+    Ok(Html(
+        EditProfileTemplate {
+            user: stUser,
+            can_load_userpic: bCanLoadUserpic,
+            can_edit_info: optRestriction.is_none(),
+            can_edit_info_reason: optRestriction.unwrap_or_default().to_string(),
+            info_markup_form_id: sEffectiveMarkup,
+            info_markup_title: sMarkupTitle,
+            form_name: stForm.name.clone().unwrap_or_default(),
+            form_url: stForm.url.clone().unwrap_or_default(),
+            form_email: stForm.email.clone().unwrap_or_default(),
+            form_town: stForm.town.clone().unwrap_or_default(),
+            form_info: stForm.info.clone().unwrap_or_default(),
+            global_errors: stErrors.vecGlobal,
+            name_error: stErrors.optName,
+            url_error: stErrors.optUrl,
+            email_error: stErrors.optEmail,
+            town_error: stErrors.optTown,
+            oldpass_error: stErrors.optOldpass,
+            csrf_token: sCsrfToken,
+        }
+        .render()?,
+    )
+    .into_response())
 }
 
 pub async fn edit_profile_form(
@@ -1729,15 +1976,30 @@ pub async fn edit_profile_form(
         .find(|(value, _, _)| *value == effective_markup)
         .map(|(_, title, _)| (*title).to_string())
         .unwrap_or_else(|| crate::routes::topics::markup_form_view("BBCODE_TEX").1);
+    let form_name = user.name.clone().unwrap_or_default();
+    let form_url = profile.url.clone().unwrap_or_default();
+    let form_email = profile.email.clone().unwrap_or_default();
+    let form_town = user.town.clone().unwrap_or_default();
+    let form_info = user.userinfo.clone().unwrap_or_default();
     let mut response = Html(
         EditProfileTemplate {
             user,
-            profile,
             can_load_userpic,
             can_edit_info: opt_restriction.is_none(),
             can_edit_info_reason: opt_restriction.unwrap_or_default().to_string(),
             info_markup_form_id: effective_markup,
             info_markup_title,
+            form_name,
+            form_url,
+            form_email,
+            form_town,
+            form_info,
+            global_errors: Vec::new(),
+            name_error: None,
+            url_error: None,
+            email_error: None,
+            town_error: None,
+            oldpass_error: None,
             csrf_token,
         }
         .render()?,
@@ -1758,8 +2020,10 @@ pub async fn edit_profile(
     current: CurrentUser,
     headers: HeaderMap,
     ConnectInfo(peer_address): ConnectInfo<SocketAddr>,
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+    stJar: CookieJar,
     Form(form): axum::Form<ProfileForm>,
-) -> Result<impl axum::response::IntoResponse> {
+) -> Result<Response> {
     ensure_self_service_actor(&current.0, &nick)?;
     let user = get_user(&state, &nick).await?;
     // Java's EditProfileController is strictly self-service (no moderator
@@ -1768,9 +2032,18 @@ pub async fn edit_profile(
 
     let oldpass = form.oldpass.as_deref().unwrap_or("");
     if oldpass.is_empty() {
-        return Err(AppError::BadRequest(
-            "Для изменения регистрации нужен ваш пароль".into(),
-        ));
+        return stRenderEditProfileValidation(
+            &state,
+            user,
+            &nick,
+            &form,
+            csrf_token,
+            StEditProfileErrors {
+                optOldpass: Some("Для изменения регистрации нужен ваш пароль".to_owned()),
+                ..Default::default()
+            },
+        )
+        .await;
     }
     let current_hash: Option<String> = sqlx::query_scalar("SELECT passwd FROM users WHERE id=$1")
         .bind(user.id)
@@ -1781,25 +2054,63 @@ pub async fn edit_profile(
         .map(|hash| security::password::verify(oldpass, hash))
         .unwrap_or(false)
     {
-        return Err(AppError::BadRequest("Неверный пароль".into()));
+        return stRenderEditProfileValidation(
+            &state,
+            user,
+            &nick,
+            &form,
+            csrf_token,
+            StEditProfileErrors {
+                optOldpass: Some("Неверный пароль".to_owned()),
+                ..Default::default()
+            },
+        )
+        .await;
     }
 
     let new_password = form.password.as_deref().filter(|s| !s.is_empty());
     let new_password_hash = if let Some(password) = new_password {
         if password.eq_ignore_ascii_case(&user.nick) {
-            return Err(AppError::BadRequest(
-                "пароль не может совпадать с логином".to_string(),
-            ));
+            return stRenderEditProfileValidation(
+                &state,
+                user,
+                &nick,
+                &form,
+                csrf_token,
+                StEditProfileErrors {
+                    vecGlobal: vec!["пароль не может совпадать с логином".to_owned()],
+                    ..Default::default()
+                },
+            )
+            .await;
         }
         if form.password2.as_deref() != Some(password) {
-            return Err(AppError::BadRequest(
-                "введенные пароли не совпадают".to_string(),
-            ));
+            return stRenderEditProfileValidation(
+                &state,
+                user,
+                &nick,
+                &form,
+                csrf_token,
+                StEditProfileErrors {
+                    vecGlobal: vec!["введенные пароли не совпадают".to_owned()],
+                    ..Default::default()
+                },
+            )
+            .await;
         }
         if password.chars().count() < 10 {
-            return Err(AppError::BadRequest(
-                "слишком короткий пароль, минимальная длина: 10".to_string(),
-            ));
+            return stRenderEditProfileValidation(
+                &state,
+                user,
+                &nick,
+                &form,
+                csrf_token,
+                StEditProfileErrors {
+                    vecGlobal: vec!["слишком короткий пароль, минимальная длина: 10".to_owned()],
+                    ..Default::default()
+                },
+            )
+            .await;
         }
         Some(
             security::password::hash(password)
@@ -1821,13 +2132,55 @@ pub async fn edit_profile(
         .map(|e| e.trim().to_lowercase())
         .filter(|e| !e.is_empty());
     let Some(requested_email) = requested_email else {
-        return Err(AppError::BadRequest("Не указан e-mail".into()));
+        return stRenderEditProfileValidation(
+            &state,
+            user,
+            &nick,
+            &form,
+            csrf_token,
+            StEditProfileErrors {
+                optEmail: Some("Не указан e-mail".to_owned()),
+                ..Default::default()
+            },
+        )
+        .await;
     };
     if requested_email.matches('@').count() != 1 || requested_email.chars().any(char::is_whitespace)
     {
-        return Err(AppError::BadRequest("Некорректный e-mail".into()));
+        return stRenderEditProfileValidation(
+            &state,
+            user,
+            &nick,
+            &form,
+            csrf_token,
+            StEditProfileErrors {
+                optEmail: Some("Некорректный e-mail".to_owned()),
+                ..Default::default()
+            },
+        )
+        .await;
     }
-    crate::routes::auth::validate_registration_email(&state, &requested_email).await?;
+    if let Err(stError) =
+        crate::routes::auth::validate_registration_email(&state, &requested_email).await
+    {
+        return match stError {
+            AppError::BadRequest(sMessage) => {
+                stRenderEditProfileValidation(
+                    &state,
+                    user,
+                    &nick,
+                    &form,
+                    csrf_token,
+                    StEditProfileErrors {
+                        optEmail: Some(sMessage),
+                        ..Default::default()
+                    },
+                )
+                .await
+            }
+            stError => Err(stError),
+        };
+    }
     let pending_email =
         (Some(requested_email.as_str()) != profile.email.as_deref()).then_some(requested_email);
 
@@ -1841,7 +2194,18 @@ pub async fn edit_profile(
         .fetch_optional(&state.pool)
         .await?;
         if taken.is_some() {
-            return Err(AppError::BadRequest("такой email уже используется".into()));
+            return stRenderEditProfileValidation(
+                &state,
+                user,
+                &nick,
+                &form,
+                csrf_token,
+                StEditProfileErrors {
+                    optEmail: Some("такой email уже используется".to_owned()),
+                    ..Default::default()
+                },
+            )
+            .await;
         }
     }
 
@@ -1860,14 +2224,40 @@ pub async fn edit_profile(
     .fetch_optional(&state.pool)
     .await?;
     if ip_block.is_some_and(|(blocked, allow_posting)| blocked && !allow_posting) {
-        return Err(AppError::BadRequest(
-            "постинг с этого IP адреса заблокирован".into(),
-        ));
+        return stRenderEditProfileValidation(
+            &state,
+            user,
+            &nick,
+            &form,
+            csrf_token,
+            StEditProfileErrors {
+                vecGlobal: vec!["постинг с этого IP адреса заблокирован".to_owned()],
+                ..Default::default()
+            },
+        )
+        .await;
     }
 
     let opt_restriction = optEditProfileInfoRestrictionForUser(&state, user.id).await?;
     let can_edit_info = opt_restriction.is_none();
-    let fixed_url = optFixedProfileUrl(form.url.as_deref())?;
+    let fixed_url = match optFixedProfileUrl(form.url.as_deref()) {
+        Ok(optUrl) => optUrl,
+        Err(AppError::BadRequest(sMessage)) => {
+            return stRenderEditProfileValidation(
+                &state,
+                user,
+                &nick,
+                &form,
+                csrf_token,
+                StEditProfileErrors {
+                    optUrl: Some(sMessage),
+                    ..Default::default()
+                },
+            )
+            .await;
+        }
+        Err(stError) => return Err(stError),
+    };
     let name = form
         .name
         .as_deref()
@@ -1882,11 +2272,20 @@ pub async fn edit_profile(
         .as_deref()
         .is_some_and(|value| value.chars().count() > 100)
     {
-        return Err(AppError::BadRequest(
-            "Слишком длинное название города (максимум 100 символов)".into(),
-        ));
+        return stRenderEditProfileValidation(
+            &state,
+            user,
+            &nick,
+            &form,
+            csrf_token,
+            StEditProfileErrors {
+                optTown: Some("Слишком длинное название города (максимум 100 символов)".to_owned()),
+                ..Default::default()
+            },
+        )
+        .await;
     }
-    let info = form.info.filter(|value| !value.is_empty());
+    let info = form.info.clone().filter(|value| !value.is_empty());
     let settings_text: Option<String> =
         sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
             .bind(user.id)
@@ -1956,26 +2355,105 @@ pub async fn edit_profile(
     }
     tx.commit().await?;
 
-    if let Some(ref new_email) = pending_email {
+    // Spring's `updateAuthToken` refreshes remember-me after a password
+    // change. The token signature contains the password hash, so returning
+    // the old cookie would log the user out on the very next request.
+    let optRememberMeCookie = if new_password_hash.is_some() {
+        let stIdentity = crate::auth::optLoadLoginIdentity(&state.pool, user.id)
+            .await?
+            .ok_or_else(|| {
+                AppError::Anyhow(anyhow::anyhow!(
+                    "password-updated user cannot be loaded for remember-me cookie"
+                ))
+            })?;
+        Some(crate::auth::stRememberMeCookie(
+            &stIdentity,
+            &state.config.site_secret,
+            crate::security::is_secure_request(
+                &headers,
+                Some(peer_address.ip()),
+                &state.config.trusted_proxy_cidrs,
+            ),
+        ))
+    } else {
+        None
+    };
+
+    let stResponse = if let Some(ref new_email) = pending_email {
         let regdate = regdate.ok_or_else(|| {
             AppError::Anyhow(anyhow::anyhow!("user registration date is missing"))
         })?;
-        crate::routes::auth::cEmailService(&state)
+        match crate::routes::auth::cEmailService(&state)
             .vSendRegistration(&user.nick, new_email, regdate.timestamp_millis(), false)
-            .await?;
-        Ok(Html(
-            "<h1>Обновление регистрации прошло успешно</h1><p>Ожидайте письма с кодом активации смены email.</p>".to_string(),
-        ).into_response())
+            .await
+        {
+            Ok(()) => Html(
+                StProfileActionDoneTemplate {
+                    message: format!(
+                        "Обновление регистрации прошло успешно. Ожидайте письма на {new_email} с кодом активации смены email."
+                    ),
+                    big_message: None,
+                    link: None,
+                }
+                .render()?,
+            )
+            .into_response(),
+            Err(stError) => {
+                tracing::warn!(
+                    error_type = std::any::type_name_of_val(&stError),
+                    "profile activation email could not be delivered"
+                );
+                stRenderEditProfileValidation(
+                    &state,
+                    user.clone(),
+                    &nick,
+                    &form,
+                    csrf_token.clone(),
+                    StEditProfileErrors {
+                        optEmail: Some(
+                            "Не удалось отправить письмо активации на указанный адрес. Проверьте корректность e-mail."
+                                .to_owned(),
+                        ),
+                        ..Default::default()
+                    },
+                )
+                .await?
+            }
+        }
     } else {
-        Ok((
+        (
             StatusCode::FOUND,
             [(
                 header::LOCATION,
                 format!("/people/{}/profile", urlencoding::encode(&user.nick)),
             )],
         )
-            .into_response())
+            .into_response()
+    };
+
+    let stResponse = match optRememberMeCookie {
+        Some(stCookie) => (stJar.add(stCookie), stResponse).into_response(),
+        None => stResponse,
+    };
+    Ok(stFinalizeEditProfileResponse(
+        stResponse,
+        new_password_hash.is_some(),
+        user.id,
+    ))
+}
+
+fn stFinalizeEditProfileResponse(
+    mut stResponse: Response,
+    bPasswordChanged: bool,
+    iUserId: i32,
+) -> Response {
+    if bPasswordChanged {
+        // The request cookie is signed with the old password hash.  Tell the
+        // post-response theme middleware which already-authenticated user owns
+        // this response instead of making it re-authenticate that stale cookie.
+        crate::theme_middleware::vUseAuthenticatedThemeForResponse(&mut stResponse, iUserId);
     }
+    stResponse
 }
 
 pub async fn settings(
@@ -1994,6 +2472,15 @@ pub async fn settings(
             .fetch_optional(&state.pool)
             .await?;
     let settings = ProfileSettings::from_hstore_text(settings_text);
+    let can_load_userpic = crate::routes::legacy::bCanLoadUserpic(&state, &user).await?;
+    let bFrozen: bool = sqlx::query_scalar(
+        "SELECT COALESCE(frozen_until>CURRENT_TIMESTAMP,false) FROM users WHERE id=$1",
+    )
+    .bind(user.id)
+    .fetch_one(&state.pool)
+    .await?;
+    let can_deregister =
+        user.max_score.unwrap_or(0) >= 100 && !user.canmod && !user.candel && !bFrozen;
     // edit-settings.jsp disables this below one green star unless a legacy
     // profile already has the option enabled.
     let hide_adsense_disabled = user.score.unwrap_or(0) < 100 && !settings.hide_adsense;
@@ -2005,6 +2492,8 @@ pub async fn settings(
             format_modes: settings.format_options(user.score.unwrap_or(0)),
             topic_values: settings.topic_options(),
             message_values: settings.message_options(),
+            can_load_userpic,
+            can_deregister,
             user,
             settings,
             hide_adsense_disabled,
@@ -2063,10 +2552,10 @@ pub async fn remark_form(
     current: CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
 ) -> Result<Html<String>> {
-    let target = get_user(&state, &nick).await?;
     let Some(me) = current.0 else {
         return Err(AppError::Forbidden);
     };
+    let target = get_user(&state, &nick).await?;
     if me.id == target.id {
         return Err(AppError::BadRequest(
             "Нельзя оставить заметку самому себе".into(),
@@ -2079,19 +2568,14 @@ pub async fn remark_form(
     .bind(target.id)
     .fetch_optional(&state.pool)
     .await?;
-    Ok(Html(format!(
-        r#"
-<h1>Заметка о {}</h1>
-<form method="post" action="/people/{}/remark">
-<input type="hidden" name="csrf" value="{csrf_token}">
-<textarea autofocus id="text" name="text" cols="60" rows="4" maxlength="255">{}</textarea>
-<button type="submit">Сохранить</button>
-</form>
-"#,
-        html_escape::encode_text(&target.nick),
-        urlencoding::encode(&target.nick),
-        html_escape::encode_text(remark.as_deref().unwrap_or(""))
-    )))
+    Ok(Html(
+        StEditRemarkTemplate {
+            sNick: target.nick,
+            sRemark: remark.unwrap_or_default(),
+            sCsrfToken: csrf_token,
+        }
+        .render()?,
+    ))
 }
 
 pub async fn save_remark(
@@ -2100,15 +2584,10 @@ pub async fn save_remark(
     current: CurrentUser,
     Form(form): axum::Form<RemarkForm>,
 ) -> Result<Response> {
-    let target = get_user(&state, &nick).await?;
     let Some(me) = current.0 else {
         return Err(AppError::Forbidden);
     };
-    if me.id == target.id {
-        return Err(AppError::BadRequest(
-            "Нельзя оставить заметку самому себе".into(),
-        ));
-    }
+    let target = get_user(&state, &nick).await?;
     let text: String = form.text.chars().take(255).collect();
     if text.is_empty() {
         sqlx::query("DELETE FROM user_remarks WHERE user_id=$1 AND ref_user_id=$2")
@@ -2164,22 +2643,15 @@ pub async fn profile_wipe(
             .bind(user.id)
             .fetch_one(&state.pool)
             .await?;
-    Ok(Html(format!(
-        r#"
-<h1>Блокировка с удалением сообщений {nick}</h1>
-<p>Будет удалено {comment_count} комментариев вместе с ответами, а так же все темы пользователя.</p>
-<p><strong>Внимание!</strong> простого способа востановить комментарии после удаления нет.</p>
-<form method="post" action="/usermod.jsp">
-  <input type="hidden" name="csrf" value="{csrf_token}">
-  <input type="hidden" name="action" value="block-n-delete-comments">
-  <input type="hidden" name="id" value="{id}">
-  <label>Причина <input type="text" name="reason" size="60" autofocus></label>
-  <button type="submit" class="btn btn-danger">Блокировать с удалением сообщений</button>
-</form>
-"#,
-        nick = html_escape::encode_text(&user.nick),
-        id = user.id
-    ))
+    Ok(Html(
+        StWipeUserTemplate {
+            sNick: user.nick,
+            iUserId: user.id,
+            iCommentCount: comment_count,
+            sCsrfToken: csrf_token,
+        }
+        .render()?,
+    )
     .into_response())
 }
 
@@ -2225,11 +2697,17 @@ fn ensure_self(current: &Option<UserSummary>, target: &UserSummary) -> Result<()
 mod tests {
     use super::{
         bHasRequestParameter, drafts, edit_profile_form, ensure_self_service_actor,
-        optEditProfileInfoRestriction, optFixedProfileUrl, sMarkupIdFromForm,
-        sUserTopicCollectionPageUrl, sUserTopicFeedPageUrl, sUserTopicPrevLabel, settings,
+        optEditProfileInfoRestriction, optFixedProfileUrl, remark_form, sMarkupIdFromForm,
+        sUserTopicCollectionPageUrl, sUserTopicFeedPageUrl, sUserTopicPrevLabel, save_remark,
+        settings, stFinalizeEditProfileResponse,
     };
     use crate::{config::StConfig, error::AppError, models::UserSummary, state::AppState};
-    use axum::{Router, http::header, routing::get};
+    use axum::{
+        Router,
+        http::{StatusCode, header},
+        response::{Html, IntoResponse},
+        routing::get,
+    };
 
     fn stUser(iId: i32, sNick: &str) -> UserSummary {
         UserSummary {
@@ -2347,6 +2825,64 @@ mod tests {
         assert_eq!(sMarkupIdFromForm("lorcode"), "BBCODE_TEX");
     }
 
+    fn stCredentialChangeResponse(
+        stResponse: axum::response::Response,
+    ) -> axum::response::Response {
+        stFinalizeEditProfileResponse(stResponse, true, 42)
+    }
+
+    #[test]
+    fn password_and_email_success_html_keeps_authenticated_theme_identity() {
+        let stResponse = stCredentialChangeResponse(Html("email sent").into_response());
+        assert_eq!(stResponse.status(), StatusCode::OK);
+        assert_eq!(
+            crate::theme_middleware::optResponseThemeUserId(&stResponse),
+            Some(42)
+        );
+    }
+
+    #[test]
+    fn password_and_email_smtp_error_html_keeps_authenticated_theme_identity() {
+        let stResponse = stCredentialChangeResponse(Html("email validation error").into_response());
+        assert_eq!(stResponse.status(), StatusCode::OK);
+        assert_eq!(
+            crate::theme_middleware::optResponseThemeUserId(&stResponse),
+            Some(42)
+        );
+    }
+
+    #[test]
+    fn password_only_redirect_keeps_status_location_and_theme_identity() {
+        let stResponse = stCredentialChangeResponse(
+            (
+                StatusCode::FOUND,
+                [(header::LOCATION, "/people/test/profile")],
+            )
+                .into_response(),
+        );
+        assert_eq!(stResponse.status(), StatusCode::FOUND);
+        assert_eq!(
+            stResponse.headers().get(header::LOCATION).unwrap(),
+            "/people/test/profile"
+        );
+        assert_eq!(
+            crate::theme_middleware::optResponseThemeUserId(&stResponse),
+            Some(42)
+        );
+    }
+
+    #[test]
+    fn authenticated_viewers_see_block_reason_outside_private_controls() {
+        let sTemplate = include_str!("../../templates/user.html");
+        let iBan = sTemplate
+            .find("{% match ban_info %}")
+            .expect("ban info block");
+        let iPrivate = sTemplate
+            .find("{% if can_view_private %}\n{% match frozen_until %}")
+            .expect("private moderation block");
+        assert!(iBan < iPrivate);
+    }
+
     #[tokio::test]
     async fn anonymous_settings_and_edit_gets_forbidden_before_database_lookup() {
         let oPool = sqlx::postgres::PgPoolOptions::new()
@@ -2385,6 +2921,8 @@ mod tests {
             .route("/people/{nick}/settings", get(settings))
             .route("/people/{nick}/edit", get(edit_profile_form))
             .route("/people/{nick}/drafts", get(drafts))
+            .route("/people/{nick}/remark", get(remark_form).post(save_remark))
+            .route("/people/{nick}/remark/", get(remark_form).post(save_remark))
             .with_state(stState);
         let stListener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -2407,6 +2945,8 @@ mod tests {
             "/people/maxcom/settings?tab=display",
             "/people/maxcom/edit",
             "/people/maxcom/drafts",
+            "/people/maxcom/remark",
+            "/people/maxcom/remark/",
         ] {
             let stResponse = cClient
                 .get(format!("http://{stAddress}{sPath}"))
@@ -2415,6 +2955,17 @@ mod tests {
                 .expect("request to test router");
             assert_eq!(stResponse.status(), reqwest::StatusCode::FORBIDDEN);
             assert!(stResponse.headers().get(header::LOCATION).is_none());
+        }
+
+        for sPath in ["/people/maxcom/remark", "/people/maxcom/remark/"] {
+            let stResponse = cClient
+                .post(format!("http://{stAddress}{sPath}"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body("text=private-note")
+                .send()
+                .await
+                .expect("POST to remark compatibility route");
+            assert_eq!(stResponse.status(), reqwest::StatusCode::FORBIDDEN);
         }
 
         hServer.abort();

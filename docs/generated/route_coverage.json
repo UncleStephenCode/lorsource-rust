@@ -1465,7 +1465,7 @@
     "produces": "",
     "controller": "EditRemarkController",
     "handler": "showForm",
-    "rust_match": "GET,POST /people/{nick}/remark",
+    "rust_match": "GET,POST /people/{nick}/remark; GET,POST /people/{nick}/remark/; GET,POST /people/{nick}/remark; GET,POST /people/{nick}/remark/",
     "source": "src/main/scala/ru/org/linux/user/EditRemarkController.scala:29",
     "semantic_parity": "not-evaluated"
   },
@@ -1479,7 +1479,7 @@
     "produces": "",
     "controller": "EditRemarkController",
     "handler": "editProfile",
-    "rust_match": "GET,POST /people/{nick}/remark",
+    "rust_match": "GET,POST /people/{nick}/remark; GET,POST /people/{nick}/remark/; GET,POST /people/{nick}/remark; GET,POST /people/{nick}/remark/",
     "source": "src/main/scala/ru/org/linux/user/EditRemarkController.scala:48",
     "semantic_parity": "not-evaluated"
   },

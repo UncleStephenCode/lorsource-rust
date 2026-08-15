@@ -43,6 +43,6 @@
 <p>Разблокированные пользователи за последние 3 дня: {% for item in unblocked_users %}{% if item.strike %}<s>{% endif %}<a href="{{ item.profile_url() }}">{{ item.nick }}</a>{% if item.strike %}</s>{% endif %} {% endfor %}(всего {{ unblocked_users.len() }})</p>
 <p>Заблокированные IP за последние 3 дня: {% for ip in blocked_ips %}<a href="/sameip.jsp?ip={{ ip }}">{{ ip }}</a> {% endfor %}(всего {{ blocked_ips.len() }})</p>
 <p>Разблокированные IP за последние 3 дня: {% for ip in unblocked_ips %}<a href="/sameip.jsp?ip={{ ip }}">{{ ip }}</a> {% endfor %}(всего {{ unblocked_ips.len() }})</p>
-<div class="userpic-list">{% for item in recent_userpics %}<a href="{{ item.profile_url }}"><img class="userpic" src="{{ item.image_url }}" alt="{{ item.nick }}"></a>{% endfor %}</div>
+<div class="userpic-list">{% for item in recent_userpics %}<a href="{{ item.profile_url }}"><div class="userpic"><img class="photo" src="{{ item.image_url }}" alt="" width={{ item.width }} height={{ item.height }} ></div></a>{% endfor %}</div>
 {% endif %}
 {% endblock %}

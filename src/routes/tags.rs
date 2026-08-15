@@ -847,9 +847,10 @@ pub async fn change_form(
     if !user.as_ref().map(|u| u.canmod).unwrap_or(false) {
         return Err(AppError::Forbidden);
     }
-    Ok(Html(format!(
+    let sTitle = format!("Изменение тега {}", q.tag_name);
+    let sContentHtml = format!(
         r#"
-<h1>Переименовать метку</h1>
+<h1>{title}</h1>
 <form method="post" action="/tags/change" class="form">
 <input type="hidden" name="csrf" value="{csrf_token}">
 <input type="hidden" name="firstLetter" value="{fl}">
@@ -858,9 +859,14 @@ pub async fn change_form(
 <button type="submit">Переименовать</button>
 </form>
 "#,
+        title = html_escape::encode_text(&sTitle),
         fl = html_escape::encode_double_quoted_attribute(q.first_letter.as_deref().unwrap_or("")),
         old = html_escape::encode_double_quoted_attribute(&q.tag_name),
-    )))
+    );
+    Ok(Html(crate::routes::sRenderLegacyContent(
+        &sTitle,
+        sContentHtml,
+    )?))
 }
 
 #[derive(Deserialize)]
@@ -966,24 +972,30 @@ pub async fn delete_form(
     } else {
         ""
     };
-    Ok(Html(format!(
+    let sContentHtml = format!(
         r#"
-<h1>Удалить метку</h1>
+<h1>Удаление метки «{old_text}»</h1>
+<p><strong>Внимание!</strong> Удаление метки нельзя отменить. Изменение не отражается в истории правок топика.</p>
 {synonym_note}
 <form method="post" action="/tags/delete" class="form">
 <input type="hidden" name="csrf" value="{csrf_token}">
 <input type="hidden" name="firstLetter" value="{fl}">
-<input type="hidden" name="oldTagName" value="{old}">
-<p>Удаляемая метка: <b>{old}</b></p>
+<input type="hidden" name="oldTagName" value="{old_attr}">
+<p>Удаляемая метка: <b>{old_text}</b></p>
 <label>Заменить на (оставьте пустым, чтобы просто удалить) <input name="tagName"></label>
 <label><input type="checkbox" name="createSynonym" value="true"> Оставить синоним на новую метку</label>
 <button type="submit">Удалить</button>
 </form>
 "#,
         fl = html_escape::encode_double_quoted_attribute(q.first_letter.as_deref().unwrap_or("")),
-        old = html_escape::encode_text(&q.tag_name),
+        old_attr = html_escape::encode_double_quoted_attribute(&q.tag_name),
+        old_text = html_escape::encode_text(&q.tag_name),
         synonym_note = synonym_note,
-    )))
+    );
+    Ok(Html(crate::routes::sRenderLegacyContent(
+        "Удаление метки",
+        sContentHtml,
+    )?))
 }
 
 #[derive(Deserialize)]

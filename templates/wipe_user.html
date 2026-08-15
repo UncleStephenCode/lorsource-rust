@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Блокировка с удалением сообщений {{ sNick }}{% endblock %}
+{% block content %}
+<h1>Блокировка с удалением сообщений {{ sNick }}</h1>
+<p>
+  Будет удалено {{ iCommentCount }} комментариев вместе с ответами, а так же все темы пользователя.
+</p>
+
+<p><strong>Внимание!</strong> простого способа востановить комментарии после удаления нет.</p>
+
+<form method="post" action="usermod.jsp">
+  <input type="hidden" name="csrf" value="{{ sCsrfToken }}">
+  <input type="hidden" name="id" value="{{ iUserId }}">
+  <div class="control-group">
+    <label for="reason">Причина</label>
+    <input type="text" id="reason" autofocus name="reason" size="60">
+  </div>
+  <div class="form-actions">
+    <button type="submit" name="action" value="block-n-delete-comments" class="btn btn-danger">
+      Блокировать с удалением сообщений
+    </button>
+  </div>
+</form>
+{% endblock %}

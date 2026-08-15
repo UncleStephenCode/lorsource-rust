@@ -5,7 +5,7 @@
   <div class="comment">
     <article class="msg" id="comment-{{ stComment.id }}">
       <div class="msg-container">
-        {% match optUserpicUrl %}{% when Some with (url) %}<div class="userpic"><img class="photo" src="{{ url }}" alt="" width="{{ iUserpicWidth }}" height="{{ iUserpicHeight }}" ></div>{% when None %}{% endmatch %}
+        {% match optUserpicUrl %}{% when Some with (url) %}<div class="userpic"><img class="photo" src="{{ url }}" alt="" width={{ iUserpicWidth }} height={{ iUserpicHeight }} ></div>{% when None %}{% endmatch %}
         <div class="msg_body{% if optUserpicUrl.is_some() %} message-w-userpic{% endif %}">
           <div class="msg-text">{% match stComment.optTitlePlain() %}{% when Some with (title) %}<h1>{{ title }}</h1>{% when None %}{% endmatch %}{{ sCommentHtml|safe }}</div>
           <div class="sign">{% if stSignature.bBlocked %}<s>{% endif %}<a itemprop="creator" href="/people/{{ stComment.author }}/profile">{{ stComment.author }}</a>{% if stSignature.bBlocked %}</s>{% endif %}{% if !stSignature.bAnonymous %} {{ stSignature.sStarsHtml|safe }}{% if stSignature.bShowScore %} (Score:&nbsp;{{ stSignature.iScore }} MaxScore:&nbsp;{{ stSignature.iMaxScore }}){% endif %}{% endif %}<br class="visible-phone"> <span class="hideon-phone">(</span><time data-format="default" datetime="{{ stComment.postdate.to_rfc3339() }}">{{ stComment.postdate }}</time><span class="hideon-phone">)</span>{% if bTopicAuthor && !stSignature.bAnonymous %} <span class="user-tag">автор топика</span>{% endif %}</div>

@@ -1,10 +1,29 @@
 {% extends "base.html" %}
 {% block title %}Настройки{% endblock %}
+{% block head_extra %}
+<script>
+$script.ready('plugins', function() {
+  $(function() {
+    $("#profileForm").validate();
+  });
+});
+
+$script.ready('jquery', function() {
+  $(function() {
+    $("#profileForm").on("submit", function() {
+      localStorage.removeItem('lor-theme');
+    });
+  });
+});
+</script>
+{% endblock %}
 {% block content %}
 <h1>Настройки</h1>
 <nav>
   <a href="/people/{{ user.nick }}/edit" class="btn btn-default">Редактировать профиль</a>
+  {% if can_load_userpic %}
   <a href="/addphoto.jsp" class="btn btn-default">Добавить фотографию</a>
+  {% endif %}
   <a href="/people/{{ user.nick }}/settings" class="btn btn-selected">Настройки</a>
 </nav>
 
@@ -19,28 +38,52 @@
 <tr><td><label for="reactionNotification">Уведомлять о реакциях</label></td><td><input type="checkbox" id="reactionNotification" name="reactionNotification" {% if settings.reaction_notification %}checked{% endif %}></td></tr>
 <tr><td colspan="2"><hr></td></tr>
 <tr><td valign="top"><span id="style-label">Тема</span></td><td><div role="radiogroup" aria-labelledby="style-label">
-{% for theme in themes %}<label><input type="radio" id="style-{{ loop.index0 }}" name="style" value="{{ theme.id }}" {% if theme.selected %}checked{% endif %}>{{ theme.label }}{% if theme.deprecated %} <small>(устаревшая)</small>{% endif %}</label>{% endfor %}
+{% for theme in themes %}
+<label><input type="radio" id="style-{{ loop.index0 }}" name="style" value="{{ theme.id }}" {% if theme.selected %}checked{% endif %}>{{ theme.label }}</label>
+{% endfor %}
 </div></td></tr>
 <tr><td colspan="2"><hr></td></tr>
-<tr><td valign="top"><span id="topics-label">Число тем форума на странице</span></td><td>{% for item in topic_values %}<label><input type="radio" name="topics" value="{{ item.value }}" {% if item.selected %}checked{% endif %}>{{ item.value }}</label> {% endfor %}</td></tr>
+<tr><td valign="top"><span id="topics-label">Число тем форума на странице</span></td><td><div role="radiogroup" aria-labelledby="topics-label">
+{% for item in topic_values %}
+<label><input type="radio" id="topics-{{ loop.index0 }}" name="topics" value="{{ item.value }}" {% if item.selected %}checked{% endif %}>{{ item.value }}</label>
+{% endfor %}
+</div></td></tr>
 <tr><td colspan="2"><hr></td></tr>
-<tr><td valign="top"><span id="messages-label">Число комментариев на странице</span></td><td>{% for item in message_values %}<label><input type="radio" name="messages" value="{{ item.value }}" {% if item.selected %}checked{% endif %}>{{ item.value }}</label> {% endfor %}</td></tr>
+<tr><td valign="top"><span id="messages-label">Число комментариев на странице</span></td><td><div role="radiogroup" aria-labelledby="messages-label">
+{% for item in message_values %}
+<label><input type="radio" id="messages-{{ loop.index0 }}" name="messages" value="{{ item.value }}" {% if item.selected %}checked{% endif %}>{{ item.value }}</label>
+{% endfor %}
+</div></td></tr>
 <tr><td colspan="2"><hr></td></tr>
-<tr><td valign="top"><span id="trackerMode-label">Фильтр трекера по умолчанию</span></td><td>{% for item in tracker_modes %}<label><input type="radio" name="trackerMode" value="{{ item.value }}" {% if item.selected %}checked{% endif %}>{{ item.label }}</label><br>{% endfor %}</td></tr>
+<tr><td valign="top"><span id="trackerMode-label">Фильтр трекера по умолчанию</span></td><td><div role="radiogroup" aria-labelledby="trackerMode-label">
+{% for item in tracker_modes %}
+<label><input type="radio" id="trackerMode-{{ loop.index0 }}" name="trackerMode" value="{{ item.value }}" {% if item.selected %}checked{% endif %}>{{ item.label }}</label>
+{% endfor %}
+</div></td></tr>
 <tr><td colspan="2"><hr></td></tr>
-<tr><td valign="top"><span id="avatar-label">При отсутствии аватара показывать</span></td><td>{% for item in avatars %}<label><input type="radio" name="avatar" value="{{ item.value }}" {% if item.selected %}checked{% endif %}>{{ item.label }}</label><br>{% endfor %}</td></tr>
+<tr><td valign="top"><span id="avatar-label">При отсутствии аватара показывать</span></td><td><div role="radiogroup" aria-labelledby="avatar-label">
+{% for item in avatars %}
+<label><input type="radio" id="avatar-{{ loop.index0 }}" name="avatar" value="{{ item.value }}" {% if item.selected %}checked{% endif %}>{{ item.label }}</label>
+{% endfor %}
+</div></td></tr>
 <tr><td colspan="2"><hr></td></tr>
-<tr><td valign="top"><span id="format-mode-label">Разметка текста</span></td><td>{% for item in format_modes %}<label><input type="radio" name="format_mode" value="{{ item.value }}" {% if item.selected %}checked{% endif %}>{{ item.label }}</label><br>{% endfor %}</td></tr>
+<tr><td valign="top"><span id="format-mode-label">Разметка текста</span></td><td><div role="radiogroup" aria-labelledby="format-mode-label">
+{% for item in format_modes %}
+<label><input type="radio" id="format_mode-{{ loop.index0 }}" name="format_mode" value="{{ item.value }}" {% if item.selected %}checked{% endif %}>{{ item.label }}</label>
+{% endfor %}
+</div></td></tr>
 </table>
 <button type="submit" class="btn btn-primary">Установить</button>
 </form>
 
 <h2>Другие настройки</h2>
 <ul>
+  {% if can_load_userpic %}
   <li><a href="/addphoto.jsp">Добавить фотографию</a></li>
+  {% endif %}
   <li><a href="/people/{{ user.nick }}/edit">Изменение регистрации</a></li>
   <li><a href="/user-filter">Настройка фильтрации сообщений</a></li>
-  <li><a href="/deregister.jsp">Удаление аккаунта</a></li>
+  {% if can_deregister %}<li><a href="/deregister.jsp">Удаление аккаунта</a></li>{% endif %}
 </ul>
 <p><b>Внимание!</b> Настройки на некоторых уже посещенных страницах могут не отображаться. Очистите кеш или используйте кнопку <i>Reload</i> вашего браузера.</p>
 {% endblock %}

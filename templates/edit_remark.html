@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Комментарий о пользователе{% endblock %}
+{% block content %}
+<h1>Комментарий о пользователе {{ sNick }}</h1>
+
+<form method="POST" id="remarkForm" action="/people/{{ sNick }}/remark">
+  <input type="hidden" name="csrf" value="{{ sCsrfToken }}">
+  <textarea autofocus id="text" name="text" cols="60" rows="4" maxlength="255">{{ sRemark }}</textarea>
+  <div class="form-actions">
+    <input type="submit" class="btn btn-primary" value="Установить">
+  </div>
+</form>
+{% endblock %}

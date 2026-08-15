@@ -3799,27 +3799,23 @@ async fn render_topic_view(
         }
         None => crate::profile::ProfileSettings::default(),
     };
-    let mapAuthorUserpics: std::collections::HashMap<i32, (String, i32, i32)> =
+    // The page query is already deduplicated by author id, so the synchronous
+    // image-header read performed by Java's UserService is done at most once
+    // per visible author rather than once per comment.
+    let mapAuthorUserpics: std::collections::HashMap<i32, crate::profile::StUserpic> =
         if stViewerProfile.photos {
             vecSignatureRows
                 .iter()
                 .map(|(iUserId, _, _, _, optPhoto, optEmail)| {
-                    let optUrl = crate::profile::userpic_url(
+                    let stUserpic = crate::profile::stResolveUserpic(
+                        std::path::Path::new(&state.config.upload_dir),
                         &stViewerProfile.avatar,
                         false,
                         *iUserId == 2,
                         optPhoto.as_deref(),
                         optEmail.as_deref(),
                     );
-                    let bDisabled = optUrl.is_none();
-                    (
-                        *iUserId,
-                        (
-                            optUrl.unwrap_or_else(|| crate::profile::DISABLED_USERPIC.to_owned()),
-                            if bDisabled { 1 } else { 150 },
-                            if bDisabled { 1 } else { 150 },
-                        ),
-                    )
+                    (*iUserId, stUserpic)
                 })
                 .collect()
         } else {
@@ -3878,7 +3874,13 @@ async fn render_topic_view(
             };
             let (optUserpicUrl, iUserpicWidth, iUserpicHeight) = mapAuthorUserpics
                 .get(&item.author_id)
-                .map(|(sUrl, iWidth, iHeight)| (Some(sUrl.clone()), *iWidth, *iHeight))
+                .map(|stUserpic| {
+                    (
+                        Some(stUserpic.sUrl.clone()),
+                        stUserpic.iWidth,
+                        stUserpic.iHeight,
+                    )
+                })
                 .unwrap_or((None, 0, 0));
             let html = markup::render_message_with_markup_policy_and_users(
                 &item.message,
@@ -4087,14 +4089,35 @@ async fn render_topic_view(
             Vec::new()
         }
     };
-    let sTopicUserpicHtml = mapAuthorUserpics
-        .get(&topic.author_id)
-        .map_or_else(String::new, |(sUrl, iWidth, iHeight)| {
-            format!(
-                "<div class=\"userpic\"><img class=\"photo\" src=\"{}\" alt=\"\" width=\"{iWidth}\" height=\"{iHeight}\"></div>",
-                html_escape::encode_double_quoted_attribute(sUrl)
-            )
-        });
+    // TopicPrepareService uses misteryMan=true for the root topic, while
+    // CommentPrepareService uses false for replies.  That distinction is
+    // observable for the anonymous account when the viewer selected the
+    // empty fallback style.
+    let optTopicUserpic = if stViewerProfile.photos {
+        vecSignatureRows
+            .iter()
+            .find(|(iUserId, _, _, _, _, _)| *iUserId == topic.author_id)
+            .map(|(iUserId, _, _, _, optPhoto, optEmail)| {
+                crate::profile::stResolveUserpic(
+                    std::path::Path::new(&state.config.upload_dir),
+                    &stViewerProfile.avatar,
+                    true,
+                    *iUserId == 2,
+                    optPhoto.as_deref(),
+                    optEmail.as_deref(),
+                )
+            })
+    } else {
+        None
+    };
+    let sTopicUserpicHtml = optTopicUserpic.map_or_else(String::new, |stUserpic| {
+        format!(
+            "<div class=\"userpic\"><img class=\"photo\" src=\"{}\" alt=\"\" width={} height={} ></div>",
+            html_escape::encode_double_quoted_attribute(&stUserpic.sUrl),
+            stUserpic.iWidth,
+            stUserpic.iHeight,
+        )
+    });
     let topic_card_html = sBuildTopicCardHtml(
         &state,
         &current_user,
@@ -5787,23 +5810,6 @@ fn vecEditPreviewImages(
     vecImages
 }
 
-pub(crate) fn stScaleUserpicDimensions(iWidth: u32, iHeight: u32) -> (i32, i32) {
-    if iWidth <= 150 && iHeight <= 150 {
-        return (iWidth as i32, iHeight as i32);
-    }
-    if iWidth >= iHeight {
-        (
-            150,
-            ((u64::from(iHeight) * 150) / u64::from(iWidth)).max(1) as i32,
-        )
-    } else {
-        (
-            ((u64::from(iWidth) * 150) / u64::from(iHeight)).max(1) as i32,
-            150,
-        )
-    }
-}
-
 async fn sEditPreviewUserpicHtml(
     stState: &AppState,
     stViewer: &UserSummary,
@@ -5823,49 +5829,19 @@ async fn sEditPreviewUserpicHtml(
             .bind(stTopic.iAuthorId)
             .fetch_one(&stState.pool)
             .await?;
-    let mut optUrl = crate::profile::userpic_url(
+    let stUserpic = crate::profile::stResolveUserpic(
+        std::path::Path::new(&stState.config.upload_dir),
         &stProfile.avatar,
         true,
         stTopic.bAuthorAnonymous,
         optPhoto.as_deref(),
         optEmail.as_deref(),
     );
-    let mut stDimensions = None;
-    if let (Some(sPhoto), Some(sUrl)) = (optPhoto.as_deref(), optUrl.as_deref())
-        && sUrl.starts_with("/photos/")
-        && std::path::Path::new(sPhoto)
-            .file_name()
-            .and_then(|sValue| sValue.to_str())
-            == Some(sPhoto)
-    {
-        stDimensions = image::image_dimensions(
-            std::path::Path::new(&stState.config.upload_dir)
-                .join("photos")
-                .join(sPhoto),
-        )
-        .ok()
-        .map(|(iWidth, iHeight)| stScaleUserpicDimensions(iWidth, iHeight));
-        if stDimensions.is_none() {
-            optUrl = crate::profile::userpic_url(
-                &stProfile.avatar,
-                true,
-                stTopic.bAuthorAnonymous,
-                None,
-                optEmail.as_deref(),
-            );
-        }
-    }
-    let (sUrl, iWidth, iHeight) = match optUrl {
-        Some(sUrl) if sUrl.starts_with("/photos/") => {
-            let (iWidth, iHeight) = stDimensions.unwrap_or((150, 150));
-            (sUrl, iWidth, iHeight)
-        }
-        Some(sUrl) => (sUrl, 150, 150),
-        None => (crate::profile::DISABLED_USERPIC.to_owned(), 1, 1),
-    };
     Ok(format!(
-        "<div class=\"userpic\"><img class=\"photo\" src=\"{}\" alt=\"\" width={iWidth} height={iHeight} ></div>",
-        html_escape::encode_double_quoted_attribute(&sUrl)
+        "<div class=\"userpic\"><img class=\"photo\" src=\"{}\" alt=\"\" width={} height={} ></div>",
+        html_escape::encode_double_quoted_attribute(&stUserpic.sUrl),
+        stUserpic.iWidth,
+        stUserpic.iHeight,
     ))
 }
 

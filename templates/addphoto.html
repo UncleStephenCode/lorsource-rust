@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Загрузка фотографии{% endblock %}
+{% block content %}
+<h1>Загрузка фотографии</h1>
+<nav>
+  <a href="/people/{{ sNick }}/edit" class="btn btn-default">Редактировать профиль</a>
+  <a class="btn btn-selected" href="/addphoto.jsp">Добавить фотографию</a>
+  <a href="/people/{{ sNick }}/settings" class="btn btn-default">Настройки</a>
+</nav>
+
+<p>
+Изображение должно соответствовать <a href="/help/rules.md">правилам</a> сайта.
+</p>
+<p>
+  Технические требования к изображению:
+  <ul>
+    <li>Ширина x Высота: от 50x50 до 300x300 пикселей</li>
+    <li>Тип: jpeg, gif, png</li>
+    <li>Размер не более 100 Kb</li>
+  </ul>
+</p>
+
+<form action="addphoto.jsp" method="POST" enctype="multipart/form-data">
+<input type="hidden" name="csrf" value="{{ sCsrfToken }}">
+{% match optError %}
+{% when Some with (sError) %}
+  <div class="error">
+    Ошибка! {{ sError }}
+  </div>
+{% when None %}{% endmatch %}
+  <input type="file" name="file">
+  <div class="form-actions">
+    <button class="btn btn-primary" type="submit">Отправить</button>
+  </div>
+</form>
+{% endblock %}

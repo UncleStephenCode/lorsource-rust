@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Информация о пользователе {{ profile.nick }}{% endblock %}
-{% block head_extra %}<script src="/js/lor/user-heatmap.js" defer></script>{% endblock %}
+{% block head_extra %}<script src="/js/lor/user-heatmap.js" defer></script>{% if rel_me %}{% match profile.url %}{% when Some with (url) %}<link rel="me" href="{{ url }}">{% when None %}{% endmatch %}{% endif %}{% endblock %}
 {% block content %}
 {% if is_owner %}
 <nav>
   <a href="/people/{{ profile.nick }}/edit" class="btn btn-default">Редактировать профиль</a>
   <a href="/people/{{ profile.nick }}/settings" class="btn btn-default">Настройки</a>
-  <form action="/logout" method="post" style="display: inline-block"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button type="submit" class="btn btn-danger">Выйти</button></form>
-  <form action="/logout_all_sessions" method="post" style="display: inline-block"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button type="submit" class="btn btn-danger">Выйти со всех устройств</button></form>
+  <form action="logout" method="post" style="display: inline-block"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button type="submit" class="btn btn-danger">Выйти</button></form>
+  <form action="logout_all_sessions" method="post" style="display: inline-block"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button type="submit" class="btn btn-danger">Выйти со всех устройств</button></form>
 </nav>
 {% else %}
 <h1>Информация о пользователе {{ profile.nick }}</h1>
@@ -17,12 +17,14 @@
 {% match frozen_until %}{% when Some with (until) %}{% if can_view_private %}<div class="infoblock">⚠️ Для учетной записи установлен режим только для чтения до <time data-format="default" datetime="{{ until.to_rfc3339() }}">{{ until }}</time>.</div>{% endif %}{% when None %}{% endmatch %}
 
 <div id="whois_userpic">
-  <div class="userpic"><img src="{{ userpic_url }}" alt="{{ profile.nick }}"></div>
+  <div class="userpic"><img class="photo" src="{{ userpic_url }}" alt="" width={{ userpic_width }} height={{ userpic_height }} ></div>
+  {% if can_view_private %}<span>
   {% match profile.photo %}
   {% when Some with (_) %}
-  {% if can_view_private %}<form name="f_remove_userpic" method="post" action="/remove-userpic.jsp"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="id" value="{{ profile.id }}"><button type="submit" class="btn btn-danger btn-small">Удалить</button></form>{% endif %}
+  <form name="f_remove_userpic" method="post" action="remove-userpic.jsp"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="id" value="{{ profile.id }}"><button type="submit" class="btn btn-danger btn-small">Удалить</button></form>
   {% when None %}{% endmatch %}
-  {% if is_owner && can_load_userpic %}<span><a class="btn btn-small btn-default" href="/addphoto.jsp">Изменить</a></span>{% endif %}
+  {% if is_owner && can_load_userpic %}<form method="get" action="addphoto.jsp"><button type="submit" class="btn btn-default btn-small">Изменить</button></form>{% endif %}
+  </span>{% endif %}
 </div>
 
 <div class="vcard">
@@ -38,12 +40,13 @@
   {% when None %}{% endmatch %}
   {% match profile.regdate %}{% when Some with (regdate) %}<b>Дата регистрации:</b> <time data-format="default" datetime="{{ regdate.to_rfc3339() }}">{{ regdate }}</time><br>{% when None %}{% endmatch %}
   {% match profile.lastlogin %}{% when Some with (lastlogin) %}<b>Последнее посещение:</b> {% match lastlogin_fuzzy %}{% when Some with (fuzzy) %}{{ fuzzy }}{% when None %}<time data-format="default" datetime="{{ lastlogin.to_rfc3339() }}">{{ lastlogin }}</time>{% endmatch %}<br>{% when None %}{% endmatch %}
-  <b>Статус:</b> {{ profile.status() }}{% if profile.canmod %} (модератор){% endif %}{% if profile.candel %} (администратор){% endif %}{% if profile.corrector %} (корректор){% endif %}{% if profile.blocked %} (заблокирован){% endif %}<br>
-  {% if can_view_private %}<b>Score:</b> {{ profile.score }} MaxScore: {{ profile.max_score }}<br>{% endif %}
+  <b>Статус:</b> {{ profile.status_html()|safe }}{% if profile.canmod %} (модератор){% endif %}{% if profile.candel %} (администратор){% endif %}{% if profile.corrector %} (корректор){% endif %}{% if profile.blocked %} (заблокирован){% endif %}<br>
+  {% if is_moderator %}<b>Score:</b> {{ profile.score }}&nbsp;MaxScore: {{ profile.max_score }}<br>{% else if is_owner %}<b>Score:</b> {{ profile.score }}<br>{% endif %}
   {% if is_moderator && profile.score < 50 && !profile.anonymous %}
   <form method="post" action="/usermod.jsp" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="id" value="{{ profile.id }}"><input type="hidden" name="action" value="score50"><button type="submit" class="btn btn-small btn-default">Установить score=50</button></form>
   {% endif %}
-  {% match profile.email %}{% when Some with (email) %}{% if can_view_private %}<b>Email:</b> <a href="mailto:{{ email }}">{{ email }}</a> (виден только вам и модераторам)<br>{% endif %}{% when None %}{% endmatch %}
+  {% match profile.email %}{% when Some with (email) %}{% if can_view_private %}<b>Email:</b> <a href="mailto:{{ email }}">{{ email }}</a> (виден только вам и модераторам)
+  <form action="/lostpwd.jsp" method="POST" style="display: inline"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="email" value="{{ email }}"><button type="submit" class="btn btn-small btn-default">Получить забытый пароль</button></form><br>{% endif %}{% when None %}{% endmatch %}
   {% if is_moderator && !profile.anonymous %}<a href="/people/{{ profile.nick }}/profile?reset-password" class="btn btn-small btn-danger">Сбросить пароль</a>{% endif %}
   {% if is_frozen && !is_owner %}<br><b>Заморожен</b>{% match frozen_until %}{% when Some with (until) %} до <time data-format="default" datetime="{{ until.to_rfc3339() }}">{{ until }}</time>{% when None %}{% endmatch %}{% match freezer_nick %}{% when Some with (freezer) %} модератором <a href="/people/{{ freezer }}/profile">{{ freezer }}</a>{% when None %}{% endmatch %}{% match freezing_reason %}{% when Some with (reason) %} по причине {{ reason }}{% when None %}{% endmatch %}<br>{% endif %}
 </div>
@@ -52,11 +55,11 @@
 {% if is_moderator && !profile.anonymous %}<form method="post" action="/usermod.jsp"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="id" value="{{ profile.id }}"><input type="hidden" name="action" value="remove_userinfo"><button type="submit" class="btn btn-danger">Удалить текст</button></form>{% endif %}
 {% when None %}{% endmatch %}{% endif %}
 
-{% if can_view_private %}
 {% match ban_info %}
 {% when Some with (b) %}
 <div class="infoblock ban-info"><b>Заблокирован</b> <time data-format="default" datetime="{{ b.bandate.to_rfc3339() }}">{{ b.bandate }}</time> модератором {{ b.moderator_nick }} · причина: {{ b.reason }}</div>
 {% when None %}{% endmatch %}
+{% if can_view_private %}
 {% match frozen_until %}
 {% when Some with (until) %}<div class="infoblock freeze-info"><b>Заморожен до:</b> <time data-format="default" datetime="{{ until.to_rfc3339() }}">{{ until }}</time></div>
 {% when None %}{% endmatch %}
@@ -138,6 +141,7 @@
 <p><b>Другие аккаунты с тем же email:</b>
 {% for nick in other_accounts %}<a href="/people/{{ nick }}/profile">{{ nick }}</a>{% if loop.last %}{% else %}, {% endif %}{% endfor %}</p>
 {% endif %}
+{% if is_moderator && !is_owner %}<p><b>Игнорируется:</b> {{ stats.ignore_count }}</p>{% endif %}
 {% endif %}
 
 {% if invited_users.len() > 0 %}
@@ -163,9 +167,9 @@
 
 {% if can_view_private && user_log.len() > 0 %}
 <h2>Журнал действий</h2>
-<ul class="userlog">
-{% for entry in user_log %}<li><time data-format="interval" datetime="{{ entry.action_date.to_rfc3339() }}">{{ entry.action_date }}</time> · {{ entry.action }} · {{ entry.actor_nick }}</li>{% endfor %}
-</ul>
+<div class="forum"><table class="message-table" width="100%"><tbody>
+{% for entry in user_log %}<tr><td><strong>{{ entry.description }}</strong>{% if !entry.is_self %}&emsp;@<a href="/people/{{ entry.actor_nick }}/profile">{{ entry.actor_nick }}</a>{% endif %}<br>{% for option in entry.options %}{{ option.label }}: {{ option.value_html|safe }}<br>{% endfor %}</td><td><time data-format="interval" datetime="{{ entry.action_date.to_rfc3339() }}">{{ entry.action_date }}</time></td></tr>{% endfor %}
+</tbody></table></div>
 {% endif %}
 
 {% if is_owner %}
@@ -183,12 +187,16 @@
 {% match stats.first_comment %}{% when Some with (v) %}<b>Первый комментарий:</b> <time data-format="default" datetime="{{ v.to_rfc3339() }}">{{ v }}</time><br>{% when None %}{% endmatch %}
 {% match stats.last_comment %}{% when Some with (v) %}<b>Последний комментарий:</b> <time data-format="default" datetime="{{ v.to_rfc3339() }}">{{ v }}</time><br>{% when None %}{% endmatch %}
 {% if stats.comment_count > 0 %}<b>Число комментариев:</b> {{ stats.comment_count }}<br>{% endif %}
-<b>Число тем:</b> {{ stats.topic_count }}
 
 {% if !profile.anonymous || is_moderator %}
+{% if stats.topics_by_section.len() > 0 %}
+<div class="forum"><table class="message-table" style="width: auto"><thead><tr><th>Раздел</th><th>Число тем</th></tr></thead><tbody>
+{% for item in stats.topics_by_section %}<tr><td>{{ item.name }}</td><td><a href="/people/{{ profile.nick }}/?section={{ item.id }}">{{ item.count }}</a></td></tr>{% endfor %}
+</tbody></table></div>
+{% endif %}
 <h2>Сообщения пользователя</h2>
 <ul>
-  <li><a href="/people/{{ profile.nick }}/">Темы</a>{% if can_view_private %} (<a href="/people/{{ profile.nick }}/deleted-topics">удаленные</a>){% endif %}</li>
+  {% if stats.topic_count > 0 || can_view_private %}<li>{% if stats.topic_count > 0 %}<a href="/people/{{ profile.nick }}/">Темы</a>{% else %}Темы{% endif %}{% if can_view_private %} (<a href="/people/{{ profile.nick }}/deleted-topics">удаленные</a>){% endif %}</li>{% endif %}
   {% if stats.comment_count > 0 || is_moderator %}<li>{% if stats.comment_count > 0 %}<a href="/search.jsp?range=COMMENTS&amp;user={{ profile.nick }}&amp;sort=DATE">Комментарии</a>{% else %}Комментарии{% endif %}{% if is_moderator %} (<a href="/people/{{ profile.nick }}/deleted-comments">удаленные</a>){% endif %}</li>{% endif %}
   {% if can_view_private %}<li><a href="/show-replies.jsp?nick={{ profile.nick }}">Уведомления</a></li>{% endif %}
   {% if can_view_private && watch_present %}<li><a href="/people/{{ profile.nick }}/tracked">Отслеживаемые темы</a></li>{% endif %}

@@ -297,6 +297,14 @@ def profiles() -> None:
 
 @test("local userpics for all monthly fixture users")
 def fixture_userpics() -> None:
+    disabled = ANON.request("/img/p.gif")
+    require(disabled.status == 200, "DisabledUserpic asset is not served")
+    require(
+        disabled.headers.get("Content-Type", "").startswith("image/gif")
+        and disabled.body[:6] in {b"GIF87a", b"GIF89a"}
+        and disabled.body[6:10] == b"\x01\x00\x01\x00",
+        "DisabledUserpic is not the Java-compatible 1x1 GIF",
+    )
     require(
         db(
             "SELECT count(*) FROM users WHERE id BETWEEN 9100001 AND 9100050 "
@@ -313,9 +321,119 @@ def fixture_userpics() -> None:
             f"avatar {user_id}: wrong content type",
         )
         require(response.body.startswith(b"\x89PNG\r\n\x1a\n"), f"avatar {user_id}: invalid PNG")
+        if user_id == 9_100_001:
+            require(
+                response.headers.get("Cache-Control") == "max-age=31556926",
+                "active userpic does not use Java media cache period",
+            )
+            csp = response.headers.get("Content-Security-Policy", "")
+            require(
+                "img-src 'self' data:" in csp
+                and "https://secure.gravatar.com" in csp,
+                "userpic response CSP blocks local or Gravatar fallbacks",
+            )
+        if user_id in {9_100_001, 9_100_002, 9_100_003}:
+            actual_size = (
+                int.from_bytes(response.body[16:20], "big"),
+                int.from_bytes(response.body[20:24], "big"),
+            )
+            expected_size = {
+                9_100_001: (300, 150),
+                9_100_002: (150, 300),
+                9_100_003: (120, 100),
+            }[user_id]
+            require(
+                actual_size == expected_size,
+                f"avatar {user_id}: dimensions {actual_size}, expected {expected_size}",
+            )
 
     profile = require_html(ANON.request("/people/crane2000/profile"), "crane avatar profile")
     require('src="/photos/9100009.png"' in profile, "profile does not use crane local avatar")
+
+    historical = ANON.request("/photos/9100009:-123456.png")
+    require(historical.status == 302, "anonymous historical userpic is not redirected")
+    require(
+        historical.headers.get("Location") == "/photos/9100009.png",
+        "historical userpic redirect does not target the active photo",
+    )
+    require(
+        ANON.request("/photos/9999999.png").status == 404,
+        "unknown userpic owner is not rejected",
+    )
+    require(
+        db("SELECT blocked::text FROM users WHERE id=9100050") == "true",
+        "blocked userpic fixture lost its account state",
+    )
+    require(
+        ANON.request("/photos/9100050.png").status == 200,
+        "active photo of a blocked user is not public like Java",
+    )
+
+    # Java gates topic/comment userpics with the *viewer's* `photos`
+    # setting.  Keep the primary browser account useful for visual tests and
+    # retain lark70 as an explicit negative fixture.
+    crane = Client(BASE)
+    crane.login("crane2000")
+    visible = require_html(
+        crane.request("/forum/games/9101003"), "crane userpic-enabled topic"
+    )
+    require(
+        'class="userpic"><img class="photo"' in visible
+        and "width=150 height=150" in visible,
+        "crane viewer does not see Java-compatible userpics",
+    )
+    require(
+        re.search(
+            r'<img class="photo" src="/photos/9100001\.png" alt="" '
+            r'width=150 height=75 >',
+            visible,
+        )
+        is not None,
+        "landscape userpic is not scaled with Java ImageInfo proportions",
+    )
+
+    hidden_viewer = Client(BASE)
+    hidden_viewer.login("lark70")
+    hidden = require_html(
+        hidden_viewer.request("/forum/games/9101003"), "photo-disabled topic"
+    )
+    require('class="userpic"' not in hidden, "photos=false still renders a userpic")
+    require(
+        "message-w-userpic" not in hidden,
+        "photos=false still reserves the userpic column",
+    )
+    hidden_profile = require_html(
+        hidden_viewer.request("/people/lark70/profile"),
+        "photo-disabled viewer profile",
+    )
+    require(
+        re.search(
+            r'<img class="photo" src="/photos/9100003\.png" alt="" '
+            r'width=120 height=100 >',
+            hidden_profile,
+        )
+        is not None,
+        "profile incorrectly applies the topic/comment photos=false gate",
+    )
+
+    moderator = Client(BASE)
+    moderator.login("hawk_moderator")
+    tracker = require_html(moderator.request("/tracker"), "moderator recent userpics")
+    for user_id, width, height in (
+        (9_100_001, 150, 75),
+        (9_100_002, 75, 150),
+        (9_100_003, 120, 100),
+    ):
+        require(
+            re.search(
+                rf'<div class="userpic"><img class="photo" '
+                rf'src="/photos/{user_id}\.png" alt="" '
+                rf'width={width} height={height} ></div>',
+                tracker,
+            )
+            is not None,
+            f"moderator tracker userpic {user_id} has wrong Java tag DOM",
+        )
 
 
 @test("notifications and private user activity pages")

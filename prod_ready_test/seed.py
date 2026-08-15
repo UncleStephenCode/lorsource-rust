@@ -261,7 +261,14 @@ def load_media() -> None:
             45 + (ordinal * 61) % 155,
             55 + (ordinal * 83) % 145,
         )
-        photo = image_bytes(300, 300, rgb, f"B{ordinal:02d}", "PNG")
+        # Exercise all branches of Java ImageInfo.scale(150), not only the
+        # square happy path: landscape, portrait and an already-small image.
+        dimensions = {
+            1: (300, 150),
+            2: (150, 300),
+            3: (120, 100),
+        }.get(ordinal, (300, 300))
+        photo = image_bytes(*dimensions, rgb, f"B{ordinal:02d}", "PNG")
         put_file(f"/app/uploads/photos/{user_id}.png", photo)
 
     # month_scale.sql attaches these deterministic images to a representative

@@ -1999,36 +1999,15 @@ fn stCommentPreviewUserpic(
     optPhoto: Option<&str>,
     optEmail: Option<&str>,
 ) -> (String, i32, i32) {
-    let mut optUrl =
-        crate::profile::userpic_url(sAvatarMode, false, bAuthorAnonymous, optPhoto, optEmail);
-    let mut optDimensions = None;
-    if let (Some(sPhoto), Some(sUrl)) = (optPhoto, optUrl.as_deref())
-        && sUrl.starts_with("/photos/")
-        && std::path::Path::new(sPhoto)
-            .file_name()
-            .and_then(|sValue| sValue.to_str())
-            == Some(sPhoto)
-    {
-        optDimensions = image::image_dimensions(pathUploadRoot.join("photos").join(sPhoto))
-            .ok()
-            .map(|(iWidth, iHeight)| {
-                crate::routes::topics::stScaleUserpicDimensions(iWidth, iHeight)
-            });
-        if optDimensions.is_none() {
-            // UserService.getUserpic ignores an unavailable/corrupt uploaded
-            // photo and falls back to the configured Gravatar/empty mode.
-            optUrl =
-                crate::profile::userpic_url(sAvatarMode, false, bAuthorAnonymous, None, optEmail);
-        }
-    }
-    match optUrl {
-        Some(sUrl) if sUrl.starts_with("/photos/") => {
-            let (iWidth, iHeight) = optDimensions.unwrap_or((150, 150));
-            (sUrl, iWidth, iHeight)
-        }
-        Some(sUrl) => (sUrl, 150, 150),
-        None => (crate::profile::DISABLED_USERPIC.to_owned(), 1, 1),
-    }
+    let stUserpic = crate::profile::stResolveUserpic(
+        pathUploadRoot,
+        sAvatarMode,
+        false,
+        bAuthorAnonymous,
+        optPhoto,
+        optEmail,
+    );
+    (stUserpic.sUrl, stUserpic.iWidth, stUserpic.iHeight)
 }
 
 struct StPreparedCommentDom<'a> {
@@ -2203,7 +2182,7 @@ async fn sCommentDeletionPreviewHtml(
             .map(|(sUrl, iWidth, iHeight)| {
                 (
                     format!(
-                        "<div class=\"userpic\"><img class=\"photo\" src=\"{}\" alt=\"\" width=\"{iWidth}\" height=\"{iHeight}\"></div>",
+                        "<div class=\"userpic\"><img class=\"photo\" src=\"{}\" alt=\"\" width={iWidth} height={iHeight} ></div>",
                         html_escape::encode_double_quoted_attribute(&sUrl),
                     ),
                     " message-w-userpic",

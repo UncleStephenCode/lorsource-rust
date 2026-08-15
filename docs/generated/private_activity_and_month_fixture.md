@@ -53,10 +53,30 @@ transaction:
   reactions, and every notification filter type;
 - sequence synchronization after all explicit IDs.
 
-`seed.py` generates 50 deterministic 300×300 PNG userpics and representative
-1600×900 gallery originals plus 500/1000/1500/2000 px derivatives. The files
+`seed.py` generates 50 deterministic PNG userpics, including landscape,
+portrait, already-small, and square dimension cases, plus representative
+1600×900 gallery originals and 500/1000/1500/2000 px derivatives. The files
 are placed in the normal uploads volume and are served by the same protected
-media handlers as uploaded production content.
+media handlers as uploaded production content. The regression suite verifies
+viewer-level topic/comment suppression, unconditional profile rendering,
+public active photos for blocked owners, and historical-photo redirects.
+
+### Avatar display source map
+
+| Java source | Rust surface | `misteryMan` | `showPhotos` gate |
+|---|---|---:|---:|
+| `TopicPrepareService` | root topic and edit preview | `true` | viewer |
+| `CommentPrepareService` | comments, reaction and deletion previews | `false` | viewer |
+| `WhoisController` | `/people/{nick}/profile` | `true` | none |
+| `UserService.getRecentUserpics` | moderator tracker | `false` | none; drops `DisabledUserpic` |
+
+All four paths share the same filesystem-aware resolver. It validates a local
+PNG/JPEG/GIF using the filename-selected decoder, preserves `ImageInfo.scale`
+aspect ratios, and falls back to the viewer-selected Gravatar mode or the 1×1
+`/img/p.gif`. Gravatar URLs are never network-probed server-side.
+Compose stores these files in the `lor_uploads` volume mounted at
+`/app/uploads`; `seed.py` writes the normal `/app/uploads/photos/{id}.png`
+paths used by the production media handler.
 
 The scale transaction raises an exception unless it ends with exactly 50
 users, 1000 topics, 5000 comments, and zero uncovered groups.

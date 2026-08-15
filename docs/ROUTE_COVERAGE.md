@@ -116,8 +116,8 @@ Spring `ANY` mappings are intentionally reported as partial unless the Rust inve
 | partial-method | `GET,HEAD` | `/people/{nick}/profile/wipe` | `` | `UserModificationController.wipe` | `GET /people/{nick}/profile/wipe` |
 | partial-method | `ANY` | `/people/{nick}/reactions` | `` | `UserReactionsController.reactions` | `GET /people/{nick}/reactions` |
 | partial-method | `ANY` | `/people/{nick}/reactions/{mode}` | `` | `UserReactionsController.reactions` | `GET /people/{nick}/reactions/{mode}` |
-| method-declared | `GET` | `/people/{nick}/remark` | `` | `EditRemarkController.showForm` | `GET,POST /people/{nick}/remark` |
-| method-declared | `POST` | `/people/{nick}/remark` | `` | `EditRemarkController.editProfile` | `GET,POST /people/{nick}/remark` |
+| method-declared | `GET` | `/people/{nick}/remark` | `` | `EditRemarkController.showForm` | `GET,POST /people/{nick}/remark; GET,POST /people/{nick}/remark/; GET,POST /people/{nick}/remark; GET,POST /people/{nick}/remark/` |
+| method-declared | `POST` | `/people/{nick}/remark` | `` | `EditRemarkController.editProfile` | `GET,POST /people/{nick}/remark; GET,POST /people/{nick}/remark/; GET,POST /people/{nick}/remark; GET,POST /people/{nick}/remark/` |
 | partial-method | `ANY` | `/people/{nick}/remarks` | `` | `ShowRemarkController.showRemarks` | `GET /people/{nick}/remarks` |
 | method-declared | `GET` | `/people/{nick}/settings` | `` | `EditSettingsController.showForm` | `GET,POST /people/{nick}/settings; GET,POST /people/{nick}/settings/; GET /people/{nick}/settings` |
 | method-declared | `POST` | `/people/{nick}/settings` | `` | `EditSettingsController.updateSettings` | `GET,POST /people/{nick}/settings; GET,POST /people/{nick}/settings/` |

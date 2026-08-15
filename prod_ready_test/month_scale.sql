@@ -39,6 +39,14 @@ SELECT id,hstore(
 )
 FROM users WHERE id BETWEEN 9100015 AND 9100050;
 
+-- Moderator tracker renders recent photos through the same Userpic JSP tag.
+-- Keep three fresh audit entries for the landscape, portrait, and small
+-- fixtures so that surface is exercised on every current-date seed run.
+INSERT INTO user_log(userid,action_userid,action_date,action,info) VALUES
+    (9100001,9100001,CURRENT_TIMESTAMP-interval '3 hours','set_userpic',hstore('new_userpic','9100001.png')),
+    (9100002,9100002,CURRENT_TIMESTAMP-interval '2 hours','set_userpic',hstore('new_userpic','9100002.png')),
+    (9100003,9100003,CURRENT_TIMESTAMP-interval '1 hour','set_userpic',hstore('new_userpic','9100003.png'));
+
 -- 982 generated topics plus the 18 hand-authored seed.sql topics = 1000.
 -- Cycling over the live catalog guarantees coverage of every group in all
 -- five content sections, including every forum subsection.

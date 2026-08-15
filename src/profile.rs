@@ -1,10 +1,9 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::Path};
 
 #[derive(Debug, Clone)]
 pub struct StThemeOption {
     pub id: &'static str,
     pub label: &'static str,
-    pub deprecated: bool,
     pub selected: bool,
 }
 
@@ -271,31 +270,40 @@ impl StProfileSettings {
             .filter(|(id, _, deprecated)| {
                 !*deprecated || score >= DEPRECATED_FEATURES_SCORE || self.style == *id
             })
-            .map(|(id, label, deprecated)| StThemeOption {
+            .map(|(id, label, _)| StThemeOption {
                 id,
                 label,
-                deprecated: *deprecated,
                 selected: self.style == *id,
             })
             .collect()
     }
 
     pub fn topic_options(&self) -> Vec<StNumberOption> {
-        TOPICS_VALUES
-            .iter()
-            .map(|v| StNumberOption {
-                value: *v,
-                selected: self.topics == *v,
+        let mut vecValues = TOPICS_VALUES.to_vec();
+        if !vecValues.contains(&self.topics) {
+            vecValues.push(self.topics);
+            vecValues.sort_unstable();
+        }
+        vecValues
+            .into_iter()
+            .map(|iValue| StNumberOption {
+                value: iValue,
+                selected: self.topics == iValue,
             })
             .collect()
     }
 
     pub fn message_options(&self) -> Vec<StNumberOption> {
-        MESSAGES_VALUES
-            .iter()
-            .map(|v| StNumberOption {
-                value: *v,
-                selected: self.messages == *v,
+        let mut vecValues = MESSAGES_VALUES.to_vec();
+        if !vecValues.contains(&self.messages) {
+            vecValues.push(self.messages);
+            vecValues.sort_unstable();
+        }
+        vecValues
+            .into_iter()
+            .map(|iValue| StNumberOption {
+                value: iValue,
+                selected: self.messages == iValue,
             })
             .collect()
     }
@@ -377,6 +385,19 @@ fn clean_hstore_token(token: &str) -> String {
 /// target has no email to derive a Gravatar hash from.
 pub const DISABLED_USERPIC: &str = "/img/p.gif";
 
+/// Java's `Userpic` value returned by `UserService.getUserpic`.
+///
+/// A userpic is never an URL alone: the JSP tag writes the dimensions
+/// calculated from the local image header as part of the public DOM.  Keeping
+/// the three values together prevents individual routes from silently
+/// reverting to a square 150x150 box for non-square uploads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StUserpic {
+    pub sUrl: String,
+    pub iWidth: i32,
+    pub iHeight: i32,
+}
+
 fn gravatar_url(email: &str, avatar_mode: &str, size: u32) -> String {
     use md5::{Digest, Md5};
     let non_exist = if avatar_mode == "empty" {
@@ -384,54 +405,138 @@ fn gravatar_url(email: &str, avatar_mode: &str, size: u32) -> String {
     } else {
         avatar_mode
     };
-    let hash = Md5::digest(email.trim().to_lowercase().as_bytes())
+    let hash = Md5::digest(email.to_lowercase().as_bytes())
         .iter()
         .map(|iByte| format!("{iByte:02x}"))
         .collect::<String>();
     format!("https://secure.gravatar.com/avatar/{hash}?s={size}&r=g&d={non_exist}&f=y")
 }
 
-/// `UserService.getUserpic`: `avatar_mode` is the *viewer's* profile
-/// setting (`session.profile.avatarMode`), not the target user's - it
-/// governs the Gravatar fallback shown for people without a local photo.
-/// `mystery_man=true` additionally special-cases the anonymous user and
-/// switches the empty-fallback style to Gravatar's "mm" silhouette
-/// (used on the profile page and topic/comment author lines, but not in
-/// compact listings where `mystery_man=false`).
-pub fn userpic_url(
-    viewer_avatar_mode: &str,
-    mystery_man: bool,
-    is_anonymous: bool,
-    local_photo: Option<&str>,
-    email: Option<&str>,
-) -> Option<String> {
-    let avatar_mode = if mystery_man && viewer_avatar_mode == "empty" {
+fn sEffectiveAvatarMode(sViewerAvatarMode: &str, bMysteryMan: bool) -> &str {
+    if bMysteryMan && sViewerAvatarMode == "empty" {
         "mm"
     } else {
-        viewer_avatar_mode
+        sViewerAvatarMode
+    }
+}
+
+fn stDisabledUserpic() -> StUserpic {
+    StUserpic {
+        sUrl: DISABLED_USERPIC.to_owned(),
+        iWidth: 1,
+        iHeight: 1,
+    }
+}
+
+fn optJavaUserpicFormat(sPhoto: &str) -> Option<image::ImageFormat> {
+    match Path::new(sPhoto)
+        .extension()
+        .and_then(|sExtension| sExtension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("jpg" | "jpeg") => Some(image::ImageFormat::Jpeg),
+        Some("png") => Some(image::ImageFormat::Png),
+        Some("gif") => Some(image::ImageFormat::Gif),
+        _ => None,
+    }
+}
+
+fn stJavaUserpicDimensions(
+    pathPhoto: &Path,
+    stFormat: image::ImageFormat,
+) -> image::ImageResult<(u32, u32)> {
+    let stFile = std::fs::File::open(pathPhoto).map_err(image::ImageError::IoError)?;
+    image::ImageReader::with_format(std::io::BufReader::new(stFile), stFormat).into_dimensions()
+}
+
+/// `ImageInfo.scale(150)` from the original application.
+pub fn stScaleUserpicDimensions(iWidth: u32, iHeight: u32) -> (i32, i32) {
+    if iWidth <= 150 && iHeight <= 150 {
+        return (iWidth as i32, iHeight as i32);
+    }
+    if iWidth > iHeight {
+        (150, (u64::from(iHeight) * 150 / u64::from(iWidth)) as i32)
+    } else {
+        ((u64::from(iWidth) * 150 / u64::from(iHeight)) as i32, 150)
+    }
+}
+
+/// Filesystem-aware equivalent of Java `UserService.getUserpic`.
+///
+/// Local photos take precedence over Gravatar, but only when the referenced
+/// file exists and has a readable PNG/JPEG/GIF header.  Missing or corrupt
+/// migration media therefore follows the same configured Gravatar/disabled
+/// fallback as Java instead of emitting a permanently broken `/photos/*`
+/// element. `sUploadRoot` is `SiteConfig.getUploadPath`, not the `photos`
+/// directory itself.
+pub fn stResolveUserpic(
+    sUploadRoot: &Path,
+    sViewerAvatarMode: &str,
+    bMysteryMan: bool,
+    bAnonymous: bool,
+    optLocalPhoto: Option<&str>,
+    optEmail: Option<&str>,
+) -> StUserpic {
+    let sAvatarMode = sEffectiveAvatarMode(sViewerAvatarMode, bMysteryMan);
+
+    if bAnonymous && bMysteryMan {
+        return StUserpic {
+            sUrl: gravatar_url("anonymous@linux.org.ru", sAvatarMode, 150),
+            iWidth: 150,
+            iHeight: 150,
+        };
+    }
+
+    if let Some(sPhoto) = optLocalPhoto.filter(|sPhoto| !sPhoto.is_empty()) {
+        let bFilename = Path::new(sPhoto)
+            .file_name()
+            .and_then(|sFilename| sFilename.to_str())
+            == Some(sPhoto);
+        if let (true, Some(stFormat)) = (bFilename, optJavaUserpicFormat(sPhoto)) {
+            match stJavaUserpicDimensions(&sUploadRoot.join("photos").join(sPhoto), stFormat) {
+                Ok((iWidth, iHeight)) if iWidth > 0 && iHeight > 0 => {
+                    let (iWidth, iHeight) = stScaleUserpicDimensions(iWidth, iHeight);
+                    return StUserpic {
+                        sUrl: format!("/photos/{sPhoto}"),
+                        iWidth,
+                        iHeight,
+                    };
+                }
+                Ok((iWidth, iHeight)) => {
+                    tracing::warn!(
+                        userpic = sPhoto,
+                        width = iWidth,
+                        height = iHeight,
+                        "local userpic dimensions are invalid"
+                    );
+                }
+                Err(stError) => {
+                    tracing::warn!(
+                        userpic = sPhoto,
+                        error = %stError,
+                        "local userpic is unavailable or invalid"
+                    );
+                }
+            }
+        } else {
+            tracing::warn!(userpic = sPhoto, "local userpic filename is invalid");
+        }
+    }
+
+    // `User.hasEmail` checks nullness only.  An empty-but-present legacy DB
+    // value is therefore hashed exactly like any other address.
+    let Some(sEmail) = optEmail else {
+        return stDisabledUserpic();
     };
-
-    if is_anonymous && mystery_man {
-        return Some(gravatar_url("anonymous@linux.org.ru", avatar_mode, 150));
+    if sAvatarMode == "empty" {
+        return stDisabledUserpic();
     }
-    if let Some(photo) = local_photo.filter(|p| !p.is_empty()) {
-        return Some(
-            if photo.starts_with('/')
-                || photo.starts_with("http://")
-                || photo.starts_with("https://")
-            {
-                photo.to_string()
-            } else {
-                format!("/photos/{photo}")
-            },
-        );
+    StUserpic {
+        sUrl: gravatar_url(sEmail, sAvatarMode, 150),
+        iWidth: 150,
+        iHeight: 150,
     }
-
-    let email = email.filter(|e| !e.is_empty());
-    if avatar_mode == "empty" {
-        return None;
-    }
-    email.map(|email| gravatar_url(email, avatar_mode, 150))
 }
 
 #[cfg(test)]
@@ -452,5 +557,233 @@ mod tests {
             .position(|sKey| sKey == "oldNotifications")
             .unwrap();
         assert_eq!(vecValues[iIndex], "true");
+    }
+
+    #[test]
+    fn settings_keep_and_sort_legacy_page_sizes_like_java() {
+        let stSettings = StProfileSettings {
+            topics: 75,
+            messages: 40,
+            ..StProfileSettings::default()
+        };
+
+        let vecTopics = stSettings.topic_options();
+        assert_eq!(
+            vecTopics
+                .iter()
+                .map(|stValue| stValue.value)
+                .collect::<Vec<_>>(),
+            vec![30, 50, 75, 100, 200, 300, 500]
+        );
+        assert!(
+            vecTopics
+                .iter()
+                .any(|stValue| stValue.value == 75 && stValue.selected)
+        );
+
+        let vecMessages = stSettings.message_options();
+        assert_eq!(
+            vecMessages
+                .iter()
+                .map(|stValue| stValue.value)
+                .collect::<Vec<_>>(),
+            vec![25, 40, 50, 100, 200, 300, 500]
+        );
+        assert!(
+            vecMessages
+                .iter()
+                .any(|stValue| stValue.value == 40 && stValue.selected)
+        );
+    }
+
+    #[test]
+    fn local_userpic_is_header_checked_and_scaled_like_java() {
+        let iNonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let pathRoot = std::env::temp_dir().join(format!(
+            "lorsource-profile-userpic-{}-{iNonce}",
+            std::process::id()
+        ));
+        let pathPhotos = pathRoot.join("photos");
+        std::fs::create_dir_all(&pathPhotos).unwrap();
+        image::RgbImage::from_pixel(300, 150, image::Rgb([20, 40, 60]))
+            .save(pathPhotos.join("42.png"))
+            .unwrap();
+
+        let stUserpic = stResolveUserpic(
+            &pathRoot,
+            "empty",
+            false,
+            false,
+            Some("42.png"),
+            Some("user@example.test"),
+        );
+        assert_eq!(stUserpic.sUrl, "/photos/42.png");
+        assert_eq!((stUserpic.iWidth, stUserpic.iHeight), (150, 75));
+
+        std::fs::remove_dir_all(pathRoot).unwrap();
+    }
+
+    #[test]
+    fn local_userpic_format_must_match_its_java_extension() {
+        let iNonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let pathRoot = std::env::temp_dir().join(format!(
+            "lorsource-profile-userpic-format-{}-{iNonce}",
+            std::process::id()
+        ));
+        let pathPhotos = pathRoot.join("photos");
+        std::fs::create_dir_all(&pathPhotos).unwrap();
+        image::RgbImage::from_pixel(150, 100, image::Rgb([20, 40, 60]))
+            .save_with_format(pathPhotos.join("42.png"), image::ImageFormat::Jpeg)
+            .unwrap();
+
+        let stUserpic = stResolveUserpic(&pathRoot, "empty", false, false, Some("42.png"), None);
+        assert_eq!(stUserpic, stDisabledUserpic());
+
+        std::fs::remove_dir_all(pathRoot).unwrap();
+    }
+
+    #[test]
+    fn unavailable_local_userpic_uses_java_fallback_contract() {
+        let iNonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let pathRoot = std::env::temp_dir().join(format!(
+            "lorsource-missing-userpic-root-{}-{iNonce}",
+            std::process::id()
+        ));
+
+        assert_eq!(
+            stResolveUserpic(
+                &pathRoot,
+                "empty",
+                false,
+                false,
+                Some("42.png"),
+                Some("user@example.test"),
+            ),
+            StUserpic {
+                sUrl: DISABLED_USERPIC.to_owned(),
+                iWidth: 1,
+                iHeight: 1,
+            }
+        );
+
+        let stGravatar = stResolveUserpic(
+            &pathRoot,
+            "identicon",
+            false,
+            false,
+            Some("42.png"),
+            Some("User@Example.Test"),
+        );
+        assert_eq!(
+            stGravatar.sUrl,
+            "https://secure.gravatar.com/avatar/08ea5c18206e8006a5f3ca67e5d844dd?s=150&r=g&d=identicon&f=y"
+        );
+        assert_eq!((stGravatar.iWidth, stGravatar.iHeight), (150, 150));
+
+        let stEmptyEmail = stResolveUserpic(&pathRoot, "identicon", false, false, None, Some(""));
+        assert_eq!(
+            stEmptyEmail.sUrl,
+            "https://secure.gravatar.com/avatar/d41d8cd98f00b204e9800998ecf8427e?s=150&r=g&d=identicon&f=y"
+        );
+        assert_ne!(stEmptyEmail.sUrl, DISABLED_USERPIC);
+        assert!(
+            gravatar_url(" User@Example.Test ", "identicon", 150)
+                .contains("/6c5bf0d04da6a4ad142847d064264884?")
+        );
+
+        for sInvalidPhoto in ["../42.png", "https://example.test/42.png", "42.webp"] {
+            let stInvalid = stResolveUserpic(
+                &pathRoot,
+                "identicon",
+                false,
+                false,
+                Some(sInvalidPhoto),
+                Some("user@example.test"),
+            );
+            assert!(
+                stInvalid.sUrl.ends_with("?s=150&r=g&d=identicon&f=y"),
+                "invalid local photo must use the configured fallback: {sInvalidPhoto}"
+            );
+        }
+
+        let stMissingTopicPhoto = stResolveUserpic(
+            &pathRoot,
+            "empty",
+            true,
+            false,
+            Some("42.png"),
+            Some("user@example.test"),
+        );
+        assert!(stMissingTopicPhoto.sUrl.ends_with("?s=150&r=g&d=mm&f=y"));
+        assert_eq!(
+            (stMissingTopicPhoto.iWidth, stMissingTopicPhoto.iHeight),
+            (150, 150)
+        );
+    }
+
+    #[test]
+    fn anonymous_mystery_man_uses_mm_even_when_empty_is_selected() {
+        let stUserpic = stResolveUserpic(Path::new("/not-used"), "empty", true, true, None, None);
+        assert!(stUserpic.sUrl.ends_with("?s=150&r=g&d=mm&f=y"));
+        assert_eq!((stUserpic.iWidth, stUserpic.iHeight), (150, 150));
+    }
+
+    #[test]
+    fn anonymous_topic_profile_and_comment_fallbacks_match_java() {
+        let iNonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let pathRoot = std::env::temp_dir().join(format!(
+            "lorsource-profile-anonymous-userpic-{}-{iNonce}",
+            std::process::id()
+        ));
+        let pathPhotos = pathRoot.join("photos");
+        std::fs::create_dir_all(&pathPhotos).unwrap();
+        image::RgbImage::from_pixel(300, 150, image::Rgb([20, 40, 60]))
+            .save(pathPhotos.join("2.png"))
+            .unwrap();
+
+        // TopicPrepareService and WhoisController use mysteryMan=true, so
+        // anonymous always gets the fixed Gravatar even if a local filename
+        // exists on the anonymous DB row.
+        let stTopic = stResolveUserpic(
+            &pathRoot,
+            "empty",
+            true,
+            true,
+            Some("2.png"),
+            Some("anonymous@example.test"),
+        );
+        assert!(stTopic.sUrl.ends_with("?s=150&r=g&d=mm&f=y"));
+        assert_eq!((stTopic.iWidth, stTopic.iHeight), (150, 150));
+
+        // CommentPrepareService uses mysteryMan=false and follows the normal
+        // local-photo/fallback branch for the same account.
+        let stComment = stResolveUserpic(
+            &pathRoot,
+            "empty",
+            false,
+            true,
+            Some("2.png"),
+            Some("anonymous@example.test"),
+        );
+        assert_eq!(stComment.sUrl, "/photos/2.png");
+        assert_eq!((stComment.iWidth, stComment.iHeight), (150, 75));
+        assert_eq!(
+            stResolveUserpic(&pathRoot, "empty", false, true, None, None),
+            stDisabledUserpic()
+        );
+
+        std::fs::remove_dir_all(pathRoot).unwrap();
     }
 }

@@ -57,16 +57,16 @@
     }
   },
   "summary": {
-    "sql_literals": 764,
-    "clean_queries": 672,
-    "review_queries": 92,
+    "sql_literals": 771,
+    "clean_queries": 678,
+    "review_queries": 93,
     "invalid_queries": 0,
     "findings": 0,
     "findings_by_criticality": {},
     "findings_by_kind": {},
     "intentional_absence_probes": 23,
     "dynamic_queries": 20,
-    "sql_fragments": 73,
+    "sql_fragments": 74,
     "queries_with_unresolved_qualifiers": 3
   },
   "findings": [],
@@ -346,10 +346,10 @@
     {
       "criticality": "P1",
       "runtime_surface": "PostgreSQL repository",
-      "sql_literals": 287,
+      "sql_literals": 292,
       "invalid_queries": 0,
       "findings": 0,
-      "review_queries": 44
+      "review_queries": 45
     },
     {
       "criticality": "P1",
@@ -370,7 +370,7 @@
     {
       "criticality": "P1",
       "runtime_surface": "legacy routes",
-      "sql_literals": 41,
+      "sql_literals": 39,
       "invalid_queries": 0,
       "findings": 0,
       "review_queries": 1
@@ -402,7 +402,7 @@
     {
       "criticality": "P1",
       "runtime_surface": "users routes",
-      "sql_literals": 57,
+      "sql_literals": 61,
       "invalid_queries": 0,
       "findings": 0,
       "review_queries": 12
@@ -710,9 +710,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "bf9f1ea6b400",
+      "id": "4743450abfce",
       "source": "src/auth.rs",
-      "line": 225,
+      "line": 246,
       "symbol": "verify_login",
       "criticality": "P0",
       "runtime_surface": "authentication/session",
@@ -736,9 +736,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "02e25c09f7a0",
+      "id": "ad2e76cd867b",
       "source": "src/auth.rs",
-      "line": 237,
+      "line": 258,
       "symbol": "verify_login",
       "criticality": "P0",
       "runtime_surface": "authentication/session",
@@ -762,9 +762,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "425f4ec1fe6f",
+      "id": "97d95f0705df",
       "source": "src/auth.rs",
-      "line": 268,
+      "line": 289,
       "symbol": "verify_login",
       "criticality": "P0",
       "runtime_surface": "authentication/session",
@@ -788,9 +788,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "7a12643346c8",
+      "id": "fe70cd4c0653",
       "source": "src/auth.rs",
-      "line": 277,
+      "line": 298,
       "symbol": "verify_login",
       "criticality": "P0",
       "runtime_surface": "authentication/session",
@@ -814,9 +814,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "51d3d0592821",
+      "id": "5f707541446e",
       "source": "src/auth.rs",
-      "line": 289,
+      "line": 310,
       "symbol": "verify_login",
       "criticality": "P0",
       "runtime_surface": "authentication/session",
@@ -11318,6 +11318,167 @@
       "intentional_absence_probes": []
     },
     {
+      "id": "a1827ea2e0ba",
+      "source": "src/infra/postgres/userpic_repository.rs",
+      "line": 25,
+      "symbol": "optUploadPolicy",
+      "criticality": "P1",
+      "runtime_surface": "PostgreSQL repository",
+      "dynamic": false,
+      "fragment": false,
+      "status": "clean",
+      "sql_preview": "SELECT CASE WHEN COALESCE(u.passwd,'')='' THEN 0 ELSE COALESCE(u.score,0) END, COALESCE(u.frozen_until > CURRENT_TIMESTAMP,false), (SELECT count(*) FROM user_log ul WHERE ul.userid=u.id AND ul.action='set_userpic'::user…",
+      "relations": [
+        {
+          "table": "user_log",
+          "alias": "ul",
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        },
+        {
+          "table": "user_log",
+          "alias": "ul",
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        },
+        {
+          "table": "del_info",
+          "alias": "di",
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        },
+        {
+          "table": "comments",
+          "alias": "c",
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        },
+        {
+          "table": "topics",
+          "alias": "t",
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        },
+        {
+          "table": "users",
+          "alias": "u",
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        }
+      ],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
+      "id": "d16f2e7d0406",
+      "source": "src/infra/postgres/userpic_repository.rs",
+      "line": 65,
+      "symbol": "vSetUserpic",
+      "criticality": "P1",
+      "runtime_surface": "PostgreSQL repository",
+      "dynamic": false,
+      "fragment": false,
+      "status": "clean",
+      "sql_preview": "SELECT photo FROM users WHERE id=$1 FOR UPDATE",
+      "relations": [
+        {
+          "table": "users",
+          "alias": null,
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        }
+      ],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
+      "id": "afe3b6ba60bc",
+      "source": "src/infra/postgres/userpic_repository.rs",
+      "line": 70,
+      "symbol": "vSetUserpic",
+      "criticality": "P1",
+      "runtime_surface": "PostgreSQL repository",
+      "dynamic": false,
+      "fragment": false,
+      "status": "clean",
+      "sql_preview": "UPDATE users SET photo=$2 WHERE id=$1",
+      "relations": [
+        {
+          "table": "users",
+          "alias": null,
+          "schema": null,
+          "context": "update",
+          "virtual": false,
+          "system": false
+        }
+      ],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
+      "id": "f175ac363734",
+      "source": "src/infra/postgres/userpic_repository.rs",
+      "line": 94,
+      "symbol": "set_userpic_keeps_the_java_audit_contract_transactional",
+      "criticality": "P1",
+      "runtime_surface": "PostgreSQL repository",
+      "dynamic": false,
+      "fragment": true,
+      "status": "review",
+      "sql_preview": "CASE WHEN COALESCE(u.passwd,'')='' THEN 0",
+      "relations": [],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
+      "id": "a4d442c78e37",
+      "source": "src/infra/postgres/userpic_repository.rs",
+      "line": 95,
+      "symbol": "set_userpic_keeps_the_java_audit_contract_transactional",
+      "criticality": "P1",
+      "runtime_surface": "PostgreSQL repository",
+      "dynamic": false,
+      "fragment": false,
+      "status": "clean",
+      "sql_preview": "SELECT photo FROM users WHERE id=$1 FOR UPDATE",
+      "relations": [
+        {
+          "table": "users",
+          "alias": null,
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        }
+      ],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
       "id": "a9b44ea2b088",
       "source": "src/infra/postgres/warning_repository.rs",
       "line": 32,
@@ -11844,9 +12005,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "180e0f641044",
+      "id": "38e383dba903",
       "source": "src/routes/admin.rs",
-      "line": 558,
+      "line": 562,
       "symbol": "same_ip",
       "criticality": "P2",
       "runtime_surface": "moderation/admin",
@@ -11894,9 +12055,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "de15bce4b82e",
+      "id": "0ec8ff409d44",
       "source": "src/routes/admin.rs",
-      "line": 593,
+      "line": 597,
       "symbol": "same_ip",
       "criticality": "P2",
       "runtime_surface": "moderation/admin",
@@ -11936,9 +12097,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "8584cadc1afc",
+      "id": "430c0cea610d",
       "source": "src/routes/admin.rs",
-      "line": 621,
+      "line": 625,
       "symbol": "same_ip",
       "criticality": "P2",
       "runtime_surface": "moderation/admin",
@@ -11962,9 +12123,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "e10c66b0730e",
+      "id": "6925ee155a05",
       "source": "src/routes/admin.rs",
-      "line": 628,
+      "line": 632,
       "symbol": "same_ip",
       "criticality": "P2",
       "runtime_surface": "moderation/admin",
@@ -11988,9 +12149,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "377602115b7f",
+      "id": "a5244decc315",
       "source": "src/routes/admin.rs",
-      "line": 725,
+      "line": 732,
       "symbol": "groupmod_form",
       "criticality": "P2",
       "runtime_surface": "moderation/admin",
@@ -12014,9 +12175,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "726b305b7ca1",
+      "id": "8048b350c729",
       "source": "src/routes/admin.rs",
-      "line": 741,
+      "line": 748,
       "symbol": "groupmod_form",
       "criticality": "P2",
       "runtime_surface": "moderation/admin",
@@ -12040,9 +12201,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "0593301b6020",
+      "id": "75e1bec24bd2",
       "source": "src/routes/admin.rs",
-      "line": 802,
+      "line": 812,
       "symbol": "groupmod_save",
       "criticality": "P2",
       "runtime_surface": "moderation/admin",
@@ -12066,9 +12227,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "c5c311466354",
+      "id": "bf58d983f0f3",
       "source": "src/routes/admin.rs",
-      "line": 854,
+      "line": 880,
       "symbol": "groupmod_save",
       "criticality": "P2",
       "runtime_surface": "moderation/admin",
@@ -12378,9 +12539,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "90103d00b99c",
+      "id": "3ae69615598a",
       "source": "src/routes/api.rs",
-      "line": 750,
+      "line": 751,
       "symbol": "stTrackerProfile",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -12404,9 +12565,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "2e91d01e8146",
+      "id": "f4c13d092e36",
       "source": "src/routes/api.rs",
-      "line": 787,
+      "line": 788,
       "symbol": "TRACKER_PUBLIC_TOPICS_CLAUSE",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -12421,9 +12582,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "d25f2902b82b",
+      "id": "9e4cb5fcac82",
       "source": "src/routes/api.rs",
-      "line": 798,
+      "line": 799,
       "symbol": "UNCOMMITTED_COUNTS_SQL",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -12463,9 +12624,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "c4b5953d92de",
+      "id": "0adbfa47b771",
       "source": "src/routes/api.rs",
-      "line": 822,
+      "line": 823,
       "symbol": "stTrackerModeratorData",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -12489,9 +12650,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "94179894d9fe",
+      "id": "d6e6ac1d59f6",
       "source": "src/routes/api.rs",
-      "line": 830,
+      "line": 831,
       "symbol": "stTrackerModeratorData",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -12515,9 +12676,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "82b51f9e1873",
+      "id": "671ec96c1ec4",
       "source": "src/routes/api.rs",
-      "line": 839,
+      "line": 840,
       "symbol": "stTrackerModeratorData",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -12541,9 +12702,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "332a13efa4a3",
+      "id": "ec5089129624",
       "source": "src/routes/api.rs",
-      "line": 850,
+      "line": 851,
       "symbol": "stTrackerModeratorData",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -12575,9 +12736,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "cb6bdc72453a",
+      "id": "fed672e6998a",
       "source": "src/routes/api.rs",
-      "line": 859,
+      "line": 860,
       "symbol": "stTrackerModeratorData",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -12609,9 +12770,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "829ccf9d8b85",
+      "id": "1a911d52e697",
       "source": "src/routes/api.rs",
-      "line": 871,
+      "line": 872,
       "symbol": "stTrackerModeratorData",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -12643,9 +12804,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "ad66ed510f78",
+      "id": "a0881d6c9c4b",
       "source": "src/routes/api.rs",
-      "line": 894,
+      "line": 902,
       "symbol": "stTrackerModeratorData",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -12669,9 +12830,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "fda1ee434763",
+      "id": "6c37d2bd79d1",
       "source": "src/routes/api.rs",
-      "line": 902,
+      "line": 910,
       "symbol": "stTrackerModeratorData",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -12695,9 +12856,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "2171cb2dec9b",
+      "id": "c53dfa5bb06f",
       "source": "src/routes/api.rs",
-      "line": 929,
+      "line": 937,
       "symbol": "tracker_filter_group_clause",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -12712,9 +12873,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "4097c71133c0",
+      "id": "fd1546853cc7",
       "source": "src/routes/api.rs",
-      "line": 930,
+      "line": 938,
       "symbol": "tracker_filter_group_clause",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -12729,9 +12890,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "5c212f5e4aa0",
+      "id": "a247c62abdce",
       "source": "src/routes/api.rs",
-      "line": 932,
+      "line": 940,
       "symbol": "tracker_filter_group_clause",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -12746,9 +12907,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "5db456df7b5c",
+      "id": "53ae54881507",
       "source": "src/routes/api.rs",
-      "line": 966,
+      "line": 974,
       "symbol": "tracker",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -12884,9 +13045,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "905be4e54957",
+      "id": "f939f5ed8ebd",
       "source": "src/routes/api.rs",
-      "line": 1026,
+      "line": 1034,
       "symbol": "tracker",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -12901,9 +13062,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "9890f947177c",
+      "id": "a215f9108b95",
       "source": "src/routes/api.rs",
-      "line": 1466,
+      "line": 1474,
       "symbol": "resolve_reaction_target",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -12927,9 +13088,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "f7b9223fb4a8",
+      "id": "7d092d9905f8",
       "source": "src/routes/api.rs",
-      "line": 1486,
+      "line": 1494,
       "symbol": "reaction_target_link",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -12969,9 +13130,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "6cd8fd5584fc",
+      "id": "3d6e20a80e84",
       "source": "src/routes/api.rs",
-      "line": 1703,
+      "line": 1711,
       "symbol": "vecReactionRows",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13027,9 +13188,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "0649e3e8caf1",
+      "id": "27d66d2b7345",
       "source": "src/routes/api.rs",
-      "line": 1723,
+      "line": 1731,
       "symbol": "vecReactionRows",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13085,9 +13246,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "4d82fef81c2a",
+      "id": "11f06412d1fc",
       "source": "src/routes/api.rs",
-      "line": 1754,
+      "line": 1762,
       "symbol": "optReactionPoll",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13111,9 +13272,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "bb797a90ca62",
+      "id": "0a6b988afc2d",
       "source": "src/routes/api.rs",
-      "line": 1762,
+      "line": 1770,
       "symbol": "optReactionPoll",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13145,9 +13306,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "1c85b389ac89",
+      "id": "d20057935b9d",
       "source": "src/routes/api.rs",
-      "line": 1773,
+      "line": 1781,
       "symbol": "optReactionPoll",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13171,9 +13332,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "4c39408dae8f",
+      "id": "e19dc2dce54f",
       "source": "src/routes/api.rs",
-      "line": 1905,
+      "line": 1913,
       "symbol": "reactions_get",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13197,9 +13358,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "a18aaa7597aa",
+      "id": "e55ace69c5a3",
       "source": "src/routes/api.rs",
-      "line": 1937,
+      "line": 1945,
       "symbol": "reactions_get",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13231,9 +13392,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "a7e691042374",
+      "id": "a5212cc9f2e4",
       "source": "src/routes/api.rs",
-      "line": 1956,
+      "line": 1964,
       "symbol": "POSTSCORE_HIDE_COMMENTS",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13273,9 +13434,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "b3e37798dce1",
+      "id": "953c61e7fd91",
       "source": "src/routes/api.rs",
-      "line": 1965,
+      "line": 1973,
       "symbol": "POSTSCORE_HIDE_COMMENTS",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13299,9 +13460,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "0d7314fd0ff9",
+      "id": "f740742b62ba",
       "source": "src/routes/api.rs",
-      "line": 1976,
+      "line": 1984,
       "symbol": "POSTSCORE_HIDE_COMMENTS",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13341,9 +13502,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "dcc684c85550",
+      "id": "3d33f4c0120a",
       "source": "src/routes/api.rs",
-      "line": 1998,
+      "line": 2006,
       "symbol": "POSTSCORE_HIDE_COMMENTS",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13367,9 +13528,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "f94a407ec5f8",
+      "id": "2c3afcdccfb3",
       "source": "src/routes/api.rs",
-      "line": 2005,
+      "line": 2013,
       "symbol": "POSTSCORE_HIDE_COMMENTS",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13393,9 +13554,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "d5ae7534a5ff",
+      "id": "c126dfdb03dd",
       "source": "src/routes/api.rs",
-      "line": 2076,
+      "line": 2080,
       "symbol": "POSTSCORE_HIDE_COMMENTS",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13419,9 +13580,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "4128ae431ff0",
+      "id": "81b0c54ee1bc",
       "source": "src/routes/api.rs",
-      "line": 2278,
+      "line": 2282,
       "symbol": "check_reaction_allowed",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13445,9 +13606,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "addac4c7892b",
+      "id": "9ac54a19ff66",
       "source": "src/routes/api.rs",
-      "line": 2298,
+      "line": 2302,
       "symbol": "check_reaction_allowed",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13495,9 +13656,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "77f7cd5e9543",
+      "id": "d22910d5d1a8",
       "source": "src/routes/api.rs",
-      "line": 2317,
+      "line": 2321,
       "symbol": "check_reaction_allowed",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13537,9 +13698,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "8f51e65769f7",
+      "id": "9e347bcafdd9",
       "source": "src/routes/api.rs",
-      "line": 2342,
+      "line": 2346,
       "symbol": "POSTSCORE_HIDE_COMMENTS",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13563,9 +13724,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "04c4bb359366",
+      "id": "16966faa6e7d",
       "source": "src/routes/api.rs",
-      "line": 2376,
+      "line": 2380,
       "symbol": "do_set_reaction",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13589,9 +13750,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "afa78d93a78b",
+      "id": "6773f27ca709",
       "source": "src/routes/api.rs",
-      "line": 2379,
+      "line": 2383,
       "symbol": "do_set_reaction",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13615,9 +13776,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "4c32eba07b79",
+      "id": "762668da6f85",
       "source": "src/routes/api.rs",
-      "line": 2383,
+      "line": 2387,
       "symbol": "do_set_reaction",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13641,9 +13802,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "28b18e83223c",
+      "id": "47c84af305a5",
       "source": "src/routes/api.rs",
-      "line": 2398,
+      "line": 2402,
       "symbol": "do_set_reaction",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13667,9 +13828,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "e370b5417dc4",
+      "id": "bfbe2aee8e6e",
       "source": "src/routes/api.rs",
-      "line": 2406,
+      "line": 2410,
       "symbol": "do_set_reaction",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13693,9 +13854,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "6aa0cb32904d",
+      "id": "4874b0894f3a",
       "source": "src/routes/api.rs",
-      "line": 2414,
+      "line": 2418,
       "symbol": "do_set_reaction",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13719,9 +13880,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "a012d4753d1b",
+      "id": "ab0eabc46a81",
       "source": "src/routes/api.rs",
-      "line": 2423,
+      "line": 2427,
       "symbol": "do_set_reaction",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13745,9 +13906,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "b3ce7feb9e89",
+      "id": "b1e71fd84851",
       "source": "src/routes/api.rs",
-      "line": 2428,
+      "line": 2432,
       "symbol": "do_set_reaction",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13771,9 +13932,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "df1d85bf9c3b",
+      "id": "d00a6cb6341a",
       "source": "src/routes/api.rs",
-      "line": 2433,
+      "line": 2437,
       "symbol": "do_set_reaction",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13797,9 +13958,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "e8274cd40d34",
+      "id": "5286360d9845",
       "source": "src/routes/api.rs",
-      "line": 2440,
+      "line": 2444,
       "symbol": "do_set_reaction",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13823,9 +13984,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "cfdf5b4a1781",
+      "id": "c08c0be782df",
       "source": "src/routes/api.rs",
-      "line": 2448,
+      "line": 2452,
       "symbol": "do_set_reaction",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13849,9 +14010,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "fa66e961a88a",
+      "id": "575973cc1535",
       "source": "src/routes/api.rs",
-      "line": 2456,
+      "line": 2460,
       "symbol": "do_set_reaction",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13875,9 +14036,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "054714111872",
+      "id": "0896d9f1b6fa",
       "source": "src/routes/api.rs",
-      "line": 2468,
+      "line": 2472,
       "symbol": "do_set_reaction",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13901,9 +14062,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "02d678c982a7",
+      "id": "d7bd205b3432",
       "source": "src/routes/api.rs",
-      "line": 2473,
+      "line": 2477,
       "symbol": "do_set_reaction",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13935,9 +14096,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "719d96239490",
+      "id": "3562bca2752c",
       "source": "src/routes/api.rs",
-      "line": 2534,
+      "line": 2538,
       "symbol": "VOTE_TOPIC_SQL",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -13985,9 +14146,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "46375f4f04db",
+      "id": "896d0db897f0",
       "source": "src/routes/api.rs",
-      "line": 2592,
+      "line": 2596,
       "symbol": "vote",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -14011,9 +14172,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "512b1a96af91",
+      "id": "1812b90d220d",
       "source": "src/routes/api.rs",
-      "line": 2605,
+      "line": 2609,
       "symbol": "vote",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -14037,9 +14198,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "864b53baf3d9",
+      "id": "f839d06989c7",
       "source": "src/routes/api.rs",
-      "line": 2613,
+      "line": 2617,
       "symbol": "vote",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -14063,9 +14224,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "c4594a3d45ba",
+      "id": "b5b37f749f87",
       "source": "src/routes/api.rs",
-      "line": 2622,
+      "line": 2626,
       "symbol": "vote",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -14089,9 +14250,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "a4af7d19d18d",
+      "id": "f1c83a605eb0",
       "source": "src/routes/api.rs",
-      "line": 2787,
+      "line": 2791,
       "symbol": "tracker_hides_only_uncommitted_premoderated_topics",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -14106,9 +14267,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "5085f9849b1f",
+      "id": "9be5328aa9b8",
       "source": "src/routes/api.rs",
-      "line": 2813,
+      "line": 2817,
       "symbol": "queue_counts_only_recent_uncommitted_premoderated_topics",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -14123,9 +14284,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "1563e8e4479d",
+      "id": "cd58a15471b4",
       "source": "src/routes/api.rs",
-      "line": 2819,
+      "line": 2823,
       "symbol": "vote_lookup_requires_a_committed_topic",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -14140,9 +14301,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "9b53dd44676a",
+      "id": "74d3d855296d",
       "source": "src/routes/api.rs",
-      "line": 2820,
+      "line": 2824,
       "symbol": "vote_lookup_requires_a_committed_topic",
       "criticality": "P1",
       "runtime_surface": "api routes",
@@ -14252,9 +14413,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "5e90cec3c445",
+      "id": "31c264f7d558",
       "source": "src/routes/auth.rs",
-      "line": 561,
+      "line": 563,
       "symbol": "bRegistrationAllowed",
       "criticality": "P0",
       "runtime_surface": "authentication/session",
@@ -14278,9 +14439,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "5fc31b611539",
+      "id": "9e4895609f3a",
       "source": "src/routes/auth.rs",
-      "line": 573,
+      "line": 575,
       "symbol": "bRegistrationAllowed",
       "criticality": "P0",
       "runtime_surface": "authentication/session",
@@ -14312,9 +14473,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "4a4024400146",
+      "id": "2fc2263bd877",
       "source": "src/routes/auth.rs",
-      "line": 660,
+      "line": 662,
       "symbol": "user_exists_or_similar",
       "criticality": "P0",
       "runtime_surface": "authentication/session",
@@ -14338,9 +14499,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "38cfbcee1d59",
+      "id": "d333cdf8f04d",
       "source": "src/routes/auth.rs",
-      "line": 668,
+      "line": 670,
       "symbol": "user_exists_or_similar",
       "criticality": "P0",
       "runtime_surface": "authentication/session",
@@ -14364,9 +14525,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "7389ffccc7e1",
+      "id": "fad8fae3c132",
       "source": "src/routes/auth.rs",
-      "line": 695,
+      "line": 697,
       "symbol": "EMAIL_IN_USE_SQL",
       "criticality": "P0",
       "runtime_surface": "authentication/session",
@@ -14406,9 +14567,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "a8e2e35562c5",
+      "id": "404d99eeded1",
       "source": "src/routes/auth.rs",
-      "line": 817,
+      "line": 819,
       "symbol": "lost_password",
       "criticality": "P0",
       "runtime_surface": "authentication/session",
@@ -14432,9 +14593,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "75f36ae700d3",
+      "id": "cddbd1b23ce1",
       "source": "src/routes/auth.rs",
-      "line": 846,
+      "line": 848,
       "symbol": "lost_password",
       "criticality": "P0",
       "runtime_surface": "authentication/session",
@@ -14458,9 +14619,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "9b21428dcdcc",
+      "id": "ddd1f12c3834",
       "source": "src/routes/auth.rs",
-      "line": 887,
+      "line": 889,
       "symbol": "lost_password",
       "criticality": "P0",
       "runtime_surface": "authentication/session",
@@ -14484,9 +14645,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "a726ea0b0a0d",
+      "id": "ea1f013cf7a6",
       "source": "src/routes/auth.rs",
-      "line": 955,
+      "line": 957,
       "symbol": "reset_password_with_code",
       "criticality": "P0",
       "runtime_surface": "authentication/session",
@@ -14510,9 +14671,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "0e544a0d6352",
+      "id": "967543776409",
       "source": "src/routes/auth.rs",
-      "line": 992,
+      "line": 994,
       "symbol": "reset_password_with_code",
       "criticality": "P0",
       "runtime_surface": "authentication/session",
@@ -14536,9 +14697,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "658c5084e28f",
+      "id": "d6a201d7c592",
       "source": "src/routes/auth.rs",
-      "line": 1066,
+      "line": 1068,
       "symbol": "registration_email_reuse_matches_java_block_audit_window",
       "criticality": "P0",
       "runtime_surface": "authentication/session",
@@ -15211,9 +15372,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "d10216e0921c",
+      "id": "77781270d801",
       "source": "src/routes/comments.rs",
-      "line": 2105,
+      "line": 2084,
       "symbol": "sCommentDeletionPreviewHtml",
       "criticality": "P0",
       "runtime_surface": "comment create/render/moderation",
@@ -15237,9 +15398,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "bc028e710ea9",
+      "id": "93cb16829d8d",
       "source": "src/routes/comments.rs",
-      "line": 2119,
+      "line": 2098,
       "symbol": "sCommentDeletionPreviewHtml",
       "criticality": "P0",
       "runtime_surface": "comment create/render/moderation",
@@ -15263,9 +15424,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "1f2cb4a5c674",
+      "id": "eba5b483792d",
       "source": "src/routes/comments.rs",
-      "line": 2125,
+      "line": 2104,
       "symbol": "sCommentDeletionPreviewHtml",
       "criticality": "P0",
       "runtime_surface": "comment create/render/moderation",
@@ -15289,9 +15450,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "fe800635a16d",
+      "id": "d88f5ab120bc",
       "source": "src/routes/comments.rs",
-      "line": 2150,
+      "line": 2129,
       "symbol": "sCommentDeletionPreviewHtml",
       "criticality": "P0",
       "runtime_surface": "comment create/render/moderation",
@@ -15315,9 +15476,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "2a7058185f35",
+      "id": "bea86ab64f86",
       "source": "src/routes/comments.rs",
-      "line": 2613,
+      "line": 2592,
       "symbol": "insert_comment",
       "criticality": "P0",
       "runtime_surface": "comment create/render/moderation",
@@ -15341,9 +15502,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "86b3362a519a",
+      "id": "c6bd38a18868",
       "source": "src/routes/comments.rs",
-      "line": 2629,
+      "line": 2608,
       "symbol": "insert_comment",
       "criticality": "P0",
       "runtime_surface": "comment create/render/moderation",
@@ -15358,9 +15519,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "22f15a5bd329",
+      "id": "d141241ac62f",
       "source": "src/routes/comments.rs",
-      "line": 2632,
+      "line": 2611,
       "symbol": "insert_comment",
       "criticality": "P0",
       "runtime_surface": "comment create/render/moderation",
@@ -15384,9 +15545,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "d63dc506bf1c",
+      "id": "90a8339daae8",
       "source": "src/routes/comments.rs",
-      "line": 2646,
+      "line": 2625,
       "symbol": "insert_comment",
       "criticality": "P0",
       "runtime_surface": "comment create/render/moderation",
@@ -15410,9 +15571,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "c0ee7725f1be",
+      "id": "de9de97568da",
       "source": "src/routes/comments.rs",
-      "line": 2672,
+      "line": 2651,
       "symbol": "insert_comment",
       "criticality": "P0",
       "runtime_surface": "comment create/render/moderation",
@@ -15436,9 +15597,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "00626d8a3250",
+      "id": "6a16b7ef2444",
       "source": "src/routes/comments.rs",
-      "line": 2680,
+      "line": 2659,
       "symbol": "insert_comment",
       "criticality": "P0",
       "runtime_surface": "comment create/render/moderation",
@@ -15462,9 +15623,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "035d5d3f9cf0",
+      "id": "4d726ed821e6",
       "source": "src/routes/comments.rs",
-      "line": 2687,
+      "line": 2666,
       "symbol": "insert_comment",
       "criticality": "P0",
       "runtime_surface": "comment create/render/moderation",
@@ -15488,9 +15649,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "d192d4da7e6a",
+      "id": "2fd8d4a1ad01",
       "source": "src/routes/comments.rs",
-      "line": 2702,
+      "line": 2681,
       "symbol": "insert_comment",
       "criticality": "P0",
       "runtime_surface": "comment create/render/moderation",
@@ -15522,9 +15683,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "7f9827a7ca09",
+      "id": "24e65127ca0d",
       "source": "src/routes/comments.rs",
-      "line": 2718,
+      "line": 2697,
       "symbol": "insert_comment",
       "criticality": "P0",
       "runtime_surface": "comment create/render/moderation",
@@ -15556,9 +15717,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "3675eb3d6a2f",
+      "id": "0fdd506b600b",
       "source": "src/routes/comments.rs",
-      "line": 2731,
+      "line": 2710,
       "symbol": "insert_comment",
       "criticality": "P0",
       "runtime_surface": "comment create/render/moderation",
@@ -15582,9 +15743,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "0c9eb803e2d0",
+      "id": "37cee0707d48",
       "source": "src/routes/comments.rs",
-      "line": 2746,
+      "line": 2725,
       "symbol": "insert_comment",
       "criticality": "P0",
       "runtime_surface": "comment create/render/moderation",
@@ -15616,9 +15777,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "b21f5c302acc",
+      "id": "b7ce4c9b0b78",
       "source": "src/routes/comments.rs",
-      "line": 2757,
+      "line": 2736,
       "symbol": "insert_comment",
       "criticality": "P0",
       "runtime_surface": "comment create/render/moderation",
@@ -15642,9 +15803,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "e85880470c1a",
+      "id": "e8b4e89a380f",
       "source": "src/routes/comments.rs",
-      "line": 2770,
+      "line": 2749,
       "symbol": "insert_comment",
       "criticality": "P0",
       "runtime_surface": "comment create/render/moderation",
@@ -15676,9 +15837,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "1b9e5f0daf8c",
+      "id": "85fb1cd483b4",
       "source": "src/routes/comments.rs",
-      "line": 2791,
+      "line": 2770,
       "symbol": "locate_topic_or_comment",
       "criticality": "P0",
       "runtime_surface": "comment create/render/moderation",
@@ -15750,9 +15911,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "36abbe2a7ac5",
+      "id": "8ce47a3cbfbd",
       "source": "src/routes/comments.rs",
-      "line": 2890,
+      "line": 2869,
       "symbol": "MAX_OFFSET",
       "criticality": "P0",
       "runtime_surface": "comment create/render/moderation",
@@ -15767,9 +15928,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "a7dac1e96dd4",
+      "id": "0d6f8d8f6624",
       "source": "src/routes/comments.rs",
-      "line": 2891,
+      "line": 2870,
       "symbol": "MAX_OFFSET",
       "criticality": "P0",
       "runtime_surface": "comment create/render/moderation",
@@ -15784,9 +15945,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "fa0b5fcfa456",
+      "id": "11081bfc28c2",
       "source": "src/routes/comments.rs",
-      "line": 2892,
+      "line": 2871,
       "symbol": "MAX_OFFSET",
       "criticality": "P0",
       "runtime_surface": "comment create/render/moderation",
@@ -15801,9 +15962,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "4c66fad376aa",
+      "id": "d3ed4274eac0",
       "source": "src/routes/comments.rs",
-      "line": 2896,
+      "line": 2875,
       "symbol": "MAX_OFFSET",
       "criticality": "P0",
       "runtime_surface": "comment create/render/moderation",
@@ -15859,9 +16020,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "902c6da6a467",
+      "id": "34e1b2e753e3",
       "source": "src/routes/comments.rs",
-      "line": 3130,
+      "line": 3109,
       "symbol": "deletion_preview_preserves_uploaded_userpic_aspect_ratio",
       "criticality": "P0",
       "runtime_surface": "comment create/render/moderation",
@@ -16571,9 +16732,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "f4588cf98c67",
+      "id": "e1717fe56ebe",
       "source": "src/routes/legacy.rs",
-      "line": 1136,
+      "line": 1137,
       "symbol": "optLoadComment",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -16613,9 +16774,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "b15819030ca0",
+      "id": "87c4e6de0f81",
       "source": "src/routes/legacy.rs",
-      "line": 1156,
+      "line": 1157,
       "symbol": "optLoadDeleteInfo",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -16647,9 +16808,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "c9bc5a73b536",
+      "id": "1a6a57fb1e68",
       "source": "src/routes/legacy.rs",
-      "line": 1238,
+      "line": 1239,
       "symbol": "view_deleted",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -16681,9 +16842,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "9fe700041d97",
+      "id": "15a90afa3100",
       "source": "src/routes/legacy.rs",
-      "line": 1252,
+      "line": 1253,
       "symbol": "view_deleted",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -16707,9 +16868,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "82b5b1ee1e20",
+      "id": "f0ebe9d5a4d4",
       "source": "src/routes/legacy.rs",
-      "line": 1269,
+      "line": 1270,
       "symbol": "view_deleted",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -16749,9 +16910,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "eb38d96e0a1a",
+      "id": "ad86ab421f2a",
       "source": "src/routes/legacy.rs",
-      "line": 1382,
+      "line": 1386,
       "symbol": "topic_link",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -16791,9 +16952,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "e13cb127dd3b",
+      "id": "be528226b736",
       "source": "src/routes/legacy.rs",
-      "line": 1538,
+      "line": 1542,
       "symbol": "process_notifications_click",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -16817,9 +16978,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "47853933e587",
+      "id": "871924e3a753",
       "source": "src/routes/legacy.rs",
-      "line": 1544,
+      "line": 1548,
       "symbol": "process_notifications_click",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -16843,9 +17004,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "fb8fd1e679e5",
+      "id": "d2ea9616ab54",
       "source": "src/routes/legacy.rs",
-      "line": 1580,
+      "line": 1584,
       "symbol": "process_notifications_click",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -16869,9 +17030,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "164f5809e90c",
+      "id": "7664c974fef1",
       "source": "src/routes/legacy.rs",
-      "line": 1584,
+      "line": 1588,
       "symbol": "process_notifications_click",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -16895,9 +17056,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "92f64b485f0d",
+      "id": "50773303528c",
       "source": "src/routes/legacy.rs",
-      "line": 1589,
+      "line": 1593,
       "symbol": "process_notifications_click",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -16921,9 +17082,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "7d64bdae770e",
+      "id": "395ceee0628a",
       "source": "src/routes/legacy.rs",
-      "line": 1597,
+      "line": 1601,
       "symbol": "process_notifications_click",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -16955,9 +17116,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "4c42f39bf23e",
+      "id": "3b3b2baa17fb",
       "source": "src/routes/legacy.rs",
-      "line": 1684,
+      "line": 1700,
       "symbol": "activate_post",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -16981,9 +17142,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "22da730846c8",
+      "id": "0acc6c13210c",
       "source": "src/routes/legacy.rs",
-      "line": 1740,
+      "line": 1759,
       "symbol": "activate_post",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -17007,9 +17168,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "bab81b64c046",
+      "id": "24cb5142defd",
       "source": "src/routes/legacy.rs",
-      "line": 1774,
+      "line": 1793,
       "symbol": "activate_post",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -17033,9 +17194,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "6797ab3f13bd",
+      "id": "9b70b0ca90cf",
       "source": "src/routes/legacy.rs",
-      "line": 1794,
+      "line": 1814,
       "symbol": "activate_post",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -17059,101 +17220,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "9affd456b6f2",
+      "id": "1d1ea583f2cc",
       "source": "src/routes/legacy.rs",
-      "line": 1935,
-      "symbol": "upload_userpic",
-      "criticality": "P1",
-      "runtime_surface": "legacy routes",
-      "dynamic": false,
-      "fragment": false,
-      "status": "clean",
-      "sql_preview": "UPDATE users SET photo=$2 WHERE id=$1",
-      "relations": [
-        {
-          "table": "users",
-          "alias": null,
-          "schema": null,
-          "context": "update",
-          "virtual": false,
-          "system": false
-        }
-      ],
-      "ctes": [],
-      "unresolved_qualifiers": [],
-      "findings": [],
-      "intentional_absence_probes": []
-    },
-    {
-      "id": "1e75eeab9ce1",
-      "source": "src/routes/legacy.rs",
-      "line": 2000,
-      "symbol": "bCanLoadUserpic",
-      "criticality": "P1",
-      "runtime_surface": "legacy routes",
-      "dynamic": false,
-      "fragment": false,
-      "status": "clean",
-      "sql_preview": "SELECT COALESCE(u.frozen_until > CURRENT_TIMESTAMP,false), (SELECT count(*) FROM user_log ul WHERE ul.userid=u.id AND ul.action='set_userpic'::user_log_action AND ul.action_date>CURRENT_TIMESTAMP-interval '1 hour'), EXI…",
-      "relations": [
-        {
-          "table": "user_log",
-          "alias": "ul",
-          "schema": null,
-          "context": "from",
-          "virtual": false,
-          "system": false
-        },
-        {
-          "table": "user_log",
-          "alias": "ul",
-          "schema": null,
-          "context": "from",
-          "virtual": false,
-          "system": false
-        },
-        {
-          "table": "del_info",
-          "alias": "di",
-          "schema": null,
-          "context": "from",
-          "virtual": false,
-          "system": false
-        },
-        {
-          "table": "comments",
-          "alias": "c",
-          "schema": null,
-          "context": "from",
-          "virtual": false,
-          "system": false
-        },
-        {
-          "table": "topics",
-          "alias": "t",
-          "schema": null,
-          "context": "from",
-          "virtual": false,
-          "system": false
-        },
-        {
-          "table": "users",
-          "alias": "u",
-          "schema": null,
-          "context": "from",
-          "virtual": false,
-          "system": false
-        }
-      ],
-      "ctes": [],
-      "unresolved_qualifiers": [],
-      "findings": [],
-      "intentional_absence_probes": []
-    },
-    {
-      "id": "668a29e41431",
-      "source": "src/routes/legacy.rs",
-      "line": 2216,
+      "line": 2211,
       "symbol": "user_exists_or_similar",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -17177,9 +17246,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "9ff05856437a",
+      "id": "9c470b3af8ff",
       "source": "src/routes/legacy.rs",
-      "line": 2224,
+      "line": 2219,
       "symbol": "user_exists_or_similar",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -17203,9 +17272,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "707f78dad461",
+      "id": "b0cfa1f695e8",
       "source": "src/routes/legacy.rs",
-      "line": 2340,
+      "line": 2335,
       "symbol": "memories",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -17229,9 +17298,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "52b78b1eb583",
+      "id": "24b87af964ad",
       "source": "src/routes/legacy.rs",
-      "line": 2350,
+      "line": 2345,
       "symbol": "memories",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -17255,9 +17324,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "19ca1e53d9ce",
+      "id": "d3145b1051e2",
       "source": "src/routes/legacy.rs",
-      "line": 2355,
+      "line": 2350,
       "symbol": "memories",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -17281,9 +17350,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "0ff90eeca429",
+      "id": "4710fcf8f15a",
       "source": "src/routes/legacy.rs",
-      "line": 2367,
+      "line": 2362,
       "symbol": "memories",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -17307,9 +17376,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "996ea7bf8c96",
+      "id": "be77be91ad06",
       "source": "src/routes/legacy.rs",
-      "line": 2376,
+      "line": 2371,
       "symbol": "memories",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -17333,9 +17402,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "1651808b1399",
+      "id": "97da75520790",
       "source": "src/routes/legacy.rs",
-      "line": 2382,
+      "line": 2377,
       "symbol": "memories",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -17359,9 +17428,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "0a09ff5633c6",
+      "id": "39c5e8b2edd7",
       "source": "src/routes/legacy.rs",
-      "line": 2428,
+      "line": 2423,
       "symbol": "stRenderUserFilter",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -17401,9 +17470,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "8ec7070f9559",
+      "id": "654004ab1b9c",
       "source": "src/routes/legacy.rs",
-      "line": 2568,
+      "line": 2563,
       "symbol": "save_or_delete_user_tag",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -17427,9 +17496,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "394c085df95d",
+      "id": "af17752a49fd",
       "source": "src/routes/legacy.rs",
-      "line": 2578,
+      "line": 2573,
       "symbol": "save_or_delete_user_tag",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -17453,9 +17522,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "9732f7de3567",
+      "id": "758805ef62b3",
       "source": "src/routes/legacy.rs",
-      "line": 2585,
+      "line": 2580,
       "symbol": "save_or_delete_user_tag",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -17479,9 +17548,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "4d1566a3bcea",
+      "id": "6f6133b840e1",
       "source": "src/routes/legacy.rs",
-      "line": 2593,
+      "line": 2588,
       "symbol": "save_or_delete_user_tag",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -17505,9 +17574,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "2e3cbe594be4",
+      "id": "cb0d1c16781e",
       "source": "src/routes/legacy.rs",
-      "line": 2659,
+      "line": 2654,
       "symbol": "ignore_user",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -17531,9 +17600,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "e64e949c30f7",
+      "id": "9af475116b0a",
       "source": "src/routes/legacy.rs",
-      "line": 2671,
+      "line": 2666,
       "symbol": "ignore_user",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -17557,9 +17626,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "c2a0c117a3eb",
+      "id": "7dc62f95c82f",
       "source": "src/routes/legacy.rs",
-      "line": 2677,
+      "line": 2672,
       "symbol": "ignore_user",
       "criticality": "P1",
       "runtime_surface": "legacy routes",
@@ -17583,9 +17652,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "c220d280bca4",
+      "id": "584f8209643c",
       "source": "src/routes/media.rs",
-      "line": 103,
+      "line": 106,
       "symbol": "finalized_image",
       "criticality": "P2",
       "runtime_surface": "media routes",
@@ -17633,9 +17702,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "30104e8f0f33",
+      "id": "9045db7172c6",
       "source": "src/routes/media.rs",
-      "line": 200,
+      "line": 203,
       "symbol": "userpic",
       "criticality": "P2",
       "runtime_surface": "media routes",
@@ -17659,9 +17728,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "b1827e11ad61",
+      "id": "4dbff18d994a",
       "source": "src/routes/mod.rs",
-      "line": 371,
+      "line": 393,
       "symbol": "about",
       "criticality": "P2",
       "runtime_surface": "moderation/admin",
@@ -17685,9 +17754,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "61c32ce8ea89",
+      "id": "32a7290f33f6",
       "source": "src/routes/mod.rs",
-      "line": 376,
+      "line": 398,
       "symbol": "about",
       "criticality": "P2",
       "runtime_surface": "moderation/admin",
@@ -17711,9 +17780,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "a093e8b031d4",
+      "id": "042c5560df8c",
       "source": "src/routes/mod.rs",
-      "line": 397,
+      "line": 419,
       "symbol": "readyz",
       "criticality": "P2",
       "runtime_surface": "moderation/admin",
@@ -18284,9 +18353,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "5a5dca485aa2",
+      "id": "8edf1f52e9f7",
       "source": "src/routes/tags.rs",
-      "line": 903,
+      "line": 909,
       "symbol": "change_tag",
       "criticality": "P1",
       "runtime_surface": "tags routes",
@@ -18310,9 +18379,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "69210a4f09c7",
+      "id": "17d6c283ca78",
       "source": "src/routes/tags.rs",
-      "line": 907,
+      "line": 913,
       "symbol": "change_tag",
       "criticality": "P1",
       "runtime_surface": "tags routes",
@@ -18336,9 +18405,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "f6c7f312cfb0",
+      "id": "14d622cea5b8",
       "source": "src/routes/tags.rs",
-      "line": 932,
+      "line": 938,
       "symbol": "reindex_topics_with_tag",
       "criticality": "P1",
       "runtime_surface": "tags routes",
@@ -18362,9 +18431,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "951b8a125ecc",
+      "id": "ff669f6c38ad",
       "source": "src/routes/tags.rs",
-      "line": 960,
+      "line": 966,
       "symbol": "delete_form",
       "criticality": "P1",
       "runtime_surface": "tags routes",
@@ -18388,9 +18457,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "2540ea6eecd4",
+      "id": "ad282164ca65",
       "source": "src/routes/tags.rs",
-      "line": 1012,
+      "line": 1024,
       "symbol": "delete_tag",
       "criticality": "P1",
       "runtime_surface": "tags routes",
@@ -18414,9 +18483,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "100188e0d3b8",
+      "id": "730bd54561e0",
       "source": "src/routes/tags.rs",
-      "line": 1017,
+      "line": 1029,
       "symbol": "delete_tag",
       "criticality": "P1",
       "runtime_surface": "tags routes",
@@ -18440,9 +18509,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "dcab8a62f2ba",
+      "id": "65ae031fcdd1",
       "source": "src/routes/tags.rs",
-      "line": 1050,
+      "line": 1062,
       "symbol": "delete_tag",
       "criticality": "P1",
       "runtime_surface": "tags routes",
@@ -18466,9 +18535,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "87b9cb124da8",
+      "id": "92682349cec9",
       "source": "src/routes/tags.rs",
-      "line": 1055,
+      "line": 1067,
       "symbol": "delete_tag",
       "criticality": "P1",
       "runtime_surface": "tags routes",
@@ -18492,9 +18561,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "2208b5a76aac",
+      "id": "ae1d2cbf8933",
       "source": "src/routes/tags.rs",
-      "line": 1059,
+      "line": 1071,
       "symbol": "delete_tag",
       "criticality": "P1",
       "runtime_surface": "tags routes",
@@ -18518,9 +18587,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "7bfd4dfe7345",
+      "id": "9724a6ae9a46",
       "source": "src/routes/tags.rs",
-      "line": 1063,
+      "line": 1075,
       "symbol": "delete_tag",
       "criticality": "P1",
       "runtime_surface": "tags routes",
@@ -18544,9 +18613,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "06591b53106d",
+      "id": "09da95e204bf",
       "source": "src/routes/tags.rs",
-      "line": 1067,
+      "line": 1079,
       "symbol": "delete_tag",
       "criticality": "P1",
       "runtime_surface": "tags routes",
@@ -18570,9 +18639,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "561820167cee",
+      "id": "3e082f95f234",
       "source": "src/routes/tags.rs",
-      "line": 1100,
+      "line": 1112,
       "symbol": "delete_tag",
       "criticality": "P1",
       "runtime_surface": "tags routes",
@@ -18596,9 +18665,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "aa807bd29f10",
+      "id": "8f32af3fd1b1",
       "source": "src/routes/tags.rs",
-      "line": 1106,
+      "line": 1118,
       "symbol": "delete_tag",
       "criticality": "P1",
       "runtime_surface": "tags routes",
@@ -18630,9 +18699,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "96180e0caf50",
+      "id": "6fb0771fc91f",
       "source": "src/routes/tags.rs",
-      "line": 1108,
+      "line": 1120,
       "symbol": "delete_tag",
       "criticality": "P1",
       "runtime_surface": "tags routes",
@@ -18656,9 +18725,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "1fe467aaa4a1",
+      "id": "5799a79b66c5",
       "source": "src/routes/tags.rs",
-      "line": 1113,
+      "line": 1125,
       "symbol": "delete_tag",
       "criticality": "P1",
       "runtime_surface": "tags routes",
@@ -18690,9 +18759,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "7ab0f2874bc6",
+      "id": "42dbc31d24b5",
       "source": "src/routes/tags.rs",
-      "line": 1115,
+      "line": 1127,
       "symbol": "delete_tag",
       "criticality": "P1",
       "runtime_surface": "tags routes",
@@ -18716,9 +18785,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "6b61988669af",
+      "id": "4886879a809a",
       "source": "src/routes/tags.rs",
-      "line": 1121,
+      "line": 1133,
       "symbol": "delete_tag",
       "criticality": "P1",
       "runtime_surface": "tags routes",
@@ -18750,9 +18819,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "cb13cb61ed0e",
+      "id": "714143b2207d",
       "source": "src/routes/tags.rs",
-      "line": 1128,
+      "line": 1140,
       "symbol": "delete_tag",
       "criticality": "P1",
       "runtime_surface": "tags routes",
@@ -18776,9 +18845,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "90ec946421ab",
+      "id": "5704bc1bd660",
       "source": "src/routes/tags.rs",
-      "line": 1134,
+      "line": 1146,
       "symbol": "delete_tag",
       "criticality": "P1",
       "runtime_surface": "tags routes",
@@ -18802,9 +18871,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "07c7402814a9",
+      "id": "a0d4a8365056",
       "source": "src/routes/tags.rs",
-      "line": 1137,
+      "line": 1149,
       "symbol": "delete_tag",
       "criticality": "P1",
       "runtime_surface": "tags routes",
@@ -20213,9 +20282,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "459e50205882",
+      "id": "5179ca309947",
       "source": "src/routes/topics.rs",
-      "line": 3841,
+      "line": 3837,
       "symbol": "render_topic_view",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -20239,9 +20308,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "b81d78a7f94d",
+      "id": "0f688bfa5347",
       "source": "src/routes/topics.rs",
-      "line": 4209,
+      "line": 4232,
       "symbol": "resolve_comment_jump",
       "criticality": "P1",
       "runtime_surface": "topic browser flow",
@@ -20265,9 +20334,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "c445e55d6a33",
+      "id": "e36031f6cb0c",
       "source": "src/routes/topics.rs",
-      "line": 4250,
+      "line": 4273,
       "symbol": "choose_topic_section",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -20291,9 +20360,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "edd295d65553",
+      "id": "f24b096353f3",
       "source": "src/routes/topics.rs",
-      "line": 4257,
+      "line": 4280,
       "symbol": "choose_topic_section",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -20325,9 +20394,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "acb40b6ffade",
+      "id": "fb7a7dc8027a",
       "source": "src/routes/topics.rs",
-      "line": 4298,
+      "line": 4321,
       "symbol": "choose_topic_section",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -20351,9 +20420,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "9ff4be360d74",
+      "id": "466cb6126f64",
       "source": "src/routes/topics.rs",
-      "line": 4346,
+      "line": 4369,
       "symbol": "load_topic_form_group",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -20385,9 +20454,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "5477a2994dff",
+      "id": "a0646683a8c4",
       "source": "src/routes/topics.rs",
-      "line": 4722,
+      "line": 4745,
       "symbol": "save_topic_upload",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -20402,9 +20471,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "5864ad580025",
+      "id": "f0c79ba4c55c",
       "source": "src/routes/topics.rs",
-      "line": 4740,
+      "line": 4763,
       "symbol": "save_topic_upload",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -20428,9 +20497,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "bdfe754c2e24",
+      "id": "9bf77b058499",
       "source": "src/routes/topics.rs",
-      "line": 4837,
+      "line": 4860,
       "symbol": "save_topic_preview",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -20445,9 +20514,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "668f0c50eb87",
+      "id": "6e8e0981d435",
       "source": "src/routes/topics.rs",
-      "line": 4862,
+      "line": 4885,
       "symbol": "save_topic_preview",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -20471,9 +20540,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "92c1cd35692f",
+      "id": "3b2f8411a33d",
       "source": "src/routes/topics.rs",
-      "line": 5116,
+      "line": 5139,
       "symbol": "create_topic",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -20497,9 +20566,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "bb754dc77951",
+      "id": "c1728780405e",
       "source": "src/routes/topics.rs",
-      "line": 5209,
+      "line": 5232,
       "symbol": "create_topic",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -20531,9 +20600,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "4b783e8edf23",
+      "id": "a06b3311e8f8",
       "source": "src/routes/topics.rs",
-      "line": 5653,
+      "line": 5676,
       "symbol": "optEditPreviewPollView",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -20557,9 +20626,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "5608dc276572",
+      "id": "807f2007f5a2",
       "source": "src/routes/topics.rs",
-      "line": 5813,
+      "line": 5819,
       "symbol": "sEditPreviewUserpicHtml",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -20583,9 +20652,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "69f5551dfda6",
+      "id": "3887655dd9d1",
       "source": "src/routes/topics.rs",
-      "line": 5822,
+      "line": 5828,
       "symbol": "sEditPreviewUserpicHtml",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -20609,9 +20678,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "a5cb79386fbc",
+      "id": "a13a34662246",
       "source": "src/routes/topics.rs",
-      "line": 5953,
+      "line": 5929,
       "symbol": "sPrepareEditTopicCardHtml",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -20635,9 +20704,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "103c82f07b83",
+      "id": "a00849ce94d3",
       "source": "src/routes/topics.rs",
-      "line": 6350,
+      "line": 6326,
       "symbol": "load_topic_edit_rules",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -20677,9 +20746,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "e99032fda9d7",
+      "id": "363f371f20d0",
       "source": "src/routes/topics.rs",
-      "line": 7477,
+      "line": 7453,
       "symbol": "CAN_VIEW_ALL_DELETED_SCORE",
       "criticality": "P1",
       "runtime_surface": "topic browser flow",
@@ -20703,9 +20772,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "9725e2bf3878",
+      "id": "ae699da6a40c",
       "source": "src/routes/topics.rs",
-      "line": 7508,
+      "line": 7484,
       "symbol": "POSTSCORE_HIDE_COMMENTS",
       "criticality": "P1",
       "runtime_surface": "topic browser flow",
@@ -20745,9 +20814,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "340646ddcde3",
+      "id": "e2ad01018075",
       "source": "src/routes/topics.rs",
-      "line": 7533,
+      "line": 7509,
       "symbol": "POSTSCORE_HIDE_COMMENTS",
       "criticality": "P1",
       "runtime_surface": "topic browser flow",
@@ -20771,9 +20840,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "49ce4a9d48e9",
+      "id": "ce9e57a8ecbb",
       "source": "src/routes/topics.rs",
-      "line": 7545,
+      "line": 7521,
       "symbol": "POSTSCORE_HIDE_COMMENTS",
       "criticality": "P1",
       "runtime_surface": "topic browser flow",
@@ -20805,9 +20874,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "e2cb4b5aa19f",
+      "id": "979fdbbe6439",
       "source": "src/routes/topics.rs",
-      "line": 7574,
+      "line": 7550,
       "symbol": "check_topic_viewable",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -20855,9 +20924,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "ef5d8c08c92c",
+      "id": "8c86ec80f72b",
       "source": "src/routes/topics.rs",
-      "line": 7600,
+      "line": 7576,
       "symbol": "check_topic_viewable",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -20881,9 +20950,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "3b3c698797d4",
+      "id": "b327cfc591e4",
       "source": "src/routes/topics.rs",
-      "line": 7612,
+      "line": 7588,
       "symbol": "check_topic_viewable",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -20907,9 +20976,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "6288bcd7b5bc",
+      "id": "e9e13a479e04",
       "source": "src/routes/topics.rs",
-      "line": 7650,
+      "line": 7626,
       "symbol": "load_topic_delete_meta",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -20949,9 +21018,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "831521dbdfae",
+      "id": "758e66b535af",
       "source": "src/routes/topics.rs",
-      "line": 7734,
+      "line": 7710,
       "symbol": "save_poll",
       "criticality": "P1",
       "runtime_surface": "topic browser flow",
@@ -20975,9 +21044,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "fa56856c81ff",
+      "id": "1e529bf71ba7",
       "source": "src/routes/topics.rs",
-      "line": 7740,
+      "line": 7716,
       "symbol": "save_poll",
       "criticality": "P1",
       "runtime_surface": "topic browser flow",
@@ -21001,9 +21070,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "2d91b8efbe62",
+      "id": "30279b018b33",
       "source": "src/routes/topics.rs",
-      "line": 7748,
+      "line": 7724,
       "symbol": "save_poll",
       "criticality": "P1",
       "runtime_surface": "topic browser flow",
@@ -21018,9 +21087,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "eaee95e04af9",
+      "id": "3a016a35114c",
       "source": "src/routes/topics.rs",
-      "line": 7751,
+      "line": 7727,
       "symbol": "save_poll",
       "criticality": "P1",
       "runtime_surface": "topic browser flow",
@@ -21044,9 +21113,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "977f208ca4e8",
+      "id": "ee8844ec6daf",
       "source": "src/routes/topics.rs",
-      "line": 7764,
+      "line": 7740,
       "symbol": "save_poll",
       "criticality": "P1",
       "runtime_surface": "topic browser flow",
@@ -21070,9 +21139,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "89009ded629b",
+      "id": "d6731a8f7e7b",
       "source": "src/routes/topics.rs",
-      "line": 7767,
+      "line": 7743,
       "symbol": "save_poll",
       "criticality": "P1",
       "runtime_surface": "topic browser flow",
@@ -21096,9 +21165,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "c935ac6b6985",
+      "id": "0b788ef9f133",
       "source": "src/routes/topics.rs",
-      "line": 7773,
+      "line": 7749,
       "symbol": "save_poll",
       "criticality": "P1",
       "runtime_surface": "topic browser flow",
@@ -21122,9 +21191,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "d774a9a2decf",
+      "id": "84f913fe8667",
       "source": "src/routes/topics.rs",
-      "line": 7800,
+      "line": 7776,
       "symbol": "notify_topic_users_tx",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -21164,9 +21233,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "b3d84807ad7c",
+      "id": "c4f00739b2da",
       "source": "src/routes/topics.rs",
-      "line": 7818,
+      "line": 7794,
       "symbol": "notify_topic_users_tx",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -21190,9 +21259,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "3aacb6f5881e",
+      "id": "597642736487",
       "source": "src/routes/topics.rs",
-      "line": 7825,
+      "line": 7801,
       "symbol": "notify_topic_users_tx",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -21216,9 +21285,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "5a60a3cfbabd",
+      "id": "c88e94b76cbf",
       "source": "src/routes/topics.rs",
-      "line": 7835,
+      "line": 7811,
       "symbol": "notify_topic_users_tx",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -21282,9 +21351,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "aabdd75db470",
+      "id": "0a4113fe4f95",
       "source": "src/routes/topics.rs",
-      "line": 7865,
+      "line": 7841,
       "symbol": "notify_topic_users_tx",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -21308,9 +21377,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "04ca545e1ee8",
+      "id": "5f69f182c401",
       "source": "src/routes/topics.rs",
-      "line": 7872,
+      "line": 7848,
       "symbol": "notify_topic_users_tx",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -21334,9 +21403,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "e7a53ca28b0d",
+      "id": "46dd12fb0558",
       "source": "src/routes/topics.rs",
-      "line": 7884,
+      "line": 7860,
       "symbol": "notify_topic_users_tx",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -21368,9 +21437,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "ebc2e6fcde87",
+      "id": "ca301d189156",
       "source": "src/routes/topics.rs",
-      "line": 7930,
+      "line": 7906,
       "symbol": "bTopicUndeletable",
       "criticality": "P0",
       "runtime_surface": "topic create/list/detail",
@@ -21394,9 +21463,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "a4a252a0dad8",
+      "id": "1c5466725e6a",
       "source": "src/routes/users.rs",
-      "line": 299,
+      "line": 438,
       "symbol": "topic_feed",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -21460,9 +21529,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "961d9ca4a0da",
+      "id": "e4bd0e1ce929",
       "source": "src/routes/users.rs",
-      "line": 315,
+      "line": 454,
       "symbol": "topic_feed",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -21477,9 +21546,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "6c5af8d29d57",
+      "id": "41647238059a",
       "source": "src/routes/users.rs",
-      "line": 333,
+      "line": 472,
       "symbol": "topic_feed",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -21519,9 +21588,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "ec7392b60f0f",
+      "id": "478de38ba50f",
       "source": "src/routes/users.rs",
-      "line": 491,
+      "line": 630,
       "symbol": "render_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -21545,9 +21614,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "9c4afdfffdf6",
+      "id": "771323b3b028",
       "source": "src/routes/users.rs",
-      "line": 503,
+      "line": 642,
       "symbol": "render_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -21571,9 +21640,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "fdd38c2b579f",
+      "id": "4b72aa39c408",
       "source": "src/routes/users.rs",
-      "line": 521,
+      "line": 660,
       "symbol": "render_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -21597,9 +21666,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "11818e3534c8",
+      "id": "069e0b188695",
       "source": "src/routes/users.rs",
-      "line": 537,
+      "line": 676,
       "symbol": "render_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -21631,9 +21700,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "4e7fcd5677da",
+      "id": "53b3b4ba83df",
       "source": "src/routes/users.rs",
-      "line": 551,
+      "line": 690,
       "symbol": "render_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -21657,9 +21726,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "a9bfc30ae084",
+      "id": "0b468050e535",
       "source": "src/routes/users.rs",
-      "line": 580,
+      "line": 719,
       "symbol": "render_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -21691,9 +21760,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "0ae19d7e2f7f",
+      "id": "f28c94ccd569",
       "source": "src/routes/users.rs",
-      "line": 595,
+      "line": 734,
       "symbol": "render_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -21717,9 +21786,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "147ec7fb502e",
+      "id": "cfad9874bc64",
       "source": "src/routes/users.rs",
-      "line": 632,
+      "line": 771,
       "symbol": "render_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -21767,9 +21836,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "05f9aeaf393c",
+      "id": "b2fd32dcc02e",
       "source": "src/routes/users.rs",
-      "line": 657,
+      "line": 796,
       "symbol": "render_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -21801,9 +21870,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "cc80502e527f",
+      "id": "e8a460ee5b26",
       "source": "src/routes/users.rs",
-      "line": 693,
+      "line": 832,
       "symbol": "render_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -21827,16 +21896,16 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "bc9dcf929deb",
+      "id": "4093dd5cb76b",
       "source": "src/routes/users.rs",
-      "line": 708,
+      "line": 856,
       "symbol": "render_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
       "dynamic": false,
       "fragment": false,
       "status": "clean",
-      "sql_preview": "SELECT l.action::text, l.action_date, u.nick FROM user_log l JOIN users u ON u.id=l.action_userid WHERE l.userid=$1 ORDER BY l.action_date DESC LIMIT 20",
+      "sql_preview": "SELECT l.action::text, l.action_date, u.nick, l.userid=l.action_userid, COALESCE(hstore_to_json(l.info),'{}'::json) FROM user_log l JOIN users u ON u.id=l.action_userid WHERE l.userid=$1 AND ($2 OR l.userid<>l.action_us…",
       "relations": [
         {
           "table": "user_log",
@@ -21861,9 +21930,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "c522a91ff450",
+      "id": "9e9071fc388c",
       "source": "src/routes/users.rs",
-      "line": 732,
+      "line": 886,
       "symbol": "render_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -21887,9 +21956,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "6b261dbfba13",
+      "id": "22abc28a0939",
       "source": "src/routes/users.rs",
-      "line": 753,
+      "line": 906,
       "symbol": "render_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -21921,9 +21990,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "290acfb1aa3a",
+      "id": "5e75f58e900f",
       "source": "src/routes/users.rs",
-      "line": 834,
+      "line": 990,
       "symbol": "SECTION_PREFIX_CASE",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -21938,9 +22007,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "c3b6d71fb744",
+      "id": "9a2e3e976d24",
       "source": "src/routes/users.rs",
-      "line": 923,
+      "line": 1079,
       "symbol": "reactions_view",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -21955,9 +22024,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "bed370680fe9",
+      "id": "db8d0fb3f067",
       "source": "src/routes/users.rs",
-      "line": 928,
+      "line": 1084,
       "symbol": "reactions_view",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -21972,9 +22041,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "2c8a5421d173",
+      "id": "2d05948e7d08",
       "source": "src/routes/users.rs",
-      "line": 931,
+      "line": 1087,
       "symbol": "reactions_view",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22062,9 +22131,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "bd7d3fff051b",
+      "id": "896cc35c0ae4",
       "source": "src/routes/users.rs",
-      "line": 963,
+      "line": 1119,
       "symbol": "reactions_view",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22079,9 +22148,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "cf96639e27d9",
+      "id": "a3e68b87b57e",
       "source": "src/routes/users.rs",
-      "line": 966,
+      "line": 1122,
       "symbol": "reactions_view",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22137,9 +22206,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "a4b062a666ed",
+      "id": "2bf5547b08d0",
       "source": "src/routes/users.rs",
-      "line": 996,
+      "line": 1152,
       "symbol": "reactions_view",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22163,9 +22232,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "17d8759169ea",
+      "id": "1393b43ca825",
       "source": "src/routes/users.rs",
-      "line": 1011,
+      "line": 1167,
       "symbol": "reactions_view",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22189,9 +22258,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "8631e5283907",
+      "id": "c65bf3aacc3a",
       "source": "src/routes/users.rs",
-      "line": 1180,
+      "line": 1336,
       "symbol": "remarks",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22215,9 +22284,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "55887f884908",
+      "id": "c0f9cc7944a0",
       "source": "src/routes/users.rs",
-      "line": 1189,
+      "line": 1345,
       "symbol": "remarks",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22232,9 +22301,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "50688edcc8c2",
+      "id": "403f7b477c81",
       "source": "src/routes/users.rs",
-      "line": 1191,
+      "line": 1347,
       "symbol": "remarks",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22249,9 +22318,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "3c38f1d149c0",
+      "id": "d18a07a28c9a",
       "source": "src/routes/users.rs",
-      "line": 1194,
+      "line": 1350,
       "symbol": "remarks",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22283,9 +22352,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "8fb23b7807bf",
+      "id": "628205d8f0b2",
       "source": "src/routes/users.rs",
-      "line": 1220,
+      "line": 1376,
       "symbol": "get_user",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22309,9 +22378,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "996ebb7aa4e5",
+      "id": "e034e6998dcf",
       "source": "src/routes/users.rs",
-      "line": 1232,
+      "line": 1388,
       "symbol": "get_user_exact",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22335,9 +22404,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "8fa6904a1c3b",
+      "id": "4ec42a31f8a0",
       "source": "src/routes/users.rs",
-      "line": 1242,
+      "line": 1398,
       "symbol": "get_user_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22361,9 +22430,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "74b1aca86007",
+      "id": "ffae47ef0495",
       "source": "src/routes/users.rs",
-      "line": 1268,
+      "line": 1424,
       "symbol": "user_stats",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22387,16 +22456,16 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "fd669784725a",
+      "id": "443338ea0cb6",
       "source": "src/routes/users.rs",
-      "line": 1278,
+      "line": 1434,
       "symbol": "user_stats",
       "criticality": "P1",
       "runtime_surface": "users routes",
       "dynamic": false,
       "fragment": false,
       "status": "clean",
-      "sql_preview": "SELECT count(*)::bigint, min(postdate), max(postdate) FROM comments WHERE userid=$1 AND NOT COALESCE(deleted,false)",
+      "sql_preview": "SELECT count(*) FILTER (WHERE NOT COALESCE(deleted,false))::bigint, min(postdate), max(postdate) FROM comments WHERE userid=$1",
       "relations": [
         {
           "table": "comments",
@@ -22413,9 +22482,85 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "bfe298307382",
+      "id": "e52131c6cdff",
       "source": "src/routes/users.rs",
-      "line": 1299,
+      "line": 1440,
+      "symbol": "user_stats",
+      "criticality": "P1",
+      "runtime_surface": "users routes",
+      "dynamic": false,
+      "fragment": false,
+      "status": "clean",
+      "sql_preview": "SELECT count(*)::bigint FROM ignore_list il JOIN users u ON u.id=il.userid WHERE il.ignored=$1 AND NOT COALESCE(u.blocked,false)",
+      "relations": [
+        {
+          "table": "ignore_list",
+          "alias": "il",
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        },
+        {
+          "table": "users",
+          "alias": "u",
+          "schema": null,
+          "context": "join",
+          "virtual": false,
+          "system": false
+        }
+      ],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
+      "id": "1abc01d2f8b6",
+      "source": "src/routes/users.rs",
+      "line": 1448,
+      "symbol": "user_stats",
+      "criticality": "P1",
+      "runtime_surface": "users routes",
+      "dynamic": false,
+      "fragment": false,
+      "status": "clean",
+      "sql_preview": "SELECT s.id, s.name, count(t.id)::bigint FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section WHERE t.userid=$1 AND NOT COALESCE(t.deleted,false) AND NOT COALESCE(t.draft,false) GROUP BY s.id,…",
+      "relations": [
+        {
+          "table": "topics",
+          "alias": "t",
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        },
+        {
+          "table": "groups",
+          "alias": "g",
+          "schema": null,
+          "context": "join",
+          "virtual": false,
+          "system": false
+        },
+        {
+          "table": "sections",
+          "alias": "s",
+          "schema": null,
+          "context": "join",
+          "virtual": false,
+          "system": false
+        }
+      ],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
+      "id": "2ac2b69f3ed4",
+      "source": "src/routes/users.rs",
+      "line": 1482,
       "symbol": "user_tags",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22447,9 +22592,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "22ef189275c0",
+      "id": "76e032476a4e",
       "source": "src/routes/users.rs",
-      "line": 1309,
+      "line": 1492,
       "symbol": "count_drafts",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22473,9 +22618,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "4217bf9bcf8a",
+      "id": "0fb0ebe23058",
       "source": "src/routes/users.rs",
-      "line": 1326,
+      "line": 1509,
       "symbol": "deleted_topics",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22499,9 +22644,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "3e2fd9cd0ce4",
+      "id": "e8621a962400",
       "source": "src/routes/users.rs",
-      "line": 1333,
+      "line": 1516,
       "symbol": "deleted_topics",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22541,9 +22686,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "490b3ca4806f",
+      "id": "a401f210e96e",
       "source": "src/routes/users.rs",
-      "line": 1373,
+      "line": 1556,
       "symbol": "drafts",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22615,9 +22760,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "0495f66c73a1",
+      "id": "9b9450f3d77e",
       "source": "src/routes/users.rs",
-      "line": 1474,
+      "line": 1657,
       "symbol": "favs",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22689,9 +22834,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "f322a66e3e54",
+      "id": "dd57416d0031",
       "source": "src/routes/users.rs",
-      "line": 1549,
+      "line": 1732,
       "symbol": "tracked",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22763,9 +22908,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "b7bb32d7a9df",
+      "id": "260fe90eba5f",
       "source": "src/routes/users.rs",
-      "line": 1625,
+      "line": 1808,
       "symbol": "optEditProfileInfoRestrictionForUser",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22813,9 +22958,35 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "bd934e516d0e",
+      "id": "e38aef4ea435",
       "source": "src/routes/users.rs",
-      "line": 1710,
+      "line": 1901,
+      "symbol": "stRenderEditProfileValidation",
+      "criticality": "P1",
+      "runtime_surface": "users routes",
+      "dynamic": false,
+      "fragment": false,
+      "status": "clean",
+      "sql_preview": "SELECT settings::text FROM user_settings WHERE id=$1",
+      "relations": [
+        {
+          "table": "user_settings",
+          "alias": null,
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        }
+      ],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
+      "id": "f73830b9f738",
+      "source": "src/routes/users.rs",
+      "line": 1957,
       "symbol": "edit_profile_form",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22839,9 +23010,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "b1df8ee2c713",
+      "id": "fdbb7a6d7118",
       "source": "src/routes/users.rs",
-      "line": 1775,
+      "line": 2048,
       "symbol": "edit_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22865,9 +23036,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "6ed6c4eb6a18",
+      "id": "77db9019a70b",
       "source": "src/routes/users.rs",
-      "line": 1836,
+      "line": 2189,
       "symbol": "edit_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22891,9 +23062,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "9aabfa298e80",
+      "id": "9ba00cea3fd9",
       "source": "src/routes/users.rs",
-      "line": 1855,
+      "line": 2219,
       "symbol": "edit_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22917,9 +23088,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "5a4854cd0d7d",
+      "id": "7aeb491c8e31",
       "source": "src/routes/users.rs",
-      "line": 1891,
+      "line": 2290,
       "symbol": "edit_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22943,9 +23114,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "595b8cbfa57f",
+      "id": "a18bdcfe3793",
       "source": "src/routes/users.rs",
-      "line": 1905,
+      "line": 2304,
       "symbol": "edit_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22969,9 +23140,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "6d8467ffbe04",
+      "id": "1f1b446dce37",
       "source": "src/routes/users.rs",
-      "line": 1920,
+      "line": 2319,
       "symbol": "edit_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -22995,9 +23166,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "a4dfe78e1dd5",
+      "id": "abe65128cf98",
       "source": "src/routes/users.rs",
-      "line": 1928,
+      "line": 2327,
       "symbol": "edit_profile",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -23021,9 +23192,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "758ae21c4f6d",
+      "id": "a4ba99e709a3",
       "source": "src/routes/users.rs",
-      "line": 1992,
+      "line": 2470,
       "symbol": "settings",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -23047,9 +23218,35 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "723f51d3e047",
+      "id": "8db0a843a4fa",
       "source": "src/routes/users.rs",
-      "line": 2028,
+      "line": 2477,
+      "symbol": "settings",
+      "criticality": "P1",
+      "runtime_surface": "users routes",
+      "dynamic": false,
+      "fragment": false,
+      "status": "clean",
+      "sql_preview": "SELECT COALESCE(frozen_until>CURRENT_TIMESTAMP,false) FROM users WHERE id=$1",
+      "relations": [
+        {
+          "table": "users",
+          "alias": null,
+          "schema": null,
+          "context": "from",
+          "virtual": false,
+          "system": false
+        }
+      ],
+      "ctes": [],
+      "unresolved_qualifiers": [],
+      "findings": [],
+      "intentional_absence_probes": []
+    },
+    {
+      "id": "64c39f0c2f5e",
+      "source": "src/routes/users.rs",
+      "line": 2517,
       "symbol": "save_settings",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -23073,9 +23270,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "4af36d33e701",
+      "id": "7fe4a1bfe3d0",
       "source": "src/routes/users.rs",
-      "line": 2038,
+      "line": 2527,
       "symbol": "save_settings",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -23099,9 +23296,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "ae467c379465",
+      "id": "10ed11da1c56",
       "source": "src/routes/users.rs",
-      "line": 2076,
+      "line": 2565,
       "symbol": "remark_form",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -23125,9 +23322,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "d55c0a27cc58",
+      "id": "82949af78801",
       "source": "src/routes/users.rs",
-      "line": 2114,
+      "line": 2593,
       "symbol": "save_remark",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -23151,9 +23348,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "897fc248899f",
+      "id": "d98d206938fe",
       "source": "src/routes/users.rs",
-      "line": 2121,
+      "line": 2600,
       "symbol": "save_remark",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -23177,9 +23374,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "4f953c366878",
+      "id": "6d72bbe16b70",
       "source": "src/routes/users.rs",
-      "line": 2163,
+      "line": 2642,
       "symbol": "profile_wipe",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -23203,9 +23400,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "077265745b4e",
+      "id": "9294e19e5698",
       "source": "src/routes/users.rs",
-      "line": 2299,
+      "line": 2777,
       "symbol": "user_topic_collections_use_full_base_and_news_card_dom",
       "criticality": "P1",
       "runtime_surface": "users routes",
@@ -23554,16 +23751,16 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "9e2ac5159982",
+      "id": "49d7b6747a31",
       "source": "src/theme_middleware.rs",
-      "line": 69,
-      "symbol": "resolve_profile",
+      "line": 109,
+      "symbol": "stResolveProfile",
       "criticality": "P2",
       "runtime_surface": "supporting runtime",
       "dynamic": false,
       "fragment": false,
       "status": "clean",
-      "sql_preview": "SELECT us.settings->'style', us.settings->'format.mode', u.nick FROM users u LEFT JOIN user_settings us ON us.id=u.id WHERE u.id=$1",
+      "sql_preview": "SELECT us.settings->'style', us.settings->'format.mode', u.nick, COALESCE(u.unread_events,0) FROM users u LEFT JOIN user_settings us ON us.id=u.id WHERE u.id=$1 AND u.activated AND NOT COALESCE(u.blocked,false)",
       "relations": [
         {
           "table": "users",

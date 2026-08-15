@@ -11,7 +11,7 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use axum_extra::extract::cookie::CookieJar;
+use axum_extra::extract::cookie::{Cookie, CookieJar};
 
 #[derive(Debug, Clone)]
 pub struct CurrentUser(pub Option<UserSummary>);
@@ -209,6 +209,27 @@ pub fn sMakeRememberMeCookieValue(stIdentity: &LoginIdentity, sSecret: &str) -> 
     )
 }
 
+/// Canonical Spring-compatible remember-me cookie used after authentication
+/// and after a password change. Keeping the attributes here prevents a route
+/// from refreshing the password-bound signature with weaker cookie flags.
+pub fn stRememberMeCookie(
+    stIdentity: &LoginIdentity,
+    sSecret: &str,
+    bSecure: bool,
+) -> Cookie<'static> {
+    Cookie::build((
+        security::remember_me::COOKIE_NAME,
+        sMakeRememberMeCookieValue(stIdentity, sSecret),
+    ))
+    .path("/")
+    .max_age(time::Duration::seconds(
+        security::remember_me::VALIDITY_SECONDS,
+    ))
+    .http_only(true)
+    .secure(bSecure)
+    .build()
+}
+
 pub async fn verify_login(
     pool: &sqlx::PgPool,
     login: &str,
@@ -295,4 +316,47 @@ pub async fn verify_login(
         password_hash: sCurrentPasswordHash,
         token_generation: stRow.token_generation,
     }))
+}
+
+#[cfg(test)]
+mod remember_me_cookie_tests {
+    use super::{LoginIdentity, stRememberMeCookie};
+    use crate::security::remember_me;
+
+    #[test]
+    fn password_refresh_cookie_has_login_attributes_and_uses_the_new_hash() {
+        let stIdentity = LoginIdentity {
+            nick: "alice".to_owned(),
+            password_hash: "$2b$12$new-hash".to_owned(),
+            token_generation: 7,
+        };
+        let stCookie = stRememberMeCookie(&stIdentity, "test-secret", true);
+
+        assert_eq!(stCookie.name(), remember_me::COOKIE_NAME);
+        assert_eq!(stCookie.path(), Some("/"));
+        assert_eq!(
+            stCookie
+                .max_age()
+                .map(|stDuration| stDuration.whole_seconds()),
+            Some(remember_me::VALIDITY_SECONDS)
+        );
+        assert_eq!(stCookie.http_only(), Some(true));
+        assert_eq!(stCookie.secure(), Some(true));
+
+        let stToken = remember_me::optDecode(stCookie.value()).expect("remember-me token");
+        assert!(remember_me::bVerify(
+            &stToken,
+            &stIdentity.password_hash,
+            "test-secret",
+            stIdentity.token_generation,
+            chrono::Utc::now().timestamp_millis(),
+        ));
+        assert!(!remember_me::bVerify(
+            &stToken,
+            "$2b$12$old-hash",
+            "test-secret",
+            stIdentity.token_generation,
+            chrono::Utc::now().timestamp_millis(),
+        ));
+    }
 }

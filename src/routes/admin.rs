@@ -481,13 +481,17 @@ async fn del_ip(
             .bind(id).bind(moderator.id).bind(&form.reason).execute(&state.pool).await?;
     }
 
-    Ok(Html(format!(
+    let sContentHtml = format!(
         "<h1>Удаление по IP</h1><p>Удаляем темы и сообщения после {cutoff} с IP {ip_escaped}</p><p>Удалено тем: {topics}, комментариев: {comments}</p>",
         cutoff = cutoff,
         ip_escaped = html_escape::encode_text(&ip),
         topics = topic_ids.len(),
         comments = comment_ids.len(),
-    )))
+    );
+    Ok(Html(crate::routes::sRenderLegacyContent(
+        "delip",
+        sContentHtml,
+    )?))
 }
 
 /// Matches SameIPController: the previous handler only did an exact-IP
@@ -532,7 +536,7 @@ async fn same_ip(
         }
     };
 
-    let mut html = String::from("<h1>Сообщения и пользователи по IP / user-agent</h1>");
+    let mut html = String::from("<h1>Поиск сообщений по метаданным</h1>");
     html.push_str(&format!(
         r#"<form method="get" class="form">
 <input name="ip" placeholder="IP" value="{}">
@@ -638,7 +642,10 @@ async fn same_ip(
         }
     }
 
-    Ok(Html(html))
+    Ok(Html(crate::routes::sRenderLegacyContent(
+        "Поиск сообщений по метаданным",
+        html,
+    )?))
 }
 
 #[derive(Deserialize)]
@@ -757,7 +764,10 @@ async fn groupmod_form(
             &csrf_token,
         ));
     }
-    Ok(Html(html))
+    Ok(Html(crate::routes::sRenderLegacyContent(
+        "Правка группы",
+        html,
+    )?))
 }
 
 /// GroupModificationController.validateUrlName.
@@ -821,33 +831,49 @@ async fn groupmod_save(
     let resolvable = form.resolvable.is_some();
 
     if form.preview.is_some() {
-        return Ok(Html(render_groupmod_form(
-            form.group,
-            &effective_title,
-            &effective_urlname,
-            &info,
-            &longinfo,
-            resolvable,
-            is_admin,
-            None,
-            true,
-            &csrf_token,
-        )));
+        let sContentHtml = format!(
+            "<h1>Правка группы {} - Предпросмотр</h1>{}",
+            html_escape::encode_text(&effective_title),
+            render_groupmod_form(
+                form.group,
+                &effective_title,
+                &effective_urlname,
+                &info,
+                &longinfo,
+                resolvable,
+                is_admin,
+                None,
+                true,
+                &csrf_token,
+            )
+        );
+        return Ok(Html(crate::routes::sRenderLegacyContent(
+            "Правка группы",
+            sContentHtml,
+        )?));
     }
 
     if let Some(error) = validate_url_name(&effective_urlname) {
-        return Ok(Html(render_groupmod_form(
-            form.group,
-            &effective_title,
-            &effective_urlname,
-            &info,
-            &longinfo,
-            resolvable,
-            is_admin,
-            Some(error),
-            false,
-            &csrf_token,
-        )));
+        let sContentHtml = format!(
+            "<h1>Правка группы {}</h1>{}",
+            html_escape::encode_text(&effective_title),
+            render_groupmod_form(
+                form.group,
+                &effective_title,
+                &effective_urlname,
+                &info,
+                &longinfo,
+                resolvable,
+                is_admin,
+                Some(error),
+                false,
+                &csrf_token,
+            )
+        );
+        return Ok(Html(crate::routes::sRenderLegacyContent(
+            "Правка группы",
+            sContentHtml,
+        )?));
     }
 
     sqlx::query(
@@ -862,7 +888,10 @@ async fn groupmod_save(
     .execute(&state.pool)
     .await?;
 
-    Ok(Html("<h1>Параметры изменены</h1>".to_string()))
+    Ok(Html(crate::routes::sRenderLegacyContent(
+        "Параметры изменены",
+        "<h1>Параметры изменены</h1>".to_owned(),
+    )?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1214,12 +1243,11 @@ async fn post_warning_form(
     let optCommentId = q.comment.filter(|iValue| *iValue != 0);
     let cService = CWarningService::new(CWarningPgRepository::new(stState.pool.clone()));
     let stPresentation = cService.stPrepare(stUser, iTopicId, optCommentId).await?;
-    Ok(Html(sWarningForm(
-        &stPresentation,
-        iTopicId,
-        optCommentId,
-        &csrf_token,
-    )))
+    let sContentHtml = sWarningForm(&stPresentation, iTopicId, optCommentId, &csrf_token);
+    Ok(Html(crate::routes::sRenderLegacyContent(
+        "Уведомить модераторов",
+        sContentHtml,
+    )?))
 }
 
 #[derive(Deserialize)]
@@ -1258,13 +1286,14 @@ async fn post_warning(
         )
         .await?
     {
-        EnCreateWarningOutcome::Validation(stPresentation) => Ok(Html(sWarningForm(
-            &stPresentation,
-            iTopicId,
-            optCommentId,
-            &csrf_token,
-        ))
-        .into_response()),
+        EnCreateWarningOutcome::Validation(stPresentation) => {
+            let sContentHtml = sWarningForm(&stPresentation, iTopicId, optCommentId, &csrf_token);
+            Ok(Html(crate::routes::sRenderLegacyContent(
+                "Уведомить модераторов",
+                sContentHtml,
+            )?)
+            .into_response())
+        }
         EnCreateWarningOutcome::Created { sLink } => Ok(Html(
             StActionDoneTemplate {
                 message: "Уведомление отправлено".to_owned(),

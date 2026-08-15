@@ -362,7 +362,7 @@ pub async fn register_form(
     )
     .to_string();
     if !bRegistrationAllowed(&state, &sRemoteIp).await? {
-        return Ok(no_register_response());
+        return no_register_response();
     }
     render_register_page(
         &state,
@@ -396,7 +396,7 @@ pub async fn register(
     Form(form): Form<RegisterForm>,
 ) -> Result<Response> {
     if !check_register_permit(&state, form.permit.as_deref()) {
-        return Ok(no_register_response());
+        return no_register_response();
     }
 
     let sRemoteIp = crate::security::stClientIp(
@@ -476,8 +476,13 @@ pub async fn register(
         .vSendRegistration(&nick, &email, regdate.timestamp_millis(), true)
         .await?;
     Ok(Html(
-        "<h1>Добавление пользователя прошло успешно.</h1><p>Ожидайте письма с кодом активации.</p>"
-            .to_string(),
+        StTopiclessActionDoneTemplate {
+            message: "Добавление пользователя прошло успешно. Ожидайте письма с кодом активации."
+                .to_owned(),
+            big_message: None,
+            link: None,
+        }
+        .render()?,
     )
     .into_response())
 }
@@ -545,15 +550,12 @@ async fn registration_error(
     Ok(None)
 }
 
-fn no_register_response() -> Response {
-    (
-        StatusCode::FORBIDDEN,
-        Html(
-            r#"<div id="warning-body"><div id="warning-logo"><img src="/img/good-penguin.png" alt="good-penguin"></div><div id="warning-text"><p>Регистрация временно не доступна, попробуйте позже.</p></div></div><div id="warning-footer"></div>"#
-                .to_owned(),
-        ),
-    )
-        .into_response()
+#[derive(Template)]
+#[template(path = "no_register.html")]
+struct StNoRegisterTemplate;
+
+fn no_register_response() -> Result<Response> {
+    Ok((StatusCode::FORBIDDEN, Html(StNoRegisterTemplate.render()?)).into_response())
 }
 
 async fn bRegistrationAllowed(state: &AppState, sRemoteIp: &str) -> Result<bool> {

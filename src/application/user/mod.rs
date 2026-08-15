@@ -11,6 +11,7 @@ use crate::{
 
 pub mod account;
 pub mod statistics;
+pub mod userpic;
 
 const I_CORRECTOR_SCORE: i32 = 200;
 

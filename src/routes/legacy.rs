@@ -1,13 +1,14 @@
 use crate::{
     application::{
         edit_history::{CEditHistoryService, StPreparedEditHistory},
-        user::account::CUserAccountService,
+        user::{account::CUserAccountService, userpic::CUserpicService},
     },
     auth::CurrentUser,
     error::{AppError, Result},
     infra::postgres::{
         edit_history_repository::CEditHistoryPgRepository,
         user_account_repository::CUserAccountPgRepository,
+        userpic_repository::CUserpicPgRepository,
     },
     markup,
     models::{CommentItem, PagerQuery, TopicSummary},
@@ -22,7 +23,6 @@ use axum::{
     response::{Html, IntoResponse, Redirect, Response},
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar};
-use image::GenericImageView;
 use serde::Deserialize;
 use serde_json::json;
 use std::net::SocketAddr;
@@ -973,9 +973,10 @@ pub async fn show_replies_jsp(
     let events =
         crate::routes::api::fetch_events(&state, target_id, db_type, true, 20, offset).await?;
 
+    let sTitle = format!("Уведомления пользователя {nick}");
     let mut html = format!(
-        "<h1>Уведомления {}</h1><p class=\"muted\">Просмотр от имени модератора {}.</p><ul class=\"notifications-list\">",
-        html_escape::encode_text(&nick),
+        "<h1>{}</h1><p class=\"muted\">Просмотр от имени модератора {}.</p><ul class=\"notifications-list\">",
+        html_escape::encode_text(&sTitle),
         html_escape::encode_text(&current.nick)
     );
     for e in &events {
@@ -994,7 +995,7 @@ pub async fn show_replies_jsp(
         html.push_str("<li class=\"muted\">Нет уведомлений</li>");
     }
     html.push_str("</ul>");
-    Ok(Html(html).into_response())
+    Ok(Html(crate::routes::sRenderLegacyContent(&sTitle, html)?).into_response())
 }
 
 fn render_replies_feed(
@@ -1354,7 +1355,10 @@ pub async fn view_deleted(
         &stMarkupUsers,
     ));
     sHtml.push_str("</div>");
-    Ok(Html(sHtml))
+    Ok(Html(crate::routes::sRenderLegacyContent(
+        "Просмотр удаленного комментария",
+        sHtml,
+    )?))
 }
 
 #[derive(Deserialize)]
@@ -1641,13 +1645,25 @@ pub struct ActivationQuery {
 
 pub async fn activate_form(
     Query(q): Query<ActivationQuery>,
+    CurrentUser(optUser): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
-) -> Html<String> {
+) -> Result<Html<String>> {
+    let sNick = q
+        .nick
+        .as_deref()
+        .filter(|sValue| valid_login_name_for_java(sValue))
+        .unwrap_or("");
+    let sActivation = q
+        .activation
+        .as_deref()
+        .filter(|sValue| sValue.chars().all(char::is_alphanumeric))
+        .unwrap_or("");
     render_activation_form(
-        q.nick.as_deref().unwrap_or(""),
-        q.activation.as_deref().unwrap_or(""),
+        sNick,
+        sActivation,
         q.error.as_deref(),
         &csrf_token,
+        optUser.is_some(),
     )
 }
 
@@ -1692,7 +1708,8 @@ pub async fn activate_post(
                 &form.activation,
                 Some("Пользователь не найден"),
                 &csrf_token,
-            )
+                false,
+            )?
             .into_response());
         };
 
@@ -1708,7 +1725,8 @@ pub async fn activate_post(
                     &form.activation,
                     Some("Неправильный логин или пароль"),
                     &csrf_token,
-                )
+                    false,
+                )?
                 .into_response());
             }
             crate::auth::LoginOutcome::Blocked => {
@@ -1733,7 +1751,8 @@ pub async fn activate_post(
                 &form.activation,
                 Some("Неправильный код активации"),
                 &csrf_token,
-            )
+                false,
+            )?
             .into_response());
         }
 
@@ -1788,7 +1807,8 @@ pub async fn activate_post(
             &form.activation,
             Some("Неправильный код активации"),
             &csrf_token,
-        )
+            true,
+        )?
         .into_response());
     }
     sqlx::query("UPDATE users SET email=new_email,new_email=NULL WHERE id=$1")
@@ -1808,26 +1828,61 @@ fn render_activation_form(
     activation: &str,
     error: Option<&str>,
     csrf_token: &str,
-) -> Html<String> {
-    let error_html = error
-        .map(|e| format!("<p class=\"error\">{}</p>", html_escape::encode_text(e)))
-        .unwrap_or_default();
-    Html(format!(
-        r#"
-<h1>Активация аккаунта</h1>
-{error_html}
-<form method="post" action="/activate" class="form">
-  <input type="hidden" name="csrf" value="{csrf_token}">
-  <input type="hidden" name="action" value="activate">
-  <label>Ник <input name="nick" value="{nick}" required></label>
-  <label>Пароль <input name="passwd" type="password" required></label>
-  <label>Код активации <input name="activation" value="{activation}" required></label>
-  <button type="submit">Активировать</button>
-</form>
-"#,
-        nick = html_escape::encode_double_quoted_attribute(nick),
-        activation = html_escape::encode_double_quoted_attribute(activation)
+    b_authenticated: bool,
+) -> Result<Html<String>> {
+    #[derive(Template)]
+    #[template(path = "activate.html")]
+    struct StActivateTemplate<'a> {
+        sNick: &'a str,
+        sActivation: &'a str,
+        optError: Option<&'a str>,
+        sCsrfToken: &'a str,
+        bAuthenticated: bool,
+    }
+
+    Ok(Html(
+        StActivateTemplate {
+            sNick: nick,
+            sActivation: activation,
+            optError: error,
+            sCsrfToken: csrf_token,
+            bAuthenticated: b_authenticated,
+        }
+        .render()?,
     ))
+}
+
+#[cfg(test)]
+mod activation_template_tests {
+    use super::render_activation_form;
+    use axum::response::Html;
+
+    #[test]
+    fn anonymous_activation_matches_java_form_and_uses_theme_shell() {
+        let Html(sHtml) =
+            render_activation_form("alice", "ABC123", Some("Ошибка"), "csrf-value", false)
+                .expect("activation template");
+
+        assert!(sHtml.contains("<!-- LOR_THEME_HEADER -->"));
+        assert!(sHtml.contains("action=\"/activate.jsp\""));
+        assert!(sHtml.contains("id=\"activateForm\" class=\"form-horizontal\""));
+        assert!(sHtml.contains("name=\"action\" value=\"new\""));
+        assert!(sHtml.contains("id=\"field_nick\" value=\"alice\""));
+        assert!(sHtml.contains("id=\"field_password\""));
+        assert!(sHtml.contains("id=\"field_code\" value=\"ABC123\""));
+        assert!(sHtml.contains("<div class=\"error\">Ошибка</div>"));
+    }
+
+    #[test]
+    fn authenticated_activation_only_asks_for_the_code() {
+        let Html(sHtml) = render_activation_form("alice", "ABC123", None, "csrf-value", true)
+            .expect("activation template");
+
+        assert!(sHtml.contains("name=\"activation\" required autofocus id=\"field_code\""));
+        assert!(!sHtml.contains("name=\"nick\""));
+        assert!(!sHtml.contains("name=\"passwd\""));
+        assert!(!sHtml.contains("name=\"action\""));
+    }
 }
 
 fn verify_activation_code(
@@ -1856,132 +1911,145 @@ pub async fn addphoto_form(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
-) -> Result<Html<String>> {
-    let Some(user) = user else {
-        return Err(AppError::Forbidden);
-    };
-    vCheckLoadUserpic(&state, &user).await?;
-    Ok(Html(format!(
-        r#"
-<h1>Загрузить userpic для {nick}</h1>
-<form method="post" action="/addphoto.jsp" enctype="multipart/form-data" class="form">
-  <input type="hidden" name="csrf" value="{csrf_token}">
-  <label>Файл PNG/JPEG/WEBP, 50–300 px, до 100 KiB <input type="file" name="file" accept="image/png,image/jpeg,image/webp" required></label>
-  <button type="submit">Загрузить</button>
-</form>
-"#,
-        nick = html_escape::encode_text(&user.nick),
-        csrf_token = html_escape::encode_double_quoted_attribute(&csrf_token),
-    )))
-}
-
-pub async fn upload_userpic(
-    State(state): State<AppState>,
-    CurrentUser(user): CurrentUser,
-    mut multipart: Multipart,
 ) -> Result<Response> {
     let Some(user) = user else {
         return Err(AppError::Forbidden);
     };
     vCheckLoadUserpic(&state, &user).await?;
-    let mut upload: Option<(String, bytes::Bytes)> = None;
+    stRenderAddphoto(user.nick, csrf_token, None, StatusCode::OK)
+}
+
+pub async fn upload_userpic(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+    mut multipart: Multipart,
+) -> Result<Response> {
+    let Some(user) = user else {
+        return Err(AppError::Forbidden);
+    };
+    let cService = CUserpicService::new(
+        CUserpicPgRepository::new(state.pool.clone()),
+        state.config.upload_dir.clone(),
+    );
+    cService.vCheckUpload(user.id).await?;
+    let mut optUpload: Option<bytes::Bytes> = None;
     while let Some(field) = multipart
         .next_field()
         .await
-        .map_err(|e| AppError::BadRequest(format!("ошибка multipart: {e}")))?
+        .map_err(|stError| AppError::BadRequest(format!("ошибка multipart: {stError}")))?
     {
-        let is_file = field.name() == Some("file");
-        let filename = field.file_name().unwrap_or("userpic").to_string();
-        let data = field
+        let bFile = field.name() == Some("file");
+        let arrData = field
             .bytes()
             .await
-            .map_err(|e| AppError::BadRequest(format!("ошибка чтения файла: {e}")))?;
-        if is_file {
-            upload = Some((filename, data));
+            .map_err(|stError| AppError::BadRequest(format!("ошибка чтения файла: {stError}")))?;
+        if bFile {
+            optUpload = Some(arrData);
             break;
         }
     }
-    let (_original_name, bytes) =
-        upload.ok_or_else(|| AppError::BadRequest("изображение не задано".into()))?;
-    let extension = validate_userpic_bytes(&bytes)?;
-    let dir = format!("{}/photos", state.config.upload_dir);
-    tokio::fs::create_dir_all(&dir)
-        .await
-        .map_err(|e| AppError::Anyhow(e.into()))?;
-    // UserpicController uses `<userid>:<signed-random-int>.<extension>`.
-    // Preserve that filename contract because UserpicPermissionInterceptor
-    // derives the owner id from the public URL.
-    let (filename, path) = loop {
-        let filename = format!("{}:{}.{}", user.id, rand::random::<i32>(), extension);
-        let path = format!("{dir}/{filename}");
-        if !tokio::fs::try_exists(&path)
-            .await
-            .map_err(|e| AppError::Anyhow(e.into()))?
-        {
-            break (filename, path);
-        }
+    let Some(arrData) = optUpload else {
+        return stRenderAddphoto(
+            user.nick,
+            csrf_token,
+            Some("изображение не задано".to_owned()),
+            StatusCode::BAD_REQUEST,
+        );
     };
-    tokio::fs::write(&path, &bytes)
-        .await
-        .map_err(|e| AppError::Anyhow(e.into()))?;
-    let mut stTransaction = match state.pool.begin().await {
-        Ok(stTransaction) => stTransaction,
-        Err(stError) => {
-            let _ = tokio::fs::remove_file(&path).await;
-            return Err(stError.into());
-        }
-    };
-    let stPersistResult: Result<()> = async {
-        sqlx::query("UPDATE users SET photo=$2 WHERE id=$1")
-            .bind(user.id)
-            .bind(&filename)
-            .execute(&mut *stTransaction)
-            .await?;
-        crate::audit::log_user_action_tx(
-            &mut stTransaction,
-            user.id,
-            user.id,
-            "set_userpic",
-            &[("new_userpic", filename.as_str())],
-        )
-        .await?;
-        stTransaction.commit().await?;
-        Ok(())
+    if arrData.is_empty() {
+        // `MultipartFile.isEmpty` is handled before Java's try/catch and
+        // therefore keeps the default 200 status while redisplaying the form.
+        return stRenderAddphoto(
+            user.nick,
+            csrf_token,
+            Some("изображение не задано".to_owned()),
+            StatusCode::OK,
+        );
     }
-    .await;
-    if let Err(stError) = stPersistResult {
-        let _ = tokio::fs::remove_file(&path).await;
-        return Err(stError);
+
+    if let Err(stError) = cService.sInstall(user.id, &arrData).await {
+        return match stError {
+            AppError::BadRequest(sMessage) => stRenderAddphoto(
+                user.nick,
+                csrf_token,
+                Some(sMessage),
+                StatusCode::BAD_REQUEST,
+            ),
+            stError => Err(stError),
+        };
     }
+
     Ok(crate::routes::admin::stProfileRedirect(&user.nick))
 }
 
-fn bMayLoadUserpic(
-    iScore: i32,
-    bFrozen: bool,
-    iRecentSetCount: i64,
-    bRecentlyResetByModerator: bool,
-    iRecentScoreLoss: i32,
-) -> bool {
-    !bFrozen
-        && iScore >= 45
-        && iRecentSetCount < 3
-        && !bRecentlyResetByModerator
-        && iRecentScoreLoss < 20
+#[derive(Template)]
+#[template(path = "addphoto.html")]
+struct StAddphotoTemplate {
+    sNick: String,
+    sCsrfToken: String,
+    optError: Option<String>,
+}
+
+fn stRenderAddphoto(
+    sNick: String,
+    sCsrfToken: String,
+    optError: Option<String>,
+    stStatus: StatusCode,
+) -> Result<Response> {
+    let sBody = StAddphotoTemplate {
+        sNick,
+        sCsrfToken,
+        optError,
+    }
+    .render()?;
+    Ok((stStatus, Html(sBody)).into_response())
 }
 
 #[cfg(test)]
-mod userpic_policy_tests {
-    use super::bMayLoadUserpic;
+mod userpic_http_contract_tests {
+    use axum::{body::to_bytes, http::StatusCode};
 
-    #[test]
-    fn java_userpic_thresholds_are_exact() {
-        assert!(bMayLoadUserpic(45, false, 2, false, 19));
-        assert!(!bMayLoadUserpic(44, false, 2, false, 19));
-        assert!(!bMayLoadUserpic(45, true, 2, false, 19));
-        assert!(!bMayLoadUserpic(45, false, 3, false, 19));
-        assert!(!bMayLoadUserpic(45, false, 2, true, 19));
-        assert!(!bMayLoadUserpic(45, false, 2, false, 20));
+    use super::stRenderAddphoto;
+
+    async fn sBody(stResponse: axum::response::Response) -> String {
+        String::from_utf8(
+            to_bytes(stResponse.into_body(), 128 * 1024)
+                .await
+                .expect("addphoto response body")
+                .to_vec(),
+        )
+        .expect("UTF-8 addphoto response")
+    }
+
+    #[tokio::test]
+    async fn empty_multipart_file_redisplays_the_themed_form_with_java_200() {
+        let stResponse = stRenderAddphoto(
+            "JB".to_owned(),
+            "csrf".to_owned(),
+            Some("изображение не задано".to_owned()),
+            StatusCode::OK,
+        )
+        .expect("render empty upload");
+        assert_eq!(stResponse.status(), StatusCode::OK);
+        let sHtml = sBody(stResponse).await;
+        assert!(sHtml.contains("<!-- LOR_THEME_HEADER -->"));
+        assert!(sHtml.contains("Ошибка! изображение не задано"));
+        assert!(sHtml.contains("action=\"addphoto.jsp\""));
+        assert!(sHtml.contains("name=\"file\""));
+    }
+
+    #[tokio::test]
+    async fn rejected_image_redisplays_the_same_form_with_java_400() {
+        let stResponse = stRenderAddphoto(
+            "JB".to_owned(),
+            "csrf".to_owned(),
+            Some("Invalid image".to_owned()),
+            StatusCode::BAD_REQUEST,
+        )
+        .expect("render invalid upload");
+        assert_eq!(stResponse.status(), StatusCode::BAD_REQUEST);
+        assert!(sBody(stResponse).await.contains("Ошибка! Invalid image"));
     }
 }
 
@@ -1991,41 +2059,12 @@ pub(crate) async fn bCanLoadUserpic(
     stState: &AppState,
     stUser: &crate::models::UserSummary,
 ) -> Result<bool> {
-    let (bFrozen, iRecentSetCount, bRecentlyResetByModerator, iRecentScoreLoss): (
-        bool,
-        i64,
-        bool,
-        i32,
-    ) = sqlx::query_as(
-        r#"SELECT COALESCE(u.frozen_until > CURRENT_TIMESTAMP,false),
-                  (SELECT count(*) FROM user_log ul
-                   WHERE ul.userid=u.id
-                     AND ul.action='set_userpic'::user_log_action
-                     AND ul.action_date>CURRENT_TIMESTAMP-interval '1 hour'),
-                  EXISTS(SELECT 1 FROM user_log ul
-                         WHERE ul.userid=u.id
-                           AND ul.action='reset_userpic'::user_log_action
-                           AND ul.action_date>CURRENT_TIMESTAMP-interval '30 days'
-                           AND ul.userid<>ul.action_userid),
-                  abs(COALESCE((SELECT sum(di.bonus) FROM del_info di
-                                WHERE di.deldate>CURRENT_TIMESTAMP-interval '3 days'
-                                  AND di.msgid IN (
-                                    SELECT c.id FROM comments c WHERE c.userid=u.id
-                                    UNION ALL
-                                    SELECT t.id FROM topics t WHERE t.userid=u.id
-                                  )),0))::int
-           FROM users u WHERE u.id=$1"#,
+    CUserpicService::new(
+        CUserpicPgRepository::new(stState.pool.clone()),
+        stState.config.upload_dir.clone(),
     )
-    .bind(stUser.id)
-    .fetch_one(&stState.pool)
-    .await?;
-    Ok(bMayLoadUserpic(
-        stUser.score.unwrap_or(0),
-        bFrozen,
-        iRecentSetCount,
-        bRecentlyResetByModerator,
-        iRecentScoreLoss,
-    ))
+    .bCanUpload(stUser.id)
+    .await
 }
 
 async fn vCheckLoadUserpic(stState: &AppState, stUser: &crate::models::UserSummary) -> Result<()> {
@@ -2033,50 +2072,6 @@ async fn vCheckLoadUserpic(stState: &AppState, stUser: &crate::models::UserSumma
         return Err(AppError::Forbidden);
     }
     Ok(())
-}
-
-fn validate_userpic_bytes(data: &[u8]) -> Result<&'static str> {
-    const MAX_FILE_SIZE: usize = 100 * 1024;
-    const MIN_IMAGE_SIZE: u32 = 50;
-    const MAX_IMAGE_SIZE: u32 = 300;
-    if data.is_empty() {
-        return Err(AppError::BadRequest("изображение не задано".into()));
-    }
-    if data.len() > MAX_FILE_SIZE {
-        return Err(AppError::BadRequest(
-            "Сбой загрузки изображения: слишком большой файл".into(),
-        ));
-    }
-    let format = image::guess_format(data).map_err(|_| {
-        AppError::BadRequest("Сбой загрузки изображения: неизвестный формат".into())
-    })?;
-    let extension =
-        match format {
-            image::ImageFormat::Png => "png",
-            image::ImageFormat::Jpeg => "jpg",
-            image::ImageFormat::WebP => "webp",
-            _ => return Err(AppError::BadRequest(
-                "Сбой загрузки изображения: неподдерживаемый или потенциально анимированный формат"
-                    .into(),
-            )),
-        };
-    let image = crate::image_upload::stDecodeWithLimits(
-        data,
-        format,
-        MAX_IMAGE_SIZE,
-        MAX_IMAGE_SIZE,
-        8 * 1024 * 1024,
-    )
-    .map_err(|e| AppError::BadRequest(format!("Сбой загрузки изображения: {e}")))?;
-    let (width, height) = image.dimensions();
-    if !(MIN_IMAGE_SIZE..=MAX_IMAGE_SIZE).contains(&width)
-        || !(MIN_IMAGE_SIZE..=MAX_IMAGE_SIZE).contains(&height)
-    {
-        return Err(AppError::BadRequest(
-            "Сбой загрузки изображения: недопустимые размеры фотографии".into(),
-        ));
-    }
-    Ok(extension)
 }
 
 #[derive(Template)]

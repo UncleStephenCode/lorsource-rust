@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Активация{% endblock %}
+{% block content %}
+<h1>Активация</h1>
+{% if !bAuthenticated %}
+<form method="post" action="/activate.jsp" id="activateForm" class="form-horizontal">
+  <input type="hidden" name="csrf" value="{{ sCsrfToken }}">
+  {% match optError %}{% when Some with (sError) %}<div class="error">{{ sError }}</div>{% when None %}{% endmatch %}
+  <div class="control-group">
+    <label class="control-label" for="field_nick">Login/Email</label>
+    <div class="controls">
+      <input type="text" name="nick" required autofocus id="field_nick" value="{{ sNick }}">
+      <span class="help-block">Регистр имеет значение! Вместо имени пользователя можно ввести email, указанный при регистрации.</span>
+    </div>
+  </div>
+  <div class="control-group">
+    <label for="field_password" class="control-label">Пароль</label>
+    <div class="controls"><input type="password" name="passwd" required id="field_password"></div>
+  </div>
+  <div class="control-group">
+    <label for="field_code" class="control-label">Код активации</label>
+    <div class="controls"><input type="text" name="activation" required id="field_code" value="{{ sActivation }}"></div>
+  </div>
+  <div class="control-group"><div class="controls"><button type="submit" class="btn btn-primary">Активировать</button></div></div>
+  <input type="hidden" name="action" value="new">
+</form>
+{% else %}
+<form method="post" action="/activate.jsp" id="activateForm">
+  <input type="hidden" name="csrf" value="{{ sCsrfToken }}">
+  {% match optError %}{% when Some with (sError) %}<div class="error">{{ sError }}</div>{% when None %}{% endmatch %}
+  <dl>
+    <dt><label for="field_code">Код активации:</label></dt>
+    <dd><input type="text" name="activation" required autofocus id="field_code" value="{{ sActivation }}"></dd>
+  </dl>
+  <button type="submit">Активировать</button>
+</form>
+{% endif %}
+{% endblock %}

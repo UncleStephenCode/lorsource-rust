@@ -102,6 +102,9 @@ DELETE FROM ignore_list WHERE userid BETWEEN 9100001 AND 9100050 OR ignored BETW
 DELETE FROM user_remarks WHERE user_id BETWEEN 9100001 AND 9100050 OR ref_user_id BETWEEN 9100001 AND 9100050;
 DELETE FROM user_tags WHERE user_id BETWEEN 9100001 AND 9100050;
 DELETE FROM user_settings WHERE id BETWEEN 9100001 AND 9100050;
+DELETE FROM user_log
+ WHERE userid BETWEEN 9100001 AND 9100050
+    OR action_userid BETWEEN 9100001 AND 9100050;
 DELETE FROM users WHERE id BETWEEN 9100001 AND 9100050;
 
 -- Password for every account: Birds-ProdReady-2026
@@ -195,7 +198,7 @@ FROM (VALUES
     (9100006,'waltz','lorcode','50','50','true','true','false','robohash','all','true','false','true'),
     (9100007,'zomg_ponies','markdown','100','25','true','true','true','retro','main','false','false','false'),
     (9100008,'tango-auto','markdown','300','300','true','false','true','identicon','all','false','false','true'),
-    (9100009,'tango-light','markdown','500','500','false','true','true','empty','main','false','false','true'),
+    (9100009,'tango-light','markdown','500','500','true','true','true','empty','main','false','false','true'),
     (9100010,'tango','ntobr','200','200','true','true','false','robohash','all','true','true','false'),
     (9100011,'tango-auto','markdown','100','100','true','true','true','identicon','main','false','false','true'),
     (9100012,'black','lorcode','50','50','true','true','true','retro','all','false','false','true'),

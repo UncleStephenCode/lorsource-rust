@@ -36,7 +36,6 @@
   </script>
   <script>
     (function() {
-      if (!document.documentElement.dataset.style.startsWith('tango')) return;
       var theme = localStorage.getItem('lor-theme');
       if (theme === 'dark' || theme === 'light' || theme === 'auto') {
         document.documentElement.setAttribute('data-theme', theme);

@@ -30,6 +30,24 @@ use axum::{
 };
 use serde_json::json;
 
+#[derive(Template)]
+#[template(path = "legacy_content.html")]
+struct StLegacyContentTemplate {
+    sTitle: String,
+    sContentHtml: String,
+}
+
+/// Wraps legacy controller content in the same base document used by normal
+/// Askama pages. The theme middleware intentionally only replaces hooks in
+/// that document, so returning a bare fragment here would bypass all themes.
+pub(crate) fn sRenderLegacyContent(sTitle: &str, sContentHtml: String) -> Result<String, AppError> {
+    Ok(StLegacyContentTemplate {
+        sTitle: sTitle.to_owned(),
+        sContentHtml,
+    }
+    .render()?)
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(topics::index))
@@ -264,6 +282,10 @@ pub fn router() -> Router<AppState> {
             get(users::remark_form).post(users::save_remark),
         )
         .route(
+            "/people/{nick}/remark/",
+            get(users::remark_form).post(users::save_remark),
+        )
+        .route(
             "/people/{nick}/settings",
             get(users::settings).post(users::save_settings),
         )
@@ -452,4 +474,28 @@ pub async fn not_found(uri: axum::http::Uri) -> Response {
     }
 
     AppError::NotFound.into_response()
+}
+
+#[cfg(test)]
+mod theme_shell_tests {
+    use super::sRenderLegacyContent;
+
+    #[test]
+    fn legacy_browser_content_is_rendered_inside_the_theme_shell() {
+        let sHtml = sRenderLegacyContent(
+            "Проверка <title>",
+            "<h1 id=\"legacy-content\">Проверка</h1>".to_owned(),
+        )
+        .expect("legacy content template");
+
+        assert!(sHtml.starts_with("<!doctype html>"));
+        assert!(sHtml.contains("<!-- LOR_THEME_HEADER -->"));
+        assert!(sHtml.contains("<!-- LOR_THEME_FOOTER -->"));
+        assert!(sHtml.contains("<main id=\"bd\">"));
+        assert!(sHtml.contains("<h1 id=\"legacy-content\">Проверка</h1>"));
+        // Askama 0.16's HTML escaper uses numeric entities for angle
+        // brackets.  Assert the exact safe output so a raw nested `<title>`
+        // can never slip into the themed legacy shell.
+        assert!(sHtml.contains("<title>Проверка &#60;title&#62;</title>"));
+    }
 }

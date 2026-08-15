@@ -16,4 +16,5 @@ pub mod topic_options_repository;
 pub mod topic_repository;
 pub mod user_account_repository;
 pub mod user_moderation_repository;
+pub mod userpic_repository;
 pub mod warning_repository;

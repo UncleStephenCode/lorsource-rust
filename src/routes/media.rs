@@ -28,18 +28,20 @@ fn bAllowedUploadFilename(sFilename: &str) -> bool {
         && matches!(
             FsPath::new(sFilename)
                 .extension()
-                .and_then(|stExtension| stExtension.to_str()),
+                .and_then(|stExtension| stExtension.to_str())
+                .map(str::to_ascii_lowercase)
+                .as_deref(),
             Some("jpg" | "jpeg" | "png" | "gif" | "webp")
         )
 }
 
 fn bAllowedTopicImageFilename(sFilename: &str) -> bool {
     bAllowedUploadFilename(sFilename)
-        && !matches!(
+        && matches!(
             FsPath::new(sFilename)
                 .extension()
                 .and_then(|stExtension| stExtension.to_str()),
-            Some("jpeg" | "webp")
+            Some("jpg" | "png" | "gif")
         )
 }
 
@@ -57,10 +59,11 @@ async fn stServeUpload(pathFile: PathBuf) -> Result<Response> {
     if !bAllowedUploadFilename(sFilename) {
         return Err(AppError::NotFound);
     }
-    let sContentType = match pathFile
+    let optExtension = pathFile
         .extension()
         .and_then(|stExtension| stExtension.to_str())
-    {
+        .map(str::to_ascii_lowercase);
+    let sContentType = match optExtension.as_deref() {
         Some("jpg" | "jpeg") => "image/jpeg",
         Some("png") => "image/png",
         Some("gif") => "image/gif",
@@ -242,6 +245,7 @@ mod tests {
             assert!(!bAllowedTopicImageFilename(sRejected), "{sRejected}");
         }
         assert!(bAllowedUploadFilename("42:123.webp"));
+        assert!(bAllowedUploadFilename("42:-123.PNG"));
     }
 
     #[test]
