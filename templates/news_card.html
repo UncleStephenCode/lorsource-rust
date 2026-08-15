@@ -1,7 +1,7 @@
 {% if !t.minor %}<article class="news" id="topic-{{ t.topic.id }}">
   <header>
     {% if t.show_group %}<div class="group"><a href="/{{ t.topic.section_prefix }}/">{{ t.topic.section_name }}</a> — <a href="/{{ t.topic.section_prefix }}/{{ t.topic.group_urlname }}">{{ t.topic.group_title }}</a>{% if t.pending %} <span>(не подтверждено)</span>{% endif %}</div>{% endif %}
-    <h1>{% if t.topic.resolved.unwrap_or(false) %}<i class="icon-check" title="решено"></i>{% endif %}<a href="{{ t.topic.topic_url() }}">{{ t.topic.title }}</a></h1>
+    <h1>{% if t.topic.resolved.unwrap_or(false) %}<i class="icon-check" title="решено"></i>{% endif %}<a href="{{ t.topic.topic_url() }}">{{ t.topic.sTitlePlain() }}</a></h1>
     {% if t.tags.len() > 0 %}<p class="tags"><i class="icon-tag"></i>&nbsp;{% for tag in t.tags %}<a class="tag" href="{{ tag.url }}">{{ tag.value }}</a>{% if !loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
   </header>
   {{ t.images_html|safe }}
@@ -12,17 +12,18 @@
       {% match t.topic.url %}{% when Some with (url) %}<p>&gt;&gt;&gt; <a href="{{ url }}">{{ t.linktext }}</a> ({{ t.short_host }})</p>{% when None %}{% endmatch %}
       {% match t.poll %}{% when Some with (p) %}{% include "poll_view.html" %}{% when None %}{% endmatch %}
     </div>
-    <div class="sign"><a href="/people/{{ t.topic.author }}/profile">{{ t.topic.author }}</a> (<time data-format="default" datetime="{{ t.topic.postdate.to_rfc3339() }}">{{ t.topic.postdate }}</time>)</div>
+    <div class="sign">{% if t.author_blocked %}<s>{% endif %}{% if t.author_link %}<a itemprop="creator" href="{{ t.author_profile_url }}">{{ t.topic.author }}</a>{% else %}{{ t.topic.author }}{% endif %}{% if t.author_blocked %}</s>{% endif %}<br class="visible-phone"> <span class="hideon-phone">(</span><time data-format="default" datetime="{{ t.sign_date.to_rfc3339() }}" {% if t.section_premoderated && t.committed %}itemprop="datePublished"{% else %}itemprop="dateCreated"{% endif %}>{{ t.sign_date }}</time><span class="hideon-phone">)</span>{% match t.author_remark %}{% when Some with (remark) %}<span class="user-remark">{{ remark }}</span>{% when None %}{% endmatch %}</div>
     <div class="nav">
       {% if t.moderate_mode %}
         {% if t.can_commit %}[<a href="/commit.jsp?msgid={{ t.topic.id }}">Подтвердить</a>]{% endif %}
         {% if t.can_delete %}[<a href="/delete.jsp?msgid={{ t.topic.id }}">Удалить</a>]{% endif %}
         {% if t.can_edit %}[<a href="/edit.jsp?msgid={{ t.topic.id }}">Править</a>]{% endif %}
-        {% if t.topic.comments > 0 %}<a href="{{ t.topic.topic_url() }}#comments">{{ t.topic.comments }} комментариев</a>{% endif %}
+        {% if t.show_comments && t.topic.comments > 0 %}<a href="{{ t.topic.topic_url() }}#comments">{{ t.topic.comments }} комментариев</a>{% endif %}
       {% else %}
-        {% if t.topic.comments == 0 %}{% if t.can_comment %}<a href="comment-message.jsp?topic={{ t.topic.id }}">Добавить&nbsp;комментарий</a>{% endif %}{% else %}<a href="{{ t.topic.topic_url() }}#comments">{{ t.topic.comments }} комментариев</a>{% endif %}
+        {% if t.topic.comments == 0 %}{% if t.can_comment %}<a href="comment-message.jsp?topic={{ t.topic.id }}">Добавить&nbsp;комментарий</a>{% endif %}{% else %}{% if t.show_comments %}<a href="{{ t.topic.topic_url() }}#comments">{{ t.topic.comments }} комментариев</a>{% endif %}{% endif %}
+        {% if t.draft %}{% if t.can_delete %}[<a href="delete.jsp?msgid={{ t.topic.id }}">Удалить</a>]{% endif %}{% if t.can_edit %}[<a href="edit.jsp?msgid={{ t.topic.id }}">Править</a>]{% endif %}{% endif %}
       {% endif %}
     </div>
   </div>
 </article>
-{% else %}<article class="infoblock mini-news" id="topic-{{ t.topic.id }}"><a href="{{ t.topic.topic_url() }}">{{ t.topic.title }}</a>{% if t.show_group && t.pending %} <span>(не подтверждено)</span>{% endif %}{% if t.topic.comments > 0 %} (<a href="{{ t.topic.topic_url() }}#comments">{{ t.topic.comments }} комментариев</a>){% endif %}</article>{% endif %}
+{% else %}<article class="infoblock mini-news" id="topic-{{ t.topic.id }}"><a href="{{ t.topic.topic_url() }}">{{ t.topic.sTitlePlain() }}</a>{% if t.show_group && t.pending %} <span>(не подтверждено)</span>{% endif %}{% if t.show_comments && t.topic.comments > 0 %} (<a href="{{ t.topic.topic_url() }}#comments">{{ t.topic.comments }} комментариев</a>){% endif %}</article>{% endif %}

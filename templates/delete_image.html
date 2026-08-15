@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Удаление изображения{% endblock %}
+{% block content %}
+<h1>Удаление изображения</h1>
+
+<div class="medium-image-container" style="max-width: {{ max_width }}px; max-height: 90vh; width: min(var(--image-width), calc(90vh * {{ medium_width }} / {{ medium_height }}))">
+  <figure class="medium-image" style="position: relative; padding-bottom: {{ padding }}%; padding-bottom: min({{ padding }}%, 90vh); margin: 0">
+    {% if linked %}<a href="{{ original_url }}" itemprop="contentURL">{% endif %}
+      <img itemprop="thumbnail" class="medium-image" src="{{ medium_url }}" alt="" srcset="{{ srcset }}" sizes="100vw" style="position: absolute; max-height: 90vh" width="{{ medium_width }}" height="{{ medium_height }}">
+    {% if linked %}</a>{% endif %}
+    <meta itemprop="caption" content="{{ topic_title }}">
+  </figure>
+</div>
+
+<form method="POST" action="/delete_image">
+  <input type="hidden" name="csrf" value="{{ csrf_token }}">
+  <input type="hidden" name="id" value="{{ image_id }}">
+
+  <input type="submit" class="btn btn-danger" value="Удалить">
+</form>
+{% endblock %}

@@ -23,7 +23,20 @@ pub struct StTopicSummary {
     pub tags: Option<String>,
 }
 
+/// Main-page metadata which is intentionally absent from ordinary topic-list
+/// rows.  The original controller needs `minor` only while splitting its one
+/// commit-date-ordered result into full cards and the brief tail.
+#[derive(Debug, Clone)]
+pub struct StMainTopicSummary {
+    pub stTopic: StTopicSummary,
+    pub bMinor: bool,
+}
+
 impl StTopicSummary {
+    pub fn sTitlePlain(&self) -> String {
+        crate::domain::title::sTopicTitlePlainForDisplay(&self.title)
+    }
+
     pub fn sTopicUrl(&self) -> String {
         format!(
             "/{}/{}/{}",
@@ -63,6 +76,14 @@ pub struct StTopicDetail {
     pub lastmod: Option<DateTime<Utc>>,
     pub author_id: i32,
     pub author: String,
+    #[serde(skip)]
+    pub author_score: i32,
+    #[serde(skip)]
+    pub author_blocked: bool,
+    #[serde(skip)]
+    pub author_anonymous: bool,
+    #[serde(skip)]
+    pub author_frozen: bool,
     pub group_id: i32,
     pub group_title: String,
     pub group_urlname: String,
@@ -85,7 +106,80 @@ pub struct StRssContext {
     pub optGroupTitle: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StRssTag {
+    pub sName: String,
+    pub iCounter: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StRssImage {
+    pub iId: i32,
+    pub sExtension: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StRssPollVariant {
+    pub sLabel: String,
+    pub iVotes: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StRssPoll {
+    pub bMultiSelect: bool,
+    pub iVoterCount: i64,
+    pub vecVariants: Vec<StRssPollVariant>,
+}
+
+/// Complete source data needed by `message-rss.tag`.
+///
+/// `sStoredTitle` deliberately remains in Java's HTML-escaped database form.
+/// The RSS item title escapes that stored value once more, exactly like
+/// `${fn:escapeXml(msg.message.title)}` in the original JSP.
+#[derive(Debug, Clone)]
+pub struct StRssTopic {
+    pub iId: i32,
+    pub sStoredTitle: String,
+    pub dtPublished: DateTime<Utc>,
+    pub dtLastModified: DateTime<Utc>,
+    pub sAuthorNick: String,
+    pub sGroupUrlName: String,
+    pub sSectionPrefix: String,
+    pub sMessage: String,
+    pub sMarkup: String,
+    pub bImagePost: bool,
+    pub bImagesAllowed: bool,
+    pub bPollPostAllowed: bool,
+    pub bNofollow: bool,
+    pub vecTags: Vec<StRssTag>,
+    pub vecImages: Vec<StRssImage>,
+    pub optPoll: Option<StRssPoll>,
+}
+
+impl StRssTopic {
+    pub fn sTopicUrl(&self) -> String {
+        format!(
+            "/{}/{}/{}",
+            self.sSectionPrefix, self.sGroupUrlName, self.iId
+        )
+    }
+}
+
 impl StTopicDetail {
+    pub fn bNofollowAuthorLinks(&self) -> bool {
+        !crate::domain::topic::link_policy::StAuthorLinkState {
+            iScore: self.author_score,
+            bBlocked: self.author_blocked,
+            bAnonymous: self.author_anonymous,
+            bFrozen: self.author_frozen,
+        }
+        .bFollowInTopic(self.moderate)
+    }
+
+    pub fn sTitlePlain(&self) -> String {
+        crate::domain::title::sTopicTitlePlainForDisplay(&self.title)
+    }
+
     pub fn sTopicUrl(&self) -> String {
         format!(
             "/{}/{}/{}",

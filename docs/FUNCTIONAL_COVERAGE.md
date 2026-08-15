@@ -2,13 +2,14 @@
 
 This report distinguishes route declaration coverage from functional handler coverage. `ROUTE_COVERAGE.md` answers whether old URLs exist; this file tracks routes still deliberately mapped to placeholders or broad stubs.
 
-Total Rust route declarations: **159**
+The route declaration total is generated from the current tree and is not
+duplicated here. See `docs/generated/rust_routes.json` and the current CI
+artifact instead of relying on a hand-maintained number.
 Routes still mapped to `legacy::not_implemented`: **0**
 Routes still mapped to `stub_admin`: **0**
 
-The current router is compiled against Axum 0.8.9 and uses `{parameter}` for
-all dynamic paths. The 193-variant Java structural inventory remains at zero
-missing declarations after that migration.
+The current router uses `{parameter}` for all dynamic paths. Structural
+coverage is recalculated in CI; it does not establish behavioral parity.
 
 ## v4 implementation notes
 

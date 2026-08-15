@@ -1,0 +1,22 @@
+{% match sLink %}
+{% when Some with (sLink) %}
+<h2><a href="{{ sLink }}">{{ sName }}</a></h2>
+{% when None %}
+<h2>{{ sName }}</h2>
+{% endmatch %}
+
+<div class="boxlet_content">
+  {{ sDescription }}:
+  <ul>
+    {% for item in vecItems %}
+    <li>
+      <a href="{{ item.sMessageUrl }}">{{ item.sTitle }}</a>
+      {% match item.optLastPageUrl %}
+      {% when Some with (sLastPageUrl) %}
+      (стр.&nbsp;<a href="{{ sLastPageUrl }}">{{ item.iPages }}</a>)
+      {% when None %}{% endmatch %}
+      ({{ item.iCommentCount }})
+    </li>
+    {% endfor %}
+  </ul>
+</div>

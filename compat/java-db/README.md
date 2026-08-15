@@ -22,6 +22,24 @@ schemas. `bootstrap` also becomes validate-only when it detects a Java database;
 it does not run `liquibase:update` there. Updating a real Java database remains
 an explicit Java/Liquibase operator operation outside application startup.
 
+The application additionally runs a bounded, read-only `pg_catalog` validator
+over the canonical 33 tables, 15 sequences and 12 retained functions. The
+checked-in `schema-objects-contract.tsv` verifies required constraints,
+defaults, index/function/trigger definitions, sequence parameters and
+ownership links, and the minimum effective `linuxweb` grants. Additional
+operator-created objects and different migration-owner role names are logged
+as fingerprint drift rather than treated as proof of incompatibility.
+
+For an *exact* regeneration check on a fresh disposable canonical bootstrap:
+
+```bash
+JAVA_DATABASE_RUNTIME_URL=postgres://linuxweb:linuxweb@localhost:5432/lor \
+  bash compat/java-db/check-schema-object-contract.sh
+```
+
+That command performs catalog reads only. Exact equality is CI/provenance
+evidence, not the more permissive production startup policy.
+
 The bootstrap confirmation permits creating missing roles and the `lor`
 database, changing ownership of an existing *empty* target database, loading
 the demo fixture, and applying the vendored chain. It never drops a database,
@@ -41,4 +59,3 @@ Environment variables and their development defaults:
 Passwords and URLs above are development-only. Production operators must
 provide secret-managed values. The runtime role is `linuxweb`; it is expected
 not to have `SELECT` on `databasechangelog`.
-

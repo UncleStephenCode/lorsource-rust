@@ -16,7 +16,7 @@
     {% for item in comments %}
       <tr>
         <td>{{ item.group_title }}</td>
-        <td>{% if item.topic_deleted %}<s>{% endif %}{% if item.comment_deleted %}<a href="/view-deleted?id={{ item.comment_id }}#comment-{{ item.comment_id }}">{{ item.topic_title }}</a>{% else %}<a href="/jump-message.jsp?msgid={{ item.topic_id }}&amp;cid={{ item.comment_id }}">{{ item.topic_title }}</a>{% endif %}{% if item.topic_deleted %}</s>{% endif %}</td>
+        <td>{% if item.topic_deleted %}<s>{% endif %}{% if item.comment_deleted %}<a href="/view-deleted?id={{ item.comment_id }}#comment-{{ item.comment_id }}">{{ item.sTopicTitlePlain() }}</a>{% else %}<a href="/jump-message.jsp?msgid={{ item.topic_id }}&amp;cid={{ item.comment_id }}">{{ item.sTopicTitlePlain() }}</a>{% endif %}{% if item.topic_deleted %}</s>{% endif %}</td>
         <td>{% match item.reason %}{% when Some with (reason) %}{{ reason }}{% when None %}{% endmatch %}</td>
         <td>{{ item.bonus }}</td>
         <td>{% match item.delete_date %}{% when Some with (date) %}<time data-format="interval" datetime="{{ date.to_rfc3339() }}">{{ date }}</time>{% when None %}{% endmatch %}</td>

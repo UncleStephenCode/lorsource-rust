@@ -9,6 +9,7 @@ use crate::{
     models::UserSummary,
 };
 
+pub mod account;
 pub mod statistics;
 
 const I_CORRECTOR_SCORE: i32 = 200;

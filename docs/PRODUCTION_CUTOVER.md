@@ -15,7 +15,7 @@ schema at startup.
   `SMTP_HELO_NAME`; these are now parsed by the central production
   configuration instead of being read lazily on first delivery;
 - a valid crash-report recipient in `ADMIN_EMAIL`;
-- a `SITE_SECRET` value of at least 32 bytes;
+- the existing Java `Secret` mounted as `SITE_SECRET` (and at least 32 bytes);
 - `PUBLIC_URL=https://...`, matching `WS_URL=wss://.../`;
 - the exact reverse-proxy CIDRs in `TRUSTED_PROXY_CIDRS`;
 - `LOR_ENV=production` and `ENABLE_DEV_BYPASSES=false`;
@@ -28,6 +28,10 @@ in retained logs as a credential incident and rotate the token before cutover.
 
 The process fails closed on missing/insecure production configuration and on a
 database that does not match the vendored Java/Liquibase contract.
+Do not generate a new `SITE_SECRET` for cutover: Java uses the same `Secret`
+for remember-me signatures and activation/reset tokens, and the Rust port
+intentionally preserves that contract.  Rotate it only as a separately planned
+session/token invalidation after migration.
 Release images are built with `cargo build --release --locked`; a changed or
 incomplete `Cargo.lock` therefore fails the image build instead of silently
 changing the dependency graph.

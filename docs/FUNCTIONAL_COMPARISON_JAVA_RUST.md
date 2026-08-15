@@ -6,16 +6,18 @@ The original archive is the current lorsource Scala/Spring MVC codebase with JSP
 
 ## Automated inventory
 
-| Area | Original | Rust port v4 | Status |
-|---|---:|---:|---|
-| Expanded Spring endpoint variants | 193 | — | Source of truth |
-| Axum route declarations | — | 159 | Some Axum routes cover several Spring handlers via method/parameter aggregation |
-| Fully declared path/method variants | 113/193 | 113/193 | Exact declared-method overlap |
-| Spring `ANY` variants with a concrete Rust method | 80/193 | 80/193 | Reported separately; not a semantic mismatch by itself |
-| Missing route declarations | 0 | 0 | Structural coverage only |
-| `legacy::not_implemented` routes | — | 0 | Removed in v4 |
-| Active original demo tables | 20 | 20 | Covered by migrations |
-| Original `monthly_stats` columns | 5 | 5 | Fixed in v4 |
+This document spans several historical port iterations, so fixed route and
+test totals are intentionally not duplicated here. The current normalized
+path/method inventory is [`ROUTE_COVERAGE.md`](ROUTE_COVERAGE.md), generated
+from both source trees by `scripts/run-compatibility-suite.sh`. It reports
+declared-method and partial/unrestricted-method coverage separately; neither a
+zero-missing result nor equal route counts prove parameter, authorization,
+HTML, database or side-effect parity.
+
+The v4 database notes below refer to the then-active demo-schema comparison.
+Current Java/Liquibase database evidence is tracked separately in
+[`DATABASE_COMPATIBILITY.md`](DATABASE_COMPATIBILITY.md) and must be validated
+against a named production clone before cutover.
 
 Generated files:
 

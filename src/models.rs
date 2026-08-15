@@ -10,5 +10,4 @@ pub type UserSummary = crate::domain::user::model::StUserSummary;
 pub type TopicSummary = crate::domain::topic::model::StTopicSummary;
 pub type TopicDetail = crate::domain::topic::model::StTopicDetail;
 pub type CommentItem = crate::domain::comment::model::StCommentItem;
-pub type TagItem = crate::domain::tag::model::StTagItem;
 pub type PagerQuery = crate::domain::common::model::StPagerQuery;

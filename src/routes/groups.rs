@@ -66,6 +66,15 @@ struct GroupTopicActivityRow {
     postscore: i32,
 }
 
+// SectionController.NonTech in the original.  GroupDao returns groups by id;
+// forum.jsp preserves that order inside each partition, while the quick-jump
+// list uses SectionController.groupsSorted (technical first, then these ids).
+const VEC_NON_TECH_GROUP_IDS: [i32; 4] = [8404, 4068, 9326, 19405];
+
+fn bNonTechGroup(iGroupId: i32) -> bool {
+    VEC_NON_TECH_GROUP_IDS.contains(&iGroupId)
+}
+
 async fn vecPrepareGroupTopics(
     stState: &AppState,
     vecTopics: Vec<TopicSummary>,
@@ -141,7 +150,7 @@ pub async fn forum_index(State(state): State<AppState>) -> Result<Html<String>> 
     let groups = forum_service(&state).vecListForumGroups().await?;
     let (other, tech): (Vec<_>, Vec<_>) = groups
         .into_iter()
-        .partition(|group| [8404, 4068, 9326, 19405].contains(&group.id));
+        .partition(|group| bNonTechGroup(group.id));
     Ok(Html(
         GroupsTemplate {
             title: "Форум".into(),
@@ -241,7 +250,19 @@ pub async fn group_page(
         user.as_ref().map(|u| u.id)
     };
 
-    let limit = state.config.page_size.max(1);
+    // GroupListDao uses the current viewer profile, including the anonymous
+    // DefaultProfile, rather than the process-wide PAGE_SIZE setting.
+    let stProfile = if let Some(stUser) = user.as_ref() {
+        let optSettings: Option<String> =
+            sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
+                .bind(stUser.id)
+                .fetch_optional(&state.pool)
+                .await?;
+        crate::profile::ProfileSettings::from_hstore_text(optSettings)
+    } else {
+        crate::profile::ProfileSettings::default()
+    };
+    let limit = i64::from(stProfile.topics);
     let lastmod = q.lastmod.unwrap_or(false);
 
     let order_by = if lastmod {
@@ -311,6 +332,7 @@ pub async fn group_page(
         .bind(ignore_user_id)
         .fetch_all(&state.pool)
         .await?;
+    let main_topics_count = topics.len();
 
     if offset == 0 && !lastmod {
         let sticky_sql = r#"SELECT t.id, t.title, t.url, t.postdate, t.lastmod, u.id AS author_id, u.nick AS author,
@@ -339,16 +361,6 @@ pub async fn group_page(
         topics = sticky;
     }
 
-    let stProfile = if let Some(stUser) = user.as_ref() {
-        let optSettings: Option<String> =
-            sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
-                .bind(stUser.id)
-                .fetch_optional(&state.pool)
-                .await?;
-        crate::profile::ProfileSettings::from_hstore_text(optSettings)
-    } else {
-        crate::profile::ProfileSettings::default()
-    };
     let topics =
         vecPrepareGroupTopics(&state, topics, ignore_user_id, stProfile.messages, lastmod).await?;
 
@@ -384,8 +396,9 @@ pub async fn group_page(
         }
         url
     });
-    let quick_groups = list_groups_by_section(&state, Some("forum"))
-        .await?
+    let mut vecQuickGroups = list_groups_by_section(&state, Some("forum")).await?;
+    vecQuickGroups.sort_by_key(|stGroup| (bNonTechGroup(stGroup.id), stGroup.id));
+    let quick_groups = vecQuickGroups
         .into_iter()
         .map(|item| crate::routes::topics::QuickGroupLink {
             title: item.title,
@@ -399,10 +412,6 @@ pub async fn group_page(
             selected: item.id == group_id,
         })
         .collect();
-    let non_sticky_count = topics
-        .iter()
-        .filter(|stTopic| !stTopic.topic.sticky)
-        .count() as i64;
     let prev_url = (offset > 0).then(|| {
         group_mode_url(
             &group_urlname,
@@ -412,7 +421,7 @@ pub async fn group_page(
             show_ignored,
         )
     });
-    let next_url = (non_sticky_count >= limit).then(|| {
+    let next_url = bGroupHasNext(offset, main_topics_count, limit).then(|| {
         group_mode_url(
             &group_urlname,
             lastmod,
@@ -445,6 +454,10 @@ pub async fn group_page(
         .render()?,
     )
     .into_response())
+}
+
+fn bGroupHasNext(iOffset: i64, iMainTopicCount: usize, iTopicsPerPage: i64) -> bool {
+    iOffset < MAX_GROUP_OFFSET && iMainTopicCount as i64 == iTopicsPerPage
 }
 
 fn optPreparedGroupLongInfo(optSource: Option<&str>) -> Option<String> {
@@ -530,10 +543,6 @@ pub async fn group_archive(
     ))
 }
 
-pub async fn list_groups(state: &AppState) -> Result<Vec<Group>> {
-    forum_service(state).vecListGroups().await
-}
-
 pub async fn find_group_by_section(
     state: &AppState,
     section_prefix: &str,
@@ -563,7 +572,13 @@ fn forum_service(state: &AppState) -> CForumService<CForumPgRepository> {
 
 #[cfg(test)]
 mod tests {
-    use super::optPreparedGroupLongInfo;
+    use super::{
+        GroupTopicView, GroupTopicsTemplate, bGroupHasNext, bNonTechGroup, group_mode_url,
+        optPreparedGroupLongInfo,
+    };
+    use crate::models::{Group, TopicSummary};
+    use askama::Template;
+    use chrono::{TimeZone, Utc};
 
     #[test]
     fn group_longinfo_is_rendered_as_sanitized_markdown() {
@@ -574,5 +589,110 @@ mod tests {
         assert!(sHtml.contains("<strong>важно</strong>"));
         assert!(!sHtml.contains("<script"));
         assert!(!sHtml.contains("javascript:"));
+    }
+
+    #[test]
+    fn group_next_link_uses_viewer_page_size_and_java_offset_ceiling() {
+        assert!(bGroupHasNext(250, 50, 50));
+        assert!(!bGroupHasNext(250, 49, 50));
+        assert!(!bGroupHasNext(300, 50, 50));
+    }
+
+    #[test]
+    fn forum_group_partition_and_quick_jump_match_section_controller() {
+        assert!(!bNonTechGroup(126));
+        assert!(bNonTechGroup(4068));
+        assert!(bNonTechGroup(8404));
+        assert!(bNonTechGroup(9326));
+
+        let mut vecGroupIds = [8404, 9326, 1339, 4068, 126];
+        vecGroupIds.sort_by_key(|iGroupId| (bNonTechGroup(*iGroupId), *iGroupId));
+        assert_eq!(vecGroupIds, [126, 1339, 4068, 8404, 9326]);
+    }
+
+    #[test]
+    fn group_pager_keeps_activity_tag_and_ignore_parameters() {
+        assert_eq!(
+            group_mode_url("linux-hardware", true, Some("tag=usb%20c"), Some(100), true,),
+            "/forum/linux-hardware?lastmod=true&tag=usb%20c&showignored=true&offset=100"
+        );
+    }
+
+    #[test]
+    fn forum_group_uses_group_rows_instead_of_tracker_rows() {
+        let dtPostdate = Utc.with_ymd_and_hms(2026, 8, 14, 12, 0, 0).unwrap();
+        let stGroup = Group {
+            id: 4068,
+            title: "General".to_owned(),
+            urlname: "general".to_owned(),
+            section: 2,
+            section_name: "Форум".to_owned(),
+            section_prefix: "forum".to_owned(),
+            info: None,
+            longinfo: None,
+            topics: 1,
+            topics_per_day: 1,
+        };
+        let stTopic = TopicSummary {
+            id: 42,
+            title: "Тестовая тема".to_owned(),
+            url: None,
+            postdate: dtPostdate,
+            lastmod: Some(dtPostdate),
+            author_id: 1,
+            author: "author".to_owned(),
+            group_id: stGroup.id,
+            group_title: stGroup.title.clone(),
+            group_urlname: stGroup.urlname.clone(),
+            section_id: stGroup.section,
+            section_name: stGroup.section_name.clone(),
+            section_prefix: stGroup.section_prefix.clone(),
+            comments: 3,
+            deleted: false,
+            sticky: false,
+            resolved: None,
+            tags: Some("rust,lor".to_owned()),
+        };
+        let sHtml = GroupTopicsTemplate {
+            title: "Форум — General".to_owned(),
+            group: stGroup,
+            longinfo_html: None,
+            topics: vec![GroupTopicView {
+                topic: stTopic,
+                last_author: "commenter".to_owned(),
+                last_postdate: dtPostdate,
+                target_url: "/forum/general/42".to_owned(),
+                comments: 3,
+                comments_closed: false,
+            }],
+            quick_groups: Vec::new(),
+            new_url: "/forum/general".to_owned(),
+            active_url: "/forum/general?lastmod=true".to_owned(),
+            archive_url: "/forum/general/archive".to_owned(),
+            add_url: None,
+            add_reason: "forbidden".to_owned(),
+            lastmod: false,
+            prev_url: None,
+            next_url: None,
+            is_moderator: false,
+        }
+        .render()
+        .expect("group template renders");
+
+        assert!(sHtml.contains("class=\"tracker\""));
+        assert!(sHtml.contains("href=\"/forum/general/42\" class=\"group-item\""));
+        for sClass in [
+            "tracker-count",
+            "tracker-title",
+            "tracker-tags",
+            "tracker-last",
+        ] {
+            assert!(
+                sHtml.contains(&format!("class=\"{sClass}\"")),
+                "missing original group row cell: {sClass}"
+            );
+        }
+        assert!(!sHtml.contains("class=\"tracker-item\""));
+        assert!(!sHtml.contains("class=\"tracker-src\""));
     }
 }

@@ -40,42 +40,42 @@ $$;
 CREATE TEMP TABLE prod_ready_owned_topics ON COMMIT DROP AS
 SELECT id FROM topics
  WHERE id BETWEEN 9101001 AND 9101099
-    OR userid BETWEEN 9100001 AND 9100014;
+    OR userid BETWEEN 9100001 AND 9100050;
 ALTER TABLE prod_ready_owned_topics ADD PRIMARY KEY (id);
 CREATE TEMP TABLE prod_ready_owned_comments ON COMMIT DROP AS
 SELECT id FROM comments
  WHERE id BETWEEN 9102001 AND 9102099
     OR topic IN (SELECT id FROM prod_ready_owned_topics)
-    OR userid BETWEEN 9100001 AND 9100014;
+    OR userid BETWEEN 9100001 AND 9100050;
 ALTER TABLE prod_ready_owned_comments ADD PRIMARY KEY (id);
 
 DELETE FROM user_events
  WHERE message_id IN (SELECT id FROM prod_ready_owned_topics)
     OR comment_id IN (SELECT id FROM prod_ready_owned_comments)
-    OR userid BETWEEN 9100001 AND 9100014
-    OR origin_user BETWEEN 9100001 AND 9100014;
+    OR userid BETWEEN 9100001 AND 9100050
+    OR origin_user BETWEEN 9100001 AND 9100050;
 DELETE FROM reactions_log
  WHERE topic_id IN (SELECT id FROM prod_ready_owned_topics)
     OR comment_id IN (SELECT id FROM prod_ready_owned_comments)
-    OR origin_user BETWEEN 9100001 AND 9100014;
+    OR origin_user BETWEEN 9100001 AND 9100050;
 DELETE FROM message_warnings
  WHERE topic IN (SELECT id FROM prod_ready_owned_topics)
     OR comment IN (SELECT id FROM prod_ready_owned_comments)
-    OR author BETWEEN 9100001 AND 9100014
-    OR closed_by BETWEEN 9100001 AND 9100014;
+    OR author BETWEEN 9100001 AND 9100050
+    OR closed_by BETWEEN 9100001 AND 9100050;
 DELETE FROM edit_info
  WHERE msgid IN (SELECT id FROM prod_ready_owned_topics)
     OR msgid IN (SELECT id FROM prod_ready_owned_comments)
-    OR editor BETWEEN 9100001 AND 9100014;
+    OR editor BETWEEN 9100001 AND 9100050;
 DELETE FROM del_info
  WHERE msgid IN (SELECT id FROM prod_ready_owned_topics)
     OR msgid IN (SELECT id FROM prod_ready_owned_comments)
-    OR delby BETWEEN 9100001 AND 9100014;
+    OR delby BETWEEN 9100001 AND 9100050;
 DELETE FROM telegram_posts
  WHERE topic_id IN (SELECT id FROM prod_ready_owned_topics);
 DELETE FROM topic_users_notified
  WHERE topic IN (SELECT id FROM prod_ready_owned_topics)
-    OR userid BETWEEN 9100001 AND 9100014;
+    OR userid BETWEEN 9100001 AND 9100050;
 DELETE FROM vote_users
  WHERE vote BETWEEN 9103001 AND 9103099
     OR vote IN (SELECT id FROM polls WHERE topic IN (SELECT id FROM prod_ready_owned_topics));
@@ -90,7 +90,7 @@ DELETE FROM images
     OR topic IN (SELECT id FROM prod_ready_owned_topics);
 DELETE FROM memories
  WHERE topic IN (SELECT id FROM prod_ready_owned_topics)
-    OR userid BETWEEN 9100001 AND 9100014;
+    OR userid BETWEEN 9100001 AND 9100050;
 DELETE FROM tags WHERE msgid IN (SELECT id FROM prod_ready_owned_topics);
 DELETE FROM comments WHERE id IN (SELECT id FROM prod_ready_owned_comments);
 DELETE FROM topics WHERE id IN (SELECT id FROM prod_ready_owned_topics);
@@ -98,11 +98,11 @@ DELETE FROM msgbase
  WHERE id IN (SELECT id FROM prod_ready_owned_topics)
     OR id IN (SELECT id FROM prod_ready_owned_comments)
     OR id BETWEEN 9101001 AND 9102099;
-DELETE FROM ignore_list WHERE userid BETWEEN 9100001 AND 9100014 OR ignored BETWEEN 9100001 AND 9100014;
-DELETE FROM user_remarks WHERE user_id BETWEEN 9100001 AND 9100014 OR ref_user_id BETWEEN 9100001 AND 9100014;
-DELETE FROM user_tags WHERE user_id BETWEEN 9100001 AND 9100014;
-DELETE FROM user_settings WHERE id BETWEEN 9100001 AND 9100014;
-DELETE FROM users WHERE id BETWEEN 9100001 AND 9100014;
+DELETE FROM ignore_list WHERE userid BETWEEN 9100001 AND 9100050 OR ignored BETWEEN 9100001 AND 9100050;
+DELETE FROM user_remarks WHERE user_id BETWEEN 9100001 AND 9100050 OR ref_user_id BETWEEN 9100001 AND 9100050;
+DELETE FROM user_tags WHERE user_id BETWEEN 9100001 AND 9100050;
+DELETE FROM user_settings WHERE id BETWEEN 9100001 AND 9100050;
+DELETE FROM users WHERE id BETWEEN 9100001 AND 9100050;
 
 -- Password for every account: Birds-ProdReady-2026
 INSERT INTO users (
@@ -119,7 +119,7 @@ INSERT INTO users (
      '$2b$12$1vqIDkN68YKWtXm75uuRtunF9SE92eT7k1lQolfhzUIHTDPA9lD8q',
      'https://example.test/finch', 'finch50@example.test', false, NULL, 'Томск', false,
      false, 50, 50, CURRENT_TIMESTAMP - interval '1 day', '2025-11-13 08:30:00+03', true, false,
-     E'[b]Зяблик[/b] проверяет границу score=50.\n\n[url=https://www.linux.org.ru/]Оригинальный LOR[/url]', 0, 0, 'BBCODE_TEX'),
+     E'[b]Зяблик[/b] проверяет границу score=50.\n\n[url=https://www.linux.org.ru/]Оригинальный LOR[/url]. [user]crane2000[/user]', 0, 0, 'BBCODE_TEX'),
     (9100003, 'lark70',        'Жаворонок Автор',
      '$2b$12$1vqIDkN68YKWtXm75uuRtunF9SE92eT7k1lQolfhzUIHTDPA9lD8q',
      NULL, 'lark70@example.test', false, NULL, 'Омск', false,
@@ -223,14 +223,14 @@ COMMIT;
 INSERT INTO msgbase(id, message, markup) VALUES
     (9101001, E'Краткая тестовая новость о том, как альтернативная прошивка сохраняет независимый путь установки приложений.\n\n* проверяется Markdown;\n* ссылка-источник;\n* премодерация новости.\n\n[Оригинальный материал](https://www.linux.org.ru/news/android/18335149)', 'MARKDOWN'),
     (9101002, E'Тестовая редакционная заметка о споре вокруг имени открытого сетевого проекта.\n\n> Материал подтверждён корректором и содержит внешнюю ссылку.\n\n>>>\nЭта часть должна быть скрыта под cut в ленте и раскрыта в теме.\n<<<\n\n[Оригинальный материал](https://www.linux.org.ru/news/russia/18335616)', 'MARKDOWN'),
-    (9101003, E'Привет, $username.\n\nКакая доля приобретённых игр действительно запускается и проходится?\n\n[b]Этот текст проверяет LORCODE[/b], [quote]цитату[/quote] и обсуждение в форуме.\n\nОригинал: https://www.linux.org.ru/polls/polls/18327393', 'BBCODE_TEX'),
+    (9101003, E'Привет, $username.\n\nКакая доля приобретённых игр действительно запускается и проходится?\n\n[b]Этот текст проверяет LORCODE[/b], [quote]цитату[/quote] и обсуждение в форуме.\n\nУпоминания: [user]crane2000[/user], [user]bird50[/user], [user]missing_fixture_user[/user].\n\nОригинал: https://www.linux.org.ru/polls/polls/18327393', 'BBCODE_TEX'),
     (9101004, E'Есть локальное зеркало провайдеров и несколько платформенных архивов.\n\n```hcl\nprovider_installation {\n  network_mirror { url = "https://mirror.example.test/providers/" }\n}\n```\n\nНужно проверить отображение кода, длинных строк и ответа с решением.\n\n[Оригинальная тема](https://www.linux.org.ru/forum/admin/18253960)', 'MARKDOWN'),
     (9101005, E'Одиночная иллюстрация тестового Linux-десктопа. Проверяются размеры, подпись, srcset и ссылка на оригинал.\n\n[Образец галереи](https://www.linux.org.ru/gallery/screenshots/18317899)', 'MARKDOWN'),
     (9101006, E'Галерея из трёх изображений: общий вид, системный монитор и игровое окно.\n\n1. Первый кадр.\n2. Второй кадр.\n3. Третий кадр.\n\n[Образец галереи](https://www.linux.org.ru/gallery/screenshots/18317899)', 'MARKDOWN'),
     (9101007, E'Тестовый опрос по мотивам обсуждения игровой библиотеки. Он проверяет множественный выбор и согласованные счётчики голосов.\n\nОригинальный опрос: https://www.linux.org.ru/polls/polls/18327393', 'BBCODE_TEX'),
     (9101008, E'Неподтверждённый опрос должен быть виден автору, корректорам и модераторам, но голосование до подтверждения недоступно.', 'MARKDOWN'),
     (9101009, E'# Проверка длинного материала\n\nЭта синтетическая статья использует несколько блоков Markdown и проверяет структуру длинного текста.\n\n## Сценарии\n\n- внутренние ссылки и `inline code`;\n- fenced code;\n- таблица;\n- типографика на мобильном экране.\n\n| Компонент | Статус |\n|---|---|\n| Axum | проверяется |\n| SQLx | проверяется |\n| Askama | проверяется |\n\n```rust\nfn main() { println!("prod-ready fixture"); }\n```\n\nИсточник тематики: https://www.linux.org.ru/people/unclestephen/', 'MARKDOWN'),
-    (9101010, E'Да, слово «вайбкодинг» спорное, но здесь интересна проверка реакций в интерфейсе.\n\nПросьба оставить одну из реакций: 👍, 😊, ☕☕, 🎉 или 🔥.\n\n@raven1000 должен получить ссылку-mention.\n\nИсточник тематики: https://www.linux.org.ru/people/unclestephen/', 'MARKDOWN'),
+    (9101010, E'Да, слово «вайбкодинг» спорное, но здесь интересна проверка реакций в интерфейсе.\n\nПросьба оставить одну из реакций: 👍, 😊, ☕☕, 🎉 или 🔥.\n\n@raven1000 должен получить ссылку-mention, @bird50 — зачёркнутую ссылку, а @missing_fixture_user — только зачёркнутое имя.\n\nИсточник тематики: https://www.linux.org.ru/people/unclestephen/', 'MARKDOWN'),
     (9101011, E'Тема на точной границе score=50. Она нужна для проверки доступа к Talks и комментариям пользователей с разным score.', 'MARKDOWN'),
     (9101012, E'[b]Материал корректора[/b]\n\nСобственную новость должен подтверждать другой корректор или модератор.\n\n[code]commitby != userid[/code]', 'BBCODE_TEX'),
     (9101013, E'Модераторская тема для проверки меню управления, предупреждений, изменения postscore и служебной информации.', 'MARKDOWN'),
@@ -240,8 +240,8 @@ INSERT INTO msgbase(id, message, markup) VALUES
     (9101017, E'Неподтверждённая галерея должна отображаться в очереди полноценной карточкой: с этим текстом, изображением, тегами и подписью автора.', 'MARKDOWN'),
     (9101018, E'# Неподтверждённая статья\n\nОчередь премодерации должна сохранять заголовки, абзацы и **Markdown**, а не превращать материал в короткую строку.', 'MARKDOWN'),
 
-    (9102001, E'Проверяю новость как обычный пользователь: ссылка открывается, теги не склеены.', 'MARKDOWN'),
-    (9102002, E'[quote]теги не склеены[/quote]\nПодтверждаю: отдельные метки отображаются корректно.', 'BBCODE_TEX'),
+    (9102001, E'Проверяю новость как обычный пользователь: ссылка открывается, теги не склеены. @raven1000 видит mention.', 'MARKDOWN'),
+    (9102002, E'[quote]теги не склеены[/quote]\nПодтверждаю: отдельные метки отображаются корректно. [user]crane2000[/user]', 'BBCODE_TEX'),
     (9102003, E'Ответ второго уровня нужен для проверки ветки комментариев и ссылки «Показать ответы».', 'MARKDOWN'),
     (9102004, E'В игровом обсуждении удобнее видеть уже выбранный вариант опроса.', 'MARKDOWN'),
     (9102005, E'Переделал структуру тестового зеркала — решение отображается в ответе.', 'MARKDOWN'),

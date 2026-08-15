@@ -11,7 +11,7 @@
 //! write handlers (`/add.jsp`, `/add_comment.jsp`, `/edit_comment`) validate
 //! the token only in their non-preview branch, so those paths are checked in
 //! the route after form parsing rather than unconditionally here.
-use crate::state::AppState;
+use crate::{error::AppError, state::AppState};
 use axum::{
     body::Body,
     extract::{ConnectInfo, FromRequestParts, Request, State},
@@ -56,6 +56,18 @@ fn is_valid_token(token: &str) -> bool {
         || (!sToken.is_empty()
             && sToken.len() <= 64
             && sToken.chars().all(|cCharacter| cCharacter.is_ascii_alphanumeric()))
+}
+
+fn bManualCsrfPath(sPath: &str) -> bool {
+    matches!(
+        sPath,
+        "/add.jsp"
+            | "/add_comment.jsp"
+            | "/edit_comment"
+            | "/comment-message.jsp"
+            | "/mtn.jsp"
+            | "/commit.jsp"
+    )
 }
 
 async fn optMultipartCsrf(sContentType: &str, vecBody: Bytes) -> Option<String> {
@@ -112,10 +124,10 @@ pub async fn apply(State(state): State<AppState>, mut req: Request, next: Next) 
 
     req.extensions_mut().insert(CsrfToken(token.clone()));
 
-    let bManualCsrf = matches!(
-        req.uri().path(),
-        "/add.jsp" | "/add_comment.jsp" | "/edit_comment"
-    );
+    // `/mtn.jsp` and `/commit.jsp` have no POST mapping. Spring resolves them
+    // to 405 before its CSRF interceptor; letting requests reach Axum's method
+    // fallback preserves that observable ordering and cannot reach a mutation.
+    let bManualCsrf = bManualCsrfPath(req.uri().path());
     if req.method() == Method::POST && !bManualCsrf {
         // A missing content-type is still checked: a bodyless cross-site POST
         // is a browser "simple request" and must not bypass the interceptor.
@@ -148,11 +160,11 @@ pub async fn apply(State(state): State<AppState>, mut req: Request, next: Next) 
             .as_deref()
             .is_some_and(|sValue| sValue.trim() == token.trim());
         if !bValid {
-            return (
-                StatusCode::FORBIDDEN,
-                "Неправильный код защиты CSRF. Возможно сессия устарела",
-            )
-                .into_response();
+            // CSRFHandlerInterceptor raises AccessViolationException.  The
+            // Java exception resolver maps that to errors/code403.jsp, so a
+            // browser receives the standard HTML warning page rather than a
+            // middleware-specific text response.
+            return AppError::Forbidden.into_response();
         }
         req = Request::from_parts(stParts, Body::from(vecBytes));
     }
@@ -181,7 +193,7 @@ pub async fn apply(State(state): State<AppState>, mut req: Request, next: Next) 
 
 #[cfg(test)]
 mod tests {
-    use super::{generate_token, is_valid_token, optMultipartCsrf};
+    use super::{bManualCsrfPath, generate_token, is_valid_token, optMultipartCsrf};
     use base64::{Engine, engine::general_purpose::STANDARD};
     use bytes::Bytes;
 
@@ -212,5 +224,20 @@ mod tests {
         )
         .await;
         assert_eq!(optToken.as_deref(), Some("java-token=="));
+    }
+
+    #[test]
+    fn get_only_mtn_reaches_method_routing_before_csrf() {
+        assert!(bManualCsrfPath("/mtn.jsp"));
+        assert!(bManualCsrfPath("/commit.jsp"));
+        assert!(!bManualCsrfPath("/mt.jsp"));
+        assert!(!bManualCsrfPath("/edit.jsp"));
+        assert!(!bManualCsrfPath("/uncommit.jsp"));
+        assert!(!bManualCsrfPath("/resolve.jsp"));
+    }
+
+    #[test]
+    fn unrestricted_comment_message_validates_query_first_csrf_in_its_handler() {
+        assert!(bManualCsrfPath("/comment-message.jsp"));
     }
 }

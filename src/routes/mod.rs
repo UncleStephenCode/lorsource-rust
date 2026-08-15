@@ -14,6 +14,8 @@ pub mod rss;
 pub mod search;
 pub mod static_cache;
 pub mod tags;
+pub mod topic_deletion;
+pub mod topic_moderation;
 pub mod topics;
 pub mod users;
 
@@ -98,42 +100,22 @@ pub fn router() -> Router<AppState> {
                 .layer(DefaultBodyLimit::max(34 * 1024 * 1024)),
         )
         .route("/add-section.jsp", get(topics::choose_topic_section))
-        .route(
-            "/edit.jsp",
-            get(topics::edit_topic_form)
-                .post(topics::edit_topic)
-                .layer(DefaultBodyLimit::max(34 * 1024 * 1024)),
-        )
-        .route(
-            "/delete.jsp",
-            get(topics::delete_topic_form).post(topics::delete_topic),
-        )
-        .route(
-            "/undelete",
-            get(topics::undelete_topic_form).post(topics::undelete_topic),
-        )
-        .route(
-            "/resolve.jsp",
-            get(topics::resolve_topic_get).post(topics::resolve_topic),
-        )
+        .route("/edit.jsp", topics::stEditTopicRoute())
+        .route("/delete.jsp", topic_deletion::stDeleteRoute())
+        .route("/undelete", topic_deletion::stUndeleteRoute())
+        .route("/resolve.jsp", topic_moderation::stResolveRoute())
         .route(
             "/add_comment.jsp",
             get(comments::add_comment_form).post(comments::add_comment),
         )
         .route("/add_comment_ajax", post(comments::add_comment_ajax))
-        .route("/comment-message.jsp", get(comments::comment_message))
+        .route("/comment-message.jsp", comments::stCommentMessageRoute())
         .route(
             "/edit_comment",
             get(comments::edit_comment_form).post(comments::edit_comment),
         )
-        .route(
-            "/delete_comment.jsp",
-            get(comments::delete_comment_form).post(comments::delete_comment),
-        )
-        .route(
-            "/undelete_comment",
-            get(comments::undelete_comment_form).post(comments::undelete_comment),
-        )
+        .route("/delete_comment.jsp", comments::stDeleteCommentRoute())
+        .route("/undelete_comment", comments::stUndeleteCommentRoute())
         .route("/search.jsp", get(search::search))
         .route("/tags", get(tags::all_tags))
         .route("/tags.jsp", get(tags::old_tags_redirect))
@@ -175,14 +157,14 @@ pub fn router() -> Router<AppState> {
         .route("/tracker/", get(api::tracker))
         .route("/tracker.jsp", get(api::tracker_old_redirect))
         .route("/section-rss.jsp", get(rss::section_rss))
-        .route("/top10.boxlet", get(api::top10_boxlet))
-        .route("/articles.boxlet", get(api::articles_boxlet))
-        .route("/poll.boxlet", get(api::poll_boxlet))
+        .route("/top10.boxlet", any(api::top10_boxlet))
+        .route("/articles.boxlet", any(api::articles_boxlet))
+        .route("/poll.boxlet", any(api::poll_boxlet))
         .route("/gallery.boxlet", any(boxlets::gallery))
         .route("/tagcloud.boxlet", any(boxlets::tagCloud))
         // Legacy compatibility surface discovered from the original Spring controllers.
         // The URL shapes are declared here; deep business-rule parity is tracked in docs.
-        .route("/ExceptionResolver", get(legacy::exception_resolver))
+        .route("/ExceptionResolver", any(legacy::exception_resolver))
         .route(
             "/activate",
             get(legacy::activate_form).post(legacy::activate_post),
@@ -197,10 +179,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/articles/archive", get(legacy::archive_section))
         .route("/articles/archive/", get(legacy::archive_section))
-        .route(
-            "/commit.jsp",
-            get(topics::commit_topic_form).post(topics::commit_topic),
-        )
+        .route("/commit.jsp", topics::stCommitTopicRoute())
         .route(
             "/delete_image",
             get(legacy::delete_image_form).post(legacy::delete_image),
@@ -209,8 +188,8 @@ pub fn router() -> Router<AppState> {
             "/deregister.jsp",
             get(legacy::deregister_form).post(legacy::deregister_post),
         )
-        .route("/errors/403", get(legacy::error_403))
-        .route("/errors/404", get(legacy::error_404))
+        .route("/errors/403", any(legacy::error_403))
+        .route("/errors/404", any(legacy::error_404))
         .route("/gallery/archive", get(legacy::archive_section))
         .route("/gallery/archive/", get(legacy::archive_section))
         .route("/group-lastmod.jsp", get(legacy::group_lastmod_jsp))
@@ -222,11 +201,8 @@ pub fn router() -> Router<AppState> {
         )
         .route("/markup/preview", post(legacy::markup_preview))
         .route("/memories.jsp", post(legacy::memories))
-        .route(
-            "/mt.jsp",
-            get(topics::move_topic_form).post(topics::move_topic),
-        )
-        .route("/mtn.jsp", get(topics::premoderated_move_form))
+        .route("/mt.jsp", topic_moderation::stMoveRoute())
+        .route("/mtn.jsp", topic_moderation::stPremoderatedMoveRoute())
         .route("/news/archive", get(legacy::archive_section))
         .route("/news/archive/", get(legacy::archive_section))
         .route("/notifications-click", post(legacy::notifications_click))
@@ -260,10 +236,7 @@ pub fn router() -> Router<AppState> {
             "/tags/delete",
             get(tags::delete_form).post(tags::delete_tag),
         )
-        .route(
-            "/uncommit.jsp",
-            get(topics::uncommit_form).post(topics::uncommit),
-        )
+        .route("/uncommit.jsp", topic_moderation::stUncommitRoute())
         .route("/user-filter", get(legacy::user_filter))
         .route("/user-filter/favorite-tag", post(legacy::favorite_tag))
         .route("/user-filter/ignore-tag", post(legacy::ignore_tag))

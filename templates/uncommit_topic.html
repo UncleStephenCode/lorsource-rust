@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Возврат в неподтверждённые{% endblock %}
+{% block content %}
+<h1>Возврат в неподтверждённые</h1>
+Вы можете отменить подтверждение и вернуть топик в список неподтверждённых.
+<div class="messages">
+  {{ topic_card_html|safe }}
+</div>
+<form method="post" action="uncommit.jsp">
+  <input type="hidden" name="csrf" value="{{ csrf_token }}">
+  <input type="hidden" name="msgid" value="{{ topic_id }}">
+  <button type="submit" name="undel" class="btn btn-primary">Отменить подтверждение</button>
+</form>
+{% endblock %}

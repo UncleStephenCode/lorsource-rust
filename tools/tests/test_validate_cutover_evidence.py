@@ -46,7 +46,7 @@ class CutoverEvidenceTest(unittest.TestCase):
                 "public_https",
                 "websocket_wss_same_authority",
                 "runtime_database_role_least_privilege",
-                "cookie_and_site_secrets_distinct",
+                "java_site_secret_continuity_verified",
                 "secret_values_redacted",
                 "trusted_proxy_cidrs_configured",
                 "opensearch_configured",
@@ -130,6 +130,14 @@ class CutoverEvidenceTest(unittest.TestCase):
         documents = self.documents()
         documents[1]["image_digest"] = "sha256:" + "b" * 64
         with self.assertRaisesRegex(EvidenceError, "does not match"):
+            self.validate(documents)
+
+    def test_rejects_obsolete_distinct_cookie_secret_claim(self) -> None:
+        documents = self.documents()
+        configuration = documents[0]["evidence"]
+        del configuration["java_site_secret_continuity_verified"]
+        configuration["cookie_and_site_secrets_distinct"] = True
+        with self.assertRaisesRegex(EvidenceError, "exact production checks"):
             self.validate(documents)
 
     def test_rejects_credential_bearing_endpoint(self) -> None:

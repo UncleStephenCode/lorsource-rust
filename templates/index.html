@@ -5,6 +5,7 @@
 
 {% match navigation %}{% when Some with (nav) %}
 <nav>
+  {% for filter in nav.forum_filters %}<a class="btn {% if filter.selected %}btn-selected{% else %}btn-default{% endif %}" href="{{ filter.url }}">{{ filter.label }}</a>{% endfor %}
   {% match nav.section_url %}{% when Some with (url) %}<a class="btn btn-selected" href="{{ url }}">Лента</a>{% when None %}{% endmatch %}
   {% if nav.uncommitted_count > 0 %}<a class="btn btn-default" href="/view-all.jsp?section={{ nav.section_id }}">Неподтверждённые: {{ nav.uncommitted_count }}</a>{% endif %}
   {% match nav.archive_url %}{% when Some with (url) %}<a class="btn btn-default" href="{{ url }}">Архив</a>{% when None %}{% endmatch %}
@@ -26,7 +27,7 @@
 {% for t in topics %}
   <a href="{{ t.topic_url() }}" class="group-item">
     <div class="tracker-count"><p>{% if t.comments == 0 %}-{% else %}<i class="icon-comment"></i> {{ t.comments }}{% endif %}</p></div>
-    <div class="tracker-title"><p>{% if t.sticky %}<i class="icon-pin icon-pin-color"></i>{% endif %}{% if t.resolved.unwrap_or(false) %}<i class="icon-check"></i>{% endif %}{{ t.title }} <span class="group-author">({{ t.author }})</span></p></div>
+    <div class="tracker-title"><p>{% if t.sticky %}<i class="icon-pin icon-pin-color"></i>{% endif %}{% if t.resolved.unwrap_or(false) %}<i class="icon-check"></i>{% endif %}{{ t.sTitlePlain() }} <span class="group-author">({{ t.author }})</span></p></div>
     <div class="tracker-tags"><p>{% for tag in t.tags_vec() %}<span class="tag">{{ tag }}</span> {% endfor %}</p></div>
     <div class="tracker-last"><p>{{ t.author }}, <time data-format="compact-interval" datetime="{{ t.postdate.to_rfc3339() }}">{{ t.postdate }}</time></p></div>
   </a>
@@ -39,7 +40,7 @@
 {% endif %}
 
 {% if topics.len() == 0 %}<p>Тем пока нет.</p>{% endif %}
-<div class="nav"><table class="nav"><tr>{% match pager.prev_offset %}{% when Some with (prev) %}<td width="35%" align="left"><a href="?offset={{ prev }}">← предыдущие</a></td>{% when None %}<td></td>{% endmatch %}<td width="35%" align="right"><a href="?offset={{ pager.next_offset }}">следующие →</a></td></tr></table></div>
+<div class="nav"><table class="nav"><tr><td width="35%" align="left">{% match prev_link %}{% when Some with (url) %}<a href="{{ url }}">← предыдущие</a>{% when None %}{% endmatch %}</td><td width="35%" align="right">{% match next_link %}{% when Some with (url) %}<a href="{{ url }}">следующие →</a>{% when None %}{% match navigation %}{% when Some with (nav) %}{% match nav.archive_url %}{% when Some with (url) %}<a href="{{ url }}">архив</a>{% when None %}{% endmatch %}{% when None %}{% endmatch %}{% endmatch %}</td></tr></table></div>
 
 {% match navigation %}{% when Some with (nav) %}{% match nav.rss_url %}{% when Some with (url) %}<p><i class="icon-rss"></i> <a href="{{ url }}">RSS подписка на новые темы</a></p>{% when None %}{% endmatch %}{% when None %}{% endmatch %}
 

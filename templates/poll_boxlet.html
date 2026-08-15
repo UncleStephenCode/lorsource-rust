@@ -1,0 +1,46 @@
+<h2><a href="/polls/">Опрос</a></h2>
+
+<div class="boxlet_content">
+  <p>
+    {{ stPoll.sTitle }}
+  </p>
+
+  {% if bEnabled %}
+  <form action="/vote.jsp" method="POST" style="margin-bottom: 1em">
+    <input type="hidden" name="csrf" value="{{ sCsrfToken }}">
+    <input type="hidden" name="voteid" value="{{ stPoll.iPollId }}">
+  {% endif %}
+  {% for stVariant in stPoll.vecVariants %}
+  <div class="{% if stPoll.bMultiSelect %}checkbox{% else %}radio{% endif %}">
+    <label>
+      {% if stVariant.bUserVoted %}
+      <span class="penguin_progress" style="width:1em;margin-left: 3px; margin-right: 3px"><span></span></span>
+      {% else if stPoll.bMultiSelect %}
+      <input type="checkbox"{% if !bEnabled %} disabled{% endif %} name="vote" value="{{ stVariant.iId }}">
+      {% else %}
+      <input type="radio"{% if !bEnabled %} disabled{% endif %} name="vote" value="{{ stVariant.iId }}">
+      {% endif %}
+      {{ stVariant.sLabel }}
+    </label>
+  </div>
+  {% endfor %}
+  {% if bEnabled %}
+    <button type="submit" class="btn btn-default">Голосовать</button>
+  </form>
+  {% endif %}
+
+  {% if !bEnabled && !bAuthorized %}
+  <div class="infoblock">Для участия в опросе <a href="/login.jsp?from=%2Fpoll.boxlet">войдите</a> или <a href="register.jsp">зарегистрируйтесь</a>.</div>
+  {% endif %}
+
+  <a href="{{ sResultsUrl }}">результаты</a>
+  {% if stPoll.bMultiSelect %}
+  ({{ stPoll.iVotes }}/{{ stPoll.iUsers }} голосов)
+  {% else %}
+  ({{ stPoll.iVotes }} голосов)
+  {% endif %}
+  <p>
+    <a href="/polls/">итоги прошедших опросов...</a>
+  <p>
+    <a class="btn btn-small btn-default" href="/add-section.jsp?section=5">добавить опрос</a>
+</div>

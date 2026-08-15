@@ -51,7 +51,7 @@
     <tbody>
     {% for d in deleted_topics %}
       <tr>
-        <td><a href="/view-message.jsp?msgid={{ d.msgid }}">{{ d.subj }}</a> ({{ d.nick }})</td>
+        <td><a href="/view-message.jsp?msgid={{ d.msgid }}">{{ d.sTitlePlain() }}</a> ({{ d.nick }})</td>
         <td>{{ d.reason_display() }}</td>
         {% if show_dates %}
         <td>{% match d.bonus %}{% when Some with (bonus) %}{{ bonus }}{% when None %}{% endmatch %}</td>

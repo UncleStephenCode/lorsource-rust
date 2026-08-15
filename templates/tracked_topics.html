@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}{{ sTitle }}{% endblock %}
+{% block content %}
+<h1>Отслеживаемые сообщения <a href="/people/{{ sNick }}/profile">{{ sNick }}</a></h1>
+{% for t in vecTopics %}
+{% include "news_card.html" %}
+{% endfor %}
+<table class="nav"><tr>
+  {% match optPrevLink %}{% when Some with (url) %}<td width="35%" align="left"><a href="{{ url }}">← предыдущие</a></td>{% when None %}{% endmatch %}
+  {% match optNextLink %}{% when Some with (url) %}<td width="35%" align="right"><a href="{{ url }}">следующие →</a></td>{% when None %}{% endmatch %}
+</tr></table>
+{% endblock %}

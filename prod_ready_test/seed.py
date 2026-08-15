@@ -14,6 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SEED_SQL = Path(__file__).with_name("seed.sql")
+MONTH_SCALE_SQL = Path(__file__).with_name("month_scale.sql")
 CONFIRMATION = "seed-disposable-compose-lor"
 IMAGE_IDS = {
     9104001: (26, 80, 125, "single desktop"),
@@ -44,7 +45,7 @@ FIXTURE_NICKS = (
     "ibis_corrector",
     "hawk_moderator",
     "eagle_moderator",
-)
+) + tuple(f"bird{ordinal:02d}" for ordinal in range(15, 51))
 
 
 def run(
@@ -133,7 +134,7 @@ def load_sql(accounts_only: bool) -> None:
     ))
     compose(
         *arguments,
-        input_bytes=SEED_SQL.read_bytes(),
+        input_bytes=SEED_SQL.read_bytes() + b"\n" + MONTH_SCALE_SQL.read_bytes(),
     )
 
 
@@ -250,24 +251,58 @@ def load_media() -> None:
         photo = image_bytes(300, 300, rgb, initials, "PNG")
         put_file(f"/app/uploads/photos/{user_id}.png", photo)
 
+    # Every one of the 50 monthly-fixture accounts has a real local userpic.
+    # Deterministic colours make a misplaced/cross-user avatar immediately
+    # visible while keeping repeated seed runs byte-for-byte reproducible.
+    for ordinal in range(1, 51):
+        user_id = 9_100_000 + ordinal
+        rgb = (
+            35 + (ordinal * 37) % 170,
+            45 + (ordinal * 61) % 155,
+            55 + (ordinal * 83) % 145,
+        )
+        photo = image_bytes(300, 300, rgb, f"B{ordinal:02d}", "PNG")
+        put_file(f"/app/uploads/photos/{user_id}.png", photo)
+
+    # month_scale.sql attaches these deterministic images to a representative
+    # set of gallery topics spanning screenshots and workplaces.
+    for ordinal in range(1, 61):
+        image_id = 9_140_000 + ordinal
+        rgb = (
+            25 + (ordinal * 29) % 150,
+            40 + (ordinal * 43) % 145,
+            50 + (ordinal * 71) % 140,
+        )
+        original = image_bytes(1600, 900, rgb, f"month gallery {ordinal:02d}", "PNG")
+        put_file(f"/app/uploads/images/{image_id}/original.png", original)
+        for width in (500, 1000, 1500, 2000):
+            derivative = image_bytes(
+                width,
+                width * 9 // 16,
+                rgb,
+                f"month gallery {ordinal:02d}",
+                "JPEG",
+            )
+            put_file(f"/app/uploads/images/{image_id}/{width}px.jpg", derivative)
+
 
 def print_summary(accounts_only: bool) -> None:
     if accounts_only:
         print(
             "prod_ready_test loaded: "
-            + query("SELECT count(*) FROM users WHERE id BETWEEN 9100001 AND 9100014")
+            + query("SELECT count(*) FROM users WHERE id BETWEEN 9100001 AND 9100050")
             + " accounts; content must be created by browser_seed.py"
         )
         print("All fixture passwords: Birds-ProdReady-2026")
         return
     summary = query(
         "SELECT "
-        "(SELECT count(*) FROM users WHERE id BETWEEN 9100001 AND 9100014)||' users, '||"
-        "(SELECT count(*) FROM topics WHERE id BETWEEN 9101001 AND 9101099)||' topics, '||"
-        "(SELECT count(*) FROM comments WHERE id BETWEEN 9102001 AND 9102099)||' comments, '||"
-        "(SELECT count(*) FROM images WHERE id BETWEEN 9104001 AND 9104099)||' images, '||"
-        "(SELECT count(*) FROM polls WHERE id BETWEEN 9103001 AND 9103099)||' polls, '||"
-        "(SELECT count(*) FROM reactions_log WHERE topic_id BETWEEN 9101001 AND 9101099)||' reactions'"
+        "(SELECT count(*) FROM users WHERE id BETWEEN 9100001 AND 9100050)||' users, '||"
+        "(SELECT count(*) FROM topics WHERE userid BETWEEN 9100001 AND 9100050)||' topics, '||"
+        "(SELECT count(*) FROM comments WHERE userid BETWEEN 9100001 AND 9100050)||' comments, '||"
+        "(SELECT count(*) FROM images i JOIN topics t ON t.id=i.topic WHERE t.userid BETWEEN 9100001 AND 9100050)||' images, '||"
+        "(SELECT count(*) FROM polls p JOIN topics t ON t.id=p.topic WHERE t.userid BETWEEN 9100001 AND 9100050)||' polls, '||"
+        "(SELECT count(*) FROM reactions_log r JOIN topics t ON t.id=r.topic_id WHERE t.userid BETWEEN 9100001 AND 9100050)||' reactions'"
     )
     print(f"prod_ready_test loaded: {summary}")
     print("All fixture passwords: Birds-ProdReady-2026")

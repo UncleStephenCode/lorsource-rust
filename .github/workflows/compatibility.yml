@@ -38,13 +38,29 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: scripts/run-compatibility-suite.sh
+      - name: Generated compatibility evidence is current
+        run: |
+          git diff --exit-code -- \
+            docs/generated/original_routes.json \
+            docs/generated/original_routes.csv \
+            docs/generated/original_surface.json \
+            docs/generated/original_surface.csv \
+            docs/generated/rust_routes.json \
+            docs/generated/rust_routes.csv \
+            docs/generated/route_coverage.json \
+            docs/generated/route_coverage.csv \
+            docs/generated/rust_sql_schema_audit.json \
+            docs/generated/rust_sql_schema_audit.csv \
+            docs/CONTROLLER_MAP.md \
+            docs/ROUTE_COVERAGE.md \
+            docs/RUST_SQL_SCHEMA_AUDIT.md
       - name: Shell syntax
         run: |
           for file in scripts/*.sh .devcontainer/*.sh compat/java-db/*.sh; do
             bash -n "$file"
           done
       - name: JavaScript syntax
-        run: node --check static/js/lor/forms-and-reactions.js
+        run: python3 tools/check_javascript_syntax.py
       - name: Docker release build
         run: docker compose build app
       - name: Production Compose model
@@ -74,6 +90,7 @@ jobs:
           # workflow deterministic without weakening normal localhost/prod.
           PUBLIC_URL: http://127.0.0.1:8181
           WS_URL: ws://127.0.0.1:8181/
+          ENABLE_DEV_BYPASSES: "true"
         run: docker compose up -d
       - name: Wait for application health
         run: |
@@ -85,6 +102,16 @@ jobs:
           done
           docker compose logs --no-color app db-bootstrap
           exit 1
+      - name: Canonical PostgreSQL schema-object contract
+        run: |
+          docker compose exec -T postgres \
+            psql -X --set ON_ERROR_STOP=1 -U linuxweb -d lor \
+              --tuples-only --no-align --field-separator=$'\t' \
+              --file /dev/stdin \
+            < compat/java-db/export-schema-objects.sql \
+            > /tmp/lorsource-schema-objects.tsv
+          cmp compat/java-db/schema-objects-contract.tsv \
+            /tmp/lorsource-schema-objects.tsv
       - name: Runtime HTTP compatibility matrix
         env:
           NEW_BASE_URL: http://127.0.0.1:8181
@@ -101,10 +128,11 @@ jobs:
       - name: Seed disposable write-flow users
         run: |
           docker compose exec -T postgres psql -U postgres -d lor --set ON_ERROR_STOP=1 <<'SQL'
-          INSERT INTO users(id,nick,passwd,email,score,max_score,lastlogin,regdate,activated,canmod)
+          INSERT INTO users(id,nick,passwd,email,score,max_score,lastlogin,regdate,activated,canmod,userinfo,town,url,photo)
           VALUES
-            (nextval('s_uid')::int,'rust-ci-author','$2b$12$Ru.keTlZ2jORV8uWKwQJ9.KnPTv8iFVh0wla7jCnwSxul4KGryElK','rust-ci-author@example.invalid',1000,1000,now(),now(),true,true),
-            (nextval('s_uid')::int,'rust-ci-reactor','$2b$12$FHB9so4OyGyXlGasu5UpROuAKwPAaUooWUuoYkBwwU.LS4.CwZyRG','rust-ci-reactor@example.invalid',1000,1000,now(),now(),true,false);
+            (nextval('s_uid')::int,'rust-ci-author','$2b$12$Ru.keTlZ2jORV8uWKwQJ9.KnPTv8iFVh0wla7jCnwSxul4KGryElK','rust-ci-author@example.invalid',1000,1000,now(),now(),true,true,null,null,null,null),
+            (nextval('s_uid')::int,'rust-ci-reactor','$2b$12$FHB9so4OyGyXlGasu5UpROuAKwPAaUooWUuoYkBwwU.LS4.CwZyRG','rust-ci-reactor@example.invalid',1000,1000,now(),now(),true,false,null,null,null,null),
+            (nextval('s_uid')::int,'rust-ci-deregister','$2b$12$FHB9so4OyGyXlGasu5UpROuAKwPAaUooWUuoYkBwwU.LS4.CwZyRG','rust-ci-deregister@example.invalid',250,250,now(),now(),true,false,'profile to clear','town to clear','https://example.invalid','compat-userpic.png');
           SQL
       - name: Stateful global last-login interceptor regression
         env:
@@ -124,6 +152,13 @@ jobs:
           WRITE_FLOW_GROUP_ID: "126"
           WRITE_FLOW_GALLERY_GROUP_ID: "4962"
         run: python3 compat/test_write_flows.py
+      - name: Stateful self-service deregistration regression
+        env:
+          NEW_BASE_URL: http://127.0.0.1:8181
+          ACCOUNT_FLOW_ALLOW_MUTATION: "yes"
+          ACCOUNT_FLOW_DEREGISTER_NICK: rust-ci-deregister
+          ACCOUNT_FLOW_DEREGISTER_PASSWORD: CompatReactor123!
+        run: python3 compat/test_account_flows.py
       - name: Seed disposable moderation-flow users
         run: |
           docker compose exec -T postgres psql -U postgres -d lor --set ON_ERROR_STOP=1 <<'SQL'

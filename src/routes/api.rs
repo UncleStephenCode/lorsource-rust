@@ -1,16 +1,30 @@
 use crate::{
+    application::boxlet::CBoxletService,
     auth::CurrentUser,
+    domain::boxlet::model::{StPollBoxlet, StTopicBoxletItem},
     error::{AppError, Result},
+    infra::postgres::boxlet_repository::CBoxletPgRepository,
+    markup,
+    models::{CommentItem, TopicDetail, UserSummary},
     state::AppState,
 };
 use askama::Template;
 use axum::{
     Json,
     extract::{Query, State},
+    http::{StatusCode, header},
     response::{Html, IntoResponse, Redirect},
 };
+use axum_extra::extract::cookie::CookieJar;
 use serde::Deserialize;
 use serde_json::json;
+
+#[derive(Template)]
+#[template(path = "notifications.html")]
+struct StNotificationsTemplate {
+    sContentHtml: String,
+    sNick: String,
+}
 
 /// Maps UserEventFilterEnum's `getName` (lowercase enum case) to its `dbType`.
 pub(crate) fn filter_db_type(filter: &str) -> Option<&'static str> {
@@ -52,6 +66,10 @@ pub(crate) struct NotificationEvent {
 }
 
 impl NotificationEvent {
+    pub(crate) fn sSubjectPlain(&self) -> String {
+        crate::domain::title::sTopicTitlePlainForDisplay(&self.subj)
+    }
+
     pub(crate) fn link(&self) -> String {
         if self.event_type == "DEL"
             && let Some(iCommentId) = self.cid
@@ -331,32 +349,36 @@ pub async fn notifications(
         .fetch_one(&state.pool)
         .await?;
 
-    let mut html = format!(
-        "<h1>Уведомления {}</h1>",
-        html_escape::encode_text(&user.nick)
-    );
-    html.push_str("<nav class=\"filters\">");
-    for (label, value) in [
-        ("все", "all"),
-        ("ответы", "answers"),
-        ("отслеживаемое", "favorites"),
-        ("удалённые", "deleted"),
-        ("упоминания", "reference"),
-        ("теги", "tag"),
-        ("реакции", "reaction"),
-        ("предупреждения", "warning"),
+    let vecAvailableTypes: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT type::text FROM user_events WHERE userid=$1 ORDER BY type::text",
+    )
+    .bind(user.id)
+    .fetch_all(&state.pool)
+    .await?;
+    let mut html = String::from("<h1>Уведомления</h1><nav>");
+    for (label, value, db_value) in [
+        ("все", "all", ""),
+        ("ответы", "answers", "REPLY"),
+        ("отслеживаемое", "favorites", "WATCH"),
+        ("удаленное", "deleted", "DEL"),
+        ("упоминания", "reference", "REF"),
+        ("теги", "tag", "TAG"),
+        ("реакции", "reaction", "REACTION"),
+        ("предупреждения", "warning", "WARNING"),
     ] {
+        if !db_value.is_empty() && !vecAvailableTypes.iter().any(|sType| sType == db_value) {
+            continue;
+        }
         let active = if value == filter {
-            " class=\"active\""
+            "btn-selected"
         } else {
-            ""
+            "btn-default"
         };
         html.push_str(&format!(
-            "<a{active} href=\"/notifications?filter={value}\">{label}</a> "
+            "<a class=\"btn {active}\" href=\"/notifications?filter={value}\">{label}</a> "
         ));
     }
     html.push_str("</nav>");
-
     if iUnreadCount > 0 {
         html.push_str(&format!(
             "<div id=\"counter_block\" class=\"infoblock\" data-unread-count=\"{iUnreadCount}\"><span id=\"counter_text\">{}</span>",
@@ -387,6 +409,7 @@ pub async fn notifications(
         html.push_str("<div class=\"forum\"><table class=\"message-table\" width=\"100%\">");
         for stPrepared in &vecPage {
             let stEvent = &stPrepared.stEvent;
+            let sSubjectPlain = stEvent.sSubjectPlain();
             let sReaction = stPrepared
                 .vecReactions
                 .first()
@@ -417,7 +440,7 @@ pub async fn notifications(
                 link = html_escape::encode_double_quoted_attribute(&stEvent.link()),
                 unread = stEvent.unread,
                 tags = sTags,
-                subj = html_escape::encode_text(&stEvent.subj),
+                subj = html_escape::encode_text(&sSubjectPlain),
                 section = html_escape::encode_text(&stEvent.section_name),
                 details = sDetails,
                 unread_mark = sUnreadMark,
@@ -431,6 +454,7 @@ pub async fn notifications(
         html.push_str("<div class=\"notifications\">");
         for stPrepared in &vecPage {
             let stEvent = &stPrepared.stEvent;
+            let sSubjectPlain = stEvent.sSubjectPlain();
             let sDate = crate::request_timezone::sTimeTag("compact-interval", stEvent.event_date);
             let sUnreadClass = if stEvent.unread {
                 "event-unread-true"
@@ -447,7 +471,7 @@ pub async fn notifications(
                 delta = iUnreadDelta,
                 icon = sNotificationIcon(&stEvent.event_type),
                 comment_icon = stEvent.cid.map(|_| "<i class=\"icon-comment\"></i>").unwrap_or(""),
-                subj = html_escape::encode_text(&stEvent.subj),
+                subj = html_escape::encode_text(&sSubjectPlain),
                 section = html_escape::encode_text(&stEvent.section_name),
             ));
             if !stPrepared.vecReactions.is_empty() {
@@ -507,7 +531,17 @@ pub async fn notifications(
         ));
     }
 
-    let mut stResponse = Html(html).into_response();
+    html.push_str(&format!(
+        "<p><i class=\"icon-rss\"></i> <a href=\"/show-replies.jsp?output=rss&amp;nick={}\">RSS подписка на новые уведомления</a></p>",
+        urlencoding::encode(&user.nick)
+    ));
+
+    let sPage = StNotificationsTemplate {
+        sContentHtml: html,
+        sNick: user.nick,
+    }
+    .render()?;
+    let mut stResponse = Html(sPage).into_response();
     stResponse.headers_mut().insert(
         axum::http::header::CACHE_CONTROL,
         axum::http::HeaderValue::from_static("no-store"),
@@ -654,6 +688,10 @@ struct TrackerTopic {
 }
 
 impl TrackerTopic {
+    fn sTitlePlain(&self) -> String {
+        crate::domain::title::sTopicTitlePlainForDisplay(&self.stRow.title)
+    }
+
     fn sGroupUrl(&self) -> String {
         format!(
             "/{}/{}/",
@@ -1096,53 +1134,307 @@ pub async fn tracker(
     ))
 }
 
-pub async fn top10_boxlet(State(state): State<AppState>) -> Result<Html<String>> {
-    let topics = crate::routes::topics::list_topics(&state, None, None, 0, 10).await?;
-    let mut html = String::from("<ul class=\"boxlet\">");
-    for t in topics {
-        html.push_str(&format!(
-            "<li><a href=\"{}\">{}</a></li>",
-            t.topic_url(),
-            html_escape::encode_text(&t.title)
-        ));
-    }
-    html.push_str("</ul>");
-    Ok(Html(html))
+#[derive(Template)]
+#[template(path = "topiclist_boxlet.html")]
+struct StTopicListBoxletTemplate {
+    sName: &'static str,
+    sLink: Option<&'static str>,
+    sDescription: &'static str,
+    vecItems: Vec<StTopicBoxletItem>,
 }
 
-pub async fn articles_boxlet(State(state): State<AppState>) -> Result<Html<String>> {
-    let topics = crate::routes::topics::list_topics(&state, Some("articles"), None, 0, 10).await?;
-    let mut html = String::from("<ul class=\"boxlet\">");
-    for t in topics {
-        html.push_str(&format!(
-            "<li><a href=\"{}\">{}</a></li>",
-            t.topic_url(),
-            html_escape::encode_text(&t.title)
-        ));
-    }
-    html.push_str("</ul>");
-    Ok(Html(html))
+#[derive(Template)]
+#[template(path = "poll_boxlet.html")]
+struct StPollBoxletTemplate {
+    stPoll: StPollBoxlet,
+    bAuthorized: bool,
+    bEnabled: bool,
+    sCsrfToken: String,
+    sResultsUrl: String,
 }
 
-pub async fn poll_boxlet(State(state): State<AppState>) -> Result<Html<String>> {
-    let topics = crate::routes::topics::list_topics(&state, Some("polls"), None, 0, 5).await?;
-    let mut html = String::from("<ul class=\"boxlet\">");
-    for t in topics {
-        html.push_str(&format!(
-            "<li><a href=\"{}\">{}</a></li>",
-            t.topic_url(),
-            html_escape::encode_text(&t.title)
-        ));
+/// `TopTenBoxlet`: public and method-agnostic through `AbstractBoxlet`, but
+/// pagination links use the authenticated visitor's `profile.messages`.
+pub async fn top10_boxlet(
+    State(stState): State<AppState>,
+    CurrentUser(optUser): CurrentUser,
+) -> Result<axum::response::Response> {
+    let cService = CBoxletService::new(
+        CBoxletPgRepository::new(stState.pool.clone()),
+        &stState.config.upload_dir,
+    );
+    let iMessagesPerPage = cService
+        .iMessagesPerPage(optUser.as_ref().map(|stUser| stUser.id))
+        .await?;
+    Ok(crate::routes::boxlets::stHtmlFragment(
+        sRenderTop10Boxlet(&stState, iMessagesPerPage).await?,
+    ))
+}
+
+pub(crate) async fn sRenderTop10Boxlet(
+    stState: &AppState,
+    iMessagesPerPage: i32,
+) -> Result<String> {
+    let cService = CBoxletService::new(
+        CBoxletPgRepository::new(stState.pool.clone()),
+        &stState.config.upload_dir,
+    );
+    Ok(StTopicListBoxletTemplate {
+        sName: "Top 10",
+        sLink: None,
+        sDescription: "Наиболее обсуждаемые темы этого месяца",
+        vecItems: cService.vecTop10(iMessagesPerPage).await?,
     }
-    html.push_str("</ul>");
-    Ok(Html(html))
+    .render()?)
+}
+
+/// `ArticlesBoxlet`: the ten newest committed, visible article topics.
+pub async fn articles_boxlet(
+    State(stState): State<AppState>,
+    CurrentUser(optUser): CurrentUser,
+) -> Result<axum::response::Response> {
+    let cService = CBoxletService::new(
+        CBoxletPgRepository::new(stState.pool.clone()),
+        &stState.config.upload_dir,
+    );
+    let iMessagesPerPage = cService
+        .iMessagesPerPage(optUser.as_ref().map(|stUser| stUser.id))
+        .await?;
+    Ok(crate::routes::boxlets::stHtmlFragment(
+        sRenderArticlesBoxlet(&stState, iMessagesPerPage).await?,
+    ))
+}
+
+pub(crate) async fn sRenderArticlesBoxlet(
+    stState: &AppState,
+    iMessagesPerPage: i32,
+) -> Result<String> {
+    let cService = CBoxletService::new(
+        CBoxletPgRepository::new(stState.pool.clone()),
+        &stState.config.upload_dir,
+    );
+    Ok(StTopicListBoxletTemplate {
+        sName: "Статьи",
+        sLink: Some("/articles/"),
+        sDescription: "Новые статьи",
+        vecItems: cService.vecArticles(iMessagesPerPage).await?,
+    }
+    .render()?)
+}
+
+/// `PollBoxlet`: anonymous visitors see disabled controls and the login
+/// prompt, eligible users get the voting form, and voters see their selected
+/// variants plus the results link without `results=true`.
+pub async fn poll_boxlet(
+    State(stState): State<AppState>,
+    CurrentUser(optUser): CurrentUser,
+    crate::csrf::CsrfToken(sCsrfToken): crate::csrf::CsrfToken,
+) -> Result<axum::response::Response> {
+    let bAuthorized = optUser.is_some();
+    Ok(crate::routes::boxlets::stHtmlFragment(
+        sRenderPollBoxlet(
+            &stState,
+            optUser.as_ref().map(|stUser| stUser.id),
+            bAuthorized,
+            sCsrfToken,
+        )
+        .await?,
+    ))
+}
+
+pub(crate) async fn sRenderPollBoxlet(
+    stState: &AppState,
+    optUserId: Option<i32>,
+    bAuthorized: bool,
+    sCsrfToken: String,
+) -> Result<String> {
+    let cService = CBoxletService::new(
+        CBoxletPgRepository::new(stState.pool.clone()),
+        &stState.config.upload_dir,
+    );
+    let stPoll = cService.stPoll(optUserId).await?;
+    let bEnabled = bAuthorized && !stPoll.bUserVoted;
+    let sResultsUrl = format!(
+        "/polls/polls/{}{}",
+        stPoll.iTopicId,
+        if stPoll.bUserVoted && bAuthorized {
+            ""
+        } else {
+            "?results=true"
+        }
+    );
+    Ok(StPollBoxletTemplate {
+        stPoll,
+        bAuthorized,
+        bEnabled,
+        sCsrfToken,
+        sResultsUrl,
+    }
+    .render()?)
+}
+
+#[cfg(test)]
+mod boxlet_endpoint_tests {
+    use askama::Template;
+
+    use super::{StPollBoxletTemplate, StTopicListBoxletTemplate};
+    use crate::domain::boxlet::model::{StPollBoxlet, StPollVariantResult, StTopicBoxletItem};
+
+    #[test]
+    fn topic_list_template_matches_original_heading_page_and_count_dom() {
+        let sHtml = StTopicListBoxletTemplate {
+            sName: "Статьи",
+            sLink: Some("/articles/"),
+            sDescription: "Новые статьи",
+            vecItems: vec![StTopicBoxletItem {
+                sMessageUrl: "/articles/test/42".to_owned(),
+                sTitle: "<script>unsafe</script>".to_owned(),
+                iCommentCount: 51,
+                iPages: 3,
+                optLastPageUrl: Some("/articles/test/42/page2?lastmod=1725000000123".to_owned()),
+            }],
+        }
+        .render()
+        .expect("topic list template");
+
+        assert!(sHtml.contains("<h2><a href=\"/articles/\">Статьи</a></h2>"));
+        assert!(sHtml.contains("Новые статьи:"));
+        assert!(sHtml.contains(
+            "(стр.&nbsp;<a href=\"/articles/test/42/page2?lastmod=1725000000123\">3</a>)"
+        ));
+        assert!(sHtml.contains("(51)"));
+        assert!(!sHtml.contains("<script>"));
+    }
+
+    #[test]
+    fn topic_and_poll_titles_are_escaped_once_after_database_entity_decode() {
+        let sTopicHtml = StTopicListBoxletTemplate {
+            sName: "Top 10",
+            sLink: None,
+            sDescription: "Темы",
+            vecItems: vec![StTopicBoxletItem {
+                sMessageUrl: "/forum/test/42".to_owned(),
+                sTitle: "A & B < C \"Q\" 'X' A 😀".to_owned(),
+                iCommentCount: 1,
+                iPages: 1,
+                optLastPageUrl: None,
+            }],
+        }
+        .render()
+        .expect("topic list template");
+        assert!(
+            sTopicHtml.contains("A &#38; B &#60; C &#34;Q&#34; &#39;X&#39; A 😀"),
+            "rendered topic boxlet: {sTopicHtml}"
+        );
+        assert!(!sTopicHtml.contains("&#38;amp;"));
+        assert!(!sTopicHtml.contains("&#38;lt;"));
+        assert!(!sTopicHtml.contains("&#38;quot;"));
+        assert!(!sTopicHtml.contains("&#38;#39;"));
+        assert!(!sTopicHtml.contains("&#38;#x41;"));
+
+        let sPollHtml = sRenderPoll(
+            StPollBoxlet {
+                sTitle: "A & B < C «Q» 'X' A 😀".to_owned(),
+                ..stPoll(false)
+            },
+            false,
+            false,
+            "/polls/polls/77?results=true",
+        );
+        assert!(sPollHtml.contains("A &#38; B &#60; C «Q» &#39;X&#39; A 😀"));
+        assert!(!sPollHtml.contains("&#38;amp;"));
+        assert!(!sPollHtml.contains("&#38;lt;"));
+        assert!(!sPollHtml.contains("&#38;quot;"));
+        assert!(!sPollHtml.contains("&#38;#39;"));
+        assert!(!sPollHtml.contains("&#38;#x41;"));
+    }
+
+    #[test]
+    fn anonymous_poll_has_disabled_inputs_login_prompt_and_forced_results() {
+        let sHtml = sRenderPoll(stPoll(false), false, false, "/polls/polls/77?results=true");
+
+        assert!(!sHtml.contains("<form action=\"/vote.jsp\""));
+        assert!(sHtml.contains("<input type=\"radio\" disabled name=\"vote\" value=\"1\">"));
+        assert!(sHtml.contains("/login.jsp?from=%2Fpoll.boxlet"));
+        assert!(sHtml.contains("href=\"register.jsp\""));
+        assert!(sHtml.contains("href=\"/polls/polls/77?results=true\">результаты</a>"));
+    }
+
+    #[test]
+    fn authorized_non_voter_gets_csrf_form_and_enabled_controls() {
+        let sHtml = sRenderPoll(stPoll(false), true, true, "/polls/polls/77?results=true");
+
+        assert!(sHtml.contains("<form action=\"/vote.jsp\" method=\"POST\""));
+        assert!(sHtml.contains("name=\"csrf\" value=\"csrf-token\""));
+        assert!(sHtml.contains("name=\"voteid\" value=\"7\""));
+        assert!(sHtml.contains("<input type=\"radio\" name=\"vote\" value=\"1\">"));
+        assert!(!sHtml.contains("<input type=\"radio\" disabled"));
+        assert!(!sHtml.contains("Для участия в опросе"));
+    }
+
+    #[test]
+    fn voter_sees_penguin_selected_variant_and_plain_results_link() {
+        let sHtml = sRenderPoll(stPoll(true), true, false, "/polls/polls/77");
+
+        assert!(sHtml.contains("class=\"penguin_progress\""));
+        assert!(!sHtml.contains("<form action=\"/vote.jsp\""));
+        assert!(!sHtml.contains("Для участия в опросе"));
+        assert!(sHtml.contains("href=\"/polls/polls/77\">результаты</a>"));
+        assert!(!sHtml.contains("results=true"));
+    }
+
+    fn stPoll(bUserVoted: bool) -> StPollBoxlet {
+        StPollBoxlet {
+            iPollId: 7,
+            iTopicId: 77,
+            bMultiSelect: false,
+            sTitle: "Лучший язык?".to_owned(),
+            vecVariants: vec![
+                StPollVariantResult {
+                    iId: 1,
+                    sLabel: "Rust".to_owned(),
+                    iVotes: 4,
+                    bUserVoted,
+                },
+                StPollVariantResult {
+                    iId: 2,
+                    sLabel: "C++".to_owned(),
+                    iVotes: 2,
+                    bUserVoted: false,
+                },
+            ],
+            iVotes: 6,
+            iUsers: 5,
+            bUserVoted,
+        }
+    }
+
+    fn sRenderPoll(
+        stPoll: StPollBoxlet,
+        bAuthorized: bool,
+        bEnabled: bool,
+        sResultsUrl: &str,
+    ) -> String {
+        StPollBoxletTemplate {
+            stPoll,
+            bAuthorized,
+            bEnabled,
+            sCsrfToken: "csrf-token".to_owned(),
+            sResultsUrl: sResultsUrl.to_owned(),
+        }
+        .render()
+        .expect("poll template")
+    }
 }
 
 #[derive(serde::Deserialize)]
 pub struct ReactionQuery {
     pub topic: Option<i32>,
     pub comment: Option<i32>,
-    pub msgid: Option<i32>,
+    /// Not consumed by the controller, but read by `topic.tag` while it
+    /// renders a poll on the reaction page.  JSP compares the raw value to
+    /// the lower-case string `true` rather than deserializing a boolean.
+    pub results: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1207,6 +1499,391 @@ async fn reaction_target_link(
     Ok(format!("/{section}/{group}/{topic_id}{anchor}"))
 }
 
+#[derive(Debug, Clone)]
+struct StReactionSignatureView {
+    bAnonymous: bool,
+    bBlocked: bool,
+    sStarsHtml: String,
+    iScore: i32,
+    iMaxScore: i32,
+    bShowScore: bool,
+}
+
+#[derive(Debug, Clone)]
+struct StReactionTagView {
+    sName: String,
+    sUrl: String,
+}
+
+#[derive(Template)]
+#[template(path = "reaction_topic.html")]
+struct StReactionTopicTemplate {
+    stTopic: TopicDetail,
+    stSignature: StReactionSignatureView,
+    vecTags: Vec<StReactionTagView>,
+    sTopicHtml: String,
+    sImagesHtml: String,
+    optPoll: Option<crate::routes::topics::PollView>,
+    bLinksAllowed: bool,
+    sLinkText: String,
+    sReactionsHtml: String,
+}
+
+#[derive(Template)]
+#[template(path = "reaction_comment.html")]
+struct StReactionCommentTemplate {
+    stTopic: TopicDetail,
+    stComment: CommentItem,
+    stSignature: StReactionSignatureView,
+    sCommentHtml: String,
+    optUserpicUrl: Option<String>,
+    iUserpicWidth: i32,
+    iUserpicHeight: i32,
+    bTopicAuthor: bool,
+    sReactionsHtml: String,
+}
+
+type TyReactionRow = (
+    i32,
+    String,
+    String,
+    i32,
+    bool,
+    Option<chrono::DateTime<chrono::Utc>>,
+);
+
+fn stReactionSignature(
+    iScore: i32,
+    iMaxScore: i32,
+    bRegistered: bool,
+    bBlocked: bool,
+    bModeratorSession: bool,
+) -> StReactionSignatureView {
+    let iNormalizedScore = iScore.clamp(0, 599);
+    let iNormalizedMaxScore = iMaxScore.max(iScore).clamp(0, 599);
+    let iGreenStars = iNormalizedScore / 100;
+    let iGreyStars = iNormalizedMaxScore / 100 - iGreenStars;
+    StReactionSignatureView {
+        bAnonymous: !bRegistered,
+        bBlocked,
+        sStarsHtml: if bRegistered {
+            format!(
+                "<span class=\"stars\">{}{}</span>",
+                "★".repeat(iGreenStars as usize),
+                "☆".repeat(iGreyStars as usize)
+            )
+        } else {
+            String::new()
+        },
+        iScore,
+        iMaxScore,
+        bShowScore: bRegistered && bModeratorSession,
+    }
+}
+
+fn sReactionDateTitle(
+    optDate: Option<chrono::DateTime<chrono::Utc>>,
+    stTimezone: chrono_tz::Tz,
+) -> String {
+    let Some(dtValue) = optDate else {
+        return String::new();
+    };
+    let dtLocal = dtValue.with_timezone(&stTimezone);
+    let sShortZone = dtLocal.format("%Z").to_string();
+    let sZone = if matches!(sShortZone.as_bytes().first(), Some(b'+') | Some(b'-')) {
+        format!("GMT{}", dtLocal.format("%:z"))
+    } else {
+        sShortZone
+    };
+    format!("{} {sZone}", dtLocal.format("%d.%m.%y %H:%M:%S"))
+}
+
+/// Exact `reactions.tag` all-mode used by reaction-topic.jsp and
+/// reaction-comment.jsp: every known choice is visible, followed by the
+/// chronological author list.  The JSON map remains authoritative; the log
+/// only supplies the optional timestamp.
+fn sRenderAllReactions(
+    iTopicId: i32,
+    optCommentId: Option<i32>,
+    vecRows: &[TyReactionRow],
+    iViewerId: i32,
+    bAllowInteract: bool,
+    sCsrfToken: &str,
+    stTimezone: chrono_tz::Tz,
+) -> String {
+    let mut vecEmoji = REACTIONS
+        .iter()
+        .map(|(sEmoji, _)| (*sEmoji).to_owned())
+        .collect::<Vec<_>>();
+    for (_, _, sReaction, _, _, _) in vecRows {
+        if !vecEmoji.contains(sReaction) {
+            vecEmoji.push(sReaction.clone());
+        }
+    }
+    // PreparedReactions.allZeros is a TreeMap[String, ...], whose ordering
+    // is Java/Scala UTF-16 lexicographic ordering.
+    vecEmoji.sort_by_key(|sEmoji| sEmoji.encode_utf16().collect::<Vec<_>>());
+
+    let sDisabled = if bAllowInteract { "" } else { " disabled" };
+    let mut sHtml = String::from(
+        "<div class=\"reactions \"><form class=\"reactions-form\" action=\"/reactions\" method=\"POST\">",
+    );
+    sHtml.push_str(&format!(
+        "<input type=\"hidden\" name=\"csrf\" value=\"{}\"><input type=\"hidden\" name=\"topic\" value=\"{iTopicId}\">",
+        html_escape::encode_double_quoted_attribute(sCsrfToken)
+    ));
+    if let Some(iCommentId) = optCommentId {
+        sHtml.push_str(&format!(
+            "<input type=\"hidden\" name=\"comment\" value=\"{iCommentId}\">"
+        ));
+    }
+
+    for sEmoji in vecEmoji {
+        let mut vecUsers = vecRows
+            .iter()
+            .filter(|(_, _, sReaction, _, _, _)| sReaction == &sEmoji)
+            .collect::<Vec<_>>();
+        vecUsers.sort_by_key(|(_, _, _, iScore, _, _)| std::cmp::Reverse(*iScore));
+        let iCount = vecUsers.len();
+        let bClicked = vecUsers
+            .iter()
+            .any(|(iUserId, _, _, _, _, _)| *iUserId == iViewerId);
+        let sDescription = REACTIONS
+            .iter()
+            .find_map(|(sKnown, sDescription)| (*sKnown == sEmoji).then_some(*sDescription))
+            .unwrap_or(&sEmoji);
+        let sUsers = vecUsers
+            .iter()
+            .take(3)
+            .map(|(_, sNick, _, _, _, _)| sNick.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let sMore = if vecUsers.len() > 3 { "..." } else { "" };
+        let sTitle = format!("Реакция \"{sDescription}\": {sUsers}{sMore}");
+        let sClickedClass = if bClicked { " btn-primary" } else { "" };
+        sHtml.push_str(&format!(
+            "<button name=\"reaction\" value=\"{}-{}\" class=\"reaction{sClickedClass} \" title=\"{}\"{sDisabled}>{} <span class=\"reaction-count\">{iCount}</span></button>",
+            html_escape::encode_double_quoted_attribute(&sEmoji),
+            !bClicked,
+            html_escape::encode_double_quoted_attribute(&sTitle),
+            html_escape::encode_text(&sEmoji),
+        ));
+    }
+    sHtml.push_str("</form></div><div class=\"reactions\">");
+    for (_, sNick, sReaction, _, bBlocked, optDate) in vecRows {
+        let sDate = sReactionDateTitle(*optDate, stTimezone);
+        let sNickText = html_escape::encode_text(sNick);
+        let sNickLink = format!(
+            "<a href=\"/people/{}/profile\">{sNickText}</a>",
+            urlencoding::encode(sNick)
+        );
+        let sUser = if *bBlocked {
+            format!("<s>{sNickLink}</s>")
+        } else {
+            sNickLink
+        };
+        sHtml.push_str(&format!(
+            "<span class=\"reaction\" title=\"{}\">{} {sUser}</span>",
+            html_escape::encode_double_quoted_attribute(&sDate),
+            html_escape::encode_text(sReaction),
+        ));
+    }
+    sHtml.push_str("</div>");
+    sHtml
+}
+
+async fn vecReactionRows(
+    stState: &AppState,
+    iTopicId: i32,
+    optCommentId: Option<i32>,
+    iViewerId: i32,
+) -> Result<Vec<TyReactionRow>> {
+    let vecRows = if let Some(iCommentId) = optCommentId {
+        sqlx::query_as(
+            r#"SELECT u.id,u.nick,item.value,COALESCE(u.score,0),
+                      COALESCE(u.blocked,false),rl.set_date
+               FROM comments c
+               CROSS JOIN LATERAL jsonb_each_text(COALESCE(c.reactions,'{}'::jsonb)) item
+               JOIN users u ON u.id=item.key::integer
+               LEFT JOIN reactions_log rl
+                 ON rl.origin_user=u.id AND rl.topic_id=c.topic AND rl.comment_id=c.id
+               WHERE c.id=$1 AND item.key ~ '^[0-9]+$'
+                 AND NOT EXISTS (
+                   SELECT 1 FROM ignore_list il
+                   WHERE il.userid=$2 AND il.ignored=u.id
+                 )
+               ORDER BY COALESCE(rl.set_date,'epoch'::timestamptz)"#,
+        )
+        .bind(iCommentId)
+        .bind(iViewerId)
+        .fetch_all(&stState.pool)
+        .await?
+    } else {
+        sqlx::query_as(
+            r#"SELECT u.id,u.nick,item.value,COALESCE(u.score,0),
+                      COALESCE(u.blocked,false),rl.set_date
+               FROM topics t
+               CROSS JOIN LATERAL jsonb_each_text(COALESCE(t.reactions,'{}'::jsonb)) item
+               JOIN users u ON u.id=item.key::integer
+               LEFT JOIN reactions_log rl
+                 ON rl.origin_user=u.id AND rl.topic_id=t.id AND rl.comment_id IS NULL
+               WHERE t.id=$1 AND item.key ~ '^[0-9]+$'
+                 AND NOT EXISTS (
+                   SELECT 1 FROM ignore_list il
+                   WHERE il.userid=$2 AND il.ignored=u.id
+                 )
+               ORDER BY COALESCE(rl.set_date,'epoch'::timestamptz)"#,
+        )
+        .bind(iTopicId)
+        .bind(iViewerId)
+        .fetch_all(&stState.pool)
+        .await?
+    };
+    Ok(vecRows)
+}
+
+async fn optReactionPoll(
+    stState: &AppState,
+    stTopic: &TopicDetail,
+    bExpired: bool,
+    bResultsRequested: bool,
+    stUser: &UserSummary,
+    sCsrfToken: &str,
+) -> Result<Option<crate::routes::topics::PollView>> {
+    let Some((iPollId, bMultiselect)): Option<(i32, bool)> =
+        sqlx::query_as("SELECT id,multiselect FROM polls WHERE topic=$1")
+            .bind(stTopic.id)
+            .fetch_optional(&stState.pool)
+            .await?
+    else {
+        return Ok(None);
+    };
+    let mut vecRows: Vec<(i32, String, i32, bool)> = sqlx::query_as(
+        r#"SELECT v.id,v.label,v.votes,
+                  EXISTS(SELECT 1 FROM vote_users vu
+                         WHERE vu.vote=v.vote AND vu.variant_id=v.id AND vu.userid=$2)
+           FROM polls_variants v WHERE v.vote=$1 ORDER BY v.id"#,
+    )
+    .bind(iPollId)
+    .bind(stUser.id)
+    .fetch_all(&stState.pool)
+    .await?;
+    let iTotalVotes: i32 = vecRows.iter().map(|(_, _, iVotes, _)| *iVotes).sum();
+    let iTotalPeople: i64 =
+        sqlx::query_scalar("SELECT count(DISTINCT userid) FROM vote_users WHERE vote=$1")
+            .bind(iPollId)
+            .fetch_one(&stState.pool)
+            .await?;
+    let bUserVoted = vecRows.iter().any(|(_, _, _, bVoted)| *bVoted);
+    let bPending = !stTopic.moderate;
+    let bShowResults = !bPending && (bResultsRequested || bUserVoted || bExpired);
+    if bShowResults {
+        vecRows.sort_by_key(|(iId, _, iVotes, _)| (std::cmp::Reverse(*iVotes), *iId));
+    }
+    let iMaxVotes = vecRows
+        .iter()
+        .map(|(_, _, iVotes, _)| *iVotes)
+        .max()
+        .unwrap_or(0);
+    let iDivisor = if bMultiselect {
+        i32::try_from(iTotalPeople)
+            .unwrap_or(i32::MAX)
+            .max(iMaxVotes)
+    } else {
+        iTotalVotes
+    };
+    let vecVariants = vecRows
+        .into_iter()
+        .map(|(iId, sLabel, iVotes, bVoted)| {
+            let iWidth = if iMaxVotes > 0 {
+                320 * iVotes / iMaxVotes
+            } else {
+                0
+            };
+            crate::routes::topics::PollVariantView {
+                id: iId,
+                label: sLabel,
+                votes: iVotes,
+                pct: if iDivisor > 0 {
+                    ((100.0 * f64::from(iVotes) / f64::from(iDivisor)).round()) as i32
+                } else {
+                    0
+                },
+                progress_pct: (iWidth / 16) * 16 * 100 / 320,
+                progress_alt: "*".repeat(iWidth as usize),
+                user_voted: bVoted,
+            }
+        })
+        .collect();
+    Ok(Some(crate::routes::topics::PollView {
+        voteid: iPollId,
+        multiselect: bMultiselect,
+        variants: vecVariants,
+        total_votes: iTotalVotes,
+        total_people: iTotalPeople,
+        can_vote: !bUserVoted && !stTopic.deleted && !bPending && !bExpired,
+        show_results: bShowResults,
+        pending: bPending,
+        authorized: true,
+        topic_url: stTopic.topic_url(),
+        csrf_token: sCsrfToken.to_owned(),
+    }))
+}
+
+fn sRenderReactionImages(
+    vecImages: &[crate::routes::topics::TopicImageView],
+    sStoredTitle: &str,
+    bImagePost: bool,
+) -> String {
+    let sTitle = crate::domain::title::sTopicTitlePlainForDisplay(sStoredTitle);
+    let sTitleAttr = html_escape::encode_double_quoted_attribute(&sTitle);
+    match vecImages {
+        [] => String::new(),
+        [stImage] => {
+            let sSrcset = crate::routes::topics::topic_image_srcset(stImage);
+            let sOpen = if bImagePost || stImage.width >= 1920 || stImage.height >= 1080 {
+                format!(
+                    "<a href=\"{}\" itemprop=\"contentURL\">",
+                    html_escape::encode_double_quoted_attribute(&stImage.original_url)
+                )
+            } else {
+                String::new()
+            };
+            let sClose = if sOpen.is_empty() { "" } else { "</a>" };
+            format!(
+                "<div class=\"medium-image-container\"><figure class=\"medium-image\" itemprop=\"associatedMedia\" itemscope itemtype=\"http://schema.org/ImageObject\">{sOpen}<img itemprop=\"thumbnail\" class=\"medium-image\" src=\"{}\" alt=\"{sTitleAttr}\" srcset=\"{}\" sizes=\"(min-width: 70em) 80vw, 100vw\" width=\"{}\" height=\"{}\">{sClose}<meta itemprop=\"caption\" content=\"{sTitleAttr}\"></figure></div>",
+                html_escape::encode_double_quoted_attribute(&stImage.medium_url),
+                html_escape::encode_double_quoted_attribute(&sSrcset),
+                stImage.width,
+                stImage.height,
+            )
+        }
+        _ => {
+            let mut sItems = String::new();
+            let mut sIndicators = String::new();
+            for (iIndex, stImage) in vecImages.iter().enumerate() {
+                let sSrcset = crate::routes::topics::topic_image_srcset(stImage);
+                sItems.push_str(&format!(
+                    "<a href=\"{}\"><img src=\"{}\" alt=\"{sTitleAttr}\" srcset=\"{}\" sizes=\"(min-width: 70em) 80vw, 100vw\" width=\"{}\" height=\"{}\"></a>",
+                    html_escape::encode_double_quoted_attribute(&stImage.original_url),
+                    html_escape::encode_double_quoted_attribute(&stImage.medium_url),
+                    html_escape::encode_double_quoted_attribute(&sSrcset),
+                    stImage.width,
+                    stImage.height,
+                ));
+                sIndicators.push_str(&format!(
+                    "<a href=\"{}\"{}></a>",
+                    html_escape::encode_double_quoted_attribute(&stImage.original_url),
+                    if iIndex == 0 { " class=\"active\"" } else { "" }
+                ));
+            }
+            format!(
+                "<div class=\"slider-parent\"><div class=\"swiffy-slider slider-indicators-round slider-indicators-outside slider-indicators-sm slider-item-ratio slider-item-ratio-contain\"><div class=\"slider-container\">{sItems}</div><button type=\"button\" class=\"slider-nav\" aria-label=\"Предыдущее изображение\"></button><button type=\"button\" class=\"slider-nav slider-nav-next\" aria-label=\"Следующее изображение\"></button><div class=\"slider-indicators\">{sIndicators}</div></div></div>"
+            )
+        }
+    }
+}
+
 /// ReactionController.commentReaction/topicReaction (GET, non-ajax): an
 /// anonymous visitor is redirected straight to the topic/comment; a logged
 /// in user gets an HTML breakdown of who reacted with what. The previous
@@ -1216,15 +1893,40 @@ async fn reaction_target_link(
 pub async fn reactions_get(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+    jar: CookieJar,
     Query(q): Query<ReactionQuery>,
 ) -> Result<axum::response::Response> {
-    let (topic_id, comment_id) =
-        resolve_reaction_target(&state.pool, q.topic, q.comment, q.msgid).await?;
-    let link = reaction_target_link(&state.pool, topic_id, comment_id).await?;
+    // Spring chooses the `params=comment` mapping whenever `comment` is
+    // present, ignoring a simultaneous `topic` value.  Without `comment`,
+    // `topic` is required; the non-original `msgid` alias is deliberately
+    // not accepted for GET.
+    let (topic_id, comment_id) = if let Some(iCommentId) = q.comment {
+        let iTopicId: i32 = sqlx::query_scalar("SELECT topic FROM comments WHERE id=$1")
+            .bind(iCommentId)
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        (iTopicId, Some(iCommentId))
+    } else {
+        (
+            q.topic
+                .ok_or_else(|| AppError::BadRequest("missing topic".into()))?,
+            None,
+        )
+    };
+    // Java loads the target before checking whether a session exists, so an
+    // unknown id is a 404 rather than an anonymous redirect to `/`.
+    let stTopic = crate::routes::topics::get_topic(&state, topic_id).await?;
+    let sLink = comment_id.map_or_else(
+        || stTopic.topic_url(),
+        |iCommentId| format!("{}?cid={iCommentId}", stTopic.topic_url()),
+    );
 
     if user.is_none() {
-        return Ok(Redirect::to(&link).into_response());
+        return Ok((StatusCode::FOUND, [(header::LOCATION, sLink)]).into_response());
     }
+    let stUser = user.as_ref().expect("authorized above");
 
     // ReactionController.commentReaction/topicReaction: a deleted
     // topic/comment (or a topic with comments hidden) isn't viewable even
@@ -1244,80 +1946,213 @@ pub async fn reactions_get(
         }
     } else {
         crate::routes::topics::check_topic_viewable(&state, topic_id, &user).await?;
-        let topic_deleted: bool = sqlx::query_scalar("SELECT deleted FROM topics WHERE id=$1")
-            .bind(topic_id)
-            .fetch_one(&state.pool)
-            .await?;
-        if topic_deleted {
+        if stTopic.deleted {
             return Err(AppError::Forbidden);
         }
     }
 
-    let iViewerId = user.as_ref().expect("authorized above").id;
-    let rows: Vec<(i32, String, String, Option<chrono::DateTime<chrono::Utc>>)> =
-        if let Some(iCommentId) = comment_id {
-            sqlx::query_as(
-                r#"SELECT u.id,u.nick,item.value,rl.set_date
-                   FROM comments c
-                   CROSS JOIN LATERAL jsonb_each_text(COALESCE(c.reactions,'{}'::jsonb)) item
-                   JOIN users u ON u.id=item.key::integer
-                   LEFT JOIN reactions_log rl
-                     ON rl.origin_user=u.id AND rl.topic_id=c.topic AND rl.comment_id=c.id
-                   WHERE c.id=$1 AND item.key ~ '^[0-9]+$'
-                     AND NOT EXISTS (
-                       SELECT 1 FROM ignore_list il
-                       WHERE il.userid=$2 AND il.ignored=u.id
-                     )
-                   ORDER BY COALESCE(rl.set_date,'epoch'::timestamptz)"#,
-            )
-            .bind(iCommentId)
-            .bind(iViewerId)
-            .fetch_all(&state.pool)
-            .await?
-        } else {
-            sqlx::query_as(
-                r#"SELECT u.id,u.nick,item.value,rl.set_date
-                   FROM topics t
-                   CROSS JOIN LATERAL jsonb_each_text(COALESCE(t.reactions,'{}'::jsonb)) item
-                   JOIN users u ON u.id=item.key::integer
-                   LEFT JOIN reactions_log rl
-                     ON rl.origin_user=u.id AND rl.topic_id=t.id AND rl.comment_id IS NULL
-                   WHERE t.id=$1 AND item.key ~ '^[0-9]+$'
-                     AND NOT EXISTS (
-                       SELECT 1 FROM ignore_list il
-                       WHERE il.userid=$2 AND il.ignored=u.id
-                     )
-                   ORDER BY COALESCE(rl.set_date,'epoch'::timestamptz)"#,
-            )
-            .bind(topic_id)
-            .bind(iViewerId)
-            .fetch_all(&state.pool)
-            .await?
-        };
+    let (bExpired, iPostscore, bLinksAllowed, bPollAllowed): (bool, i32, bool, bool) =
+        sqlx::query_as(
+            r#"SELECT NOT t.sticky AND COALESCE(t.commitdate,t.postdate)+s.expire<CURRENT_TIMESTAMP,
+                      COALESCE(t.postscore,-9999),s.havelink,COALESCE(s.vote,false)
+               FROM topics t JOIN groups g ON g.id=t.groupid
+               JOIN sections s ON s.id=g.section WHERE t.id=$1"#,
+        )
+        .bind(topic_id)
+        .fetch_one(&state.pool)
+        .await?;
+    let bFrozen = sqlx::query_scalar::<_, Option<chrono::DateTime<chrono::Utc>>>(
+        "SELECT frozen_until FROM users WHERE id=$1",
+    )
+    .bind(stUser.id)
+    .fetch_one(&state.pool)
+    .await?
+    .is_some_and(|dtUntil| dtUntil > chrono::Utc::now());
+    let vecRows = vecReactionRows(&state, topic_id, comment_id, stUser.id).await?;
+    let stTimezone = crate::request_timezone::stRequestTimezone(&jar);
 
-    let mut html = format!(
-        "<h1>Реакции</h1><p><a href=\"{link}\">Перейти к {}</a></p><ul>",
-        if comment_id.is_some() {
-            "комментарию"
+    if let Some(iCommentId) = comment_id {
+        let stComment: CommentItem = sqlx::query_as(
+            r#"SELECT c.id,c.topic,c.replyto,c.title,m.message,m.markup::text AS markup,
+                      c.postdate,u.id AS author_id,u.nick AS author,
+                      COALESCE(u.score,0) AS author_score,
+                      COALESCE(u.blocked,false) AS author_blocked,
+                      COALESCE(u.passwd,'')='' AS author_anonymous,
+                      COALESCE(u.frozen_until > CURRENT_TIMESTAMP,false) AS author_frozen,
+                      c.deleted
+               FROM comments c JOIN msgbase m ON m.id=c.id JOIN users u ON u.id=c.userid
+               WHERE c.id=$1"#,
+        )
+        .bind(iCommentId)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
+        let (iScore, iMaxScore, bRegistered, bBlocked, optPhoto, optEmail): (
+            i32,
+            i32,
+            bool,
+            bool,
+            Option<String>,
+            Option<String>,
+        ) = sqlx::query_as(
+            r#"SELECT COALESCE(score,0),COALESCE(max_score,0),COALESCE(passwd,'')<>'',
+                      COALESCE(blocked,false),photo,email FROM users WHERE id=$1"#,
+        )
+        .bind(stComment.author_id)
+        .fetch_one(&state.pool)
+        .await?;
+        let optSettings: Option<String> =
+            sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
+                .bind(stUser.id)
+                .fetch_optional(&state.pool)
+                .await?;
+        let stProfile = crate::profile::ProfileSettings::from_hstore_text(optSettings);
+        let (optUserpicUrl, iUserpicWidth, iUserpicHeight) = if stProfile.photos {
+            let optUrl = crate::profile::userpic_url(
+                &stProfile.avatar,
+                false,
+                stComment.author_id == 2,
+                optPhoto.as_deref(),
+                optEmail.as_deref(),
+            );
+            let bDisabled = optUrl.is_none();
+            (
+                Some(optUrl.unwrap_or_else(|| crate::profile::DISABLED_USERPIC.to_owned())),
+                if bDisabled { 1 } else { 150 },
+                if bDisabled { 1 } else { 150 },
+            )
         } else {
-            "теме"
-        }
+            (None, 0, 0)
+        };
+        let bAllowInteract = !bFrozen
+            && !bExpired
+            && !stComment.deleted
+            && iPostscore != 10002
+            && stUser.id != stComment.author_id;
+        let sReactionsHtml = sRenderAllReactions(
+            topic_id,
+            Some(iCommentId),
+            &vecRows,
+            stUser.id,
+            bAllowInteract,
+            &csrf_token,
+            stTimezone,
+        );
+        let stMarkupUsers = state
+            .markup
+            .stResolveBatch([(&*stComment.message, &*stComment.markup)])
+            .await?;
+        return Ok(Html(
+            StReactionCommentTemplate {
+                stSignature: stReactionSignature(
+                    iScore,
+                    iMaxScore,
+                    bRegistered,
+                    bBlocked,
+                    stUser.canmod,
+                ),
+                sCommentHtml: markup::render_message_with_markup_policy_and_users(
+                    &stComment.message,
+                    Some(&stComment.markup),
+                    None,
+                    stComment.bNofollowAuthorLinks(),
+                    Some(&state.config.public_url),
+                    Some(&stMarkupUsers),
+                ),
+                optUserpicUrl,
+                iUserpicWidth,
+                iUserpicHeight,
+                bTopicAuthor: stComment.author_id == stTopic.author_id,
+                sReactionsHtml,
+                stTopic,
+                stComment,
+            }
+            .render()?,
+        )
+        .into_response());
+    }
+
+    let (iScore, iMaxScore, bRegistered, bBlocked): (i32, i32, bool, bool) = sqlx::query_as(
+        r#"SELECT COALESCE(score,0),COALESCE(max_score,0),COALESCE(passwd,'')<>'',
+                      COALESCE(blocked,false) FROM users WHERE id=$1"#,
+    )
+    .bind(stTopic.author_id)
+    .fetch_one(&state.pool)
+    .await?;
+    let bAllowInteract = !bFrozen && !bExpired && stUser.id != stTopic.author_id;
+    let sReactionsHtml = sRenderAllReactions(
+        topic_id,
+        None,
+        &vecRows,
+        stUser.id,
+        bAllowInteract,
+        &csrf_token,
+        stTimezone,
     );
-    for (_uid, nick, reaction, optDate) in &rows {
-        let sDate = optDate
-            .map(|dtValue| dtValue.to_string())
-            .unwrap_or_default();
-        html.push_str(&format!(
-            "<li>{} <b>{}</b> · {sDate}</li>",
-            html_escape::encode_text(reaction),
-            html_escape::encode_text(nick),
-        ));
-    }
-    if rows.is_empty() {
-        html.push_str("<li class=\"muted\">Нет реакций</li>");
-    }
-    html.push_str("</ul>");
-    Ok(Html(html).into_response())
+    let vecImages = crate::routes::topics::load_topic_images(&state, topic_id).await?;
+    let sImagesHtml = sRenderReactionImages(
+        &vecImages,
+        &stTopic.title,
+        stTopic.section_prefix == "gallery",
+    );
+    let optPoll = if bPollAllowed {
+        optReactionPoll(
+            &state,
+            &stTopic,
+            bExpired,
+            q.results.as_deref() == Some("true"),
+            stUser,
+            &csrf_token,
+        )
+        .await?
+    } else {
+        None
+    };
+    let vecTags = stTopic
+        .tags_vec()
+        .into_iter()
+        .map(|sName| StReactionTagView {
+            sUrl: format!("/tag/{}", urlencoding::encode(&sName)),
+            sName,
+        })
+        .collect();
+    let sLinkText = stTopic
+        .linktext
+        .as_deref()
+        .filter(|sValue| !sValue.is_empty())
+        .unwrap_or("Подробности")
+        .to_owned();
+    let stMarkupUsers = state
+        .markup
+        .stResolveBatch([(&*stTopic.message, &*stTopic.markup)])
+        .await?;
+    Ok(Html(
+        StReactionTopicTemplate {
+            stSignature: stReactionSignature(
+                iScore,
+                iMaxScore,
+                bRegistered,
+                bBlocked,
+                stUser.canmod,
+            ),
+            vecTags,
+            sTopicHtml: markup::render_topic_with_expanded_cut_policy_and_users(
+                &stTopic.message,
+                &stTopic.markup,
+                stTopic.bNofollowAuthorLinks(),
+                Some(&state.config.public_url),
+                Some(&stMarkupUsers),
+            ),
+            sImagesHtml,
+            optPoll,
+            bLinksAllowed,
+            sLinkText,
+            sReactionsHtml,
+            stTopic,
+        }
+        .render()?,
+    )
+    .into_response())
 }
 
 /// ReactionService.DefinedReactions - order matters (matches insertion order
@@ -1338,6 +2173,94 @@ pub(crate) const REACTIONS: &[(&str, &str)] = &[
     ("🎉", "хлопушка"),
     ("🤬", "нет слов!"),
 ];
+
+#[cfg(test)]
+mod reaction_get_contract_tests {
+    use super::*;
+    use axum::http::HeaderValue;
+    use chrono::TimeZone;
+
+    #[test]
+    fn all_mode_renders_every_choice_and_author_log_like_reactions_tag() {
+        let dtSet = chrono::Utc
+            .with_ymd_and_hms(2026, 8, 15, 9, 10, 11)
+            .unwrap();
+        let sHtml = sRenderAllReactions(
+            42,
+            Some(7),
+            &[
+                (10, "alice".into(), "🎉".into(), 300, false, Some(dtSet)),
+                (11, "blocked".into(), "custom".into(), 50, true, None),
+            ],
+            10,
+            true,
+            "csrf-token",
+            chrono_tz::Europe::Moscow,
+        );
+
+        assert_eq!(
+            sHtml.matches("<button name=\"reaction\"").count(),
+            REACTIONS.len() + 1
+        );
+        assert!(sHtml.contains("method=\"POST\""));
+        assert!(sHtml.contains("name=\"comment\" value=\"7\""));
+        assert!(sHtml.contains("value=\"🎉-false\" class=\"reaction btn-primary \""));
+        assert!(sHtml.contains("value=\"custom-true\""));
+        assert!(sHtml.contains("title=\"15.08.26 12:10:11 MSK\""));
+        assert!(sHtml.contains("<s><a href=\"/people/blocked/profile\">blocked</a></s>"));
+        assert!(!sHtml.contains("Нет реакций"));
+    }
+
+    #[test]
+    fn disabled_all_mode_keeps_buttons_visible_but_non_interactive() {
+        let sHtml =
+            sRenderAllReactions(42, None, &[], 10, false, "csrf-token", chrono_tz::Etc::UTC);
+
+        assert_eq!(
+            sHtml.matches("<button name=\"reaction\"").count(),
+            REACTIONS.len()
+        );
+        assert_eq!(sHtml.matches(" disabled>").count(), REACTIONS.len());
+        assert!(!sHtml.contains("reaction-show-list"));
+        assert!(!sHtml.contains("reaction-show\""));
+    }
+
+    #[test]
+    fn reaction_pages_use_full_base_layout_and_original_return_dom() {
+        let sTopic = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/templates/reaction_topic.html"
+        ));
+        let sComment = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/templates/reaction_comment.html"
+        ));
+        for sTemplate in [sTopic, sComment] {
+            assert!(sTemplate.contains("{% extends \"base.html\" %}"));
+            assert!(sTemplate.contains("class=\"messages\""));
+            assert!(sTemplate.contains("class=\"btn btn-primary\""));
+            assert!(sTemplate.contains("Вернуться"));
+        }
+        assert!(sTopic.contains("id=\"topic-{{ stTopic.id }}\""));
+        assert!(sComment.contains("id=\"comment-{{ stComment.id }}\""));
+        assert!(sComment.contains("class=\"userpic\""));
+        assert!(!sTopic.contains("<h1>Реакции</h1>"));
+    }
+
+    #[test]
+    fn anonymous_redirect_contract_is_http_302() {
+        let stResponse = (
+            StatusCode::FOUND,
+            [(header::LOCATION, "/forum/linux-org-ru/42".to_owned())],
+        )
+            .into_response();
+        assert_eq!(stResponse.status(), StatusCode::FOUND);
+        assert_eq!(
+            stResponse.headers().get(header::LOCATION),
+            Some(&HeaderValue::from_static("/forum/linux-org-ru/42"))
+        );
+    }
+}
 
 async fn check_reaction_allowed(
     pool: &sqlx::PgPool,
@@ -1759,6 +2682,18 @@ mod moderation_semantics_tests {
 
         assert!(!bNotificationIsCurrent(&stRemoved));
         assert!(bNotificationIsCurrent(&stReply));
+    }
+
+    #[test]
+    fn notification_html_subject_is_plain_but_raw_storage_value_is_preserved() {
+        let mut stEvent = stNotification(1, 1, "REPLY", 10, None, true, None, None);
+        stEvent.subj = "A &amp; B &lt;b&gt; &quot;Q&quot; &#39;X&#39;".to_owned();
+
+        assert_eq!(stEvent.sSubjectPlain(), "A & B <b> «Q» 'X'");
+        assert_eq!(
+            stEvent.subj,
+            "A &amp; B &lt;b&gt; &quot;Q&quot; &#39;X&#39;"
+        );
     }
 
     #[test]

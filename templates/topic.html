@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}{{ topic.title }} — {{ topic.group_title }} — {{ topic.section_name }}{% endblock %}
+{% block title %}{{ topic.sTitlePlain() }} — {{ topic.group_title }} — {{ topic.section_name }}{% endblock %}
 {% block head_extra %}
 <link rel="canonical" href="{{ canonical_url }}">
 <meta property="og:type" content="article">
 <meta property="og:locale" content="ru_RU">
-<meta property="og:title" content="{{ topic.title }}">
+<meta property="og:title" content="{{ topic.sTitlePlain() }}">
 <meta property="og:url" content="{{ canonical_url }}">
 <meta property="og:image" content="{{ og_image_url }}">
 <meta property="article:section" content="{{ topic.group_title }}">
@@ -15,26 +15,7 @@
 {% endblock %}
 {% block content %}
 <div class="messages" itemscope itemtype="http://schema.org/Article">
-<article class="msg" id="topic-{{ topic.id }}">
-  <header>
-    <div class="msg-top-header"><a href="/{{ topic.section_prefix }}/">{{ topic.section_name }}</a> — <a href="/{{ topic.section_prefix }}/{{ topic.group_urlname }}">{{ topic.group_title }}</a></div>
-    <h1><a href="{{ topic.topic_url() }}">{{ topic.title }}</a></h1>
-    {% if topic.tags_vec().len() > 0 %}<p class="tags"><i class="icon-tag"></i>&nbsp;{% for tag in topic.tags_vec() %}<a class="tag" href="/tag/{{ tag }}">{{ tag }}</a>{% if !loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
-  </header>
-  <div class="msg-container">
-    <div class="msg_body">
-      {{ images_html|safe }}
-      <div class="msg-text">
-        {{ topic_html|safe }}
-        {% match poll %}{% when Some with (p) %}{% include "poll_view.html" %}{% when None %}{% endmatch %}
-        {% match topic.url %}{% when Some with (url) %}<p>&gt;&gt;&gt; <a rel="nofollow" href="{{ url }}">{% match topic.linktext %}{% when Some with (lt) %}{{ lt }}{% when None %}Подробности{% endmatch %}</a></p>{% when None %}{% endmatch %}
-      </div>
-      <footer><div class="sign" style="margin-left:0"><a href="/people/{{ topic.author }}/profile">{{ topic.author }}</a> {{ topic_author_signature.stars_html|safe }}{% if topic_author_signature.show_score %} (Score: {{ topic_author_signature.score }} MaxScore: {{ topic_author_signature.max_score }}){% endif %}<br><time data-format="default" datetime="{{ topic.postdate.to_rfc3339() }}">{{ topic.postdate }}</time></div></footer>
-      {% if can_comment || topic_show_reactions_link %}<div class="reply"><ul id="topicMenu">{% if can_comment %}<li><a href="comment-message.jsp?topic={{ topic.id }}">Ответить</a></li>{% endif %}{% if topic_show_reactions_link %}<li><a class="reaction-show" href="/reactions?topic={{ topic.id }}">Реакции</a></li>{% endif %}</ul></div>{% endif %}
-      {{ topic_reactions_html|safe }}
-    </div>
-  </div>
-</article>
+{{ topic_card_html|safe }}
 
 {% match thread_root %}{% when Some with (root) %}<p><a href="{{ topic.topic_url() }}">← вернуться ко всем комментариям</a> (режим ветки, корень #{{ root }})</p>{% when None %}{% endmatch %}
 {% if show_deleted %}<p>Просмотр удалённых комментариев. <a href="{{ topic.topic_url() }}">Скрыть удалённые</a></p>{% endif %}
@@ -47,7 +28,7 @@
     <div class="msg-container">
       {% match c.userpic_url %}{% when Some with (url) %}<div class="userpic"><img class="photo" src="{{ url }}" alt="" width="{{ c.userpic_width }}" height="{{ c.userpic_height }}"></div>{% when None %}{% endmatch %}
       <div class="msg_body{% if c.userpic_url.is_some() %} message-w-userpic{% endif %}">
-      <div class="msg-text">{% if c.item.title.len() > 0 %}<h1>{{ c.item.title }}</h1>{% endif %}{{ c.html|safe }}</div>
+      <div class="msg-text">{% match c.item.optTitlePlain() %}{% when Some with (title) %}<h1>{{ title }}</h1>{% when None %}{% endmatch %}{{ c.html|safe }}</div>
       <div class="sign"><a href="/people/{{ c.item.author }}/profile">{{ c.item.author }}</a> {{ c.author_signature.stars_html|safe }}{% if c.author_signature.show_score %} (Score:&nbsp;{{ c.author_signature.score }} MaxScore:&nbsp;{{ c.author_signature.max_score }}){% endif %}{% if c.is_topic_author %} <span class="user-tag">автор топика</span>{% endif %}<br><time data-format="default" datetime="{{ c.item.postdate.to_rfc3339() }}">{{ c.item.postdate }}</time></div>
       {% if !c.item.deleted %}<div class="reply"><ul>{% if can_comment %}<li><a href="add_comment.jsp?topic={{ topic.id }}&replyto={{ c.item.id }}" data-author-readonly="{{ c.author_readonly }}">Ответить</a></li>{% endif %}{% if c.show_reactions_link %}<li><a class="reaction-show" href="/reactions?topic={{ topic.id }}&comment={{ c.item.id }}">Реакции</a></li>{% endif %}{% if c.can_edit %}<li><a href="/edit_comment?original={{ c.item.id }}&amp;topic={{ topic.id }}">Править</a></li>{% endif %}{% if c.can_delete %}<li><a href="/delete_comment.jsp?msgid={{ c.item.id }}">Удалить</a></li>{% endif %}{% if c.answer_count > 1 %}<li><a href="{{ c.answer_url }}">Показать ответы</a></li>{% endif %}{% if c.answer_count == 1 %}<li><a href="{{ c.answer_url }}">Показать ответ</a></li>{% endif %}{% if c.can_warn %}<li><a href="/post-warning?topic={{ topic.id }}&amp;comment={{ c.item.id }}">Уведомить модераторов</a></li>{% endif %}<li><a href="{{ topic.topic_url() }}?cid={{ c.item.id }}">Ссылка</a></li></ul></div>{{ c.reactions_html|safe }}{% endif %}
     </div></div>

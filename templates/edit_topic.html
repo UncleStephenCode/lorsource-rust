@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Редактирование сообщения{% endblock %}
+{% block head_extra %}
+<script type="text/javascript">
+  $script('/js/add-form.js', function() {
+    setupFormWithSpinner({
+      formSelector: '#messageForm',
+      textareaSelector: '#form_msg',
+      validateOptions: { messages: { title: "Введите заголовок" } }
+    });
+  });
+  $script.ready("plugins", function() { $script("/js/tagsAutocomplete.js"); });
+</script>
+{% endblock %}
+{% block content %}
+<h1>{{ heading }}</h1>
+
+{% match topic_card_html %}
+{% when Some with (html) %}
+<div class="messages">
+  {{ html|safe }}
+</div>
+{% when None %}{% endmatch %}
+
+<form action="edit.jsp" name="edit" method="post" id="messageForm" enctype="{% if imagepost %}multipart/form-data{% else %}application/x-www-form-urlencoded{% endif %}">
+  <input type="hidden" name="csrf" value="{{ csrf_token }}">
+  {% for error in errors %}<div class="error">{{ error }}</div>{% endfor %}
+  <input type="hidden" name="msgid" value="{{ topic_id }}">
+  {% match last_edit %}{% when Some with (value) %}<input type="hidden" name="lastEdit" value="{{ value }}">{% when None %}{% endmatch %}
+
+  {% if content_editable %}
+  <div class="control-group">
+    <label for="title">Заглавие</label>
+    <input id="form_title" name="title" required="required" value="{{ form_title }}">
+  </div>
+
+  {% if poll_allowed %}
+    {% for variant in poll_variants %}<label>Вариант #{{ loop.index0 }}: <input id="form_poll{{ variant.id }}" name="poll[{{ variant.id }}]" size="40" value="{{ variant.label }}"></label><br>{% endfor %}
+    {% for variant in new_poll %}<label>Новый #{{ loop.index0 }}: <input id="form_newPoll{{ loop.index0 }}" name="newPoll[{{ loop.index0 }}]" size="40" value="{{ variant }}"></label><br>{% endfor %}
+    <label>Мультивыбор: <input id="form_multiselect" type="checkbox" name="multiselect" value="true"{% if poll_multiselect %} checked{% endif %}><input type="hidden" name="_multiselect" value="on"></label><br>
+  {% endif %}
+
+  <div class="control-group" data-format-mode="{{ format_mode }}">
+    <div class="markup-tabs">
+      <ul class="markup-tabs__nav"><li class="markup-tabs__tab active" data-tab="editor">{{ format_title }}</li></ul>
+      <div class="markup-tabs__content"><div class="markup-tabs__panel active" data-panel="editor"><textarea name="msg" id="form_msg">{{ form_msg }}</textarea></div></div>
+    </div>
+    <div class="help-block">
+      {% if format_mode == "lorcode" %}<b>Внимание:</b> прочитайте описание разметки <a href="/help/lorcode.md" target="_blank">LORCODE</a>.{% endif %}
+      {% if format_mode == "markdown" %}<b>Внимание:</b> прочитайте описание разметки <a target="_blank" href="/help/markdown.md">Markdown</a>.{% endif %}
+      Обратите внимание на то, как <a target="_blank" href="/forum/linux-org-ru/15431459">правильно копировать вывод терминала</a>.
+    </div>
+  </div>
+
+  {% if links_allowed %}
+  <div class="control-group"><label for="linktext">Текст ссылки</label><input id="form_linktext" name="linktext" value="{{ form_linktext }}"></div>
+  <div class="control-group"><label for="url">Ссылка (не забудьте <b>https://</b>)</label><input id="form_url" name="url" placeholder="https://" type="url" value="{{ form_url }}"></div>
+  {% endif %}
+  {% endif %}
+
+  {% if tags_editable %}
+  <div class="control-group">
+    <label for="tags">Метки (разделенные запятой, не более 5)</label>
+    <input required="required" autocapitalize="off" data-tags-autocomplete="data-tags-autocomplete" id="tags" name="tags" value="{{ form_tags }}">
+  </div>
+  {% endif %}
+
+  {% if imagepost %}
+  <div class="control-group">
+    {% for image in existing_images %}
+    <div style="display: flex; align-items: center; gap: 1em">
+      <a href="{{ image.original_url }}" target="_blank"><img src="{{ image.medium_url }}" style="height: 50px; width: auto"></a>
+      <a href="/delete_image?id={{ image.id }}">удалить изображение</a>
+    </div>
+    {% endfor %}
+    {% for image in uploaded_images %}
+    <div style="display: flex; align-items: center; gap: 1em"><a href="/gallery/preview/{{ image }}" target="_blank"><img src="/gallery/preview/{{ image }}" style="height: 50px; width: auto"></a></div>
+    <input id="form_uploadedImages{{ loop.index0 }}" type="hidden" name="uploadedImages[{{ loop.index0 }}]" value="{{ image }}">
+    {% endfor %}
+    {% for slot in empty_image_slots %}<input id="form_uploadedImages{{ slot }}" type="hidden" name="uploadedImages[{{ slot }}]" value=""><label>Добавить изображение: <input type="file" name="images" accept=".jpg,.jpeg,.png,.gif,image/jpeg,image/png,image/gif"></label>{% endfor %}
+  </div>
+  {% endif %}
+
+  {% if mini_editable %}<label>Мини: <input id="form_minor" type="checkbox" name="minor" value="true"{% if form_minor %} checked{% endif %}><input type="hidden" name="_minor" value="on"></label>{% else %}<input id="form_minor" type="hidden" name="minor" value="{% if form_minor %}true{% else %}false{% endif %}">{% endif %}
+
+  <div class="form-actions">
+    <button type="submit" class="btn {% if commit_form %}btn-default{% else %}btn-primary{% endif %}">Отредактировать</button>
+    &nbsp;
+    <button type="submit" name="preview" class="btn btn-default">Предпросмотр</button>
+    {% if draft %}&nbsp;{% if publish_allowed %}<button type="submit" name="publish" class="btn {% if commit_form %}btn-default{% else %}btn-primary{% endif %}">Опубликовать</button>{% else %}<a class="btn btn-primary disabled" title="{{ publish_reason }}">Опубликовать</a>{% endif %}{% endif %}
+  </div>
+
+  {% if commit_form %}
+  <label>Группа:
+    <select name="chgrp">{% for group in groups %}<option value="{{ group.id }}"{% if group.selected %} selected="selected"{% endif %}>{{ group.title }}</option>{% endfor %}</select>
+  </label>
+  <label>Бонус автору ({% if author_blocked %}<s>{% endif %}{{ author_nick }}{% if author_blocked %}</s>{% endif %}): <input id="form_bonus" name="bonus" value="{{ bonus }}" size="5" class="number" type="number" min="0" max="20"> (от 0 до 20; текущий score={{ author_score }})</label>
+  {% for editor in editors %}<label>Бонус корректору ({% if editor.blocked %}<s>{% endif %}{{ editor.nick }}{% if editor.blocked %}</s>{% endif %}): <input id="form_editorBonus{{ editor.nick }}" name="editorBonus[{{ editor.nick }}]" value="{{ editor.bonus }}" size="5" class="number" type="number" min="0" max="5"> (от 0 до 5; текущий score={{ editor.score }})</label>{% endfor %}
+  <div class="form-actions"><button type="submit" name="commit" class="btn btn-primary">{% if draft %}Опубликовать и Подтвердить{% else %}Подтвердить{% endif %}</button></div>
+  {% endif %}
+</form>
+
+{% if imagepost %}
+<p>Технические требования к изображению:</p>
+<ul><li>Ширина x Высота: от 400x400 до 5120x5120 пикселей</li><li>Тип: jpeg, gif, png</li><li>Размер не более 8142 Kb</li><li>Изображения, содержащие EXIF-информацию, не всегда могут быть загружены.</li></ul>
+{% endif %}
+{% endblock %}

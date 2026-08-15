@@ -51,6 +51,7 @@ def main() -> int:
                 str(HERE / "browser_seed.py"),
                 "--base",
                 args.base,
+                "--restart",
             ],
             check=True,
         )
@@ -66,6 +67,7 @@ def main() -> int:
                 str(HERE / "browser_seed.py"),
                 "--base",
                 args.base,
+                "--restart",
             ],
             check=True,
         )

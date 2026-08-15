@@ -1,5 +1,10 @@
 # Parity audit v7: current Java/Scala source vs Rust port
 
+> Historical snapshot only. Counts in this report describe the named v7 input
+> archives and must not be copied into current readiness claims. The live
+> structural inventory is [`ROUTE_COVERAGE.md`](ROUTE_COVERAGE.md); it does not
+> prove request, authorization, HTML, database or side-effect parity.
+
 Input archives used for this audit:
 
 - `lorsource-java-cleared.zip` — current Java/Scala source of the original engine.

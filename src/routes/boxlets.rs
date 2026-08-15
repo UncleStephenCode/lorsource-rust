@@ -29,32 +29,38 @@ struct StTagCloudBoxletTemplate {
 /// extractor. `AbstractBoxlet` accepts every HTTP method and its optional
 /// `edit` request parameter only populates an unused model value for this JSP.
 pub async fn gallery(State(stState): State<AppState>) -> Result<Response> {
+    Ok(stHtmlFragment(sRenderGalleryBoxlet(&stState).await?))
+}
+
+pub(crate) async fn sRenderGalleryBoxlet(stState: &AppState) -> Result<String> {
     let cService = CBoxletService::new(
         CBoxletPgRepository::new(stState.pool.clone()),
         &stState.config.upload_dir,
     );
-    let sBody = StGalleryBoxletTemplate {
+    Ok(StGalleryBoxletTemplate {
         items: cService.vecGallery().await?,
     }
-    .render()?;
-    Ok(stHtmlFragment(sBody))
+    .render()?)
 }
 
 /// `TagCloudBoxlet.getData`: public, session-independent and method-agnostic,
 /// like the original `AbstractBoxlet` controller.
 pub async fn tagCloud(State(stState): State<AppState>) -> Result<Response> {
+    Ok(stHtmlFragment(sRenderTagCloudBoxlet(&stState).await?))
+}
+
+pub(crate) async fn sRenderTagCloudBoxlet(stState: &AppState) -> Result<String> {
     let cService = CBoxletService::new(
         CBoxletPgRepository::new(stState.pool.clone()),
         &stState.config.upload_dir,
     );
-    let sBody = StTagCloudBoxletTemplate {
+    Ok(StTagCloudBoxletTemplate {
         tags: cService.vecTagCloud().await?,
     }
-    .render()?;
-    Ok(stHtmlFragment(sBody))
+    .render()?)
 }
 
-fn stHtmlFragment(sBody: String) -> Response {
+pub(crate) fn stHtmlFragment(sBody: String) -> Response {
     let mut stResponse = sBody.into_response();
     stResponse.headers_mut().insert(
         header::CONTENT_TYPE,
@@ -97,6 +103,38 @@ mod tests {
         assert!(sHtml.contains("width=640 height=480"));
         assert!(sHtml.contains("Скриншот</a> от tester (3)"));
         assert!(sHtml.contains("другие скриншоты..."));
+    }
+
+    #[test]
+    fn gallery_titles_are_escaped_once_after_database_entity_decode() {
+        let sHtml = StGalleryBoxletTemplate {
+            items: vec![StGalleryBoxletItem {
+                sTitle: "A & B < C \"Q\" 'X' A 😀".to_owned(),
+                sAltTitle: "A & B < C \"Q\" 'X' A 😀".to_owned(),
+                iStat: 1,
+                sUserNick: "tester".to_owned(),
+                sLink: "/gallery/screenshots/1".to_owned(),
+                sImageMedium: "images/1/1000px.jpg".to_owned(),
+                sImageSrcset: "images/1/500px.jpg 500w".to_owned(),
+                iImageWidth: 640,
+                iImageHeight: 480,
+                sImagePaddingPercent: "75.0".to_owned(),
+            }],
+        }
+        .render()
+        .expect("gallery template");
+
+        let sEscaped = "A &#38; B &#60; C &#34;Q&#34; &#39;X&#39; A 😀";
+        assert!(
+            sHtml.contains(&format!("alt=\"{sEscaped}\"")),
+            "rendered gallery boxlet: {sHtml}"
+        );
+        assert!(sHtml.contains(&format!(">{sEscaped}</a> от tester (1)")));
+        assert!(!sHtml.contains("&#38;amp;"));
+        assert!(!sHtml.contains("&#38;lt;"));
+        assert!(!sHtml.contains("&#38;quot;"));
+        assert!(!sHtml.contains("&#38;#39;"));
+        assert!(!sHtml.contains("&#38;#x41;"));
     }
 
     #[test]

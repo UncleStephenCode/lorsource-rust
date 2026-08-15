@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Перенос топика{% endblock %}
+{% block content %}
+<h1>Перенос топика</h1>
+
+<form method="post" action="/mt.jsp" style="margin-top: 1em">
+  <input type="hidden" name="csrf" value="{{ csrf_token }}">
+  <input type="hidden" name="msgid" value="{{ topic_id }}">
+  <div class="control-group">
+    <label>
+      Группа:
+      <select name="moveto">
+        {% for group in groups %}<option value="{{ group.id }}"{% if group.selected %} selected="selected"{% endif %}>{{ group.label }}</option>{% endfor %}
+      </select>
+    </label>
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">Переместить</button>
+  </div>
+</form>
+
+<p>
+  Сообщение написано {% if author_blocked %}<s>{{ author_nick }}</s>{% else %}{{ author_nick }}{% endif %}, score={{ author_score }}
+</p>
+{% endblock %}

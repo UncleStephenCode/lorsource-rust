@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Данные изменены{% endblock %}
+{% block content %}
+<p>Данные изменены</p>
+
+<p>{{ big_message|safe }}</p>
+
+<p>
+  <a href="{{ link }}">Продолжить</a>
+</p>
+{% endblock %}

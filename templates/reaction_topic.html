@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Реакция на сообщение{% endblock %}
+{% block content %}
+<div class="messages">
+  <article class="msg" id="topic-{{ stTopic.id }}">
+    <header>
+      <div class="msg-top-header">
+        <span><a href="/{{ stTopic.section_prefix }}/">{{ stTopic.section_name }}</a> — <a href="/{{ stTopic.section_prefix }}/{{ stTopic.group_urlname }}">{{ stTopic.group_title }}</a>{% if stTopic.section_premoderated && !stTopic.moderate %} <span>(не подтверждено)</span>{% endif %}</span>
+      </div>
+      <h1>{% if stTopic.resolved.unwrap_or(false) %}<i class="icon-check" title="решено"></i>{% endif %}<a href="{{ stTopic.topic_url() }}">{{ stTopic.sTitlePlain() }}</a>{% if stTopic.draft %}<span style="color:red">(черновик)</span>{% endif %}</h1>
+      {% if vecTags.len() > 0 %}<p class="tags"><i class="icon-tag"></i>&nbsp;{% for stTag in vecTags %}<a class="tag" rel="tag" href="{{ stTag.sUrl }}">{{ stTag.sName }}</a>{% if !loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
+    </header>
+    <div class="msg-container">
+      <div class="msg_body">
+        {{ sImagesHtml|safe }}
+        <div class="msg-text">
+          {{ sTopicHtml|safe }}
+          {% match optPoll %}{% when Some with (p) %}{% include "poll_view.html" %}{% when None %}{% endmatch %}
+          {% if bLinksAllowed %}{% match stTopic.url %}{% when Some with (url) %}<p>&gt;&gt;&gt; <a href="{{ url }}">{{ sLinkText }}</a></p>{% when None %}{% endmatch %}{% endif %}
+        </div>
+        <footer>
+          <div class="sign" style="margin-left: 0">{% if stSignature.bBlocked %}<s>{% endif %}<a rel="author" itemprop="creator" href="/people/{{ stTopic.author }}/profile">{{ stTopic.author }}</a>{% if stSignature.bBlocked %}</s>{% endif %}{% if !stSignature.bAnonymous %} {{ stSignature.sStarsHtml|safe }}{% if stSignature.bShowScore %} (Score: {{ stSignature.iScore }} MaxScore: {{ stSignature.iMaxScore }}){% endif %}{% endif %}<br><time data-format="default" datetime="{{ stTopic.postdate.to_rfc3339() }}">{{ stTopic.postdate }}</time></div>
+        </footer>
+        {{ sReactionsHtml|safe }}
+      </div>
+    </div>
+  </article>
+  <a class="btn btn-primary" href="{{ stTopic.topic_url() }}">Вернуться</a>
+</div>
+{% endblock %}

@@ -8,6 +8,8 @@ pub mod email_domain_block;
 pub mod exception_reporting;
 pub mod forum;
 pub mod geo_location;
+pub mod image;
+pub mod markup;
 pub mod realtime;
 pub mod tag;
 pub mod topic;

@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Удаление комментария{% endblock %}
+{% block head_extra %}
+<script>
+function change(dest, source) {
+  dest.value = source.options[source.selectedIndex].value;
+}
+</script>
+{% endblock %}
+{% block content %}
+<h1>Удаление комментария</h1>
+Вы можете удалить свой комментарий в течение трех часов с момента
+его помещения, если на него еще нет ответов.
+<form method=POST action="delete_comment.jsp" class="form-horizontal">
+  <input type="hidden" name="csrf" value="{{ csrf_token }}">
+  <div class="control-group">
+    <label class="control-label" for="reason-input">Причина удаления</label>
+    <div class="controls">
+      {% if moderator %}<select name=reason_select onChange="change(reason,reason_select);">
+        <option value="">
+        {% for reason in delete_reasons %}<option value="{{ reason }}">{{ reason }}
+        {% endfor %}
+      </select><br>{% endif %}
+      <input id="reason-input" type=text name=reason>
+    </div>
+  </div>
+  {% if show_bonus %}<div class="control-group">
+    <label class="control-label" for="bonus-input">Штраф<br>score автора: {{ author_score }}</label>
+    <div class="controls">
+      <input id="bonus-input" type=number name=bonus value="7" min="0" max="20">
+      <span class="help-inline">(от 0 до 20)</span>
+    </div>
+  </div>{% endif %}
+  {% if moderator %}<div class="control-group">
+    <label class="control-label" for="delete_replys">Удалять ответы</label>
+    <div class="controls">
+      <input id="delete_replys" type="checkbox" name="delete_replys">
+      <span class="help-block">Внимание! Значение по умолчанию изменено!</span>
+    </div>
+  </div>{% endif %}
+  <input type=hidden name=msgid value="{{ comment_id }}">
+  <div class="control-group"><div class="controls">
+    <button type=submit class="btn btn-danger">Удалить</button>
+  </div></div>
+</form>
+<div class="messages"><div class="comment">{{ preview_html|safe }}</div></div>
+{% endblock %}

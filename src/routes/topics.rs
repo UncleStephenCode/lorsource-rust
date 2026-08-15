@@ -1,25 +1,34 @@
 use crate::{
-    application::topic::{CTopicService, posting::CAddTopicService},
+    application::topic::{
+        CTopicService,
+        edit::{CTopicEditService, EnTopicEditOutcome, StPreparedTopicEdit, StTopicEditInput},
+        posting::CAddTopicService,
+    },
     auth::CurrentUser,
     domain::topic::{
+        edit::{
+            StTopicEditActor, StTopicEditPoll, StTopicEditPollValue, TrTopicEditRealtimeNotifier,
+        },
         posting::{StAddTopicActor, StAddTopicPermission, StTopicLimitInfo},
-        repository::{StEditTopic, StNewTopic},
+        repository::StNewTopic,
     },
     error::{AppError, Result},
     infra::postgres::{
-        add_topic_repository::CAddTopicPgRepository, topic_repository::CTopicPgRepository,
+        add_topic_repository::CAddTopicPgRepository, topic_edit_repository::CTopicEditPgRepository,
+        topic_repository::CTopicPgRepository,
     },
+    infra::search_queue::CSearchQueueSender,
     markup,
-    models::{CommentItem, Group, PagerQuery, TagItem, TopicDetail, TopicSummary, UserSummary},
+    models::{CommentItem, Group, PagerQuery, TopicDetail, TopicSummary, UserSummary},
     pagination::Pager,
     state::AppState,
 };
 use askama::Template;
 use axum::{
-    Form,
-    extract::{ConnectInfo, FromRequest, Multipart, Path, Query, Request, State},
+    extract::{ConnectInfo, DefaultBodyLimit, FromRequest, Multipart, Path, Query, Request, State},
     http::{HeaderMap, StatusCode, Uri, header, header::CONTENT_TYPE},
     response::{Html, IntoResponse, Redirect, Response},
+    routing::{MethodRouter, get},
 };
 use serde::Deserialize;
 use std::net::SocketAddr;
@@ -30,10 +39,11 @@ struct IndexTemplate {
     title: String,
     topics: Vec<TopicSummary>,
     news: Vec<NewsTopicView>,
-    pager: Pager,
     main_page: bool,
     tracker_layout: bool,
     navigation: Option<TopicListNavigation>,
+    prev_link: Option<String>,
+    next_link: Option<String>,
 }
 
 #[derive(Template)]
@@ -48,21 +58,131 @@ struct MainPageTemplate {
     user_status: String,
     drafts_count: i64,
     favorite_present: bool,
-    poll: Option<TopicSummary>,
-    articles: Vec<TopicSummary>,
-    top_topics: Vec<TopicSummary>,
-    gallery: Vec<GalleryBoxItem>,
-    tags: Vec<TagItem>,
+    boxlets_html: String,
     show_gallery_on_main: bool,
 }
 
-struct GalleryBoxItem {
-    topic: TopicSummary,
-    image_url: String,
-    image_srcset: String,
-    image_width: i32,
-    image_height: i32,
-    image_padding_percent: f64,
+#[derive(Template)]
+#[template(path = "main_boxlets.html")]
+struct StMainBoxletsTemplate {
+    vecBoxlets: Vec<String>,
+}
+
+const ARR_MAIN_MIXED_BOXLETS: [&str; 2] = ["top10", "tagcloud"];
+const ARR_MAIN_NEWS_BOXLETS: [&str; 5] = ["poll", "articles", "top10", "gallery", "tagcloud"];
+
+fn arrMainBoxlets(bShowGalleryOnMain: bool) -> &'static [&'static str] {
+    if bShowGalleryOnMain {
+        &ARR_MAIN_MIXED_BOXLETS
+    } else {
+        &ARR_MAIN_NEWS_BOXLETS
+    }
+}
+
+/// MainPageController keeps appending full cards until it has seen ten
+/// non-minor topics.  A minor topic before that boundary is a full card too,
+/// but does not advance the counter.
+fn bMainTopicUsesFullCard(bMinor: bool, iFullNonMinor: &mut usize) -> bool {
+    let bFullCard = *iFullNonMinor < 10;
+    if bFullCard && !bMinor {
+        *iFullNonMinor += 1;
+    }
+    bFullCard
+}
+
+async fn vecRenderMainBoxlets(
+    stState: &AppState,
+    bShowGalleryOnMain: bool,
+    iMessagesPerPage: i32,
+    optUserId: Option<i32>,
+    sCsrfToken: &str,
+) -> Result<Vec<String>> {
+    let mut vecBoxlets = Vec::with_capacity(arrMainBoxlets(bShowGalleryOnMain).len());
+    for sBoxletName in arrMainBoxlets(bShowGalleryOnMain) {
+        let sBoxlet = match *sBoxletName {
+            "poll" => {
+                crate::routes::api::sRenderPollBoxlet(
+                    stState,
+                    optUserId,
+                    optUserId.is_some(),
+                    sCsrfToken.to_owned(),
+                )
+                .await?
+            }
+            "articles" => {
+                crate::routes::api::sRenderArticlesBoxlet(stState, iMessagesPerPage).await?
+            }
+            "top10" => crate::routes::api::sRenderTop10Boxlet(stState, iMessagesPerPage).await?,
+            "gallery" => crate::routes::boxlets::sRenderGalleryBoxlet(stState).await?,
+            "tagcloud" => crate::routes::boxlets::sRenderTagCloudBoxlet(stState).await?,
+            _ => unreachable!("Profile.getBoxlets contains an unknown boxlet"),
+        };
+        vecBoxlets.push(sBoxlet);
+    }
+    Ok(vecBoxlets)
+}
+
+#[cfg(test)]
+mod main_boxlet_layout_tests {
+    use askama::Template;
+
+    use super::{StMainBoxletsTemplate, arrMainBoxlets, bMainTopicUsesFullCard};
+
+    #[test]
+    fn mixed_main_profile_uses_exact_java_boxlet_order() {
+        assert_eq!(arrMainBoxlets(true), ["top10", "tagcloud"]);
+    }
+
+    #[test]
+    fn news_only_profile_uses_exact_java_boxlet_order() {
+        assert_eq!(
+            arrMainBoxlets(false),
+            ["poll", "articles", "top10", "gallery", "tagcloud"]
+        );
+    }
+
+    #[test]
+    fn main_wraps_direct_fragments_once_and_keeps_their_order() {
+        let sHtml = StMainBoxletsTemplate {
+            vecBoxlets: vec![
+                "<h2>poll</h2><div class=\"boxlet_content\">P</div>".to_owned(),
+                "<h2>articles</h2><div class=\"boxlet_content\">A</div>".to_owned(),
+            ],
+        }
+        .render()
+        .expect("main boxlets partial");
+
+        assert_eq!(sHtml.matches("<div class=\"boxlet\">").count(), 2);
+        assert!(sHtml.find("<h2>poll</h2>") < sHtml.find("<h2>articles</h2>"));
+        assert!(!sHtml.contains("&lt;h2&gt;"));
+    }
+
+    #[test]
+    fn main_template_has_no_legacy_duplicate_boxlet_markup() {
+        let sTemplate = include_str!("../../templates/main_page.html");
+        assert!(sTemplate.contains("{{ boxlets_html|safe }}"));
+        for sLegacyField in ["top_topics", "gallery.len()", "tags.len()", "match poll"] {
+            assert!(!sTemplate.contains(sLegacyField));
+        }
+    }
+
+    #[test]
+    fn minor_topic_before_tenth_regular_topic_remains_a_full_card() {
+        let vecMinor = [
+            false, false, false, false, false, false, false, false, false, true, false, true,
+        ];
+        let mut iFullNonMinor = 0;
+        let vecFull = vecMinor
+            .into_iter()
+            .map(|bMinor| bMainTopicUsesFullCard(bMinor, &mut iFullNonMinor))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            vecFull,
+            [true; 11].into_iter().chain([false]).collect::<Vec<_>>()
+        );
+        assert_eq!(iFullNonMinor, 10);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +199,13 @@ pub(crate) struct ActiveTagLink {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct ForumFilterLink {
+    pub(crate) label: &'static str,
+    pub(crate) url: &'static str,
+    pub(crate) selected: bool,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct TopicListNavigation {
     pub(crate) section_id: i32,
     pub(crate) section_url: Option<String>,
@@ -91,6 +218,7 @@ pub(crate) struct TopicListNavigation {
     pub(crate) all_groups_selected: bool,
     pub(crate) uncommitted_count: i64,
     pub(crate) active_tags: Vec<ActiveTagLink>,
+    pub(crate) forum_filters: Vec<ForumFilterLink>,
 }
 
 #[derive(Debug, Clone)]
@@ -103,10 +231,9 @@ struct CommentPageLink {
 #[template(path = "topic.html")]
 struct TopicTemplate {
     topic: TopicDetail,
-    topic_author_signature: AuthorSignatureView,
     canonical_url: String,
     og_image_url: String,
-    topic_html: String,
+    topic_card_html: String,
     comments: Vec<CommentView>,
     /// Non-empty only outside thread/deleted mode, when there's more than
     /// one page of comments (TopicController.buildPages).
@@ -122,10 +249,6 @@ struct TopicTemplate {
     filtered_count: usize,
     unfiltered_count: usize,
     csrf_token: String,
-    poll: Option<PollView>,
-    images_html: String,
-    topic_reactions_html: String,
-    topic_show_reactions_link: bool,
     comment_format_mode: String,
     comment_format_title: String,
     can_comment: bool,
@@ -134,6 +257,731 @@ struct TopicTemplate {
     captcha_site_key: String,
     realtime_bootstrap_html: String,
     related_topics: Vec<Vec<crate::search_index::StSimilarTopic>>,
+}
+
+#[derive(Template)]
+#[template(path = "topic_card.html")]
+struct StTopicCardTemplate {
+    card: StTopicCardView,
+}
+
+struct StTopicCardView {
+    topic: TopicDetail,
+    title_plain: String,
+    topic_author_signature: AuthorSignatureView,
+    topic_html: String,
+    poll: Option<PollView>,
+    images_html: String,
+    topic_reactions_html: String,
+    topic_show_reactions_link: bool,
+    show_menu: bool,
+    enable_schema: bool,
+    links_allowed: bool,
+    topic_expired: bool,
+    resolved: bool,
+    moderator_menu: bool,
+    can_commit: bool,
+    can_comment: bool,
+    can_edit: bool,
+    can_delete: bool,
+    can_resolve: bool,
+    can_warn: bool,
+    show_postscore: bool,
+    postscore_info_html: String,
+    deleted_header_html: String,
+    userpic_html: String,
+    author_html: String,
+    remark_html: String,
+    moderator_ip_html: String,
+    committer_html: String,
+    edit_summary_html: String,
+    moderator_user_agent_html: String,
+    warnings_html: String,
+    memories_buttons_html: String,
+    memories_script_html: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct StTopicCardMeta {
+    #[sqlx(rename = "bLinksAllowed")]
+    bLinksAllowed: bool,
+    #[sqlx(rename = "bResolvable")]
+    bResolvable: bool,
+    #[sqlx(rename = "bExpired")]
+    bExpired: bool,
+    #[sqlx(rename = "iTopicPostScore")]
+    iTopicPostScore: i32,
+    #[sqlx(rename = "iRestrictComments")]
+    iRestrictComments: i32,
+    #[sqlx(rename = "iCommentCount")]
+    iCommentCount: i32,
+    #[sqlx(rename = "iOpenWarnings")]
+    iOpenWarnings: i32,
+    #[sqlx(rename = "bAllowAnonymous")]
+    bAllowAnonymous: bool,
+    #[sqlx(rename = "iScoreLoss")]
+    iScoreLoss: i32,
+    #[sqlx(rename = "optCommitDate")]
+    optCommitDate: Option<chrono::DateTime<chrono::Utc>>,
+    #[sqlx(rename = "optCommitterNick")]
+    optCommitterNick: Option<String>,
+    #[sqlx(rename = "bCommitterBlocked")]
+    bCommitterBlocked: bool,
+    #[sqlx(rename = "sPostIp")]
+    sPostIp: String,
+    #[sqlx(rename = "iUserAgentId")]
+    iUserAgentId: i32,
+    #[sqlx(rename = "optUserAgent")]
+    optUserAgent: Option<String>,
+    #[sqlx(rename = "optRemark")]
+    optRemark: Option<String>,
+    #[sqlx(rename = "optDeleteUserNick")]
+    optDeleteUserNick: Option<String>,
+    #[sqlx(rename = "optDeleteReason")]
+    optDeleteReason: Option<String>,
+}
+
+struct StTopicCardBuildInput {
+    topic: TopicDetail,
+    title_plain: String,
+    topic_author_signature: AuthorSignatureView,
+    topic_html: String,
+    poll: Option<PollView>,
+    images_html: String,
+    topic_reactions: ReactionsWidget,
+    userpic_html: String,
+    can_comment: bool,
+    actor_frozen: bool,
+    show_menu: bool,
+    enable_schema: bool,
+    include_canonical_extras: bool,
+    remote_ip: String,
+}
+
+fn iSectionCommentPostScore(iSectionId: i32) -> i32 {
+    match iSectionId {
+        1 | 2 => crate::domain::topic::options::POSTSCORE_UNRESTRICTED,
+        3 | 5 | 6 => 45,
+        _ => 50,
+    }
+}
+
+fn iEffectiveTopicPostScore(stTopic: &TopicDetail, stMeta: &StTopicCardMeta) -> i32 {
+    let iCommentCountRestriction = if stTopic.sticky {
+        crate::domain::topic::options::POSTSCORE_UNRESTRICTED
+    } else if stMeta.iCommentCount > 3000 {
+        200
+    } else if stMeta.iCommentCount > 2000 {
+        100
+    } else if stMeta.iCommentCount > 1000 {
+        50
+    } else {
+        crate::domain::topic::options::POSTSCORE_UNRESTRICTED
+    };
+    let iScoreLossRestriction = if stTopic.sticky || stMeta.bExpired {
+        crate::domain::topic::options::POSTSCORE_UNRESTRICTED
+    } else if stMeta.iScoreLoss >= 150 {
+        100
+    } else if stMeta.iScoreLoss >= 100 {
+        50
+    } else {
+        crate::domain::topic::options::POSTSCORE_UNRESTRICTED
+    };
+    [
+        stMeta.iTopicPostScore,
+        stMeta.iRestrictComments,
+        iSectionCommentPostScore(stTopic.section_id),
+        iCommentCountRestriction,
+        if stMeta.bAllowAnonymous {
+            crate::domain::topic::options::POSTSCORE_UNRESTRICTED
+        } else {
+            crate::domain::topic::options::POSTSCORE_REGISTERED_ONLY
+        },
+        iScoreLossRestriction,
+        if stMeta.iOpenWarnings > 2 {
+            100
+        } else {
+            crate::domain::topic::options::POSTSCORE_UNRESTRICTED
+        },
+    ]
+    .into_iter()
+    .max()
+    .unwrap_or(crate::domain::topic::options::POSTSCORE_UNRESTRICTED)
+}
+
+fn sTopicCardUserHtml(sNick: &str, bBlocked: bool, bLink: bool, sAttributes: &str) -> String {
+    let sNickText = html_escape::encode_text(sNick);
+    let sBody = if bLink {
+        format!(
+            "<a{sAttributes} href=\"/people/{}/profile\">{sNickText}</a>",
+            urlencoding::encode(sNick)
+        )
+    } else {
+        sNickText.into_owned()
+    };
+    if bBlocked {
+        format!("<s>{sBody}</s>")
+    } else {
+        sBody
+    }
+}
+
+async fn stTopicCardMeta(
+    stState: &AppState,
+    iTopicId: i32,
+    optViewerId: Option<i32>,
+) -> Result<StTopicCardMeta> {
+    sqlx::query_as(
+        r#"SELECT s.havelink AS "bLinksAllowed", g.resolvable AS "bResolvable",
+                  NOT t.sticky AND COALESCE(t.commitdate,t.postdate)<CURRENT_TIMESTAMP-s.expire AS "bExpired",
+                  COALESCE(t.postscore,-9999) AS "iTopicPostScore",
+                  g.restrict_comments AS "iRestrictComments", t.stat1 AS "iCommentCount",
+                  t.open_warnings AS "iOpenWarnings", t.allow_anonymous AS "bAllowAnonymous",
+                  COALESCE((SELECT sum(-di.bonus) FROM del_info di
+                            JOIN comments dc ON dc.id=di.msgid
+                            WHERE di.bonus IS NOT NULL AND di.bonus<>0
+                              AND dc.userid<>2 AND dc.deleted AND dc.topic=t.id),0)::int AS "iScoreLoss",
+                  t.commitdate AS "optCommitDate", committer.nick AS "optCommitterNick",
+                  COALESCE(committer.blocked,false) AS "bCommitterBlocked",
+                  COALESCE(host(t.postip),'') AS "sPostIp", COALESCE(t.ua_id,0) AS "iUserAgentId",
+                  ua.name AS "optUserAgent", remark.remark_text AS "optRemark",
+                  delete_user.nick AS "optDeleteUserNick", di.reason AS "optDeleteReason"
+             FROM topics t
+             JOIN groups g ON g.id=t.groupid
+             JOIN sections s ON s.id=g.section
+             LEFT JOIN users committer ON committer.id=t.commitby
+             LEFT JOIN user_agents ua ON ua.id=t.ua_id
+             LEFT JOIN user_remarks remark ON remark.user_id=$2 AND remark.ref_user_id=t.userid
+             LEFT JOIN del_info di ON di.msgid=t.id
+             LEFT JOIN users delete_user ON delete_user.id=di.delby
+            WHERE t.id=$1"#,
+    )
+    .bind(iTopicId)
+    .bind(optViewerId)
+    .fetch_optional(&stState.pool)
+    .await?
+    .ok_or(AppError::NotFound)
+}
+
+async fn sTopicEditSummaryHtml(
+    stState: &AppState,
+    stTopic: &TopicDetail,
+    optUser: &Option<UserSummary>,
+    bExpired: bool,
+) -> Result<String> {
+    let optRow: Option<(String, chrono::DateTime<chrono::Utc>, i64)> = sqlx::query_as(
+        r#"SELECT u.nick,e.editdate,count(*) OVER()::bigint
+             FROM edit_info e JOIN users u ON u.id=e.editor
+            WHERE e.msgid=$1 AND e.object_type='TOPIC'::edit_event_type
+            ORDER BY e.id DESC LIMIT 1"#,
+    )
+    .bind(stTopic.id)
+    .fetch_optional(&stState.pool)
+    .await?;
+    let Some((sEditor, dtEdit, iCount)) = optRow else {
+        return Ok(String::new());
+    };
+    let bShowHistory = optUser
+        .as_ref()
+        .is_some_and(|stUser| stUser.canmod || stUser.id == stTopic.author_id || !bExpired);
+    let sCount = if bShowHistory {
+        format!(
+            "(\u{0432}\u{0441}\u{0435}\u{0433}\u{043e} <a href=\"{}/history\">\u{0438}\u{0441}\u{043f}\u{0440}\u{0430}\u{0432}\u{043b}\u{0435}\u{043d}\u{0438}\u{0439}: {iCount}</a>)",
+            stTopic.topic_url()
+        )
+    } else {
+        format!(
+            "(\u{0432}\u{0441}\u{0435}\u{0433}\u{043e} \u{0438}\u{0441}\u{043f}\u{0440}\u{0430}\u{0432}\u{043b}\u{0435}\u{043d}\u{0438}\u{0439}: {iCount})"
+        )
+    };
+    Ok(format!(
+        "<br>\u{041f}\u{043e}\u{0441}\u{043b}\u{0435}\u{0434}\u{043d}\u{0435}\u{0435} \u{0438}\u{0441}\u{043f}\u{0440}\u{0430}\u{0432}\u{043b}\u{0435}\u{043d}\u{0438}\u{0435}: {} <time data-format=\"default\" datetime=\"{}\">{dtEdit}</time> {sCount}",
+        html_escape::encode_text(&sEditor),
+        dtEdit.to_rfc3339()
+    ))
+}
+
+async fn sTopicWarningsHtml(
+    stState: &AppState,
+    iTopicId: i32,
+    stUser: &UserSummary,
+    sCsrfToken: &str,
+    iOpenWarnings: i32,
+) -> Result<String> {
+    type TyWarningRow = (
+        i32,
+        chrono::DateTime<chrono::Utc>,
+        String,
+        bool,
+        String,
+        String,
+        Option<String>,
+        Option<bool>,
+    );
+    let vecRows: Vec<TyWarningRow> = sqlx::query_as(
+        r#"SELECT w.id,w.postdate,author.nick,COALESCE(author.blocked,false),
+                  w.warning_type::text,w.message,closed.nick,closed.blocked
+             FROM message_warnings w
+             JOIN users author ON author.id=w.author
+             LEFT JOIN users closed ON closed.id=w.closed_by
+            WHERE w.topic=$1 AND w.comment IS NULL
+              AND ($2 OR w.warning_type IN ('tag','spelling'))
+            ORDER BY w.postdate"#,
+    )
+    .bind(iTopicId)
+    .bind(stUser.canmod)
+    .fetch_all(&stState.pool)
+    .await?;
+    if vecRows.is_empty() {
+        return Ok(String::new());
+    }
+    let mut sHtml = String::from("<div class=\"infoblock\">");
+    for (iId, dtPost, sAuthor, bAuthorBlocked, sType, sMessage, optClosed, optClosedBlocked) in
+        vecRows
+    {
+        let sTypeName = crate::domain::warning::model::EnWarningType::optFromId(&sType)
+            .map(|enType| enType.sName())
+            .unwrap_or(&sType);
+        let sAuthorHtml = sTopicCardUserHtml(&sAuthor, bAuthorBlocked, true, "");
+        sHtml.push_str("<div style=\"margin-bottom: 0.5em\">⚠️ ");
+        if optClosed.is_some() {
+            sHtml.push_str("<s>");
+        }
+        sHtml.push_str(&format!(
+            "<time data-format=\"default\" datetime=\"{}\">{dtPost}</time> {sAuthorHtml}: [{}] {}",
+            dtPost.to_rfc3339(),
+            html_escape::encode_text(sTypeName),
+            html_escape::encode_text(&sMessage)
+        ));
+        if let Some(sClosed) = optClosed {
+            sHtml.push_str(&format!(
+                "</s> (\u{0437}\u{0430}\u{043a}\u{0440}\u{044b}\u{0442} {})",
+                sTopicCardUserHtml(&sClosed, optClosedBlocked.unwrap_or(false), true, "")
+            ));
+        } else {
+            sHtml.push_str(&format!(
+                "&nbsp;<form class=\"clear-warning-form\" action=\"clear-warning\" method=\"POST\" style=\"display: inline-block\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><input type=\"hidden\" name=\"id\" value=\"{iId}\"><button type=\"submit\" class=\"btn btn-small btn-default\">\u{0437}\u{0430}\u{043a}\u{0440}\u{044b}\u{0442}\u{044c}</button></form>",
+                html_escape::encode_double_quoted_attribute(sCsrfToken)
+            ));
+        }
+        sHtml.push_str("</div>");
+    }
+    if iOpenWarnings > 2 && stUser.canmod {
+        sHtml.push_str("<div style=\"margin-bottom: 0.5em\">⚠️ \u{041f}\u{0440}\u{0435}\u{0432}\u{044b}\u{0448}\u{0435}\u{043d}\u{043e} \u{0447}\u{0438}\u{0441}\u{043b}\u{043e} \u{043f}\u{0440}\u{0435}\u{0434}\u{0443}\u{043f}\u{0440}\u{0435}\u{0436}\u{0434}\u{0435}\u{043d}\u{0438}\u{0439}. \u{0421}\u{043e}\u{043e}\u{0431}\u{0449}\u{0435}\u{043d}\u{0438}\u{0435} \u{0441}\u{043a}\u{0440}\u{044b}\u{0442}\u{043e} \u{0434}\u{043b}\u{044f} \u{043d}\u{0435}\u{0430}\u{0432}\u{0442}\u{043e}\u{0440}\u{0438}\u{0437}\u{043e}\u{0432}\u{0430}\u{043d}\u{043d}\u{044b}\u{0445} \u{043f}\u{043e}\u{0441}\u{0435}\u{0442}\u{0438}\u{0442}\u{0435}\u{043b}\u{0435}\u{0439}.</div>");
+    }
+    sHtml.push_str("</div>");
+    Ok(sHtml)
+}
+
+async fn stTopicMemoriesHtml(
+    stState: &AppState,
+    iTopicId: i32,
+    optUser: &Option<UserSummary>,
+    sCsrfToken: &str,
+) -> Result<(String, String)> {
+    let vecCounts: Vec<(bool, i64)> =
+        sqlx::query_as("SELECT watch,count(*)::bigint FROM memories WHERE topic=$1 GROUP BY watch")
+            .bind(iTopicId)
+            .fetch_all(&stState.pool)
+            .await?;
+    let mut iWatchCount = 0;
+    let mut iFavCount = 0;
+    for (bWatch, iCount) in vecCounts {
+        if bWatch {
+            iWatchCount = iCount;
+        } else {
+            iFavCount = iCount;
+        }
+    }
+    let mut iWatchId = 0;
+    let mut iFavId = 0;
+    if let Some(stUser) = optUser {
+        for (iId, bWatch) in sqlx::query_as::<_, (i32, bool)>(
+            "SELECT id,watch FROM memories WHERE userid=$1 AND topic=$2",
+        )
+        .bind(stUser.id)
+        .bind(iTopicId)
+        .fetch_all(&stState.pool)
+        .await?
+        {
+            if bWatch {
+                iWatchId = iId;
+            } else {
+                iFavId = iId;
+            }
+        }
+    }
+    let sButtons = format!(
+        "<div class=\"fav-buttons\"><div><a id=\"favs_button\" href=\"#\"{} title=\"{}\"><i class=\"icon-star\"></i></a><br><span id=\"favs_count\">{iFavCount}</span><br></div><div><a id=\"memories_button\" href=\"#\"{} title=\"{}\"><i class=\"icon-bell\"></i></a><br><span id=\"memories_count\">{iWatchCount}</span></div></div>",
+        if iFavId != 0 {
+            " class=\"selected\""
+        } else {
+            ""
+        },
+        if iFavId != 0 {
+            "\u{0423}\u{0434}\u{0430}\u{043b}\u{0438}\u{0442}\u{044c} \u{0438}\u{0437} \u{0438}\u{0437}\u{0431}\u{0440}\u{0430}\u{043d}\u{043d}\u{043e}\u{0433}\u{043e}"
+        } else {
+            "\u{0412} \u{0438}\u{0437}\u{0431}\u{0440}\u{0430}\u{043d}\u{043d}\u{043e}\u{0435}"
+        },
+        if iWatchId != 0 {
+            " class=\"selected\""
+        } else {
+            ""
+        },
+        if iWatchId != 0 {
+            "\u{041d}\u{0435} \u{043e}\u{0442}\u{0441}\u{043b}\u{0435}\u{0436}\u{0438}\u{0432}\u{0430}\u{0442}\u{044c}"
+        } else {
+            "\u{041e}\u{0442}\u{0441}\u{043b}\u{0435}\u{0436}\u{0438}\u{0432}\u{0430}\u{0442}\u{044c}"
+        },
+    );
+    let sScript = if optUser.is_some() {
+        format!(
+            "<script type=\"text/javascript\">$script.ready('lorjs', function () {{ topic_memories_form_setup({iWatchId}, true, {iTopicId}, \"{}\"); topic_memories_form_setup({iFavId}, false, {iTopicId}, \"{}\"); }});</script>",
+            html_escape::encode_double_quoted_attribute(sCsrfToken),
+            html_escape::encode_double_quoted_attribute(sCsrfToken)
+        )
+    } else {
+        "<script type=\"text/javascript\">$script.ready('lorjs', function() { initStarPopovers(); });</script>".to_owned()
+    };
+    Ok((sButtons, sScript))
+}
+
+async fn sBuildTopicCardHtml(
+    stState: &AppState,
+    optUser: &Option<UserSummary>,
+    sCsrfToken: &str,
+    stInput: StTopicCardBuildInput,
+) -> Result<String> {
+    let stTopic = &stInput.topic;
+    let stMeta = stTopicCardMeta(
+        stState,
+        stTopic.id,
+        optUser.as_ref().map(|stUser| stUser.id),
+    )
+    .await?;
+    let bModerator = optUser.as_ref().is_some_and(|stUser| stUser.canmod);
+    let bAuthorized = optUser.is_some();
+    let sAuthorHtml = sTopicCardUserHtml(
+        &stTopic.author,
+        stTopic.author_blocked,
+        !stTopic.author_anonymous || bAuthorized,
+        " rel=\"author\" itemprop=\"creator\"",
+    );
+    let sRemarkHtml = stMeta
+        .optRemark
+        .as_ref()
+        .map_or_else(String::new, |sRemark| {
+            format!(
+                "&emsp;<span class=\"user-remark\">{}</span>",
+                html_escape::encode_text(sRemark)
+            )
+        });
+    let sModeratorIpHtml = if bModerator && !stMeta.sPostIp.is_empty() {
+        let sIp = html_escape::encode_double_quoted_attribute(&stMeta.sPostIp);
+        format!(" (<a href=\"sameip.jsp?ip={sIp}\">{sIp}</a>)")
+    } else {
+        String::new()
+    };
+    let sCommitterHtml = if stTopic.section_premoderated && stTopic.moderate {
+        match stMeta.optCommitterNick.as_deref() {
+            Some(sNick) if sNick != stTopic.author => {
+                let mut sHtml = format!(
+                    "<br>\u{041f}\u{0440}\u{043e}\u{0432}\u{0435}\u{0440}\u{0435}\u{043d}\u{043e}: {}",
+                    sTopicCardUserHtml(sNick, stMeta.bCommitterBlocked, true, "")
+                );
+                if let Some(dtCommit) = stMeta.optCommitDate
+                    && dtCommit != stTopic.postdate
+                {
+                    sHtml.push_str(&format!(
+                        " (<time data-format=\"default\" datetime=\"{}\" itemprop=\"datePublished\">{dtCommit}</time>)",
+                        dtCommit.to_rfc3339()
+                    ));
+                }
+                sHtml
+            }
+            _ => String::new(),
+        }
+    } else {
+        String::new()
+    };
+    let sModeratorUserAgentHtml = if bModerator {
+        stMeta
+            .optUserAgent
+            .as_ref()
+            .map_or_else(String::new, |sUserAgent| {
+                format!(
+                    "<br>{}&nbsp;<a href=\"sameip.jsp?ua={}&amp;ip={}&amp;mask=0\">🔍</a>",
+                    html_escape::encode_text(sUserAgent),
+                    stMeta.iUserAgentId,
+                    html_escape::encode_double_quoted_attribute(&stMeta.sPostIp)
+                )
+            })
+    } else {
+        String::new()
+    };
+
+    let (mut bCanCommit, mut bCanEdit) = (false, false);
+    if stInput.show_menu
+        && let Some(stUser) = optUser
+    {
+        let stPrepared = cTopicEditService(stState)
+            .stPrepare(stTopic.id, stTopicEditActor(stUser), &stInput.remote_ip)
+            .await?;
+        bCanCommit =
+            stPrepared.stSnapshot.bCommittable() && stPrepared.stCommitPermission.bPermitted();
+        bCanEdit = stPrepared.bAnythingEditable();
+    }
+
+    let stDeleteMeta = if stInput.show_menu {
+        Some(load_topic_delete_meta(stState, stTopic.id).await?)
+    } else {
+        None
+    };
+    let bCanDelete = match (optUser.as_ref(), stDeleteMeta.as_ref()) {
+        (Some(stUser), Some(stDeleteMeta)) if !stTopic.deleted => {
+            b_topic_deletable(stDeleteMeta, stUser, chrono::Utc::now())
+        }
+        _ => false,
+    };
+    let bCanUndelete = match (optUser.as_ref(), stDeleteMeta.as_ref()) {
+        (Some(stUser), Some(stDeleteMeta)) if stTopic.deleted => {
+            bTopicUndeletable(stState, stDeleteMeta, stUser, stTopic.id).await?
+        }
+        _ => false,
+    };
+    let sDeletedHeaderHtml = if stInput.show_menu && stTopic.deleted {
+        let sDescription = match (
+            stMeta.optDeleteUserNick.as_deref(),
+            stMeta.optDeleteReason.as_deref(),
+        ) {
+            (Some(sNick), Some(sReason)) => format!(
+                "<strong>\u{0421}\u{043e}\u{043e}\u{0431}\u{0449}\u{0435}\u{043d}\u{0438}\u{0435} \u{0443}\u{0434}\u{0430}\u{043b}\u{0435}\u{043d}\u{043e} {} \u{043f}\u{043e} \u{043f}\u{0440}\u{0438}\u{0447}\u{0438}\u{043d}\u{0435}: '{}'</strong>",
+                html_escape::encode_text(sNick),
+                html_escape::encode_text(sReason)
+            ),
+            _ => "<strong>\u{0421}\u{043e}\u{043e}\u{0431}\u{0449}\u{0435}\u{043d}\u{0438}\u{0435} \u{0443}\u{0434}\u{0430}\u{043b}\u{0435}\u{043d}\u{043e}</strong>".to_owned(),
+        };
+        format!(
+            "<div class=\"title\">{sDescription}{}</div>",
+            if bCanUndelete {
+                format!(
+                    " [<a href=\"/undelete?msgid={}\">\u{0432}\u{043e}\u{0441}\u{0441}\u{0442}\u{0430}\u{043d}\u{043e}\u{0432}\u{0438}\u{0442}\u{044c}</a>]",
+                    stTopic.id
+                )
+            } else {
+                String::new()
+            }
+        )
+    } else {
+        String::new()
+    };
+
+    let sEditSummaryHtml = if stInput.include_canonical_extras {
+        sTopicEditSummaryHtml(stState, stTopic, optUser, stMeta.bExpired).await?
+    } else {
+        String::new()
+    };
+    let sWarningsHtml = if stInput.include_canonical_extras && !stMeta.bExpired {
+        match optUser {
+            Some(stUser) if stUser.canmod || stUser.corrector => {
+                sTopicWarningsHtml(
+                    stState,
+                    stTopic.id,
+                    stUser,
+                    sCsrfToken,
+                    stMeta.iOpenWarnings,
+                )
+                .await?
+            }
+            _ => String::new(),
+        }
+    } else {
+        String::new()
+    };
+    let (sMemoriesButtonsHtml, sMemoriesScriptHtml) = if stInput.include_canonical_extras {
+        stTopicMemoriesHtml(stState, stTopic.id, optUser, sCsrfToken).await?
+    } else {
+        (String::new(), String::new())
+    };
+    let iEffectivePostScore = iEffectiveTopicPostScore(stTopic, &stMeta);
+    let bCanResolve = optUser.as_ref().is_some_and(|stUser| {
+        stMeta.bResolvable && (stUser.canmod || stUser.id == stTopic.author_id)
+    });
+    let bCanWarn = optUser.as_ref().is_some_and(|stUser| {
+        stUser.score.unwrap_or(0) >= 50
+            && !stInput.actor_frozen
+            && !stTopic.deleted
+            && !stMeta.bExpired
+            && !stTopic.draft
+    });
+    let bResolved = stTopic.resolved.unwrap_or(false);
+    let bModeratorMenu = stInput.show_menu && bModerator && !stTopic.deleted;
+    StTopicCardTemplate {
+        card: StTopicCardView {
+            topic: stInput.topic,
+            title_plain: stInput.title_plain,
+            topic_author_signature: stInput.topic_author_signature,
+            topic_html: stInput.topic_html,
+            poll: stInput.poll,
+            images_html: stInput.images_html,
+            topic_reactions_html: stInput.topic_reactions.html,
+            topic_show_reactions_link: stInput.topic_reactions.show_menu_link,
+            show_menu: stInput.show_menu,
+            enable_schema: stInput.enable_schema,
+            links_allowed: stMeta.bLinksAllowed,
+            topic_expired: stMeta.bExpired,
+            resolved: bResolved,
+            moderator_menu: bModeratorMenu,
+            can_commit: bCanCommit,
+            can_comment: stInput.can_comment,
+            can_edit: bCanEdit,
+            can_delete: bCanDelete,
+            can_resolve: bCanResolve,
+            can_warn: bCanWarn,
+            show_postscore: bAuthorized && !stMeta.bExpired,
+            postscore_info_html: crate::domain::topic::options::sPostScoreInfo(iEffectivePostScore),
+            deleted_header_html: sDeletedHeaderHtml,
+            userpic_html: stInput.userpic_html,
+            author_html: sAuthorHtml,
+            remark_html: sRemarkHtml,
+            moderator_ip_html: sModeratorIpHtml,
+            committer_html: sCommitterHtml,
+            edit_summary_html: sEditSummaryHtml,
+            moderator_user_agent_html: sModeratorUserAgentHtml,
+            warnings_html: sWarningsHtml,
+            memories_buttons_html: sMemoriesButtonsHtml,
+            memories_script_html: sMemoriesScriptHtml,
+        },
+    }
+    .render()
+    .map_err(AppError::Template)
+}
+
+/// Full `PreparedTopic` card used by `/uncommit.jsp`.  Java passes
+/// `showMenu=false`, no `messageMenu`, no edit summary and no memories model,
+/// but still prepares the author remark, committer, moderator IP/UA,
+/// postscore, reactions, images and poll.
+pub(crate) async fn sPrepareTopicCardHtml(
+    stState: &AppState,
+    iTopicId: i32,
+    optUser: &Option<UserSummary>,
+    sCsrfToken: &str,
+    bShowMenu: bool,
+) -> Result<String> {
+    let stTopic = get_topic(stState, iTopicId).await?;
+    let stMarkupUsers = stState
+        .markup
+        .stResolveBatch(std::iter::once((
+            stTopic.message.as_str(),
+            stTopic.markup.as_str(),
+        )))
+        .await?;
+    let sTopicHtml = markup::render_topic_with_expanded_cut_policy_and_users(
+        &stTopic.message,
+        &stTopic.markup,
+        stTopic.bNofollowAuthorLinks(),
+        Some(&stState.config.public_url),
+        Some(&stMarkupUsers),
+    );
+    let stMeta = stTopicCardMeta(
+        stState,
+        stTopic.id,
+        optUser.as_ref().map(|stUser| stUser.id),
+    )
+    .await?;
+    let (iScore, iMaxScore, bRegistered): (i32, i32, bool) = sqlx::query_as(
+        "SELECT COALESCE(score,0),COALESCE(max_score,0),COALESCE(passwd,'')<>'' FROM users WHERE id=$1",
+    )
+    .bind(stTopic.author_id)
+    .fetch_one(&stState.pool)
+    .await?;
+    let bModeratorSession = optUser.as_ref().is_some_and(|stUser| stUser.canmod);
+    let bReactorFrozen = match optUser {
+        Some(stUser) => sqlx::query_scalar::<_, Option<chrono::DateTime<chrono::Utc>>>(
+            "SELECT frozen_until FROM users WHERE id=$1",
+        )
+        .bind(stUser.id)
+        .fetch_one(&stState.pool)
+        .await?
+        .is_some_and(|dtUntil| dtUntil > chrono::Utc::now()),
+        None => false,
+    };
+    let vecAllReactions = load_all_reactions(
+        stState,
+        stTopic.id,
+        optUser.as_ref().map(|stUser| stUser.id),
+    )
+    .await?;
+    let vecTopicReactions = vecAllReactions
+        .iter()
+        .filter(|(optCommentId, ..)| optCommentId.is_none())
+        .map(|(_, sReaction, iUserId, sNick, iScore)| {
+            (sReaction.clone(), *iUserId, sNick.clone(), *iScore)
+        })
+        .collect::<Vec<_>>();
+    let bAllowReactions = reactions_allow_interact(
+        optUser,
+        bReactorFrozen,
+        stMeta.bExpired,
+        stTopic.author_id,
+        stTopic.deleted,
+        false,
+    );
+    let stReactions = render_reactions_widget(
+        stTopic.id,
+        None,
+        &vecTopicReactions,
+        optUser.as_ref().map(|stUser| stUser.id),
+        bAllowReactions,
+        sCsrfToken,
+    );
+    let optPoll = load_poll_view(
+        stState,
+        stTopic.id,
+        stTopic.deleted,
+        poll_is_pending(stTopic.moderate),
+        stMeta.bExpired,
+        false,
+        optUser,
+        sCsrfToken,
+        &stTopic.topic_url(),
+    )
+    .await?;
+    let vecImages = load_topic_images(stState, stTopic.id).await?;
+    let sImagesHtml = render_topic_images(
+        &vecImages,
+        &stTopic.title,
+        stTopic.section_prefix == "gallery",
+        false,
+    );
+    let sTitlePlain = stTopic.sTitlePlain();
+    sBuildTopicCardHtml(
+        stState,
+        optUser,
+        sCsrfToken,
+        StTopicCardBuildInput {
+            topic: stTopic,
+            title_plain: sTitlePlain,
+            topic_author_signature: stAuthorSignature(
+                iScore,
+                iMaxScore,
+                bRegistered,
+                bModeratorSession,
+            ),
+            topic_html: sTopicHtml,
+            poll: optPoll,
+            images_html: sImagesHtml,
+            topic_reactions: stReactions,
+            userpic_html: String::new(),
+            can_comment: false,
+            actor_frozen: bReactorFrozen,
+            show_menu: bShowMenu,
+            enable_schema: false,
+            include_canonical_extras: false,
+            remote_ip: String::new(),
+        },
+    )
+    .await
 }
 
 fn sRealtimeTopicBootstrap(
@@ -369,7 +1217,9 @@ pub(crate) struct PollVariantView {
 }
 
 /// PreparedImage-compatible view of any image attached to a topic.
+#[derive(Debug, Clone)]
 pub(crate) struct TopicImageView {
+    pub(crate) id: i32,
     pub(crate) medium_url: String,
     pub(crate) original_url: String,
     pub(crate) width: i32,
@@ -392,6 +1242,19 @@ pub(crate) struct NewsTopicView {
     pub(crate) poll: Option<PollView>,
     pub(crate) minor: bool,
     pub(crate) pending: bool,
+    /// `user-topics.jsp` uses `news.tag`, whose menu exposes edit/delete
+    /// controls for drafts even outside the moderation queue.
+    pub(crate) draft: bool,
+    pub(crate) markup: String,
+    pub(crate) postscore: i32,
+    pub(crate) section_premoderated: bool,
+    pub(crate) committed: bool,
+    pub(crate) show_comments: bool,
+    pub(crate) author_blocked: bool,
+    pub(crate) author_link: bool,
+    pub(crate) author_profile_url: String,
+    pub(crate) author_remark: Option<String>,
+    pub(crate) sign_date: chrono::DateTime<chrono::Utc>,
     /// `news.tag` is also used by the Java premoderation queue with
     /// `moderateMode=true`.  Keep that mode on the same prepared card so the
     /// queue cannot silently drift back to a compact topic list.
@@ -408,6 +1271,71 @@ pub(crate) struct NewsTopicView {
 pub(crate) struct NewsTagView {
     pub(crate) value: String,
     pub(crate) url: String,
+}
+
+fn bNewsAuthorLink(bAuthorAnonymous: bool, bSessionAuthorized: bool) -> bool {
+    !bAuthorAnonymous || bSessionAuthorized
+}
+
+fn dtNewsSignDate(
+    bSectionPremoderated: bool,
+    bCommitted: bool,
+    dtPostDate: chrono::DateTime<chrono::Utc>,
+    optCommitDate: Option<chrono::DateTime<chrono::Utc>>,
+) -> chrono::DateTime<chrono::Utc> {
+    if bSectionPremoderated && bCommitted {
+        optCommitDate.unwrap_or(dtPostDate)
+    } else {
+        dtPostDate
+    }
+}
+
+#[cfg(test)]
+mod news_signature_tests {
+    use super::{bNewsAuthorLink, dtNewsSignDate};
+    use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn anonymous_author_is_plain_text_only_for_anonymous_viewer() {
+        assert!(!bNewsAuthorLink(true, false));
+        assert!(bNewsAuthorLink(true, true));
+        assert!(bNewsAuthorLink(false, false));
+    }
+
+    #[test]
+    fn premoderated_committed_topic_uses_commit_date() {
+        let dtPostDate = Utc.with_ymd_and_hms(2026, 8, 1, 10, 0, 0).unwrap();
+        let dtCommitDate = Utc.with_ymd_and_hms(2026, 8, 2, 11, 0, 0).unwrap();
+
+        assert_eq!(
+            dtNewsSignDate(true, true, dtPostDate, Some(dtCommitDate)),
+            dtCommitDate
+        );
+        assert_eq!(
+            dtNewsSignDate(false, true, dtPostDate, Some(dtCommitDate)),
+            dtPostDate
+        );
+        assert_eq!(
+            dtNewsSignDate(true, false, dtPostDate, Some(dtCommitDate)),
+            dtPostDate
+        );
+    }
+
+    #[test]
+    fn missing_commit_date_falls_back_to_post_date() {
+        let dtPostDate = Utc.with_ymd_and_hms(2026, 8, 1, 10, 0, 0).unwrap();
+        assert_eq!(dtNewsSignDate(true, true, dtPostDate, None), dtPostDate);
+    }
+
+    #[test]
+    fn news_signature_dom_preserves_blocked_link_and_private_remark_hooks() {
+        let sTemplate = include_str!("../../templates/news_card.html");
+        assert!(sTemplate.contains("{% if t.author_blocked %}<s>{% endif %}"));
+        assert!(sTemplate.contains("{% if t.author_link %}<a itemprop=\"creator\""));
+        assert!(sTemplate.contains("itemprop=\"datePublished\""));
+        assert!(sTemplate.contains("itemprop=\"dateCreated\""));
+        assert!(sTemplate.contains("<span class=\"user-remark\">{{ remark }}</span>"));
+    }
 }
 
 fn sExternalLinkHost(sUrl: &str) -> String {
@@ -466,6 +1394,7 @@ pub(crate) async fn load_topic_images(
             .map(|size| (format!("/images/{id}/{size}px.jpg"), size))
             .collect::<Vec<_>>();
         prepared.push(TopicImageView {
+            id,
             medium_url: format!("/{medium}"),
             original_url: format!("/{original}"),
             width,
@@ -568,14 +1497,24 @@ fn render_image_slider(images: &[TopicImageView], title: &str, news: bool) -> St
 
 fn render_topic_images(
     images: &[TopicImageView],
-    title: &str,
+    sStoredTitle: &str,
+    imagepost: bool,
+    news: bool,
+) -> String {
+    let sTitlePlain = crate::domain::title::sTopicTitlePlainForDisplay(sStoredTitle);
+    render_topic_images_with_plain_title(images, &sTitlePlain, imagepost, news)
+}
+
+fn render_topic_images_with_plain_title(
+    images: &[TopicImageView],
+    sTitlePlain: &str,
     imagepost: bool,
     news: bool,
 ) -> String {
     match images {
         [] => String::new(),
-        [image] => render_single_image(image, title, imagepost, news),
-        _ => render_image_slider(images, title, news),
+        [image] => render_single_image(image, sTitlePlain, imagepost, news),
+        _ => render_image_slider(images, sTitlePlain, news),
     }
 }
 
@@ -585,6 +1524,7 @@ mod image_view_tests {
 
     fn image(id: i32) -> TopicImageView {
         TopicImageView {
+            id,
             medium_url: format!("/images/{id}/1000px.jpg"),
             original_url: format!("/images/{id}/original.png"),
             width: 1920,
@@ -619,6 +1559,21 @@ mod image_view_tests {
         assert!(html.contains("/images/1/1000px.jpg"));
         assert!(html.contains("/images/2/1000px.jpg"));
     }
+
+    #[test]
+    fn stored_title_is_decoded_then_attribute_escaped_once() {
+        let html = render_topic_images(
+            &[image(1)],
+            "A &amp; B &lt;b&gt; &quot;Q&quot; &#39;X&#39;",
+            false,
+            false,
+        );
+
+        assert!(html.contains("alt=\"A &amp; B &lt;b&gt; «Q» 'X'\""));
+        assert!(html.contains("content=\"A &amp; B &lt;b&gt; «Q» 'X'\""));
+        assert!(!html.contains("&amp;amp;"));
+        assert!(!html.contains("<b>"));
+    }
 }
 
 pub(crate) async fn prepare_news_topics(
@@ -637,6 +1592,29 @@ pub(crate) async fn prepare_news_topics_for_viewer(
     csrf_token: &str,
 ) -> Result<Vec<NewsTopicView>> {
     let mut prepared = Vec::with_capacity(topics.len());
+    let vecTopicIds = topics.iter().map(|stTopic| stTopic.id).collect::<Vec<_>>();
+    let stMarkupUsers = state.markup.stResolveMessageIds(&vecTopicIds).await?;
+    let mapAuthorRemarks: std::collections::HashMap<i32, String> = if let Some(stViewer) =
+        current_user.as_ref()
+    {
+        let vecAuthorIds: Vec<i32> = topics
+            .iter()
+            .map(|stTopic| stTopic.author_id)
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        sqlx::query_as::<_, (i32, String)>(
+                "SELECT ref_user_id,remark_text FROM user_remarks WHERE user_id=$1 AND ref_user_id=ANY($2)",
+            )
+            .bind(stViewer.id)
+            .bind(&vecAuthorIds)
+            .fetch_all(&state.pool)
+            .await?
+            .into_iter()
+            .collect()
+    } else {
+        std::collections::HashMap::new()
+    };
     let stPostingResolution = crate::application::auth::stResolvePostingIdentity(
         state,
         current_user.as_ref(),
@@ -652,12 +1630,30 @@ pub(crate) async fn prepare_news_topics_for_viewer(
             Option<String>,
             Option<String>,
             bool,
+            Option<chrono::DateTime<chrono::Utc>>,
             bool,
             bool,
             bool,
+            i32,
+            bool,
+            bool,
+            bool,
+            bool,
+            i32,
         );
         let row: Option<TyNewsTopicRow> = sqlx::query_as(
-            "SELECT m.message, m.markup::text, t.linktext, g.image, t.moderate, COALESCE(t.commitdate,t.postdate)+s.expire<CURRENT_TIMESTAMP, t.minor, s.moderate FROM msgbase m JOIN topics t ON t.id=m.id JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section WHERE m.id=$1",
+            r#"SELECT m.message, m.markup::text, t.linktext, g.image, t.moderate, t.commitdate,
+                      COALESCE(t.commitdate,t.postdate)+s.expire<CURRENT_TIMESTAMP,
+                      t.minor, s.moderate, COALESCE(u.score,0),
+                      COALESCE(u.blocked,false), COALESCE(u.passwd,'')='',
+                      COALESCE(u.frozen_until > CURRENT_TIMESTAMP,false), t.draft,
+                      COALESCE(t.postscore,-9999)
+                 FROM msgbase m
+                 JOIN topics t ON t.id=m.id
+                 JOIN users u ON u.id=t.userid
+                 JOIN groups g ON g.id=t.groupid
+                 JOIN sections s ON s.id=g.section
+                WHERE m.id=$1"#,
         )
         .bind(topic.id)
         .fetch_optional(&state.pool)
@@ -668,9 +1664,16 @@ pub(crate) async fn prepare_news_topics_for_viewer(
             linktext,
             group_image,
             moderate,
+            optCommitDate,
             expired,
             minor,
             section_premoderated,
+            iAuthorScore,
+            bAuthorBlocked,
+            bAuthorAnonymous,
+            bAuthorFrozen,
+            bDraft,
+            iPostscore,
         ) = row.unwrap_or_else(|| {
             (
                 String::new(),
@@ -678,11 +1681,31 @@ pub(crate) async fn prepare_news_topics_for_viewer(
                 None,
                 None,
                 false,
+                None,
                 false,
                 false,
                 false,
+                0,
+                false,
+                true,
+                false,
+                false,
+                -9999,
             )
         });
+        let bNofollow = !crate::domain::topic::link_policy::StAuthorLinkState {
+            iScore: iAuthorScore,
+            bBlocked: bAuthorBlocked,
+            bAnonymous: bAuthorAnonymous,
+            bFrozen: bAuthorFrozen,
+        }
+        .bFollowInTopic(moderate);
+        let dtSignDate = dtNewsSignDate(
+            section_premoderated,
+            moderate,
+            topic.postdate,
+            optCommitDate,
+        );
         let images = load_topic_images(state, topic.id).await?;
         let images_html = render_topic_images(
             &images,
@@ -740,10 +1763,13 @@ pub(crate) async fn prepare_news_topics_for_viewer(
             .await
             .is_ok();
         prepared.push(NewsTopicView {
-            topic_html: markup::render_topic_with_minimized_cut(
+            topic_html: markup::render_topic_with_minimized_cut_policy_and_users(
                 &message,
                 &message_markup,
                 &topic.topic_url(),
+                bNofollow,
+                Some(&state.config.public_url),
+                Some(&stMarkupUsers),
             ),
             images_html,
             group_image_url,
@@ -752,16 +1778,27 @@ pub(crate) async fn prepare_news_topics_for_viewer(
                 .unwrap_or_else(|| "Подробности".to_string()),
             short_host,
             tags,
-            topic,
             show_group,
             poll,
             minor,
             pending: section_premoderated && !moderate,
+            draft: bDraft,
+            markup: message_markup,
+            postscore: iPostscore,
+            section_premoderated,
+            committed: moderate,
+            show_comments: iPostscore != crate::domain::topic::posting::POSTSCORE_HIDE_COMMENTS,
+            author_blocked: bAuthorBlocked,
+            author_link: bNewsAuthorLink(bAuthorAnonymous, current_user.is_some()),
+            author_profile_url: format!("/people/{}/profile", urlencoding::encode(&topic.author)),
+            author_remark: mapAuthorRemarks.get(&topic.author_id).cloned(),
+            sign_date: dtSignDate,
             moderate_mode: false,
             can_commit: false,
             can_delete: false,
             can_edit: false,
             can_comment,
+            topic,
         });
     }
     Ok(prepared)
@@ -1192,6 +2229,7 @@ struct TopicFormTemplate {
     image_allowed: bool,
     image_required: bool,
     additional_image_rows: Vec<()>,
+    existing_images: Vec<TopicImageView>,
     uploaded_images: Vec<String>,
     form_title: String,
     form_msg: String,
@@ -1264,7 +2302,6 @@ struct AddSectionTemplate {
 }
 
 pub struct TopicForm {
-    pub id: Option<i32>,
     pub group: i32,
     pub title: String,
     pub msg: String,
@@ -1275,7 +2312,6 @@ pub struct TopicForm {
     pub preview: Option<String>,
     pub noinfo: Option<String>,
     pub poll: Vec<String>,
-    pub variant_id: Vec<i32>,
     pub multiselect: Option<String>,
     pub nick: Option<String>,
     pub password: Option<String>,
@@ -1284,9 +2320,8 @@ pub struct TopicForm {
     pub uploaded_images: Vec<String>,
 }
 
-/// `axum::Form` can't deserialize the repeated `poll`/`variant_id` keys into
-/// `Vec` fields (see `crate::form`), so this form is parsed from the raw
-/// body by hand instead.
+/// `axum::Form` can't deserialize repeated/indexed poll keys into `Vec`
+/// fields (see `crate::form`), so this form is parsed from the raw body.
 fn parse_indexed_field(pairs: &[(String, String)], prefix: &str) -> Vec<(i32, String)> {
     let start = format!("{prefix}[");
     let mut values: Vec<(i32, String)> = pairs
@@ -1307,33 +2342,22 @@ fn parse_topic_form(pairs: &[(String, String)]) -> Result<TopicForm> {
     use crate::form::{get, get_all};
     let indexed_poll = parse_indexed_field(pairs, "poll");
     let new_poll = parse_indexed_field(pairs, "newPoll");
-    let (poll, variant_id) = if !indexed_poll.is_empty() || !new_poll.is_empty() {
-        let mut ids = indexed_poll.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+    let poll = if !indexed_poll.is_empty() || !new_poll.is_empty() {
         let mut labels = indexed_poll
             .into_iter()
             .map(|(_, label)| label)
             .collect::<Vec<_>>();
-        ids.extend(std::iter::repeat_n(0, new_poll.len()));
         labels.extend(new_poll.into_iter().map(|(_, label)| label));
-        (labels, ids)
+        labels
     } else {
         // Accept the first Rust port's flattened fields as a compatibility
         // fallback, while every generated form uses Java's indexed names.
-        (
-            get_all(pairs, "poll")
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
-            get_all(pairs, "variant_id")
-                .into_iter()
-                .filter_map(|s| s.parse().ok())
-                .collect(),
-        )
+        get_all(pairs, "poll")
+            .into_iter()
+            .map(str::to_string)
+            .collect()
     };
     Ok(TopicForm {
-        id: get(pairs, "msgid")
-            .or_else(|| get(pairs, "id"))
-            .and_then(|v| v.parse().ok()),
         group: get(pairs, "group")
             .and_then(|v| v.parse().ok())
             .unwrap_or(0),
@@ -1346,7 +2370,6 @@ fn parse_topic_form(pairs: &[(String, String)]) -> Result<TopicForm> {
         preview: get(pairs, "preview").map(str::to_string),
         noinfo: get(pairs, "noinfo").map(str::to_string),
         poll,
-        variant_id,
         multiselect: get(pairs, "multiselect")
             .or_else(|| get(pairs, "multiSelect"))
             .map(str::to_string),
@@ -1387,26 +2410,6 @@ mod topic_form_contract_tests {
         .unwrap();
         assert_eq!(form.group, 19387);
         assert_eq!(form.poll, ["Первый", "Второй"]);
-        assert_eq!(form.variant_id, [0, 1]);
-        assert!(form.multiselect.is_some());
-    }
-
-    #[test]
-    fn parses_java_edit_topic_poll_contract_without_group() {
-        let form = parse_topic_form(&pairs(&[
-            ("msgid", "42"),
-            ("title", "Опрос"),
-            ("msg", "Текст"),
-            ("tags", "lor"),
-            ("poll[17]", "Существующий"),
-            ("newPoll[0]", "Новый"),
-            ("multiselect", "on"),
-        ]))
-        .unwrap();
-        assert_eq!(form.id, Some(42));
-        assert_eq!(form.group, 0);
-        assert_eq!(form.poll, ["Существующий", "Новый"]);
-        assert_eq!(form.variant_id, [17, 0]);
         assert!(form.multiselect.is_some());
     }
 
@@ -1424,7 +2427,6 @@ mod topic_form_contract_tests {
         ]))
         .unwrap();
         assert_eq!(form.poll, ["Да", "Нет"]);
-        assert_eq!(form.variant_id, [12, 0]);
     }
 }
 
@@ -1435,7 +2437,7 @@ pub async fn index(
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
 ) -> Result<Html<String>> {
     let _ = q;
-    let show_gallery_on_main = match &current_user {
+    let stProfileSettings = match &current_user {
         Some(user) => {
             let settings_text: Option<String> =
                 sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
@@ -1443,37 +2445,31 @@ pub async fn index(
                     .fetch_optional(&state.pool)
                     .await?
                     .flatten();
-            crate::profile::ProfileSettings::from_hstore_text(settings_text).main_gallery
+            crate::profile::ProfileSettings::from_hstore_text(settings_text)
         }
-        None => crate::profile::ProfileSettings::default().main_gallery,
+        None => crate::profile::ProfileSettings::default(),
     };
-    let all_topics = if show_gallery_on_main {
-        let mut topics = Vec::new();
-        for section in ["news", "gallery", "polls", "articles"] {
-            topics.extend(list_topics(&state, Some(section), None, 0, 30).await?);
+    let show_gallery_on_main = stProfileSettings.main_gallery;
+    let vecMainTopics = topic_service(&state)
+        .vecListMainTopics(
+            show_gallery_on_main,
+            current_user.as_ref().map(|stUser| stUser.id),
+            30,
+        )
+        .await?;
+    let mut iFullNonMinor = 0;
+    let mut vecFullTopics = Vec::new();
+    let mut brief = Vec::new();
+    for stMainTopic in vecMainTopics {
+        if bMainTopicUsesFullCard(stMainTopic.bMinor, &mut iFullNonMinor) {
+            vecFullTopics.push(stMainTopic.stTopic);
+        } else {
+            brief.push(stMainTopic.stTopic);
         }
-        topics.sort_by(|left, right| {
-            let left_date = left.lastmod.as_ref().unwrap_or(&left.postdate);
-            let right_date = right.lastmod.as_ref().unwrap_or(&right.postdate);
-            right
-                .sticky
-                .cmp(&left.sticky)
-                .then_with(|| right_date.cmp(left_date))
-        });
-        topics.truncate(30);
-        topics
-    } else {
-        list_topics(&state, Some("news"), None, 0, 30).await?
-    };
-    let news = prepare_news_topics_for_viewer(
-        &state,
-        all_topics.iter().take(10).cloned().collect(),
-        true,
-        &current_user,
-        &csrf_token,
-    )
-    .await?;
-    let brief = all_topics.iter().skip(10).cloned().collect();
+    }
+    let news =
+        prepare_news_topics_for_viewer(&state, vecFullTopics, true, &current_user, &csrf_token)
+            .await?;
     let add_restriction: i32 = if show_gallery_on_main {
         sqlx::query_scalar("SELECT COALESCE(min(restrict_topics),-9999) FROM sections")
             .fetch_one(&state.pool)
@@ -1516,46 +2512,17 @@ pub async fn index(
         }
         None => (0, false, String::new()),
     };
-    let poll = if show_gallery_on_main {
-        None
-    } else {
-        list_topics(&state, Some("polls"), None, 0, 1)
-            .await?
-            .into_iter()
-            .next()
-    };
-    let articles = if show_gallery_on_main {
-        Vec::new()
-    } else {
-        list_topics(&state, Some("articles"), None, 0, 7).await?
-    };
-    let top_topics = all_topics.iter().take(10).cloned().collect();
-    let mut gallery = Vec::new();
-    if !show_gallery_on_main {
-        for topic in list_topics(&state, Some("gallery"), None, 0, 12).await? {
-            if let Some(image) = load_topic_images(&state, topic.id)
-                .await?
-                .into_iter()
-                .next()
-            {
-                let srcset = image_srcset(&image);
-                let padding_percent =
-                    100.0 * f64::from(image.medium_height) / f64::from(image.medium_width);
-                gallery.push(GalleryBoxItem {
-                    topic,
-                    image_url: image.medium_url,
-                    image_srcset: srcset,
-                    image_width: image.medium_width,
-                    image_height: image.medium_height,
-                    image_padding_percent: padding_percent,
-                });
-                if gallery.len() == 3 {
-                    break;
-                }
-            }
-        }
+    let boxlets_html = StMainBoxletsTemplate {
+        vecBoxlets: vecRenderMainBoxlets(
+            &state,
+            show_gallery_on_main,
+            stProfileSettings.messages,
+            current_user.as_ref().map(|stUser| stUser.id),
+            &csrf_token,
+        )
+        .await?,
     }
-    let tags = sqlx::query_as::<_, TagItem>("SELECT value,counter FROM tags_values WHERE counter>0 ORDER BY counter DESC,lower(value) LIMIT 25").fetch_all(&state.pool).await?;
+    .render()?;
     Ok(Html(
         MainPageTemplate {
             news,
@@ -1573,38 +2540,196 @@ pub async fn index(
             user_status,
             drafts_count,
             favorite_present,
-            poll,
-            articles,
-            top_topics,
-            gallery,
-            tags,
+            boxlets_html,
             show_gallery_on_main,
         }
         .render()?,
     ))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnForumFeedFilter {
+    All,
+    NoTalks,
+    Tech,
+}
+
+impl EnForumFeedFilter {
+    fn parse(optValue: Option<&str>) -> Result<Self> {
+        match optValue {
+            None => Ok(Self::All),
+            Some("notalks") => Ok(Self::NoTalks),
+            Some("tech") => Ok(Self::Tech),
+            Some(_) => Err(AppError::BadRequest(
+                "Некорректное значение filter".to_owned(),
+            )),
+        }
+    }
+
+    fn optId(self) -> Option<&'static str> {
+        match self {
+            Self::All => None,
+            Self::NoTalks => Some("notalks"),
+            Self::Tech => Some("tech"),
+        }
+    }
+
+    fn optTitle(self) -> Option<&'static str> {
+        match self {
+            Self::All => None,
+            Self::NoTalks => Some("без talks"),
+            Self::Tech => Some("тех. форум"),
+        }
+    }
+
+    fn bNoTalks(self) -> bool {
+        self == Self::NoTalks
+    }
+
+    fn bTech(self) -> bool {
+        self == Self::Tech
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StForumFeedQuery {
+    offset: Option<i64>,
+    filter: Option<String>,
+}
+
+fn sTopicFeedPageUrl(sBase: &str, optFilter: Option<&str>, iOffset: i64) -> String {
+    let mut vecParams = Vec::new();
+    if let Some(sFilter) = optFilter {
+        vecParams.push(format!("filter={}", urlencoding::encode(sFilter)));
+    }
+    if iOffset > 0 {
+        vecParams.push(format!("offset={iOffset}"));
+    }
+    if vecParams.is_empty() {
+        sBase.to_owned()
+    } else {
+        format!("{sBase}?{}", vecParams.join("&"))
+    }
+}
+
+fn stTopicFeedLinks(
+    sBase: &str,
+    optFilter: Option<&str>,
+    stPager: &Pager,
+    iItemCount: usize,
+) -> (Option<String>, Option<String>) {
+    let optPrev = (stPager.offset >= stPager.limit)
+        .then(|| sTopicFeedPageUrl(sBase, optFilter, (stPager.offset - stPager.limit).max(0)));
+    let optNext = crate::pagination::topic_feed_has_next(stPager, iItemCount)
+        .then(|| sTopicFeedPageUrl(sBase, optFilter, stPager.next_offset));
+    (optPrev, optNext)
+}
+
+#[cfg(test)]
+mod topic_listing_contract_tests {
+    use super::{EnForumFeedFilter, stTopicFeedLinks};
+
+    #[test]
+    fn forum_filter_parser_accepts_only_java_values() {
+        assert_eq!(
+            EnForumFeedFilter::parse(None).unwrap(),
+            EnForumFeedFilter::All
+        );
+        assert_eq!(
+            EnForumFeedFilter::parse(Some("notalks")).unwrap(),
+            EnForumFeedFilter::NoTalks
+        );
+        assert_eq!(
+            EnForumFeedFilter::parse(Some("tech")).unwrap(),
+            EnForumFeedFilter::Tech
+        );
+        assert!(EnForumFeedFilter::parse(Some("")).is_err());
+        assert!(EnForumFeedFilter::parse(Some("all")).is_err());
+        assert!(EnForumFeedFilter::parse(Some("TECH")).is_err());
+    }
+
+    #[test]
+    fn forum_pager_preserves_filter_in_both_directions() {
+        let stPager = crate::pagination::topic_feed_pager(20);
+        let (optPrev, optNext) = stTopicFeedLinks("/forum/lenta", Some("notalks"), &stPager, 20);
+
+        assert_eq!(optPrev.as_deref(), Some("/forum/lenta?filter=notalks"));
+        assert_eq!(
+            optNext.as_deref(),
+            Some("/forum/lenta?filter=notalks&offset=40")
+        );
+    }
+
+    #[test]
+    fn partial_topic_page_has_no_next_link() {
+        let stPager = crate::pagination::topic_feed_pager(0);
+        let (_, optNext) = stTopicFeedLinks("/news/", None, &stPager, 19);
+
+        assert!(optNext.is_none());
+    }
+}
+
 pub async fn lenta(
     State(state): State<AppState>,
-    Query(q): Query<PagerQuery>,
+    Query(q): Query<StForumFeedQuery>,
     CurrentUser(current_user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
 ) -> Result<Html<String>> {
-    let pager = Pager::new(q.offset.unwrap_or(0), state.config.page_size);
-    let topics = list_topics(&state, Some("forum"), None, pager.offset, pager.limit).await?;
+    let enFilter = EnForumFeedFilter::parse(q.filter.as_deref())?;
+    let pager = crate::pagination::topic_feed_pager(q.offset.unwrap_or(0));
+    let topics = list_topics_filtered(
+        &state,
+        Some("forum"),
+        None,
+        pager.offset,
+        pager.limit,
+        enFilter.bNoTalks(),
+        enFilter.bTech(),
+    )
+    .await?;
+    let (prev_link, next_link) =
+        stTopicFeedLinks("/forum/lenta", enFilter.optId(), &pager, topics.len());
     let news =
         prepare_news_topics_for_viewer(&state, topics.clone(), true, &current_user, &csrf_token)
             .await?;
-    let navigation = build_topic_list_navigation(&state, "forum", None, &current_user).await?;
+    let mut navigation = build_topic_list_navigation(&state, "forum", None, &current_user).await?;
+    navigation.section_url = None;
+    navigation.quick_groups.clear();
+    navigation.rss_url = Some(match enFilter.optId() {
+        Some(sFilter) => format!("/section-rss.jsp?section=2&filter={sFilter}"),
+        None => "/section-rss.jsp?section=2".to_owned(),
+    });
+    navigation.forum_filters = vec![
+        ForumFilterLink {
+            label: "все",
+            url: "/forum/lenta",
+            selected: enFilter == EnForumFeedFilter::All,
+        },
+        ForumFilterLink {
+            label: "без talks",
+            url: "/forum/lenta?filter=notalks",
+            selected: enFilter == EnForumFeedFilter::NoTalks,
+        },
+        ForumFilterLink {
+            label: "тех. форум",
+            url: "/forum/lenta?filter=tech",
+            selected: enFilter == EnForumFeedFilter::Tech,
+        },
+    ];
+    let title = match enFilter.optTitle() {
+        Some(sFilterTitle) => format!("Форум ({sFilterTitle})"),
+        None => "Форум".to_owned(),
+    };
     Ok(Html(
         IndexTemplate {
-            title: "Форум / лента".into(),
+            title,
             topics,
             news,
-            pager,
             main_page: false,
             tracker_layout: false,
             navigation: Some(navigation),
+            prev_link,
+            next_link,
         }
         .render()?,
     ))
@@ -1618,8 +2743,10 @@ pub async fn section_topics(
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
 ) -> Result<Html<String>> {
     let section = section_from_uri(&uri).unwrap_or("news");
-    let pager = Pager::new(q.offset.unwrap_or(0), state.config.page_size);
+    let pager = crate::pagination::topic_feed_pager(q.offset.unwrap_or(0));
     let topics = list_topics(&state, Some(section), None, pager.offset, pager.limit).await?;
+    let (prev_link, next_link) =
+        stTopicFeedLinks(&format!("/{section}/"), None, &pager, topics.len());
     let news =
         prepare_news_topics_for_viewer(&state, topics.clone(), true, &current_user, &csrf_token)
             .await?;
@@ -1629,10 +2756,11 @@ pub async fn section_topics(
             title: section_title(section).to_string(),
             topics,
             news,
-            pager,
             main_page: false,
             tracker_layout: false,
             navigation: Some(navigation),
+            prev_link,
+            next_link,
         }
         .render()?,
     ))
@@ -1647,7 +2775,7 @@ pub async fn section_group_topics(
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
 ) -> Result<Html<String>> {
     let section = section_from_uri(&uri).unwrap_or("news");
-    let pager = Pager::new(q.offset.unwrap_or(0), state.config.page_size);
+    let pager = crate::pagination::topic_feed_pager(q.offset.unwrap_or(0));
     let topics = list_topics(
         &state,
         Some(section),
@@ -1657,6 +2785,12 @@ pub async fn section_group_topics(
     )
     .await?;
     let selected = crate::routes::groups::find_group_by_section(&state, section, &group).await?;
+    let (prev_link, next_link) = stTopicFeedLinks(
+        &format!("/{section}/{}", urlencoding::encode(&selected.urlname)),
+        None,
+        &pager,
+        topics.len(),
+    );
     let news =
         prepare_news_topics_for_viewer(&state, topics.clone(), false, &current_user, &csrf_token)
             .await?;
@@ -1667,35 +2801,103 @@ pub async fn section_group_topics(
             title: format!("{} «{}»", section_title(section), selected.title),
             topics,
             news,
-            pager,
             main_page: false,
             tracker_layout: false,
             navigation: Some(navigation),
+            prev_link,
+            next_link,
         }
         .render()?,
     ))
 }
 
-pub async fn legacy_show_topics(
-    State(state): State<AppState>,
-    Query(q): Query<PagerQuery>,
-    CurrentUser(_current_user): CurrentUser,
-) -> Result<Html<String>> {
-    let pager = Pager::new(q.offset.unwrap_or(0), state.config.page_size);
-    let topics = list_topics(&state, None, None, pager.offset, pager.limit).await?;
-    let news = prepare_news_topics(&state, topics.clone(), true).await?;
-    Ok(Html(
-        IndexTemplate {
-            title: "show-topics.jsp".into(),
-            topics,
-            news,
-            pager,
-            main_page: false,
-            tracker_layout: false,
-            navigation: None,
-        }
-        .render()?,
-    ))
+#[derive(Debug, Deserialize)]
+pub struct LegacyShowTopicsQuery {
+    pub nick: Option<String>,
+    pub output: Option<String>,
+}
+
+fn stLegacyShowTopicsRedirect(stQuery: LegacyShowTopicsQuery) -> Result<Response> {
+    // TopicListController.showUserTopics binds `nick` with @RequestParam.
+    // Spring rejects an omitted required parameter with HTTP 400 before the
+    // controller runs (confirmed against the original runtime).
+    let sNick = stQuery
+        .nick
+        .ok_or_else(|| AppError::BadRequest("Required parameter 'nick' is missing".to_owned()))?;
+    let sNick = urlencoding::encode(&sNick);
+    let sLocation = if stQuery.output.is_some() {
+        // Presence, not the value, selects the retired RSS branch.
+        format!("/people/{sNick}/?output=rss")
+    } else {
+        format!("/people/{sNick}/")
+    };
+
+    // Spring RedirectView uses 302 for this legacy GET endpoint.  Axum's
+    // Redirect::to is 303, so construct the response explicitly.
+    Ok((StatusCode::FOUND, [(header::LOCATION, sLocation)]).into_response())
+}
+
+pub async fn legacy_show_topics(Query(stQuery): Query<LegacyShowTopicsQuery>) -> Result<Response> {
+    stLegacyShowTopicsRedirect(stQuery)
+}
+
+#[cfg(test)]
+mod legacy_show_topics_tests {
+    use axum::{
+        http::{StatusCode, header},
+        response::IntoResponse,
+    };
+
+    use super::{LegacyShowTopicsQuery, stLegacyShowTopicsRedirect};
+    use crate::error::AppError;
+
+    #[test]
+    fn redirects_to_the_canonical_user_topic_list_with_java_302() {
+        let stResponse = stLegacyShowTopicsRedirect(LegacyShowTopicsQuery {
+            nick: Some("maxcom".to_owned()),
+            output: None,
+        })
+        .expect("legacy redirect");
+
+        assert_eq!(stResponse.status(), StatusCode::FOUND);
+        assert_eq!(
+            stResponse
+                .headers()
+                .get(header::LOCATION)
+                .and_then(|stValue| stValue.to_str().ok()),
+            Some("/people/maxcom/")
+        );
+    }
+
+    #[test]
+    fn any_output_value_selects_the_retired_rss_redirect() {
+        let stResponse = stLegacyShowTopicsRedirect(LegacyShowTopicsQuery {
+            nick: Some("maxcom".to_owned()),
+            output: Some("atom".to_owned()),
+        })
+        .expect("legacy RSS redirect");
+
+        assert_eq!(stResponse.status(), StatusCode::FOUND);
+        assert_eq!(
+            stResponse
+                .headers()
+                .get(header::LOCATION)
+                .and_then(|stValue| stValue.to_str().ok()),
+            Some("/people/maxcom/?output=rss")
+        );
+    }
+
+    #[test]
+    fn missing_nick_uses_the_original_spring_binding_400_contract() {
+        let stError = stLegacyShowTopicsRedirect(LegacyShowTopicsQuery {
+            nick: None,
+            output: None,
+        })
+        .expect_err("nick is required");
+
+        assert!(matches!(stError, AppError::BadRequest(_)));
+        assert_eq!(stError.into_response().status(), StatusCode::BAD_REQUEST);
+    }
 }
 
 const VIEW_ALL_SECTION_PREFIX_CASE: &str = "CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(s.name) END";
@@ -1734,6 +2936,10 @@ struct DeletedTopicRow {
 impl DeletedTopicRow {
     fn reason_display(&self) -> &str {
         self.reason.as_deref().unwrap_or_default()
+    }
+
+    fn sTitlePlain(&self) -> String {
+        crate::domain::title::sPlainForDisplay(&self.subj)
     }
 }
 
@@ -1921,6 +3127,7 @@ pub(crate) async fn build_topic_list_navigation(
         all_groups_selected: selected_group.is_none(),
         uncommitted_count,
         active_tags,
+        forum_filters: Vec::new(),
     })
 }
 
@@ -2377,8 +3584,6 @@ async fn render_topic_view(
         .await
     });
 
-    let topic_html = markup::render_topic_with_expanded_cut(&topic.message, &topic.markup);
-
     let all_comments: Vec<CommentItem> = if want_deleted {
         topic_service(&state).vecListComments(id).await?
     } else {
@@ -2423,7 +3628,7 @@ async fn render_topic_view(
                 stComment.id,
                 CommentReplyView {
                     id: stComment.id,
-                    title: (!stComment.title.trim().is_empty()).then(|| stComment.title.clone()),
+                    title: stComment.optTitlePlain(),
                     author: stComment.author.clone(),
                     postdate: stComment.postdate,
                 },
@@ -2484,6 +3689,23 @@ async fn render_topic_view(
         };
         (slice, pages, false, page + 1 < total_pages)
     };
+    let stMarkupUsers = state
+        .markup
+        .stResolveBatch(
+            std::iter::once((topic.message.as_str(), topic.markup.as_str())).chain(
+                page_comments
+                    .iter()
+                    .map(|stComment| (stComment.message.as_str(), stComment.markup.as_str())),
+            ),
+        )
+        .await?;
+    let topic_html = markup::render_topic_with_expanded_cut_policy_and_users(
+        &topic.message,
+        &topic.markup,
+        topic.bNofollowAuthorLinks(),
+        Some(&state.config.public_url),
+        Some(&stMarkupUsers),
+    );
 
     // ReactionService.allowInteract's expired/comments-hidden/frozen inputs,
     // fetched once up front so per-comment widgets don't each hit the DB.
@@ -2658,7 +3880,14 @@ async fn render_topic_view(
                 .get(&item.author_id)
                 .map(|(sUrl, iWidth, iHeight)| (Some(sUrl.clone()), *iWidth, *iHeight))
                 .unwrap_or((None, 0, 0));
-            let html = markup::render_message_with_markup(&item.message, Some(&item.markup), None);
+            let html = markup::render_message_with_markup_policy_and_users(
+                &item.message,
+                Some(&item.markup),
+                None,
+                item.bNofollowAuthorLinks(),
+                Some(&state.config.public_url),
+                Some(&stMarkupUsers),
+            );
             let rows: Vec<(String, i32, String, i32)> = all_reactions
                 .iter()
                 .filter(|(cid, ..)| *cid == Some(item.id))
@@ -2858,14 +4087,43 @@ async fn render_topic_view(
             Vec::new()
         }
     };
+    let sTopicUserpicHtml = mapAuthorUserpics
+        .get(&topic.author_id)
+        .map_or_else(String::new, |(sUrl, iWidth, iHeight)| {
+            format!(
+                "<div class=\"userpic\"><img class=\"photo\" src=\"{}\" alt=\"\" width=\"{iWidth}\" height=\"{iHeight}\"></div>",
+                html_escape::encode_double_quoted_attribute(sUrl)
+            )
+        });
+    let topic_card_html = sBuildTopicCardHtml(
+        &state,
+        &current_user,
+        &csrf_token,
+        StTopicCardBuildInput {
+            topic: topic.clone(),
+            title_plain: topic.sTitlePlain(),
+            topic_author_signature,
+            topic_html,
+            poll,
+            images_html,
+            topic_reactions,
+            userpic_html: sTopicUserpicHtml,
+            can_comment,
+            actor_frozen: reactor_frozen,
+            show_menu: true,
+            enable_schema: true,
+            include_canonical_extras: true,
+            remote_ip: sRemoteIp,
+        },
+    )
+    .await?;
 
     Ok(Html(
         TopicTemplate {
             topic,
-            topic_author_signature,
             canonical_url,
             og_image_url,
-            topic_html,
+            topic_card_html,
             comments,
             pages,
             thread_root,
@@ -2874,10 +4132,6 @@ async fn render_topic_view(
             filtered_count,
             unfiltered_count,
             csrf_token,
-            poll,
-            images_html,
-            topic_reactions_html: topic_reactions.html,
-            topic_show_reactions_link: topic_reactions.show_menu_link,
             comment_format_mode,
             comment_format_title,
             can_comment,
@@ -3257,6 +4511,7 @@ pub async fn new_topic_form(
             } else {
                 Vec::new()
             },
+            existing_images: Vec::new(),
             uploaded_images: Vec::new(),
             form_title: String::new(),
             form_msg: String::new(),
@@ -3344,7 +4599,7 @@ fn validate_topic_form(form: &TopicForm, links_allowed: bool, bAnonymous: bool) 
             "заголовок сообщения не может быть пустым".into(),
         ));
     }
-    if form.title.chars().count() > 140 {
+    if crate::domain::title::iJavaStringLength(&form.title) > 140 {
         return Err(AppError::BadRequest("Слишком большой заголовок".into()));
     }
     if title.starts_with('[') {
@@ -3709,7 +4964,7 @@ mod topic_image_processing_tests {
     }
 }
 
-fn renderSubmittedAddTopicForm(
+async fn renderSubmittedAddTopicForm(
     stState: &AppState,
     stGroup: &TopicFormGroup,
     stForm: &TopicForm,
@@ -3721,11 +4976,28 @@ fn renderSubmittedAddTopicForm(
     optFormError: Option<String>,
     stTopicLimitInfo: StTopicLimitInfo,
     stPublishPermission: &StAddTopicPermission,
+    bPreviewNofollow: bool,
     bPreview: bool,
     bSessionAuthorized: bool,
     bRequireCaptcha: bool,
 ) -> Result<Response> {
     let (optTopicLimitError, optTopicLimitInfo) = topicLimitNotices(stTopicLimitInfo);
+    let optPreviewHtml = if bPreview {
+        let stMarkupUsers = stState
+            .markup
+            .stResolveBatch([(&*stForm.msg, sMarkupId)])
+            .await?;
+        Some(markup::render_message_with_markup_policy_and_users(
+            &stForm.msg,
+            Some(sMarkupId),
+            None,
+            bPreviewNofollow,
+            Some(&stState.config.public_url),
+            Some(&stMarkupUsers),
+        ))
+    } else {
+        None
+    };
     Ok(Html(
         TopicFormTemplate {
             title: format!("Добавить в «{}»", stGroup.title),
@@ -3756,14 +5028,14 @@ fn renderSubmittedAddTopicForm(
             } else {
                 Vec::new()
             },
+            existing_images: Vec::new(),
             uploaded_images: stForm.uploaded_images.clone(),
             form_title: stForm.title.clone(),
             form_msg: stForm.msg.clone(),
             form_url: stForm.url.clone().unwrap_or_default(),
             form_linktext: stForm.linktext.clone().unwrap_or_default(),
             form_tags: stForm.tags.clone().unwrap_or_default(),
-            preview_html: bPreview
-                .then(|| markup::render_message_with_markup(&stForm.msg, Some(sMarkupId), None)),
+            preview_html: optPreviewHtml,
             noinfo: stForm
                 .noinfo
                 .as_deref()
@@ -3840,6 +5112,19 @@ pub async fn create_topic(
         optFormError = stResolution.optError.clone();
     }
     let stPostingIdentity = stResolution.stIdentity;
+    let bPostingAuthorFrozen: bool = sqlx::query_scalar(
+        "SELECT COALESCE(frozen_until > CURRENT_TIMESTAMP,false) FROM users WHERE id=$1",
+    )
+    .bind(stPostingIdentity.stUser.id)
+    .fetch_one(&state.pool)
+    .await?;
+    let bPreviewNofollow = !crate::domain::topic::link_policy::StAuthorLinkState {
+        iScore: stPostingIdentity.stUser.score.unwrap_or(0),
+        bBlocked: stPostingIdentity.stUser.blocked.unwrap_or(false),
+        bAnonymous: !stPostingIdentity.bAuthorized,
+        bFrozen: bPostingAuthorFrozen,
+    }
+    .bFollowInTopic(false);
     // AuthUtil.postingUser deliberately does not change the site profile:
     // credentialed public-form posts use Profile.DEFAULT, while a real HTTP
     // session retains its selected markup mode.
@@ -3880,10 +5165,12 @@ pub async fn create_topic(
             optFormError,
             stTopicLimitInfo,
             &stPublishPermission,
+            bPreviewNofollow,
             form.preview.is_some(),
             bSessionAuthorized,
             bRequireCaptcha,
-        );
+        )
+        .await;
     }
     if !stPostingPermission.bPermitted() {
         // AddTopicController.checkOrError puts the restriction into the
@@ -3904,10 +5191,12 @@ pub async fn create_topic(
             )),
             stTopicLimitInfo,
             &stPublishPermission,
+            bPreviewNofollow,
             form.preview.is_some(),
             bSessionAuthorized,
             bRequireCaptcha,
-        );
+        )
+        .await;
     }
     if form.preview.is_none()
         && crate::form::get(&pairs, "csrf").map(str::trim) != Some(csrf_token.trim())
@@ -3949,10 +5238,12 @@ pub async fn create_topic(
             None,
             stTopicLimitInfo,
             &stPublishPermission,
+            bPreviewNofollow,
             true,
             bSessionAuthorized,
             bRequireCaptcha,
-        );
+        )
+        .await;
     }
 
     // AddTopicRequestValidator.validateTags/AddTopicController: every
@@ -3991,10 +5282,12 @@ pub async fn create_topic(
             Some(sRateError),
             stTopicLimitInfo,
             &stPublishPermission,
+            bPreviewNofollow,
             false,
             bSessionAuthorized,
             bRequireCaptcha,
-        );
+        )
+        .await;
     }
 
     if !is_draft && !stPublishPermission.bPermitted() {
@@ -4010,12 +5303,15 @@ pub async fn create_topic(
             Some(format!("Ограничение: {}", stPublishPermission.sReason())),
             stTopicLimitInfo,
             &stPublishPermission,
+            bPreviewNofollow,
             false,
             bSessionAuthorized,
             bRequireCaptcha,
-        );
+        )
+        .await;
     }
 
+    let sStoredTitle = crate::domain::title::sEscapeForStorage(&form.title);
     let mut stUploadRollback = StTopicUploadRollback::stNew();
     let mut tx = state.pool.begin().await?;
     let service = topic_service(&state);
@@ -4030,7 +5326,7 @@ pub async fn create_topic(
                 iMsgId: id,
                 iGroupId: form.group,
                 iUserId: stPostingIdentity.stUser.id,
-                sTitle: form.title.trim(),
+                sTitle: &sStoredTitle,
                 optUrl: group
                     .links_allowed
                     .then_some(form.url.as_deref())
@@ -4079,6 +5375,7 @@ pub async fn create_topic(
             id,
             stPostingIdentity.stUser.id,
             &form.msg,
+            &markup_id,
             !premoderated,
         )
         .await?
@@ -4116,6 +5413,878 @@ struct ModeratedTopicTemplate {
     topic_url: String,
 }
 
+#[derive(Debug, Clone)]
+struct StEditPollVariantView {
+    id: i32,
+    label: String,
+}
+
+#[derive(Debug, Clone)]
+struct StEditGroupView {
+    id: i32,
+    title: String,
+    selected: bool,
+}
+
+#[derive(Debug, Clone)]
+struct StEditEditorView {
+    nick: String,
+    score: i32,
+    bonus: i32,
+    blocked: bool,
+}
+
+#[derive(Debug, Clone)]
+struct StEditTopicFormValues {
+    optTitle: Option<String>,
+    optMessage: Option<String>,
+    optUrl: Option<String>,
+    optLinkText: Option<String>,
+    optTagsRaw: Option<String>,
+    vecPoll: Vec<StTopicEditPollValue>,
+    vecNewPoll: Vec<String>,
+    bPollMapPresent: bool,
+    bMultiSelect: bool,
+    bMinor: bool,
+    iBonus: i32,
+    vecEditorBonus: Vec<(String, i32)>,
+    optChangeGroupId: Option<i32>,
+    optLastEditMillis: Option<i64>,
+    vecUploadedImages: Vec<String>,
+}
+
+impl StEditTopicFormValues {
+    fn stInitial(stPrepared: &StPreparedTopicEdit, sMessage: String) -> Self {
+        let stTopic = &stPrepared.stSnapshot;
+        let (vecPoll, bMultiSelect) = stTopic.optPoll.as_ref().map_or_else(
+            || (Vec::new(), false),
+            |stPoll| {
+                (
+                    stPoll
+                        .vecVariants
+                        .iter()
+                        .map(|stVariant| StTopicEditPollValue {
+                            iVariantId: stVariant.iId,
+                            sLabel: stVariant.sLabel.clone(),
+                        })
+                        .collect(),
+                    stPoll.bMultiSelect,
+                )
+            },
+        );
+        Self {
+            optTitle: Some(crate::domain::title::sUnescapeFromStorage(
+                &stTopic.sStoredTitle,
+            )),
+            optMessage: Some(sMessage),
+            optUrl: stTopic.optUrl.clone(),
+            optLinkText: stTopic.optLinkText.clone(),
+            optTagsRaw: (!stTopic.vecTags.is_empty()).then(|| stTopic.vecTags.join(", ")),
+            vecPoll,
+            vecNewPoll: vec![String::new(); POLL_NEW_VARIANT_SLOTS],
+            bPollMapPresent: stTopic.optPoll.is_some(),
+            bMultiSelect,
+            bMinor: stTopic.bMinor,
+            iBonus: 3,
+            vecEditorBonus: stTopic
+                .vecEditors
+                .iter()
+                .map(|stEditor| (stEditor.sNick.clone(), 0))
+                .collect(),
+            optChangeGroupId: Some(stTopic.iGroupId),
+            optLastEditMillis: stTopic.optLastEditMillis,
+            vecUploadedImages: Vec::new(),
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "edit_topic.html")]
+struct StEditTopicTemplate {
+    heading: String,
+    csrf_token: String,
+    errors: Vec<String>,
+    topic_id: i32,
+    last_edit: Option<i64>,
+    content_editable: bool,
+    tags_editable: bool,
+    mini_editable: bool,
+    links_allowed: bool,
+    poll_allowed: bool,
+    imagepost: bool,
+    existing_images: Vec<TopicImageView>,
+    uploaded_images: Vec<String>,
+    empty_image_slots: Vec<usize>,
+    form_title: String,
+    form_msg: String,
+    form_url: String,
+    form_linktext: String,
+    form_tags: String,
+    form_minor: bool,
+    poll_variants: Vec<StEditPollVariantView>,
+    new_poll: Vec<String>,
+    poll_multiselect: bool,
+    format_mode: String,
+    format_title: String,
+    topic_card_html: Option<String>,
+    draft: bool,
+    publish_allowed: bool,
+    publish_reason: String,
+    commit_form: bool,
+    groups: Vec<StEditGroupView>,
+    author_nick: String,
+    author_score: i32,
+    author_blocked: bool,
+    bonus: i32,
+    editors: Vec<StEditEditorView>,
+}
+
+#[derive(Template)]
+#[template(path = "topic_edit_user_error.html")]
+struct StTopicEditUserErrorTemplate {
+    exception_class: &'static str,
+    message: String,
+}
+
+fn stTopicEditUserErrorResponse(sExceptionClass: &'static str, sMessage: String) -> Response {
+    let sBody = StTopicEditUserErrorTemplate {
+        exception_class: sExceptionClass,
+        message: sMessage,
+    }
+    .render()
+    .unwrap_or_else(|_| "Внутренняя ошибка сервера".to_owned());
+    (StatusCode::INTERNAL_SERVER_ERROR, Html(sBody)).into_response()
+}
+
+fn sEditPreviewTitle(sRawTitle: &str) -> String {
+    // Topic.fromEditRequest escapes the raw title, then the preview's
+    // <l:title> runs processTitle without the DB-read makeTitle pass.
+    crate::domain::title::sProcessTitlePlainForDisplay(&crate::domain::title::sEscapeForStorage(
+        sRawTitle,
+    ))
+}
+
+fn stEditPreviewHeaderValues(
+    optSubmittedTitle: Option<&str>,
+    sStoredTitle: &str,
+    optSubmittedUrl: Option<&str>,
+    optStoredUrl: Option<&str>,
+    optSubmittedLinkText: Option<&str>,
+    optStoredLinkText: Option<&str>,
+) -> (String, String, String) {
+    let sTitle = optSubmittedTitle.map_or_else(
+        || crate::domain::title::sTopicTitlePlainForDisplay(sStoredTitle),
+        sEditPreviewTitle,
+    );
+    let sUrl = optSubmittedUrl
+        .map(crate::application::topic::edit::sFixUrlLikeJava)
+        .or_else(|| optStoredUrl.map(str::to_owned))
+        .unwrap_or_default();
+    let sLinkText = optSubmittedLinkText
+        .map(str::to_owned)
+        .or_else(|| optStoredLinkText.map(str::to_owned))
+        .unwrap_or_default();
+    (sTitle, sUrl, sLinkText)
+}
+
+fn vecEditPreviewPollDefinition(
+    stOldPoll: &StTopicEditPoll,
+    vecSubmitted: &[StTopicEditPollValue],
+) -> Vec<StTopicEditPollValue> {
+    let mapSubmitted = vecSubmitted
+        .iter()
+        .filter(|stVariant| stVariant.iVariantId != 0)
+        .map(|stVariant| (stVariant.iVariantId, stVariant.sLabel.as_str()))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut vecVariants = stOldPoll
+        .vecVariants
+        .iter()
+        .filter_map(|stVariant| {
+            mapSubmitted
+                .get(&stVariant.iId)
+                .filter(|sLabel| !sLabel.is_empty())
+                .map(|sLabel| StTopicEditPollValue {
+                    iVariantId: stVariant.iId,
+                    sLabel: (*sLabel).to_owned(),
+                })
+        })
+        .collect::<Vec<_>>();
+    vecVariants.extend(
+        vecSubmitted
+            .iter()
+            .filter(|stVariant| stVariant.iVariantId == 0 && !stVariant.sLabel.is_empty())
+            .cloned(),
+    );
+    vecVariants
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn optEditPreviewPollView(
+    stState: &AppState,
+    stTopic: &TopicDetail,
+    stSnapshot: &crate::domain::topic::edit::StTopicEditSnapshot,
+    stValues: &StEditTopicFormValues,
+    optUser: &Option<UserSummary>,
+    sCsrfToken: &str,
+    bResultsRequested: bool,
+) -> Result<Option<PollView>> {
+    if !stSnapshot.bSectionPollAllowed {
+        return Ok(None);
+    }
+    if !stValues.bPollMapPresent {
+        return load_poll_view(
+            stState,
+            stTopic.id,
+            stTopic.deleted,
+            poll_is_pending(stTopic.moderate),
+            stSnapshot.bExpired,
+            bResultsRequested,
+            optUser,
+            sCsrfToken,
+            &stTopic.topic_url(),
+        )
+        .await;
+    }
+
+    let Some(stOldPoll) = stSnapshot.optPoll.as_ref() else {
+        return Ok(None);
+    };
+    let mapVotes = sqlx::query_as::<_, (i32, i32)>(
+        "SELECT id,votes FROM polls_variants WHERE vote=$1 ORDER BY id",
+    )
+    .bind(stOldPoll.iId)
+    .fetch_all(&stState.pool)
+    .await?
+    .into_iter()
+    .collect::<std::collections::HashMap<_, _>>();
+    let vecDefinition = vecEditPreviewPollDefinition(stOldPoll, &stValues.vecPoll);
+    let iTotalVotes = vecDefinition
+        .iter()
+        .map(|stVariant| mapVotes.get(&stVariant.iVariantId).copied().unwrap_or(0))
+        .sum::<i32>();
+    let iMaxVotes = vecDefinition
+        .iter()
+        .map(|stVariant| mapVotes.get(&stVariant.iVariantId).copied().unwrap_or(0))
+        .max()
+        .unwrap_or(0);
+    let vecVariants = vecDefinition
+        .into_iter()
+        .map(|stVariant| {
+            let iVotes = mapVotes.get(&stVariant.iVariantId).copied().unwrap_or(0);
+            let iWidth = if iMaxVotes > 0 {
+                320 * iVotes / iMaxVotes
+            } else {
+                0
+            };
+            PollVariantView {
+                id: stVariant.iVariantId,
+                label: stVariant.sLabel,
+                votes: iVotes,
+                pct: if iTotalVotes > 0 {
+                    ((100.0 * f64::from(iVotes) / f64::from(iTotalVotes)).round()) as i32
+                } else {
+                    0
+                },
+                progress_pct: (iWidth / 16) * 16 * 100 / 320,
+                progress_alt: "*".repeat(iWidth as usize),
+                // PollPrepareService.preparePollPreview deliberately asks
+                // PollDao for anonymous results, even for a logged-in editor.
+                user_voted: false,
+            }
+        })
+        .collect();
+    let bPending = poll_is_pending(stTopic.moderate);
+    let bShowResults = !bPending && (bResultsRequested || stSnapshot.bExpired);
+    Ok(Some(PollView {
+        voteid: stOldPoll.iId,
+        multiselect: stOldPoll.bMultiSelect,
+        variants: vecVariants,
+        total_votes: iTotalVotes,
+        // preparePollPreview passes zero, not the persisted voter count.
+        total_people: 0,
+        // With a submitted poll map Java's preparePollPreview is anonymous:
+        // the topic tag enables the form for any authenticated viewer when
+        // the topic is committed and not expired, even if this editor voted
+        // before.  Deletion is not part of that tag condition.
+        can_vote: optUser.is_some() && !bPending && !stSnapshot.bExpired,
+        show_results: bShowResults,
+        pending: bPending,
+        authorized: optUser.is_some(),
+        topic_url: stTopic.topic_url(),
+        csrf_token: sCsrfToken.to_owned(),
+    }))
+}
+
+fn sRenderEditPreviewMessage(
+    sMessage: &str,
+    sMarkup: &str,
+    bNofollow: bool,
+    sPublicUrl: &str,
+    stUsers: &crate::domain::markup::model::StMarkupUserDirectory,
+) -> String {
+    // TopicPrepareService.prepareTopicPreview calls renderTopic with
+    // minimizeCut=false.  This is observably different from the comment
+    // renderer: Markdown and LORCODE cuts are expanded with their topic
+    // fragment containers.
+    markup::render_topic_with_expanded_cut_policy_and_users(
+        sMessage,
+        sMarkup,
+        bNofollow,
+        Some(sPublicUrl),
+        Some(stUsers),
+    )
+}
+
+fn optEditPreviewImageView(
+    pathUploadRoot: &std::path::Path,
+    sName: &str,
+) -> Option<TopicImageView> {
+    let pathName = std::path::Path::new(sName);
+    if pathName.file_name().and_then(|sValue| sValue.to_str()) != Some(sName) {
+        return None;
+    }
+    let sStem = sName.rsplit_once('.').map_or(sName, |(sStem, _)| sStem);
+    let pathRoot = pathUploadRoot.join("gallery/preview");
+    let pathOriginal = pathRoot.join(sName);
+    let pathMedium = pathRoot.join(format!("{sStem}-1000px.jpg"));
+    let (iWidth, iHeight) = image::image_dimensions(pathOriginal).ok()?;
+    let (iMediumWidth, iMediumHeight) = image::image_dimensions(pathMedium).ok()?;
+    let sOriginalUrl = format!("/gallery/preview/{sName}");
+    let mut vecSrcset = [500_u32, 1000, 1500, 2000]
+        .into_iter()
+        .filter(|iSize| iWidth > 2000 || *iSize < iWidth)
+        .map(|iSize| {
+            (
+                format!("/gallery/preview/{sStem}-{iSize}px.jpg"),
+                iSize as i32,
+            )
+        })
+        .collect::<Vec<_>>();
+    if iWidth <= 2000 {
+        vecSrcset.push((sOriginalUrl.clone(), iWidth as i32));
+    }
+    Some(TopicImageView {
+        id: 0,
+        medium_url: format!("/gallery/preview/{sStem}-1000px.jpg"),
+        original_url: sOriginalUrl,
+        width: i32::try_from(iWidth).ok()?,
+        height: i32::try_from(iHeight).ok()?,
+        medium_width: i32::try_from(iMediumWidth).ok()?,
+        medium_height: i32::try_from(iMediumHeight).ok()?,
+        srcset: vecSrcset,
+    })
+}
+
+fn vecEditPreviewImages(
+    stState: &AppState,
+    vecExisting: &[TopicImageView],
+    vecPreviewNames: &[String],
+) -> Vec<TopicImageView> {
+    let mut vecImages = vecExisting.to_vec();
+    vecImages.extend(vecPreviewNames.iter().filter_map(|sName| {
+        optEditPreviewImageView(std::path::Path::new(&stState.config.upload_dir), sName)
+    }));
+    vecImages
+}
+
+pub(crate) fn stScaleUserpicDimensions(iWidth: u32, iHeight: u32) -> (i32, i32) {
+    if iWidth <= 150 && iHeight <= 150 {
+        return (iWidth as i32, iHeight as i32);
+    }
+    if iWidth >= iHeight {
+        (
+            150,
+            ((u64::from(iHeight) * 150) / u64::from(iWidth)).max(1) as i32,
+        )
+    } else {
+        (
+            ((u64::from(iWidth) * 150) / u64::from(iHeight)).max(1) as i32,
+            150,
+        )
+    }
+}
+
+async fn sEditPreviewUserpicHtml(
+    stState: &AppState,
+    stViewer: &UserSummary,
+    stTopic: &crate::domain::topic::edit::StTopicEditSnapshot,
+) -> Result<String> {
+    let optSettings: Option<String> =
+        sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
+            .bind(stViewer.id)
+            .fetch_optional(&stState.pool)
+            .await?;
+    let stProfile = crate::profile::ProfileSettings::from_hstore_text(optSettings);
+    if !stProfile.photos {
+        return Ok(String::new());
+    }
+    let (optPhoto, optEmail): (Option<String>, Option<String>) =
+        sqlx::query_as("SELECT photo,email FROM users WHERE id=$1")
+            .bind(stTopic.iAuthorId)
+            .fetch_one(&stState.pool)
+            .await?;
+    let mut optUrl = crate::profile::userpic_url(
+        &stProfile.avatar,
+        true,
+        stTopic.bAuthorAnonymous,
+        optPhoto.as_deref(),
+        optEmail.as_deref(),
+    );
+    let mut stDimensions = None;
+    if let (Some(sPhoto), Some(sUrl)) = (optPhoto.as_deref(), optUrl.as_deref())
+        && sUrl.starts_with("/photos/")
+        && std::path::Path::new(sPhoto)
+            .file_name()
+            .and_then(|sValue| sValue.to_str())
+            == Some(sPhoto)
+    {
+        stDimensions = image::image_dimensions(
+            std::path::Path::new(&stState.config.upload_dir)
+                .join("photos")
+                .join(sPhoto),
+        )
+        .ok()
+        .map(|(iWidth, iHeight)| stScaleUserpicDimensions(iWidth, iHeight));
+        if stDimensions.is_none() {
+            optUrl = crate::profile::userpic_url(
+                &stProfile.avatar,
+                true,
+                stTopic.bAuthorAnonymous,
+                None,
+                optEmail.as_deref(),
+            );
+        }
+    }
+    let (sUrl, iWidth, iHeight) = match optUrl {
+        Some(sUrl) if sUrl.starts_with("/photos/") => {
+            let (iWidth, iHeight) = stDimensions.unwrap_or((150, 150));
+            (sUrl, iWidth, iHeight)
+        }
+        Some(sUrl) => (sUrl, 150, 150),
+        None => (crate::profile::DISABLED_USERPIC.to_owned(), 1, 1),
+    };
+    Ok(format!(
+        "<div class=\"userpic\"><img class=\"photo\" src=\"{}\" alt=\"\" width={iWidth} height={iHeight} ></div>",
+        html_escape::encode_double_quoted_attribute(&sUrl)
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn sPrepareEditTopicCardHtml(
+    stState: &AppState,
+    stUser: &UserSummary,
+    sCsrfToken: &str,
+    stPrepared: &StPreparedTopicEdit,
+    stValues: &StEditTopicFormValues,
+    optTags: Option<&[String]>,
+    vecExistingImages: &[TopicImageView],
+    bPublish: bool,
+    bResultsRequested: bool,
+) -> Result<String> {
+    let stSnapshot = &stPrepared.stSnapshot;
+    let mut stTopic = get_topic(stState, stSnapshot.iTopicId).await?;
+    let (sTitlePlain, sPreviewUrl, sPreviewLinkText) = stEditPreviewHeaderValues(
+        stValues.optTitle.as_deref(),
+        &stSnapshot.sStoredTitle,
+        stValues.optUrl.as_deref(),
+        stSnapshot.optUrl.as_deref(),
+        stValues.optLinkText.as_deref(),
+        stSnapshot.optLinkText.as_deref(),
+    );
+    // The typed edit snapshot is the controller's prepared-model source of
+    // truth.  Copy its presentation fields into the unpersisted adapter too,
+    // instead of accidentally relying on a second read having identical
+    // values throughout the request.
+    stTopic.author_frozen = stSnapshot.bAuthorFrozen;
+    stTopic.group_title = stSnapshot.sGroupTitle.clone();
+    stTopic.section_name = stSnapshot.sSectionTitle.clone();
+    if let Some(sTitle) = stValues.optTitle.as_deref() {
+        stTopic.title = crate::domain::title::sEscapeForStorage(sTitle);
+    }
+    stTopic.message = stValues
+        .optMessage
+        .clone()
+        .unwrap_or_else(|| stSnapshot.sMessage.clone());
+    if stSnapshot.bLinksAllowed {
+        stTopic.url = stValues
+            .optUrl
+            .as_ref()
+            .map(|_| sPreviewUrl)
+            .or_else(|| stSnapshot.optUrl.clone());
+        stTopic.linktext = stValues
+            .optLinkText
+            .as_ref()
+            .map(|_| sPreviewLinkText)
+            .or_else(|| stSnapshot.optLinkText.clone());
+    }
+    stTopic.tags = optTags.map(|vecTags| vecTags.join(","));
+    stTopic.draft = stSnapshot.bDraft && !bPublish;
+
+    let stMarkupUsers = stState
+        .markup
+        .stResolveBatch([(&*stTopic.message, &*stSnapshot.sMarkup)])
+        .await?;
+    let sTopicHtml = sRenderEditPreviewMessage(
+        &stTopic.message,
+        &stSnapshot.sMarkup,
+        stTopic.bNofollowAuthorLinks(),
+        &stState.config.public_url,
+        &stMarkupUsers,
+    );
+    let optUser = Some(stUser.clone());
+    let optPoll = optEditPreviewPollView(
+        stState,
+        &stTopic,
+        stSnapshot,
+        stValues,
+        &optUser,
+        sCsrfToken,
+        bResultsRequested,
+    )
+    .await?;
+    let vecImages = vecEditPreviewImages(stState, vecExistingImages, &stValues.vecUploadedImages);
+    let sImagesHtml = render_topic_images_with_plain_title(
+        &vecImages,
+        &sTitlePlain,
+        stSnapshot.bSectionImagePost,
+        false,
+    );
+    let bActorFrozen = sqlx::query_scalar::<_, Option<chrono::DateTime<chrono::Utc>>>(
+        "SELECT frozen_until FROM users WHERE id=$1",
+    )
+    .bind(stUser.id)
+    .fetch_one(&stState.pool)
+    .await?
+    .is_some_and(|dtUntil| dtUntil > chrono::Utc::now());
+    let vecTopicReactions = load_all_reactions(stState, stTopic.id, Some(stUser.id))
+        .await?
+        .into_iter()
+        .filter(|(optCommentId, ..)| optCommentId.is_none())
+        .map(|(_, sReaction, iUserId, sNick, iScore)| (sReaction, iUserId, sNick, iScore))
+        .collect::<Vec<_>>();
+    let bAllowReactions = reactions_allow_interact(
+        &optUser,
+        bActorFrozen,
+        stSnapshot.bExpired,
+        stTopic.author_id,
+        stTopic.deleted,
+        false,
+    );
+    let stReactions = render_reactions_widget(
+        stTopic.id,
+        None,
+        &vecTopicReactions,
+        Some(stUser.id),
+        bAllowReactions,
+        sCsrfToken,
+    );
+    let sUserpicHtml = sEditPreviewUserpicHtml(stState, stUser, stSnapshot).await?;
+    sBuildTopicCardHtml(
+        stState,
+        &optUser,
+        sCsrfToken,
+        StTopicCardBuildInput {
+            topic: stTopic,
+            title_plain: sTitlePlain,
+            topic_author_signature: stAuthorSignature(
+                stSnapshot.iAuthorScore,
+                stSnapshot.iAuthorMaxScore,
+                !stSnapshot.bAuthorAnonymous,
+                stUser.canmod,
+            ),
+            topic_html: sTopicHtml,
+            poll: optPoll,
+            images_html: sImagesHtml,
+            topic_reactions: stReactions,
+            userpic_html: sUserpicHtml,
+            can_comment: false,
+            actor_frozen: bActorFrozen,
+            show_menu: false,
+            enable_schema: false,
+            include_canonical_extras: false,
+            remote_ip: String::new(),
+        },
+    )
+    .await
+}
+
+#[derive(Clone, Copy)]
+struct CRouteTopicEditRealtimeNotifier<'a> {
+    stState: &'a AppState,
+}
+
+impl TrTopicEditRealtimeNotifier for CRouteTopicEditRealtimeNotifier<'_> {
+    fn vNotifyEvents(&self, vecUserIds: &[i32]) {
+        self.stState
+            .realtime
+            .vNotifyEvents(vecUserIds.iter().copied());
+    }
+}
+
+fn cTopicEditService(
+    stState: &AppState,
+) -> CTopicEditService<
+    CTopicEditPgRepository,
+    CSearchQueueSender,
+    CRouteTopicEditRealtimeNotifier<'_>,
+> {
+    CTopicEditService::new(
+        CTopicEditPgRepository::new(stState.pool.clone()),
+        CSearchQueueSender::new(
+            stState.config.opensearch_url.as_deref(),
+            &stState.config.upload_dir,
+        ),
+        CRouteTopicEditRealtimeNotifier { stState },
+    )
+}
+
+fn stTopicEditActor(stUser: &UserSummary) -> StTopicEditActor {
+    StTopicEditActor {
+        iUserId: stUser.id,
+        iScore: stUser.score.unwrap_or(0),
+        bModerator: stUser.canmod,
+        bAdministrator: stUser.candel,
+        bCorrector: stUser.corrector,
+        bBlocked: stUser.blocked.unwrap_or(false),
+    }
+}
+
+fn stAddActorForEdit(stUser: &UserSummary) -> StAddTopicActor {
+    StAddTopicActor {
+        optUserId: Some(stUser.id),
+        bAnonymous: false,
+        bModerator: stUser.canmod,
+        bCorrector: stUser.corrector,
+        bBlocked: stUser.blocked.unwrap_or(false),
+        iScore: stUser.score.unwrap_or(0),
+    }
+}
+
+fn sTopicEditRemoteIp(
+    stState: &AppState,
+    headers: &HeaderMap,
+    stPeerAddress: SocketAddr,
+) -> String {
+    crate::security::stClientIp(
+        stPeerAddress.ip(),
+        headers,
+        &stState.config.trusted_proxy_cidrs,
+    )
+    .to_string()
+}
+
+async fn stEditPublishPermission(
+    stState: &AppState,
+    stUser: &UserSummary,
+    stPrepared: &StPreparedTopicEdit,
+    sRemoteIp: &str,
+) -> Result<StAddTopicPermission> {
+    let stActor = stAddActorForEdit(stUser);
+    let stPostingPermission = add_topic_service(stState)
+        .optCheckGroup(stPrepared.stSnapshot.iGroupId, stActor, sRemoteIp)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let stLimit = stState
+        .topic_publish
+        .stTopicLimitInfo(stActor, stPrepared.stSnapshot.iSectionId)
+        .await?;
+    Ok(stState
+        .topic_publish
+        .stCheckPublish(stPostingPermission, stLimit))
+}
+
+#[derive(Debug, Default)]
+struct StEditTopicRenderContext {
+    optTags: Option<Vec<String>>,
+    bTopicCard: bool,
+    bPublish: bool,
+    bResultsRequested: bool,
+}
+
+const S_ALLOW_EDIT_OPTIONS: &str = "POST,GET,HEAD,OPTIONS";
+const S_ALLOW_EDIT_405: &str = "POST, GET";
+const S_ALLOW_COMMIT_OPTIONS: &str = "GET,HEAD,OPTIONS";
+const S_ALLOW_COMMIT_405: &str = "GET";
+
+/// Keep the legacy Spring method contract explicit.  In particular, Axum's
+/// synthesized OPTIONS/405 headers use a different order and spacing.
+pub fn stEditTopicRoute() -> MethodRouter<AppState> {
+    get(edit_topic_form)
+        .post(edit_topic)
+        .options(options_edit_topic)
+        .fallback(method_not_allowed_edit_topic)
+        .layer(DefaultBodyLimit::max(34 * 1024 * 1024))
+}
+
+/// `/commit.jsp` only opens the shared edit form.  Confirmation itself is a
+/// POST to `/edit.jsp`; accepting a POST here would be a second, non-Java
+/// mutation surface.
+pub fn stCommitTopicRoute() -> MethodRouter<AppState> {
+    get(commit_topic_form)
+        .options(options_commit_topic)
+        .fallback(method_not_allowed_commit_topic)
+}
+
+fn stEditTopicMethodResponse(stStatus: StatusCode, sAllow: &'static str) -> Response {
+    (
+        stStatus,
+        [(header::ALLOW, sAllow), (header::CONTENT_LENGTH, "0")],
+    )
+        .into_response()
+}
+
+async fn options_edit_topic() -> Response {
+    stEditTopicMethodResponse(StatusCode::OK, S_ALLOW_EDIT_OPTIONS)
+}
+
+async fn method_not_allowed_edit_topic() -> Response {
+    stEditTopicMethodResponse(StatusCode::METHOD_NOT_ALLOWED, S_ALLOW_EDIT_405)
+}
+
+async fn options_commit_topic() -> Response {
+    stEditTopicMethodResponse(StatusCode::OK, S_ALLOW_COMMIT_OPTIONS)
+}
+
+async fn method_not_allowed_commit_topic() -> Response {
+    stEditTopicMethodResponse(StatusCode::METHOD_NOT_ALLOWED, S_ALLOW_COMMIT_405)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn stRenderEditTopic(
+    stState: &AppState,
+    stUser: &UserSummary,
+    sCsrfToken: &str,
+    stPrepared: StPreparedTopicEdit,
+    stValues: StEditTopicFormValues,
+    vecErrors: Vec<String>,
+    bCommitForm: bool,
+    sHeading: String,
+    sRemoteIp: &str,
+    stRenderContext: StEditTopicRenderContext,
+) -> Result<Response> {
+    let stTopic = &stPrepared.stSnapshot;
+    let vecExistingImages = load_topic_images(stState, stTopic.iTopicId).await?;
+    let bImagePost = stTopic.bSectionImagePost
+        || (stTopic.bSectionImageAllowed
+            && (stUser.canmod || stUser.corrector || stUser.score.unwrap_or(0) >= 50));
+    let iEmptyImageSlots = if bImagePost {
+        4usize.saturating_sub(vecExistingImages.len() + stValues.vecUploadedImages.len())
+    } else {
+        0
+    };
+    let iUploadedImageCount = stValues.vecUploadedImages.len();
+    let vecEmptyImageSlots =
+        (iUploadedImageCount..iUploadedImageCount + iEmptyImageSlots).collect();
+    let stPublishPermission = if stTopic.bDraft {
+        stEditPublishPermission(stState, stUser, &stPrepared, sRemoteIp).await?
+    } else {
+        StAddTopicPermission { optReason: None }
+    };
+    let (sFormatMode, sFormatTitle) = markup_form_view(&stTopic.sMarkup);
+    let sFormMessage = stValues
+        .optMessage
+        .clone()
+        .unwrap_or_else(|| stTopic.sMessage.clone());
+    let sFormTitle = stValues.optTitle.clone().unwrap_or_default();
+    let sFormUrl = stValues.optUrl.clone().unwrap_or_default();
+    let sFormLinkText = stValues.optLinkText.clone().unwrap_or_default();
+    let sFormTags = stValues.optTagsRaw.clone().unwrap_or_default();
+    let optTopicCardHtml = if stRenderContext.bTopicCard {
+        Some(
+            sPrepareEditTopicCardHtml(
+                stState,
+                stUser,
+                sCsrfToken,
+                &stPrepared,
+                &stValues,
+                stRenderContext.optTags.as_deref(),
+                &vecExistingImages,
+                stRenderContext.bPublish,
+                stRenderContext.bResultsRequested,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    let mapEditorBonus = stValues
+        .vecEditorBonus
+        .iter()
+        .cloned()
+        .collect::<std::collections::HashMap<_, _>>();
+    let vecEditors = stTopic
+        .vecEditors
+        .iter()
+        .map(|stEditor| StEditEditorView {
+            nick: stEditor.sNick.clone(),
+            score: stEditor.iScore,
+            bonus: mapEditorBonus.get(&stEditor.sNick).copied().unwrap_or(0),
+            blocked: stEditor.bBlocked,
+        })
+        .collect();
+    let vecPollVariants = stValues
+        .vecPoll
+        .iter()
+        .filter(|stVariant| stVariant.iVariantId != 0)
+        .map(|stVariant| StEditPollVariantView {
+            id: stVariant.iVariantId,
+            label: stVariant.sLabel.clone(),
+        })
+        .collect();
+    let vecGroups = stTopic
+        .vecGroups
+        .iter()
+        .map(|stGroup| StEditGroupView {
+            id: stGroup.iId,
+            title: stGroup.sTitle.clone(),
+            selected: stValues.optChangeGroupId.unwrap_or(stTopic.iGroupId) == stGroup.iId,
+        })
+        .collect();
+    let sPublishReason = stPublishPermission.sReason().to_owned();
+    Ok(Html(
+        StEditTopicTemplate {
+            heading: sHeading,
+            csrf_token: sCsrfToken.to_owned(),
+            errors: vecErrors,
+            topic_id: stTopic.iTopicId,
+            last_edit: stTopic.optLastEditMillis,
+            content_editable: stPrepared.stContentPermission.bPermitted(),
+            tags_editable: stPrepared.stTagsPermission.bPermitted(),
+            mini_editable: stPrepared.bMiniEditable(),
+            links_allowed: stTopic.bLinksAllowed,
+            poll_allowed: stTopic.bSectionPollAllowed,
+            imagepost: bImagePost,
+            existing_images: vecExistingImages,
+            uploaded_images: stValues.vecUploadedImages,
+            empty_image_slots: vecEmptyImageSlots,
+            form_title: sFormTitle,
+            form_msg: sFormMessage,
+            form_url: sFormUrl,
+            form_linktext: sFormLinkText,
+            form_tags: sFormTags,
+            form_minor: stValues.bMinor,
+            poll_variants: vecPollVariants,
+            new_poll: stValues.vecNewPoll,
+            poll_multiselect: stValues.bMultiSelect,
+            format_mode: sFormatMode,
+            format_title: sFormatTitle,
+            topic_card_html: optTopicCardHtml,
+            draft: stTopic.bDraft,
+            publish_allowed: stPublishPermission.bPermitted(),
+            publish_reason: sPublishReason,
+            commit_form: bCommitForm,
+            groups: vecGroups,
+            author_nick: stTopic.sAuthorNick.clone(),
+            author_score: stTopic.iAuthorScore,
+            author_blocked: stTopic.bAuthorBlocked,
+            bonus: stValues.iBonus,
+            editors: vecEditors,
+        }
+        .render()?,
+    )
+    .into_response())
+}
+
 pub async fn edit_topic_form(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -4125,112 +6294,40 @@ pub async fn edit_topic_form(
     ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
 ) -> Result<Response> {
     let Some(user) = user else {
-        return Ok(crate::routes::auth::login_redirect(&format!(
-            "/edit.jsp?msgid={}",
-            q.msgid
-        )));
-    };
-    let topic = get_topic(&state, q.msgid).await?;
-    let stRules = load_topic_edit_rules(&state, q.msgid).await?;
-    check_topic_edit_preconditions(&state, &headers, stPeerAddress, &user, &topic).await?;
-    if !b_topic_content_editable(&topic, &stRules, &user)
-        && !b_topic_tags_editable(&topic, &stRules, &user)
-    {
         return Err(AppError::Forbidden);
-    }
-    let selected_group = topic.group_id;
-    let group = load_topic_form_group(&state, selected_group).await?;
-    let (format_mode, format_mode_title) = markup_form_view(&topic.markup);
-    let image_allowed = image_upload_allowed(&group, &Some(user));
-    let image_count: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM images WHERE topic=$1 AND NOT deleted")
-            .bind(q.msgid)
-            .fetch_one(&state.pool)
-            .await?;
-    let form_msg = if let Some(iRecordId) = q.from_history {
+    };
+    let sRemoteIp = sTopicEditRemoteIp(&state, &headers, stPeerAddress);
+    let stActor = stTopicEditActor(&user);
+    let cService = cTopicEditService(&state);
+    let stPrepared = cService
+        .stPrepareEditForm(q.msgid, stActor, &sRemoteIp)
+        .await?;
+    let sMessage = if let Some(iRecordId) = q.from_history {
         let cHistoryService = crate::application::edit_history::CEditHistoryService::new(
             crate::infra::postgres::edit_history_repository::CEditHistoryPgRepository::new(
                 state.pool.clone(),
             ),
         );
         cHistoryService
-            .sRestorableTopicMessage(topic.id, iRecordId)
+            .sRestorableTopicMessage(q.msgid, iRecordId)
             .await?
     } else {
-        topic.message.clone()
+        stPrepared.stSnapshot.sMessage.clone()
     };
-    // PollDao.getPollByTopicId/EditTopicController: pre-fill existing
-    // variants (blank if the topic has no poll yet, e.g. a topic moved
-    // into the Опросы section after creation) plus a handful of empty
-    // slots for adding new ones.
-    let poll_row: Option<(i32, bool)> =
-        sqlx::query_as("SELECT id, multiselect FROM polls WHERE topic=$1")
-            .bind(q.msgid)
-            .fetch_optional(&state.pool)
-            .await?;
-    let (poll_variants, poll_multiselect) = match poll_row {
-        Some((poll_id, multiselect)) => {
-            let variants = sqlx::query_as::<_, (i32, String)>(
-                "SELECT id, label FROM polls_variants WHERE vote=$1 ORDER BY id",
-            )
-            .bind(poll_id)
-            .fetch_all(&state.pool)
-            .await?;
-            (variants, multiselect)
-        }
-        None => (Vec::new(), false),
-    };
-    Ok(Html(
-        TopicFormTemplate {
-            title: "Редактировать тему".into(),
-            form_error: None,
-            topic_limit_error: None,
-            topic_limit_info: None,
-            topic_posting_allowed: true,
-            topic_posting_reason: String::new(),
-            action: "/edit.jsp".into(),
-            topic_id: Some(topic.id),
-            csrf_token,
-            poll_variants,
-            poll_new_rows: if group.poll_allowed {
-                vec![String::new(); POLL_NEW_VARIANT_SLOTS]
-            } else {
-                Vec::new()
-            },
-            poll_multiselect,
-            selected_group,
-            is_edit: true,
-            links_allowed: group.links_allowed,
-            premoderated: group.premoderated,
-            poll_allowed: group.poll_allowed,
-            image_allowed,
-            image_required: false,
-            additional_image_rows: if image_allowed && group.section_prefix != "forum" {
-                vec![(); 3usize.saturating_sub(image_count as usize)]
-            } else {
-                Vec::new()
-            },
-            uploaded_images: Vec::new(),
-            form_title: topic.title.clone(),
-            form_msg,
-            form_url: topic.url.clone().unwrap_or_default(),
-            form_linktext: topic.linktext.clone().unwrap_or_default(),
-            form_tags: topic.tags_vec().join(", "),
-            preview_html: None,
-            noinfo: false,
-            add_info_html: None,
-            format_mode,
-            format_mode_title,
-            anonymous_form: false,
-            form_nick: String::new(),
-            require_captcha: false,
-            captcha_site_key: String::new(),
-            show_allow_anonymous: false,
-            allow_anonymous: true,
-        }
-        .render()?,
+    let stValues = StEditTopicFormValues::stInitial(&stPrepared, sMessage);
+    stRenderEditTopic(
+        &state,
+        &user,
+        &csrf_token,
+        stPrepared,
+        stValues,
+        Vec::new(),
+        false,
+        "Редактирование".into(),
+        &sRemoteIp,
+        StEditTopicRenderContext::default(),
     )
-    .into_response())
+    .await
 }
 
 const TOPIC_EDIT_WINDOW_DAYS: i64 = 14;
@@ -4264,33 +6361,6 @@ pub(crate) async fn load_topic_edit_rules(
         postscore,
         commitdate,
     })
-}
-
-async fn check_topic_edit_preconditions(
-    state: &AppState,
-    headers: &HeaderMap,
-    stPeerAddress: SocketAddr,
-    user: &UserSummary,
-    topic: &TopicDetail,
-) -> Result<()> {
-    if topic.deleted {
-        return Err(AppError::BadRequest(
-            "нельзя править удаленные топики".into(),
-        ));
-    }
-    let sRemoteIp = crate::security::stClientIp(
-        stPeerAddress.ip(),
-        headers,
-        &state.config.trusted_proxy_cidrs,
-    )
-    .to_string();
-    if crate::routes::comments::optCommentActorError(state, user, false, &sRemoteIp)
-        .await?
-        .is_some()
-    {
-        return Err(AppError::Forbidden);
-    }
-    Ok(())
 }
 
 fn b_topic_editable_by_author(
@@ -4346,10 +6416,6 @@ pub(crate) fn b_topic_content_editable(
     b_topic_editable_by_author(topic, rules, user)
 }
 
-fn b_topic_tags_editable(topic: &TopicDetail, rules: &TopicEditRules, user: &UserSummary) -> bool {
-    user.candel || user.canmod || user.corrector || b_topic_editable_by_author(topic, rules, user)
-}
-
 #[cfg(test)]
 mod topic_edit_permission_tests {
     use super::*;
@@ -4384,6 +6450,10 @@ mod topic_edit_permission_tests {
             lastmod: None,
             author_id: 1,
             author: "user1".into(),
+            author_score: 100,
+            author_blocked: false,
+            author_anonymous: false,
+            author_frozen: false,
             group_id: 2,
             group_title: "group".into(),
             group_urlname: "group".into(),
@@ -4427,7 +6497,7 @@ mod topic_edit_permission_tests {
     }
 
     #[test]
-    fn corrector_obeys_no_comments_lock_but_can_still_edit_tags() {
+    fn corrector_obeys_no_comments_content_lock() {
         let st_topic = st_topic();
         let mut st_rules = st_rules();
         let st_corrector = st_user(2, false, false, true);
@@ -4442,7 +6512,6 @@ mod topic_edit_permission_tests {
             &st_rules,
             &st_corrector
         ));
-        assert!(b_topic_tags_editable(&st_topic, &st_rules, &st_corrector));
     }
 
     #[test]
@@ -4475,77 +6544,678 @@ mod topic_edit_permission_tests {
     }
 }
 
-#[derive(Clone)]
-struct TopicPollSnapshot {
-    id: i32,
-    multiselect: bool,
-    variants: Vec<(i32, String)>,
+struct StParsedEditTopicRequest {
+    iTopicId: i32,
+    stValues: StEditTopicFormValues,
+    optTags: Option<Vec<String>>,
+    bPreview: bool,
+    bCommit: bool,
+    bPublish: bool,
+    vecErrors: Vec<String>,
 }
 
-async fn load_topic_poll_snapshot(
-    state: &AppState,
-    topic_id: i32,
-) -> Result<Option<TopicPollSnapshot>> {
-    let Some((id, multiselect)): Option<(i32, bool)> =
-        sqlx::query_as("SELECT id,multiselect FROM polls WHERE topic=$1")
-            .bind(topic_id)
-            .fetch_optional(&state.pool)
-            .await?
-    else {
-        return Ok(None);
-    };
-    let variants = sqlx::query_as("SELECT id,label FROM polls_variants WHERE vote=$1 ORDER BY id")
-        .bind(id)
-        .fetch_all(&state.pool)
-        .await?;
-    Ok(Some(TopicPollSnapshot {
-        id,
-        multiselect,
-        variants,
-    }))
-}
-
-fn b_poll_modified(snapshot: Option<&TopicPollSnapshot>, form: &TopicForm) -> bool {
-    let bMultiselect = form.multiselect.is_some();
-    match snapshot {
-        None => form.poll.iter().any(|sLabel| !sLabel.trim().is_empty()),
-        Some(stPoll) => {
-            if stPoll.multiselect != bMultiselect {
-                return true;
-            }
-            form.variant_id
-                .iter()
-                .zip(form.poll.iter())
-                .any(|(iVariantId, sLabel)| {
-                    let sLabel = sLabel.trim();
-                    if *iVariantId == 0 {
-                        !sLabel.is_empty()
-                    } else {
-                        stPoll
-                            .variants
-                            .iter()
-                            .find(|(iId, _)| iId == iVariantId)
-                            .is_some_and(|(_, sOldLabel)| sOldLabel != sLabel)
-                    }
-                })
+fn bSpringFormBoolean(optValue: Option<&str>, sField: &str, vecErrors: &mut Vec<String>) -> bool {
+    match optValue.map(str::to_ascii_lowercase).as_deref() {
+        None | Some("false") | Some("off") | Some("no") | Some("0") => false,
+        Some("true") | Some("on") | Some("yes") | Some("1") => true,
+        Some(_) => {
+            // Spring's CustomBooleanEditor records a binding error for every
+            // other token.  It never silently treats arbitrary input as true.
+            vecErrors.push(format!("Некорректное значение {sField}"));
+            false
         }
     }
 }
 
-fn opt_poll_history_json(
-    topic_id: i32,
-    snapshot: Option<&TopicPollSnapshot>,
-) -> Option<serde_json::Value> {
-    snapshot.map(|stPoll| {
-        serde_json::json!({
-            "id": stPoll.id,
-            "topic": topic_id,
-            "multiSelect": stPoll.multiselect,
-            "variants": stPoll.variants.iter().map(|(iId, sLabel)| {
-                serde_json::json!({"id": iId, "label": sLabel})
-            }).collect::<Vec<_>>()
+fn vecStringIndexedField(vecPairs: &[(String, String)], sPrefix: &str) -> Vec<(String, String)> {
+    let sStart = format!("{sPrefix}[");
+    vecPairs
+        .iter()
+        .filter_map(|(sKey, sValue)| {
+            Some((
+                sKey.strip_prefix(&sStart)?.strip_suffix(']')?.to_owned(),
+                sValue.clone(),
+            ))
         })
+        .collect()
+}
+
+fn bJavaTopicUrl(sUrl: &str) -> bool {
+    static RE_URL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(concat!(
+            r"(?i)^(?:",
+            r"(?:(?:https?|ftp)://(?:(?:[0-9\p{L}.-]+\.[0-9\p{L}]+)|(?:\d+\.\d+\.\d+\.\d+))(?::[0-9]+)?(?:/[^ ]*)?)",
+            r"|(?:mailto:[a-z0-9_+-.]+@[0-9a-z.-]+\.[a-z]+)",
+            r"|(?:news:[a-z0-9.-]+)",
+            r"|(?:(?:www|ftp)\.(?:(?:[0-9a-z.-]+\.[a-z]+(?::[0-9]+)?(?:/[^ ]*)?)|(?:[a-z]+(?:/[^ ]*)?)))",
+            r")$"
+        ))
+        .expect("URLUtil.IsUrl regex")
+    });
+    RE_URL.is_match(sUrl)
+}
+
+fn optInvalidXmlCharacter(sValue: &str) -> Option<String> {
+    sValue
+        .chars()
+        .find(|cValue| {
+            !matches!(
+                *cValue,
+                '\u{9}' | '\u{A}' | '\u{D}' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..='\u{10FFFF}'
+            )
+        })
+        .map(|cValue| format!("Недопустимый XML-символ U+{:04X}", u32::from(cValue)))
+}
+
+fn stParseEditTopicRequest(vecPairs: &[(String, String)]) -> Result<StParsedEditTopicRequest> {
+    use crate::form::get;
+
+    let iTopicId = get(vecPairs, "msgid")
+        .ok_or_else(|| AppError::BadParameter("Не задан msgid".into()))?
+        .parse::<i32>()
+        .map_err(|_| AppError::BadParameter("Некорректный msgid".into()))?;
+    let bPollMapPresent = vecPairs.iter().any(|(sKey, _)| {
+        sKey.strip_prefix("poll[")
+            .and_then(|sSuffix| sSuffix.strip_suffix(']'))
+            .is_some()
+    });
+    let vecOldPoll = parse_indexed_field(vecPairs, "poll")
+        .into_iter()
+        .map(|(iVariantId, sLabel)| StTopicEditPollValue { iVariantId, sLabel })
+        .collect::<Vec<_>>();
+    let mapNewPoll = parse_indexed_field(vecPairs, "newPoll")
+        .into_iter()
+        .collect::<std::collections::HashMap<_, _>>();
+    let vecNewPoll = (0..POLL_NEW_VARIANT_SLOTS)
+        .map(|iIndex| {
+            mapNewPoll
+                .get(&(iIndex as i32))
+                .cloned()
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>();
+    let mut vecPoll = vecOldPoll;
+    vecPoll.extend(
+        vecNewPoll
+            .iter()
+            .cloned()
+            .map(|sLabel| StTopicEditPollValue {
+                iVariantId: 0,
+                sLabel,
+            }),
+    );
+
+    let optChangeGroupId = match get(vecPairs, "chgrp") {
+        Some(sValue) => Some(
+            sValue
+                .parse()
+                .map_err(|_| AppError::BadParameter("Некорректная группа".into()))?,
+        ),
+        None => None,
+    };
+
+    let mut vecErrors = Vec::new();
+
+    let optTagsRaw = get(vecPairs, "tags").map(str::to_owned);
+    let mut vecTags = optTagsRaw
+        .as_deref()
+        .map(crate::routes::tags::parse_tags)
+        .unwrap_or_default();
+    let vecBadTags = vecTags
+        .iter()
+        .filter(|sTag| {
+            crate::domain::title::iJavaStringLength(sTag) > 32
+                || !crate::routes::tags::is_good_tag(sTag)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    vecTags.retain(|sTag| {
+        crate::domain::title::iJavaStringLength(sTag) <= 32
+            && crate::routes::tags::is_good_tag(sTag)
+    });
+
+    let optTitle = get(vecPairs, "title").map(str::to_owned);
+    if let Some(sTitle) = optTitle.as_deref() {
+        if sTitle.trim().is_empty() {
+            vecErrors.push("заголовок сообщения не может быть пустым".into());
+        }
+        if crate::domain::title::iJavaStringLength(sTitle) > 140 {
+            vecErrors.push("Слишком большой заголовок".into());
+        }
+        if sTitle.trim().starts_with('[') {
+            vecErrors.push(
+                "Не добавляйте теги в заголовки, используйте предназначенное для тегов поле ввода"
+                    .into(),
+            );
+        }
+    }
+    let optMessage = get(vecPairs, "msg").map(str::to_owned);
+    if let Some(sError) = optMessage.as_deref().and_then(optInvalidXmlCharacter) {
+        vecErrors.push(sError);
+    }
+    let optUrl = get(vecPairs, "url").map(str::to_owned);
+    let optLinkText = get(vecPairs, "linktext").map(str::to_owned);
+    if let Some(sUrl) = optUrl.as_deref().filter(|sValue| !sValue.is_empty()) {
+        if crate::domain::title::iJavaStringLength(sUrl) > 255 {
+            vecErrors.push("Слишком длинный URL".into());
+        }
+        if !bJavaTopicUrl(sUrl) {
+            vecErrors.push("Некорректный URL".into());
+        }
+        if optLinkText.as_deref().is_none_or(str::is_empty) {
+            vecErrors.push("URL указан без текста ссылки".into());
+        }
+    }
+    for sTag in vecBadTags {
+        if crate::domain::title::iJavaStringLength(&sTag) > 32 {
+            vecErrors.push(format!(
+                "Слишком длинный тег: '{sTag}' (максимум 32 символов)"
+            ));
+        } else {
+            vecErrors.push(format!("Некорректный тег: '{sTag}'"));
+        }
+    }
+    if vecTags.len() > crate::routes::tags::MAX_TAGS_PER_TOPIC {
+        vecErrors.push(format!(
+            "Слишком много тегов (максимум {})",
+            crate::routes::tags::MAX_TAGS_PER_TOPIC
+        ));
+    }
+    if optTagsRaw.is_some() && vecErrors.is_empty() && vecTags.is_empty() {
+        vecErrors.push("Установите теги".into());
+    }
+
+    let iBonus = match get(vecPairs, "bonus") {
+        Some(sValue) => match sValue.parse::<i32>() {
+            Ok(iValue) => iValue,
+            Err(_) => {
+                vecErrors.push("Некорректное значение bonus".into());
+                3
+            }
+        },
+        None => 3,
+    };
+    let mut vecEditorBonus = Vec::new();
+    for (sNick, sValue) in vecStringIndexedField(vecPairs, "editorBonus") {
+        match sValue.parse::<i32>() {
+            Ok(iValue) => vecEditorBonus.push((sNick, iValue)),
+            Err(_) => vecErrors.push("Некорректное значение editorBonus".into()),
+        }
+    }
+    let optLastEditMillis = match get(vecPairs, "lastEdit") {
+        Some(sValue) => match sValue.parse::<i64>() {
+            Ok(iValue) => Some(iValue),
+            Err(_) => {
+                // A failed Spring property conversion remains a BindingResult
+                // error even when the topic has no edit-history rows.
+                vecErrors.push("Некорректное значение lastEdit".into());
+                None
+            }
+        },
+        None => None,
+    };
+    let bMultiSelect =
+        bSpringFormBoolean(get(vecPairs, "multiselect"), "multiselect", &mut vecErrors);
+    let bMinor = bSpringFormBoolean(get(vecPairs, "minor"), "minor", &mut vecErrors);
+
+    Ok(StParsedEditTopicRequest {
+        iTopicId,
+        stValues: StEditTopicFormValues {
+            optTitle,
+            optMessage,
+            optUrl,
+            optLinkText,
+            optTagsRaw,
+            vecPoll,
+            vecNewPoll,
+            bPollMapPresent,
+            bMultiSelect,
+            bMinor,
+            iBonus,
+            vecEditorBonus,
+            optChangeGroupId,
+            optLastEditMillis,
+            vecUploadedImages: parse_indexed_field(vecPairs, "uploadedImages")
+                .into_iter()
+                .map(|(_, sName)| sName)
+                .filter(|sName| !sName.is_empty())
+                .collect(),
+        },
+        optTags: (!vecTags.is_empty()).then_some(vecTags),
+        bPreview: get(vecPairs, "preview").is_some(),
+        bCommit: get(vecPairs, "commit").is_some(),
+        bPublish: get(vecPairs, "publish").is_some(),
+        vecErrors,
     })
+}
+
+#[cfg(test)]
+mod edit_topic_binding_tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    fn vecPairs(vecValues: &[(&str, &str)]) -> Vec<(String, String)> {
+        vecValues
+            .iter()
+            .map(|(sKey, sValue)| ((*sKey).to_owned(), (*sValue).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn spring_boolean_tokens_are_exact_and_case_insensitive() {
+        for sValue in ["true", "TRUE", "on", "ON", "yes", "YeS", "1"] {
+            let mut vecErrors = Vec::new();
+            assert!(bSpringFormBoolean(Some(sValue), "minor", &mut vecErrors));
+            assert!(vecErrors.is_empty(), "token={sValue}");
+        }
+        for optValue in [
+            None,
+            Some("false"),
+            Some("FALSE"),
+            Some("off"),
+            Some("no"),
+            Some("0"),
+        ] {
+            let mut vecErrors = Vec::new();
+            assert!(!bSpringFormBoolean(optValue, "minor", &mut vecErrors));
+            assert!(vecErrors.is_empty(), "token={optValue:?}");
+        }
+        for sValue in ["", "garbage", " true ", "2"] {
+            let mut vecErrors = Vec::new();
+            assert!(!bSpringFormBoolean(Some(sValue), "minor", &mut vecErrors));
+            assert_eq!(vecErrors, ["Некорректное значение minor"]);
+        }
+    }
+
+    #[test]
+    fn malformed_boolean_and_last_edit_are_form_errors_not_true_or_ignored() {
+        let stParsed = stParseEditTopicRequest(&vecPairs(&[
+            ("msgid", "42"),
+            ("title", "title"),
+            ("msg", "body"),
+            ("minor", "surprise"),
+            ("multiselect", "2"),
+            ("lastEdit", "not-a-number"),
+        ]))
+        .expect("binding result");
+
+        assert_eq!(stParsed.iTopicId, 42);
+        assert!(!stParsed.stValues.bMinor);
+        assert!(!stParsed.stValues.bMultiSelect);
+        assert_eq!(stParsed.stValues.optLastEditMillis, None);
+        assert!(
+            stParsed
+                .vecErrors
+                .iter()
+                .any(|sError| sError.contains("lastEdit"))
+        );
+        assert!(
+            stParsed
+                .vecErrors
+                .iter()
+                .any(|sError| sError.contains("minor"))
+        );
+        assert!(
+            stParsed
+                .vecErrors
+                .iter()
+                .any(|sError| sError.contains("multiselect"))
+        );
+    }
+
+    #[test]
+    fn action_buttons_remain_presence_only_like_request_get_parameter() {
+        let stParsed = stParseEditTopicRequest(&vecPairs(&[
+            ("msgid", "42"),
+            ("preview", "false"),
+            ("commit", ""),
+            ("publish", "0"),
+        ]))
+        .expect("binding result");
+
+        assert!(stParsed.bPreview);
+        assert!(stParsed.bCommit);
+        assert!(stParsed.bPublish);
+    }
+
+    #[test]
+    fn poll_map_presence_is_distinct_from_new_poll_slots() {
+        let stMissingPollMap = stParseEditTopicRequest(&vecPairs(&[
+            ("msgid", "42"),
+            ("newPoll[0]", "must be ignored without poll map"),
+        ]))
+        .expect("binding result");
+        assert!(!stMissingPollMap.stValues.bPollMapPresent);
+
+        let stPresentPollMap =
+            stParseEditTopicRequest(&vecPairs(&[("msgid", "42"), ("poll[10]", "kept")]))
+                .expect("binding result");
+        assert!(stPresentPollMap.stValues.bPollMapPresent);
+    }
+
+    #[test]
+    fn preview_title_uses_from_edit_request_then_title_tag_pipeline() {
+        assert_eq!(sEditPreviewTitle("A -- B"), "A\u{a0}— B");
+        // The preview must not apply Topic.fromResultSet/makeTitle, which
+        // would additionally typographize quotes after a DB round trip.
+        assert_eq!(sEditPreviewTitle("\"A\" -- B"), "\"A\"\u{a0}— B");
+    }
+
+    #[test]
+    fn tags_only_missing_fields_preview_falls_back_to_original_header() {
+        let (sTitle, sUrl, sLinkText) = stEditPreviewHeaderValues(
+            None,
+            "Original -- title",
+            None,
+            Some("https://old.example/"),
+            None,
+            Some("old link"),
+        );
+        assert_eq!(
+            sTitle,
+            crate::domain::title::sTopicTitlePlainForDisplay("Original -- title")
+        );
+        assert_eq!(sUrl, "https://old.example/");
+        assert_eq!(sLinkText, "old link");
+    }
+
+    #[test]
+    fn staged_image_adapter_keeps_preview_urls_and_responsive_metadata() {
+        let pathRoot = std::env::temp_dir().join(format!(
+            "lorsource-edit-preview-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let pathPreview = pathRoot.join("gallery/preview");
+        std::fs::create_dir_all(&pathPreview).expect("preview directory");
+        let sName = "preview-7-fixture.png";
+        image::DynamicImage::new_rgb8(640, 480)
+            .save(pathPreview.join(sName))
+            .expect("preview original");
+        image::DynamicImage::new_rgb8(1000, 750)
+            .save(pathPreview.join("preview-7-fixture-1000px.jpg"))
+            .expect("preview medium");
+
+        let stImage = optEditPreviewImageView(&pathRoot, sName).expect("staged preview image");
+        assert_eq!(stImage.id, 0);
+        assert_eq!(
+            stImage.original_url,
+            "/gallery/preview/preview-7-fixture.png"
+        );
+        assert_eq!(
+            stImage.medium_url,
+            "/gallery/preview/preview-7-fixture-1000px.jpg"
+        );
+        assert_eq!((stImage.width, stImage.height), (640, 480));
+        assert_eq!((stImage.medium_width, stImage.medium_height), (1000, 750));
+        assert_eq!(
+            stImage.srcset,
+            vec![
+                (
+                    "/gallery/preview/preview-7-fixture-500px.jpg".to_owned(),
+                    500
+                ),
+                ("/gallery/preview/preview-7-fixture.png".to_owned(), 640),
+            ]
+        );
+        assert!(optEditPreviewImageView(&pathRoot, "../fixture.png").is_none());
+
+        std::fs::remove_dir_all(pathRoot).expect("remove staged preview fixture");
+    }
+
+    #[test]
+    fn submitted_poll_preview_keeps_old_order_and_appends_only_new_slots() {
+        let stOldPoll = StTopicEditPoll {
+            iId: 5,
+            bMultiSelect: true,
+            vecVariants: vec![
+                crate::domain::topic::edit::StTopicEditPollVariant {
+                    iId: 10,
+                    sLabel: "alpha original".into(),
+                },
+                crate::domain::topic::edit::StTopicEditPollVariant {
+                    iId: 20,
+                    sLabel: "beta original".into(),
+                },
+            ],
+        };
+        let vecSubmitted = vec![
+            StTopicEditPollValue {
+                iVariantId: 999,
+                sLabel: "unknown id".into(),
+            },
+            StTopicEditPollValue {
+                iVariantId: 20,
+                sLabel: String::new(),
+            },
+            StTopicEditPollValue {
+                iVariantId: 10,
+                sLabel: "alpha edited".into(),
+            },
+            StTopicEditPollValue {
+                iVariantId: 0,
+                sLabel: "gamma new".into(),
+            },
+            StTopicEditPollValue {
+                iVariantId: 0,
+                sLabel: String::new(),
+            },
+        ];
+        let vecVariants = vecEditPreviewPollDefinition(&stOldPoll, &vecSubmitted);
+        assert_eq!(vecVariants.len(), 2);
+        assert_eq!(vecVariants[0].iVariantId, 10);
+        assert_eq!(vecVariants[0].sLabel, "alpha edited");
+        assert_eq!(vecVariants[1].iVariantId, 0);
+        assert_eq!(vecVariants[1].sLabel, "gamma new");
+    }
+
+    #[test]
+    fn preview_markup_resolves_existing_blocked_and_missing_users() {
+        use crate::domain::markup::model::{StMarkupUser, StMarkupUserDirectory};
+
+        let stUsers = StMarkupUserDirectory::stFromUsers(vec![
+            StMarkupUser {
+                sInputNick: "alice".into(),
+                sCanonicalNick: "Alice".into(),
+                bBlocked: false,
+            },
+            StMarkupUser {
+                sInputNick: "blocked".into(),
+                sCanonicalNick: "blocked".into(),
+                bBlocked: true,
+            },
+        ]);
+        let sHtml = sRenderEditPreviewMessage(
+            "[user]alice[/user] [user]blocked[/user] [user]missing[/user] [cut]expanded[/cut]",
+            "BBCODE_TEX",
+            false,
+            "https://www.linux.org.ru",
+            &stUsers,
+        );
+
+        assert!(
+            sHtml.contains("href=\"https://www.linux.org.ru/people/Alice/profile\""),
+            "{sHtml}"
+        );
+        assert!(
+            sHtml.contains("<s><a style=\"text-decoration: none\" href=\"https://www.linux.org.ru/people/blocked/profile\""),
+            "{sHtml}"
+        );
+        assert!(sHtml.contains("<s>missing</s>"), "{sHtml}");
+        assert!(sHtml.contains("<div id=\"cut0\">"), "{sHtml}");
+        assert!(sHtml.contains("expanded"), "{sHtml}");
+    }
+
+    #[test]
+    fn validator_errors_keep_java_field_order() {
+        let stParsed = stParseEditTopicRequest(&vecPairs(&[
+            ("msgid", "42"),
+            ("title", " "),
+            ("msg", "\0"),
+            ("url", "not a URL"),
+            ("linktext", ""),
+            ("tags", "bad<tag"),
+            ("bonus", "NaN"),
+            ("editorBonus[alice]", "NaN"),
+            ("lastEdit", "NaN"),
+        ]))
+        .expect("binding result");
+        let vecErrors = stParsed.vecErrors;
+
+        let iTitle = vecErrors
+            .iter()
+            .position(|sError| sError.contains("заголовок"))
+            .expect("title error");
+        let iMessage = vecErrors
+            .iter()
+            .position(|sError| sError.contains("XML"))
+            .expect("message error");
+        let iUrl = vecErrors
+            .iter()
+            .position(|sError| sError.contains("URL"))
+            .expect("URL error");
+        let iTags = vecErrors
+            .iter()
+            .position(|sError| sError.contains("тег"))
+            .expect("tags error");
+        let iBonus = vecErrors
+            .iter()
+            .position(|sError| sError.contains("bonus"))
+            .expect("bonus error");
+        let iEditorBonus = vecErrors
+            .iter()
+            .position(|sError| sError.contains("editorBonus"))
+            .expect("editor bonus error");
+        let iLastEdit = vecErrors
+            .iter()
+            .position(|sError| sError.contains("lastEdit"))
+            .expect("last edit error");
+        assert!(
+            iTitle < iMessage
+                && iMessage < iUrl
+                && iUrl < iTags
+                && iTags < iBonus
+                && iBonus < iEditorBonus
+                && iEditorBonus < iLastEdit
+        );
+    }
+
+    #[tokio::test]
+    async fn commit_user_error_is_visible_escaped_and_keeps_java_500() {
+        let stResponse = stTopicEditUserErrorResponse(
+            "ru.org.linux.user.UserErrorException",
+            "Топик <script>уже подтвержден</script>".into(),
+        );
+        assert_eq!(stResponse.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let vecBody = to_bytes(stResponse.into_body(), 128 * 1024)
+            .await
+            .expect("legacy user-error page");
+        let sBody = String::from_utf8(vecBody.to_vec()).expect("UTF-8");
+        assert!(sBody.contains("Топик"));
+        assert!(sBody.contains("уже подтвержден"));
+        assert!(!sBody.contains("<script>уже"));
+    }
+
+    #[tokio::test]
+    async fn editable_missing_title_uses_java_bad_input_500_page() {
+        let stResponse = stTopicEditUserErrorResponse(
+            "ru.org.linux.site.BadInputException",
+            "заголовок сообщения не может быть пустым".into(),
+        );
+        assert_eq!(stResponse.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let vecBody = to_bytes(stResponse.into_body(), 128 * 1024)
+            .await
+            .expect("legacy bad-input page");
+        let sBody = String::from_utf8(vecBody.to_vec()).expect("UTF-8");
+        assert!(sBody.contains("ru.org.linux.site.BadInputException"));
+        assert!(sBody.contains("заголовок сообщения не может быть пустым"));
+    }
+
+    #[tokio::test]
+    async fn edit_and_commit_method_responses_match_spring() {
+        for (stResponse, sAllow) in [
+            (options_edit_topic().await, S_ALLOW_EDIT_OPTIONS),
+            (options_commit_topic().await, S_ALLOW_COMMIT_OPTIONS),
+        ] {
+            assert_eq!(stResponse.status(), StatusCode::OK);
+            assert_eq!(stResponse.headers()[header::ALLOW], sAllow);
+            assert_eq!(stResponse.headers()[header::CONTENT_LENGTH], "0");
+        }
+
+        for (stResponse, sAllow) in [
+            (method_not_allowed_edit_topic().await, S_ALLOW_EDIT_405),
+            (method_not_allowed_commit_topic().await, S_ALLOW_COMMIT_405),
+        ] {
+            assert_eq!(stResponse.status(), StatusCode::METHOD_NOT_ALLOWED);
+            assert_eq!(stResponse.headers()[header::ALLOW], sAllow);
+            assert_eq!(stResponse.headers()[header::CONTENT_LENGTH], "0");
+        }
+    }
+
+    #[test]
+    fn edit_template_keeps_spring_dom_and_full_preview_hooks() {
+        let sTemplate = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/templates/edit_topic.html"
+        ));
+        for sNeedle in [
+            "action=\"edit.jsp\"",
+            "id=\"messageForm\"",
+            "id=\"form_title\"",
+            "id=\"form_msg\"",
+            "id=\"form_multiselect\"",
+            "id=\"tags\"",
+            "name=\"_multiselect\"",
+            "id=\"form_minor\"",
+            "name=\"_minor\"",
+            "name=\"lastEdit\"",
+            "name=\"uploadedImages[",
+            "topic_card_html",
+            "{{ html|safe }}",
+            "<div class=\"messages\">",
+        ] {
+            assert!(sTemplate.contains(sNeedle), "missing DOM hook {sNeedle}");
+        }
+        // EditTopicController renders the same topic tag/card as a canonical
+        // topic page.  Keeping a second hand-written article here would drift
+        // in author metadata, reactions, polls and responsive images.
+        for sRemovedPreviewField in [
+            "<article class=\"msg\"",
+            "preview_poll_variants",
+            "preview_poll_multiselect",
+            "preview_url",
+            "preview_linktext",
+        ] {
+            assert!(
+                !sTemplate.contains(sRemovedPreviewField),
+                "custom preview field remains: {sRemovedPreviewField}"
+            );
+        }
+        let sTopicCard = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/templates/topic_card.html"
+        ));
+        for sSharedHook in [
+            "<article class=\"msg\"",
+            "<div class=\"msg-container\">",
+            "card.userpic_html",
+            "card.remark_html",
+            "card.committer_html",
+            "card.moderator_ip_html",
+            "card.moderator_user_agent_html",
+            "card.topic_reactions_html",
+        ] {
+            assert!(
+                sTopicCard.contains(sSharedHook),
+                "shared topic card lacks {sSharedHook}"
+            );
+        }
+        for sLinkedBonus in [
+            "<a href=\"/people/{{ author_nick }}/profile\">{{ author_nick }}</a>): <input id=\"form_bonus\"",
+            "<a href=\"/people/{{ editor.nick }}/profile\">{{ editor.nick }}</a>): <input id=\"form_editorBonus",
+        ] {
+            assert!(!sTemplate.contains(sLinkedBonus));
+        }
+    }
 }
 
 pub async fn edit_topic(
@@ -4556,275 +7226,167 @@ pub async fn edit_topic(
     ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
     request: Request,
 ) -> Result<Response> {
-    let Some(user) = user else {
-        return Err(AppError::Forbidden);
-    };
+    let sRemoteIp = sTopicEditRemoteIp(&state, &headers, stPeerAddress);
+    let bQueryResultsRequested = request.uri().query().is_some_and(|sQuery| {
+        serde_urlencoded::from_str::<Vec<(String, String)>>(sQuery)
+            .is_ok_and(|vecQuery| crate::form::get(&vecQuery, "results") == Some("true"))
+    });
     let (pairs, uploads) = parse_topic_request(&state, request).await?;
-    let mut form = parse_topic_form(&pairs)?;
+    let bResultsRequested =
+        bQueryResultsRequested || crate::form::get(&pairs, "results") == Some("true");
     if crate::form::get(&pairs, "csrf").map(str::trim) != Some(csrf_token.trim()) {
         return Err(AppError::Forbidden);
     }
-    let id = form
-        .id
-        .ok_or_else(|| AppError::BadRequest("missing topic id".into()))?;
-    let meta = load_topic_delete_meta(&state, id).await?;
-    let current_topic = get_topic(&state, id).await?;
-    let stRules = load_topic_edit_rules(&state, id).await?;
-    check_topic_edit_preconditions(&state, &headers, stPeerAddress, &user, &current_topic).await?;
-    let group = load_topic_form_group(&state, current_topic.group_id).await?;
-    validate_topic_form(&form, group.links_allowed, false)?;
-    let bContentEditable = b_topic_content_editable(&current_topic, &stRules, &user);
-    let bTagsEditable = b_topic_tags_editable(&current_topic, &stRules, &user);
-    if !bContentEditable && !bTagsEditable {
+    // Spring resolves and binds @ModelAttribute and @RequestParam values
+    // before entering AuthorizedOnly. Preserve that observable error order.
+    let mut stRequest = stParseEditTopicRequest(&pairs)?;
+    let iTopicId = stRequest.iTopicId;
+    let Some(user) = user else {
         return Err(AppError::Forbidden);
-    }
-    let upload_allowed = image_upload_allowed(&group, &Some(user.clone()));
-    if (!uploads.is_empty() || !form.uploaded_images.is_empty()) && !upload_allowed {
-        return Err(AppError::Forbidden);
-    }
-    form.uploaded_images = vecReusableTopicPreviews(&state, user.id, &form.uploaded_images);
-    let additional_count: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM images WHERE topic=$1 AND NOT deleted")
-            .bind(id)
-            .fetch_one(&state.pool)
-            .await?;
-    if additional_count + uploads.len() as i64 + form.uploaded_images.len() as i64 > 4 {
-        return Err(AppError::BadRequest("Слишком много изображений".into()));
-    }
-
-    // EditTopicRequestValidator.validateTags: same rule as topic creation.
-    let tags = crate::routes::tags::parse_and_validate_tags(form.tags.as_deref().unwrap_or(""))
-        .map_err(AppError::BadRequest)?;
-    crate::routes::tags::check_can_create_new_tags(&state, &tags, &user, meta.premoderated).await?;
-
-    let bMessageModified = form.msg != current_topic.message;
-    let bTitleModified = form.title.trim() != current_topic.title;
-    let optNewUrl = group
-        .links_allowed
-        .then(|| form.url.as_deref().unwrap_or("").trim().to_owned())
-        .filter(|sValue| !sValue.is_empty());
-    let optNewLinkText = group
-        .links_allowed
-        .then(|| form.linktext.as_deref().unwrap_or("").trim().to_owned())
-        .filter(|sValue| !sValue.is_empty());
-    let bUrlModified =
-        optNewUrl.as_deref().unwrap_or("") != current_topic.url.as_deref().unwrap_or("").trim();
-    let bLinkTextModified = optNewLinkText.as_deref().unwrap_or("")
-        != current_topic.linktext.as_deref().unwrap_or("").trim();
-    let vecOldTags = current_topic.tags_vec();
-    let mut vecComparableOldTags = vecOldTags
-        .iter()
-        .map(|sTag| sTag.to_lowercase())
-        .collect::<Vec<_>>();
-    let mut vecComparableNewTags = tags
-        .iter()
-        .map(|sTag| sTag.to_lowercase())
-        .collect::<Vec<_>>();
-    vecComparableOldTags.sort_unstable();
-    vecComparableNewTags.sort_unstable();
-    let bTagsModified = vecComparableOldTags != vecComparableNewTags;
-    let optOldPoll = if meta.poll_allowed {
-        load_topic_poll_snapshot(&state, id).await?
-    } else {
-        None
     };
-    let bPollModified = meta.poll_allowed && b_poll_modified(optOldPoll.as_ref(), &form);
-    let bContentModified = bMessageModified
-        || bTitleModified
-        || bUrlModified
-        || bLinkTextModified
-        || bPollModified
-        || !uploads.is_empty()
-        || !form.uploaded_images.is_empty();
-    if bContentModified && !bContentEditable {
-        return Err(AppError::Forbidden);
-    }
-
-    if form.preview.is_some() {
-        form.uploaded_images
-            .extend(vecStageTopicPreviews(&state, user.id, &uploads).await?);
-        let poll_variants = form
-            .variant_id
-            .iter()
-            .zip(form.poll.iter())
-            .filter(|(id, _)| **id != 0)
-            .map(|(id, label)| (*id, label.clone()))
-            .collect();
-        let poll_new_rows = form
-            .variant_id
-            .iter()
-            .zip(form.poll.iter())
-            .filter(|(id, _)| **id == 0)
-            .map(|(_, label)| label.clone())
-            .collect();
-        return Ok(Html(
-            TopicFormTemplate {
-                title: "Редактирование".into(),
-                form_error: None,
-                topic_limit_error: None,
-                topic_limit_info: None,
-                topic_posting_allowed: true,
-                topic_posting_reason: String::new(),
-                action: "/edit.jsp".into(),
-                topic_id: Some(id),
-                csrf_token,
-                poll_variants,
-                poll_new_rows,
-                poll_multiselect: form.multiselect.is_some(),
-                selected_group: current_topic.group_id,
-                is_edit: true,
-                links_allowed: group.links_allowed,
-                premoderated: group.premoderated,
-                poll_allowed: group.poll_allowed,
-                image_allowed: upload_allowed,
-                image_required: false,
-                additional_image_rows: if upload_allowed && group.section_prefix != "forum" {
-                    vec![(); 3usize.saturating_sub(additional_count as usize)]
-                } else {
-                    Vec::new()
-                },
-                uploaded_images: form.uploaded_images.clone(),
-                form_title: form.title.clone(),
-                form_msg: form.msg.clone(),
-                form_url: form.url.clone().unwrap_or_default(),
-                form_linktext: form.linktext.clone().unwrap_or_default(),
-                form_tags: form.tags.clone().unwrap_or_default(),
-                preview_html: Some(markup::render_message_with_markup(
-                    &form.msg,
-                    Some(&current_topic.markup),
-                    None,
-                )),
-                noinfo: false,
-                add_info_html: None,
-                format_mode: markup_form_view(&current_topic.markup).0,
-                format_mode_title: markup_form_view(&current_topic.markup).1,
-                anonymous_form: false,
-                form_nick: String::new(),
-                require_captcha: false,
-                captcha_site_key: String::new(),
-                show_allow_anonymous: false,
-                allow_anonymous: true,
-            }
-            .render()?,
-        )
-        .into_response());
-    }
-
-    let bModified = bContentModified || bTagsModified;
-    if !bModified {
-        return Err(AppError::BadRequest("Нет изменений".into()));
-    }
-    let vecOldImageIds: Vec<i32> = if uploads.is_empty() && form.uploaded_images.is_empty() {
-        Vec::new()
-    } else {
-        sqlx::query_scalar("SELECT id FROM images WHERE topic=$1 AND NOT deleted ORDER BY id")
-            .bind(id)
-            .fetch_all(&state.pool)
-            .await?
-    };
-
-    let mut stUploadRollback = StTopicUploadRollback::stNew();
-    let mut tx = state.pool.begin().await?;
-    let service = topic_service(&state);
-    if bMessageModified {
-        service.vUpdateTopicMessage(&mut tx, id, &form.msg).await?;
-    }
-    if bTitleModified || bUrlModified || bLinkTextModified {
-        service
-            .vUpdateTopicHeader(
-                &mut tx,
-                StEditTopic {
-                    iMsgId: id,
-                    sTitle: form.title.trim(),
-                    optUrl: optNewUrl,
-                    optLinkText: optNewLinkText,
-                },
-            )
-            .await?;
-    }
-    if bTagsModified {
-        service
-            .vReplaceTags(&mut tx, id, form.tags.as_deref())
-            .await?;
-    }
-    if bPollModified {
-        save_poll(
-            &mut tx,
-            id,
-            form.multiselect.is_some(),
-            &form.variant_id,
-            &form.poll,
-        )
+    let stActor = stTopicEditActor(&user);
+    let cService = cTopicEditService(&state);
+    let stPreparedBeforeUpload = cService
+        .stPrepareEditForm(iTopicId, stActor, &sRemoteIp)
         .await?;
+
+    if stPreparedBeforeUpload.stContentPermission.bPermitted()
+        && stRequest
+            .stValues
+            .optTitle
+            .as_deref()
+            .is_none_or(|sTitle| sTitle.trim().is_empty())
+    {
+        return Ok(stTopicEditUserErrorResponse(
+            "ru.org.linux.site.BadInputException",
+            "заголовок сообщения не может быть пустым".into(),
+        ));
     }
-    for upload in &uploads {
-        save_topic_upload(&mut tx, &state, id, upload, &mut stUploadRollback).await?;
-    }
-    for sPreview in &form.uploaded_images {
-        save_topic_preview(&mut tx, &state, id, sPreview, &mut stUploadRollback).await?;
-    }
-    sqlx::query(
-        r#"INSERT INTO edit_info(
-             msgid,editor,oldmessage,oldtitle,oldtags,oldlinktext,oldurl,
-             object_type,oldpoll,oldaddimages
-           ) VALUES($1,$2,$3,$4,$5,$6,$7,'TOPIC'::edit_event_type,$8,$9)"#,
-    )
-    .bind(id)
-    .bind(user.id)
-    .bind(bMessageModified.then_some(current_topic.message.as_str()))
-    .bind(bTitleModified.then_some(current_topic.title.as_str()))
-    .bind(bTagsModified.then(|| vecOldTags.join(", ")))
-    .bind(
-        bLinkTextModified
-            .then_some(current_topic.linktext.as_deref())
-            .flatten(),
-    )
-    .bind(
-        bUrlModified
-            .then_some(current_topic.url.as_deref())
-            .flatten(),
-    )
-    .bind(
-        bPollModified
-            .then(|| opt_poll_history_json(id, optOldPoll.as_ref()))
-            .flatten()
-            .map(sqlx::types::Json),
-    )
-    .bind((!uploads.is_empty() || !form.uploaded_images.is_empty()).then_some(vecOldImageIds))
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query("UPDATE topics SET lastmod=CURRENT_TIMESTAMP WHERE id=$1")
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    let vecNotified = if !current_topic.draft && !stRules.expired {
-        notify_topic_users_tx(
-            &mut tx,
-            id,
-            current_topic.author_id,
-            &form.msg,
-            !current_topic.section_premoderated,
+
+    let vecExistingImages = load_topic_images(&state, iTopicId).await?;
+    let bImagePost = stPreparedBeforeUpload.stSnapshot.bSectionImagePost
+        || (stPreparedBeforeUpload.stSnapshot.bSectionImageAllowed
+            && (user.canmod || user.corrector || user.score.unwrap_or(0) >= 50));
+    let stPostingPermission = add_topic_service(&state)
+        .optCheckGroup(
+            stPreparedBeforeUpload.stSnapshot.iGroupId,
+            stAddActorForEdit(&user),
+            &sRemoteIp,
         )
         .await?
+        .ok_or(AppError::NotFound)?;
+    if bImagePost && stPostingPermission.bPermitted() {
+        let iLimit = 4usize.saturating_sub(vecExistingImages.len());
+        stRequest.stValues.vecUploadedImages =
+            vecReusableTopicPreviews(&state, user.id, &stRequest.stValues.vecUploadedImages)
+                .into_iter()
+                .take(iLimit)
+                .collect();
+        let iUploadSlots = iLimit.saturating_sub(stRequest.stValues.vecUploadedImages.len());
+        match vecStageTopicPreviews(&state, user.id, &uploads[..uploads.len().min(iUploadSlots)])
+            .await
+        {
+            Ok(vecNames) => stRequest.stValues.vecUploadedImages.extend(vecNames),
+            Err(AppError::BadRequest(sError)) => stRequest.vecErrors.push(sError),
+            Err(stError) => return Err(stError),
+        }
     } else {
-        Vec::new()
-    };
-    tx.commit().await?;
-    stUploadRollback.vCommit();
-    for sPreview in &form.uploaded_images {
-        vDeleteTopicPreview(&state, sPreview).await;
+        stRequest.stValues.vecUploadedImages.clear();
     }
-    state.realtime.vNotifyEvents(vecNotified.iter().copied());
-    crate::search_index::index_topic(&state, id, false).await;
-    Ok(Redirect::to(&format!("/jump-message.jsp?msgid={id}")).into_response())
-}
+    if stPreparedBeforeUpload.stSnapshot.bSectionImagePost
+        && vecExistingImages.is_empty()
+        && stRequest.stValues.vecUploadedImages.is_empty()
+    {
+        stRequest
+            .vecErrors
+            .push("Для этого раздела требуется как минимум одно изображение".into());
+    }
 
-#[derive(Deserialize)]
-pub struct TopicActionForm {
-    pub msgid: i32,
-    pub resolve: Option<String>,
-    pub reason: Option<String>,
-    pub bonus: Option<i32>,
+    let stPublishPermission = if stPreparedBeforeUpload.stSnapshot.bDraft {
+        stEditPublishPermission(&state, &user, &stPreparedBeforeUpload, &sRemoteIp).await?
+    } else {
+        StAddTopicPermission { optReason: None }
+    };
+    let optPoll = (stPreparedBeforeUpload.stSnapshot.bSectionPollAllowed
+        && stRequest.stValues.bPollMapPresent)
+        .then(|| stRequest.stValues.vecPoll.clone());
+    let stInput = StTopicEditInput {
+        optTitle: stRequest.stValues.optTitle.clone(),
+        optMessage: stRequest.stValues.optMessage.clone(),
+        optUrl: stRequest.stValues.optUrl.clone(),
+        optLinkText: stRequest.stValues.optLinkText.clone(),
+        optTags: stRequest.optTags.clone(),
+        bMinor: stRequest.stValues.bMinor,
+        bPreview: stRequest.bPreview,
+        bCommit: stRequest.bCommit,
+        bPublish: stRequest.bPublish,
+        optChangeGroupId: stRequest.stValues.optChangeGroupId,
+        iBonus: stRequest.stValues.iBonus,
+        vecEditorBonus: stRequest.stValues.vecEditorBonus.clone(),
+        optLastEditMillis: stRequest.stValues.optLastEditMillis,
+        optPoll,
+        bMultiSelect: stRequest.stValues.bMultiSelect,
+        vecPreviewNames: stRequest.stValues.vecUploadedImages.clone(),
+    };
+    match cService
+        .stSubmit(
+            iTopicId,
+            stActor,
+            &sRemoteIp,
+            stInput,
+            stRequest.vecErrors,
+            stPublishPermission.bPermitted(),
+            stPublishPermission.sReason(),
+            &state.config.upload_dir,
+        )
+        .await?
+    {
+        EnTopicEditOutcome::Render {
+            stPrepared,
+            vecErrors,
+            bCommitForm,
+            sHeading,
+        } => {
+            stRenderEditTopic(
+                &state,
+                &user,
+                &csrf_token,
+                *stPrepared,
+                stRequest.stValues,
+                vecErrors,
+                bCommitForm,
+                sHeading,
+                &sRemoteIp,
+                StEditTopicRenderContext {
+                    optTags: stRequest.optTags.clone(),
+                    bTopicCard: true,
+                    bPublish: stRequest.bPublish,
+                    bResultsRequested,
+                },
+            )
+            .await
+        }
+        EnTopicEditOutcome::Applied {
+            sRedirectUrl,
+            bModeratedConfirmation,
+            ..
+        } => {
+            for sPreviewName in &stRequest.stValues.vecUploadedImages {
+                vDeleteTopicPreview(&state, sPreviewName).await;
+            }
+            if bModeratedConfirmation {
+                Ok(Html(
+                    ModeratedTopicTemplate {
+                        topic_url: sRedirectUrl,
+                    }
+                    .render()?,
+                )
+                .into_response())
+            } else {
+                Ok((StatusCode::FOUND, [(header::LOCATION, sRedirectUrl)]).into_response())
+            }
+        }
+    }
 }
 
 /// Matches GroupPermissionService.DeletePeriod: an author may delete their
@@ -4841,11 +7403,17 @@ fn b_topic_deletable(
         && (meta.draft
             || (!(meta.premoderated && meta.commited)
                 && meta.comment_count == 0
-                && dtNow <= meta.postdate + chrono::Duration::hours(TOPIC_DELETE_WINDOW_HOURS)));
+                && dtNow < meta.postdate + chrono::Duration::hours(TOPIC_DELETE_WINDOW_HOURS)));
     if user.candel || bDeletableByAuthor {
         true
     } else if user.canmod {
-        !meta.premoderated || !meta.commited || dtNow <= meta.postdate + chrono::Duration::days(30)
+        !meta.premoderated
+            || !meta.commited
+            || meta
+                .postdate
+                .with_timezone(&chrono::Local)
+                .checked_add_months(chrono::Months::new(1))
+                .is_some_and(|dtDeadline| dtDeadline.with_timezone(&chrono::Utc) > dtNow)
     } else {
         false
     }
@@ -4859,15 +7427,6 @@ struct TopicDeleteMeta {
     premoderated: bool,
     commited: bool,
     comment_count: i64,
-    poll_allowed: bool,
-}
-
-#[derive(Template)]
-#[template(path = "action_done.html")]
-struct StTopicActionDoneTemplate {
-    message: String,
-    big_message: Option<String>,
-    link: Option<String>,
 }
 
 type TyTopicDeleteRow = (
@@ -4878,7 +7437,6 @@ type TyTopicDeleteRow = (
     bool,
     bool,
     i64,
-    bool,
 );
 
 pub(crate) async fn b_user_slow_mode_restricted(
@@ -5090,7 +7648,7 @@ pub(crate) async fn check_topic_viewable(
 async fn load_topic_delete_meta(state: &AppState, msgid: i32) -> Result<TopicDeleteMeta> {
     let row: TyTopicDeleteRow = sqlx::query_as(
         r#"SELECT t.userid, t.deleted, t.postdate, COALESCE(t.draft,false), s.moderate,
-                  t.moderate, t.stat1::bigint, s.vote
+                  t.moderate, t.stat1::bigint
            FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section
            WHERE t.id=$1"#,
     )
@@ -5106,213 +7664,7 @@ async fn load_topic_delete_meta(state: &AppState, msgid: i32) -> Result<TopicDel
         premoderated: row.4,
         commited: row.5,
         comment_count: row.6,
-        poll_allowed: row.7,
     })
-}
-
-pub async fn delete_topic(
-    State(state): State<AppState>,
-    CurrentUser(user): CurrentUser,
-    Form(form): Form<TopicActionForm>,
-) -> Result<Html<String>> {
-    let Some(user) = user else {
-        return Err(AppError::Forbidden);
-    };
-    if form.bonus.is_some_and(|iBonus| !(0..=20).contains(&iBonus)) {
-        return Err(AppError::BadRequest("неправильный размер штрафа".into()));
-    }
-    let meta = load_topic_delete_meta(&state, form.msgid).await?;
-    if meta.deleted {
-        return Err(AppError::BadRequest("сообщение уже удалено".into()));
-    }
-
-    if !b_topic_deletable(&meta, &user, chrono::Utc::now()) {
-        return Err(AppError::Forbidden);
-    }
-
-    let mut bonus = if user.canmod && user.id != meta.author_id && !meta.draft {
-        crate::routes::comments::iDeleteScoreDelta(form.bonus.unwrap_or(0))
-    } else {
-        0
-    };
-    if bonus != 0 && meta.author_id != 2 {
-        let bAuthorFrozen: bool = sqlx::query_scalar(
-            "SELECT COALESCE(frozen_until > CURRENT_TIMESTAMP,false) FROM users WHERE id=$1",
-        )
-        .bind(meta.author_id)
-        .fetch_one(&state.pool)
-        .await?;
-        if bAuthorFrozen {
-            bonus = 0;
-        }
-    }
-    let reason = form.reason.clone().unwrap_or_default();
-
-    let mut tx = state.pool.begin().await?;
-    sqlx::query("UPDATE topics SET deleted=true,sticky=false WHERE id=$1 AND NOT deleted")
-        .bind(form.msgid)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("INSERT INTO del_info(msgid,delby,reason,deldate,bonus) VALUES($1,$2,$3,now(),$4) ON CONFLICT(msgid) DO UPDATE SET delby=EXCLUDED.delby, reason=EXCLUDED.reason, deldate=now(), bonus=EXCLUDED.bonus")
-        .bind(form.msgid).bind(user.id).bind(&reason).bind(bonus).execute(&mut *tx).await?;
-    if bonus != 0 {
-        sqlx::query("UPDATE users SET score=GREATEST(score+$2,0) WHERE id=$1")
-            .bind(meta.author_id)
-            .bind(bonus)
-            .execute(&mut *tx)
-            .await?;
-    }
-    vDeleteTopicEventsTx(&mut tx, form.msgid).await?;
-    crate::routes::comments::vNotifyDeletedTx(
-        &mut tx,
-        meta.author_id,
-        user.id,
-        Some(form.msgid),
-        None,
-        &reason,
-    )
-    .await?;
-    tx.commit().await?;
-    crate::search_index::index_topic(&state, form.msgid, true).await;
-    Ok(Html(
-        StTopicActionDoneTemplate {
-            message: "Сообщение удалено".into(),
-            big_message: None,
-            link: None,
-        }
-        .render()?,
-    ))
-}
-
-/// UserEventService.processTopicDeleted, kept in the write transaction just
-/// like DeleteService.deleteTopic in the original application.
-async fn vDeleteTopicEventsTx(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    iTopicId: i32,
-) -> Result<()> {
-    let vecAffectedUsers: Vec<i32> = sqlx::query_scalar(
-        r#"SELECT DISTINCT userid FROM user_events
-           WHERE message_id=$1
-             AND type IN ('TAG','REF','REPLY','WATCH','REACTION','WARNING')"#,
-    )
-    .bind(iTopicId)
-    .fetch_all(&mut **tx)
-    .await?;
-    sqlx::query(
-        r#"DELETE FROM user_events
-           WHERE message_id=$1
-             AND type IN ('TAG','REF','REPLY','WATCH','REACTION','WARNING')"#,
-    )
-    .bind(iTopicId)
-    .execute(&mut **tx)
-    .await?;
-    if !vecAffectedUsers.is_empty() {
-        sqlx::query(
-            r#"UPDATE users SET unread_events=(
-                   SELECT count(*) FROM user_events e
-                   WHERE e.unread AND e.userid=users.id
-               ) WHERE id = ANY($1)"#,
-        )
-        .bind(&vecAffectedUsers)
-        .execute(&mut **tx)
-        .await?;
-    }
-    Ok(())
-}
-
-pub async fn undelete_topic(
-    State(state): State<AppState>,
-    CurrentUser(user): CurrentUser,
-    Form(form): Form<TopicActionForm>,
-) -> Result<Html<String>> {
-    let Some(user) = user else {
-        return Err(AppError::Forbidden);
-    };
-    if !user.canmod {
-        return Err(AppError::Forbidden);
-    }
-    let meta = load_topic_delete_meta(&state, form.msgid).await?;
-    if !bTopicUndeletable(&state, &meta, &user, form.msgid).await? {
-        return Err(AppError::Forbidden);
-    }
-    let mut tx = state.pool.begin().await?;
-    let optBonus: Option<i32> =
-        sqlx::query_scalar("SELECT bonus FROM del_info WHERE msgid=$1 FOR UPDATE")
-            .bind(form.msgid)
-            .fetch_optional(&mut *tx)
-            .await?
-            .flatten();
-    if let Some(iBonus) = optBonus.filter(|iValue| *iValue != 0) {
-        sqlx::query("UPDATE users SET score=GREATEST(score-$2,0) WHERE id=$1")
-            .bind(meta.author_id)
-            .bind(iBonus)
-            .execute(&mut *tx)
-            .await?;
-    }
-    sqlx::query("UPDATE topics SET deleted=false WHERE id=$1")
-        .bind(form.msgid)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM del_info WHERE msgid=$1")
-        .bind(form.msgid)
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await?;
-    crate::search_index::index_topic(&state, form.msgid, true).await;
-    let topic = get_topic(&state, form.msgid).await?;
-    Ok(Html(
-        StTopicActionDoneTemplate {
-            message: "Сообщение восстановлено".into(),
-            big_message: None,
-            link: Some(topic.topic_url()),
-        }
-        .render()?,
-    ))
-}
-
-pub async fn resolve_topic_get(
-    State(state): State<AppState>,
-    Query(form): Query<TopicActionForm>,
-    CurrentUser(user): CurrentUser,
-) -> Result<Redirect> {
-    do_resolve_topic(&state, user, form).await
-}
-
-pub async fn resolve_topic(
-    State(state): State<AppState>,
-    CurrentUser(user): CurrentUser,
-    Form(form): Form<TopicActionForm>,
-) -> Result<Redirect> {
-    do_resolve_topic(&state, user, form).await
-}
-
-async fn do_resolve_topic(
-    state: &AppState,
-    user: Option<crate::models::UserSummary>,
-    form: TopicActionForm,
-) -> Result<Redirect> {
-    let Some(user) = user else {
-        return Err(AppError::Forbidden);
-    };
-    let Some((author_id, group_resolvable)) =
-        topic_service(state).optResolveMeta(form.msgid).await?
-    else {
-        return Err(AppError::NotFound);
-    };
-    if !group_resolvable {
-        return Err(AppError::Forbidden);
-    }
-    if !user.canmod && user.id != author_id {
-        return Err(AppError::Forbidden);
-    }
-    let resolved = form.resolve.as_deref().map(|value| value == "yes");
-    topic_service(state)
-        .vSetResolved(form.msgid, resolved)
-        .await?;
-    Ok(Redirect::to(&format!(
-        "/jump-message.jsp?msgid={}",
-        form.msgid
-    )))
 }
 
 pub async fn list_topics(
@@ -5324,6 +7676,20 @@ pub async fn list_topics(
 ) -> Result<Vec<TopicSummary>> {
     topic_service(state)
         .vecListTopics(section, group, offset, limit)
+        .await
+}
+
+async fn list_topics_filtered(
+    state: &AppState,
+    section: Option<&str>,
+    group: Option<&str>,
+    offset: i64,
+    limit: i64,
+    no_talks: bool,
+    tech: bool,
+) -> Result<Vec<TopicSummary>> {
+    topic_service(state)
+        .vecListTopicsFiltered(section, group, offset, limit, no_talks, tech)
         .await
 }
 
@@ -5423,24 +7789,27 @@ async fn notify_topic_users_tx(
     topic_id: i32,
     author_id: i32,
     message: &str,
+    message_markup: &str,
     bIncludeTagEvents: bool,
 ) -> Result<Vec<i32>> {
-    let mentioned_nicks = markup::extract_mentions(message);
+    let mentioned_nicks = markup::extract_mentions(message, message_markup);
     let mut notified: Vec<i32> = if mentioned_nicks.is_empty() {
         vec![]
     } else {
         sqlx::query_scalar(
             r#"SELECT u.id FROM users u
-               WHERE lower(u.nick) = ANY($1) AND u.id <> $2
+               WHERE u.nick = ANY($1) AND u.id <> $2
+                 AND ($4 OR NOT COALESCE(u.blocked,false))
                  AND NOT EXISTS (
                      SELECT 1 FROM topic_users_notified tun
                      WHERE tun.topic=$3 AND tun.userid=u.id
                  )
                  AND NOT EXISTS (SELECT 1 FROM ignore_list il WHERE il.userid=u.id AND il.ignored=$2)"#,
         )
-        .bind(mentioned_nicks.iter().map(|n| n.to_lowercase()).collect::<Vec<_>>())
+        .bind(&mentioned_nicks)
         .bind(author_id)
         .bind(topic_id)
+        .bind(markup::mentions_include_blocked_users(message_markup))
         .fetch_all(&mut **tx)
         .await?
     };
@@ -5542,82 +7911,6 @@ fn section_title(section: &str) -> &'static str {
     }
 }
 
-pub async fn delete_topic_form(
-    State(state): State<AppState>,
-    Query(q): Query<ViewMessageQuery>,
-    CurrentUser(user): CurrentUser,
-    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
-) -> Result<Html<String>> {
-    let Some(user) = user else {
-        return Err(AppError::Forbidden);
-    };
-    let stMeta = load_topic_delete_meta(&state, q.msgid).await?;
-    if stMeta.deleted {
-        return Err(AppError::BadRequest("Сообщение уже удалено".into()));
-    }
-    if !b_topic_deletable(&stMeta, &user, chrono::Utc::now()) {
-        return Err(AppError::Forbidden);
-    }
-    let bExpired = crate::routes::comments::is_topic_expired(&state, q.msgid).await?;
-    let optAuthorScore = if user.canmod && !stMeta.premoderated && !stMeta.draft && !bExpired {
-        Some(
-            sqlx::query_scalar::<_, i32>("SELECT COALESCE(score,0) FROM users WHERE id=$1")
-                .bind(stMeta.author_id)
-                .fetch_one(&state.pool)
-                .await?,
-        )
-    } else {
-        None
-    };
-    let optBonus = optAuthorScore
-        .map(|iScore| {
-            format!(
-                r#"<div class="control-group"><label for="bonus-input">Штраф<br>score автора: {}</label><div class="controls"><input id="bonus-input" type="number" name="bonus" value="7" min="0" max="20"><span class="help-inline">(от 0 до 20)</span></div></div>"#,
-                iScore
-            )
-        })
-        .unwrap_or_default();
-    Ok(Html(format!(
-        r#"
-<h1>Удаление сообщения</h1>
-<form method="post" action="/delete.jsp" class="form-horizontal">
-  <input type="hidden" name="csrf" value="{csrf_token}">
-  <div class="control-group"><label class="control-label" for="reason-input">Причина удаления</label><div class="controls"><input id="reason-input" type="text" name="reason"></div></div>
-  {optBonus}
-  <input type="hidden" name="msgid" value="{0}">
-  <div class="control-group"><div class="controls"><button type="submit" class="btn btn-danger">Удалить</button></div></div>
-</form>
-"#,
-        q.msgid
-    )))
-}
-
-pub async fn undelete_topic_form(
-    State(state): State<AppState>,
-    Query(q): Query<ViewMessageQuery>,
-    CurrentUser(user): CurrentUser,
-    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
-) -> Result<Html<String>> {
-    let Some(user) = user else {
-        return Err(AppError::Forbidden);
-    };
-    let stMeta = load_topic_delete_meta(&state, q.msgid).await?;
-    if !bTopicUndeletable(&state, &stMeta, &user, q.msgid).await? {
-        return Err(AppError::Forbidden);
-    }
-    Ok(Html(format!(
-        r#"
-<h1>Восстановить тему #{}</h1>
-<form method="post" action="/undelete">
-  <input type="hidden" name="csrf" value="{csrf_token}">
-  <input type="hidden" name="msgid" value="{}">
-  <button type="submit">Восстановить</button>
-</form>
-"#,
-        q.msgid, q.msgid
-    )))
-}
-
 /// GroupPermissionService.isUndeletable: an administrator can always restore
 /// a deleted topic; a plain moderator can do so while it is live, or for 14
 /// days after deletion if the topic has already expired.
@@ -5650,7 +7943,7 @@ fn check_commit_allowed(user: &UserSummary, topic_author_id: i32) -> Result<()> 
     if !user.canmod && !user.corrector {
         return Err(AppError::Forbidden);
     }
-    if user.corrector && !user.canmod && user.id == topic_author_id {
+    if user.corrector && user.id == topic_author_id {
         return Err(AppError::Forbidden);
     }
     Ok(())
@@ -5658,161 +7951,56 @@ fn check_commit_allowed(user: &UserSummary, topic_author_id: i32) -> Result<()> 
 
 pub async fn commit_topic_form(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(q): Query<ViewMessageQuery>,
     CurrentUser(user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
-) -> Result<Html<String>> {
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
+) -> Result<Response> {
     let Some(user) = user else {
         return Err(AppError::Forbidden);
     };
-    let author_id: i32 = sqlx::query_scalar("SELECT userid FROM topics WHERE id=$1")
-        .bind(q.msgid)
-        .fetch_optional(&state.pool)
-        .await?
-        .ok_or(AppError::NotFound)?;
-    check_commit_allowed(&user, author_id)?;
-    Ok(Html(format!(
-        r#"
-<h1>Подтвердить тему #{}</h1>
-<form method="post" action="/commit.jsp">
-  <input type="hidden" name="csrf" value="{csrf_token}">
-  <input type="hidden" name="msgid" value="{}">
-  <button type="submit">Подтвердить</button>
-</form>
-"#,
-        q.msgid, q.msgid
-    )))
-}
-
-pub async fn commit_topic(
-    State(state): State<AppState>,
-    CurrentUser(user): CurrentUser,
-    Form(form): Form<TopicActionForm>,
-) -> Result<Redirect> {
-    let Some(user) = user else {
-        return Err(AppError::Forbidden);
+    let sRemoteIp = sTopicEditRemoteIp(&state, &headers, stPeerAddress);
+    let cService = cTopicEditService(&state);
+    let stPrepared = match cService
+        .stPrepareCommitForm(q.msgid, stTopicEditActor(&user), &sRemoteIp)
+        .await
+    {
+        Ok(stPrepared) => stPrepared,
+        // UserErrorException is rendered by the Java global resolver as its
+        // common error page with HTTP 500 and a visible, escaped message.
+        Err(AppError::BadRequest(sMessage)) => {
+            return Ok(stTopicEditUserErrorResponse(
+                "ru.org.linux.user.UserErrorException",
+                sMessage,
+            ));
+        }
+        Err(stError) => return Err(stError),
     };
-    let author_id: i32 = sqlx::query_scalar("SELECT userid FROM topics WHERE id=$1")
-        .bind(form.msgid)
-        .fetch_optional(&state.pool)
-        .await?
-        .ok_or(AppError::NotFound)?;
-    check_commit_allowed(&user, author_id)?;
-    topic_service(&state)
-        .vCommitTopic(form.msgid, user.id)
-        .await?;
-    crate::search_index::index_topic(&state, form.msgid, true).await;
-    Ok(Redirect::to(&format!(
-        "/jump-message.jsp?msgid={}",
-        form.msgid
-    )))
-}
-
-pub async fn uncommit_form(
-    Query(q): Query<ViewMessageQuery>,
-    CurrentUser(user): CurrentUser,
-    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
-) -> Result<Html<String>> {
-    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) {
-        return Err(AppError::Forbidden);
-    }
-    Ok(Html(format!(
-        r#"
-<h1>Отменить подтверждение темы #{}</h1>
-<form method="post" action="/uncommit.jsp">
-  <input type="hidden" name="csrf" value="{csrf_token}">
-  <input type="hidden" name="msgid" value="{}">
-  <button type="submit">Отменить подтверждение</button>
-</form>
-"#,
-        q.msgid, q.msgid
-    )))
-}
-
-pub async fn uncommit(
-    State(state): State<AppState>,
-    CurrentUser(user): CurrentUser,
-    Form(form): Form<TopicActionForm>,
-) -> Result<Redirect> {
-    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) {
-        return Err(AppError::Forbidden);
-    }
-    topic_service(&state).vUncommitTopic(form.msgid).await?;
-    crate::search_index::index_topic(&state, form.msgid, true).await;
-    Ok(Redirect::to(&format!(
-        "/jump-message.jsp?msgid={}",
-        form.msgid
-    )))
-}
-
-#[derive(Deserialize)]
-pub struct MoveTopicForm {
-    pub msgid: i32,
-    pub moveto: i32,
-}
-
-pub async fn move_topic_form(
-    State(state): State<AppState>,
-    Query(q): Query<ViewMessageQuery>,
-    CurrentUser(user): CurrentUser,
-    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
-) -> Result<Html<String>> {
-    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) {
-        return Err(AppError::Forbidden);
-    }
-    let topic = get_topic(&state, q.msgid).await?;
-    let groups = crate::routes::groups::list_groups(&state).await?;
-    let mut options = String::new();
-    for g in groups {
-        let selected = if g.id == topic.group_id {
-            " selected"
-        } else {
-            ""
-        };
-        options.push_str(&format!(
-            "<option value=\"{}\"{}>{} / {}</option>",
-            g.id,
-            selected,
-            html_escape::encode_text(&g.section_name),
-            html_escape::encode_text(&g.title)
-        ));
-    }
-    Ok(Html(format!(
-        r#"
-<h1>Переместить тему #{}</h1>
-<form method="post" action="/mt.jsp">
-  <input type="hidden" name="csrf" value="{csrf_token}">
-  <input type="hidden" name="msgid" value="{}">
-  <select name="moveto">{}</select>
-  <button type="submit">Переместить</button>
-</form>
-"#,
-        q.msgid, q.msgid, options
-    )))
-}
-
-pub async fn move_topic(
-    State(state): State<AppState>,
-    CurrentUser(user): CurrentUser,
-    Form(form): Form<MoveTopicForm>,
-) -> Result<Redirect> {
-    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) {
-        return Err(AppError::Forbidden);
-    }
-    topic_service(&state)
-        .vMoveTopic(form.msgid, form.moveto)
-        .await?;
-    Ok(Redirect::to(&format!(
-        "/jump-message.jsp?msgid={}",
-        form.msgid
-    )))
-}
-
-pub async fn premoderated_move_form(
-    State(state): State<AppState>,
-    Query(q): Query<ViewMessageQuery>,
-    user: CurrentUser,
-    csrf: crate::csrf::CsrfToken,
-) -> Result<Html<String>> {
-    move_topic_form(State(state), Query(q), user, csrf).await
+    let sMessage = if let Some(iRecordId) = q.from_history {
+        let cHistoryService = crate::application::edit_history::CEditHistoryService::new(
+            crate::infra::postgres::edit_history_repository::CEditHistoryPgRepository::new(
+                state.pool.clone(),
+            ),
+        );
+        cHistoryService
+            .sRestorableTopicMessage(q.msgid, iRecordId)
+            .await?
+    } else {
+        stPrepared.stSnapshot.sMessage.clone()
+    };
+    let stValues = StEditTopicFormValues::stInitial(&stPrepared, sMessage);
+    stRenderEditTopic(
+        &state,
+        &user,
+        &csrf_token,
+        stPrepared,
+        stValues,
+        Vec::new(),
+        true,
+        "Подтверждение".into(),
+        &sRemoteIp,
+        StEditTopicRenderContext::default(),
+    )
+    .await
 }

@@ -17,7 +17,20 @@ The Rust process connects as the Java runtime role, normally `linuxweb`. At
 startup it performs catalog-only validation of all 33 canonical tables and 214
 columns, their PostgreSQL types/nullability, the five enums, 15 sequences, 12
 database functions, two extensions and five enabled retained business triggers.
-It performs no DDL or DML.
+It also validates the 605-record schema-object contract: required PK/FK/UNIQUE
+and CHECK constraints, defaults, index definitions, function and trigger
+definitions, sequence parameters/`OWNED BY` links, and minimum effective
+`linuxweb` table/sequence grants. It performs no DDL or DML.
+
+The object query is bounded to named application relations/functions; it does
+not scan application data, Liquibase rows or extension-owned functions.
+Missing or changed canonical semantic objects stop startup. Additional
+operator-created indexes/constraints/grants and owner-role-name differences do
+not: they produce a count plus expected/actual SHA-256 fingerprint and a
+bounded drift warning for cutover review. This prevents an observability index
+or deployment-specific owner from making an otherwise compatible clone
+unstartable while preserving evidence of divergence. Missing required
+`linuxweb` grants remain blocking.
 
 The validator does not read `databasechangelog`. This is deliberate: the Java
 grants let `linuxweb` use application tables but not the Liquibase ledger.
@@ -102,4 +115,35 @@ sha256sum /tmp/lorsource-java-schema.sql
 Do not commit this dump as a second schema authority. If the Java changelog is
 updated, re-vendor it from a named Java commit, regenerate
 `checksums.sha256`, rebuild `schema-contract.tsv` from an isolated migrated
-database, and review the Rust SQL call sites against the changed contract.
+database, regenerate `schema-objects-contract.tsv` through
+`export-schema-objects.sql`, and review the Rust SQL call sites against the
+changed contracts. Validate exact reproducibility on that disposable database
+with:
+
+```bash
+JAVA_DATABASE_RUNTIME_URL=postgres://linuxweb:linuxweb@localhost:5432/lor \
+  bash compat/java-db/check-schema-object-contract.sh
+```
+
+The same catalog path can be exercised through SQLx without any mutation:
+
+```bash
+LOR_SCHEMA_INTEGRATION_CONFIRM=read-only-canonical-contract \
+LOR_SCHEMA_INTEGRATION_DATABASE_URL=postgres://linuxweb:linuxweb@localhost:5432/lor \
+  cargo test canonicalSchemaObjectContractMatchesRuntimeCatalog -- --ignored
+```
+
+The local 2026-08-15 evidence used PostgreSQL 16.14. It is not evidence that a
+production clone, production privileges, or a different PostgreSQL major has
+passed the comparison; those remain release rehearsal requirements.
+
+## Mixed historical title representation
+
+Java and older Rust write paths can leave distinguishable and ambiguous title
+encodings in the same database. Never normalize them by a blanket startup
+migration or by matching entity text alone. The fail-closed, strictly
+read-only classifier, clone-role requirements, hashed artifacts and manual
+review/rollback procedure are documented in
+[`TITLE_REPRESENTATION_AUDIT.md`](TITLE_REPRESENTATION_AUDIT.md). A report from
+the local demo database is not a substitute for running that procedure on a
+named, provenance-backed production clone.

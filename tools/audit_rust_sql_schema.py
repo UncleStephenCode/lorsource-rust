@@ -53,7 +53,7 @@ NON_COLUMN_WORDS = {
     "current_catalog", "current_date", "current_role", "current_schema",
     "current_time", "current_timestamp", "current_user", "date", "day",
     "dec", "decimal", "default", "deferrable", "delete", "desc", "distinct",
-    "do", "else", "end", "except", "exists", "extract", "false", "fetch",
+    "do", "else", "end", "escape", "except", "exists", "extract", "false", "fetch",
     "filter", "first", "float", "for", "foreign", "from", "full", "grant",
     "greatest", "group", "having", "hour", "ilike", "in", "initially",
     "inner", "insert", "int", "integer", "intersect", "interval", "into",
@@ -62,7 +62,7 @@ NON_COLUMN_WORDS = {
     "month", "natural", "new", "no", "not", "nothing", "null", "nullif", "nulls",
     "numeric", "of", "offset", "old", "on", "only", "or", "order", "outer",
     "over", "overlaps", "partition", "placing", "primary", "real", "recursive",
-    "references", "returning", "right", "row", "second", "select", "session_user",
+    "references", "returning", "right", "row", "second", "select", "session_user", "share",
     "set", "similar", "smallint", "some", "symmetric", "table", "text", "then",
     "time", "timestamp", "to", "trailing", "true", "union", "unique", "unknown",
     "update", "user", "using", "values", "varchar", "variadic", "verbose", "when",
@@ -340,6 +340,12 @@ def extract_sql_strings(root: Path) -> list[RustString]:
             if (item.line, item.value) in selected_ids:
                 continue
             value = item.value.strip()
+            # Askama expressions use Rust-style equality.  A template-source
+            # assertion such as ``c.answer_count == 1`` can otherwise look
+            # like a SQL continuation when the same Rust file contains a real
+            # query using alias ``c``.
+            if "==" in value:
+                continue
             qualifiers = set(re.findall(r"\b([a-z][a-z0-9_]{0,15})\s*\.\s*[a-z_][a-z0-9_$]*\b", value))
             expression_start = re.match(
                 r"(?is)^(?:NOT\s+|COALESCE\s*\(|LOWER\s*\(|UPPER\s*\(|[a-z][a-z0-9_]{0,15}\s*\.)",
@@ -1157,7 +1163,12 @@ def write_csv(path: Path, report: dict[str, object]) -> None:
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=fields, extrasaction="ignore")
+        writer = csv.DictWriter(
+            stream,
+            fieldnames=fields,
+            extrasaction="ignore",
+            lineterminator="\n",
+        )
         writer.writeheader()
         writer.writerows({"record_class": "finding", **row} for row in report["findings"])
         writer.writerows(

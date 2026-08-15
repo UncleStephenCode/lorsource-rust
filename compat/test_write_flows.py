@@ -12,6 +12,7 @@ import json
 import html
 import os
 import re
+import subprocess
 import struct
 import sys
 import time
@@ -20,7 +21,9 @@ import urllib.error
 import urllib.request
 import zlib
 
+from stateful_database import psql_target
 from test_http_compat import HttpClient, response_value
+from write_flow_html import visible_text, visible_topic_title
 
 
 def require(condition: bool, message: str) -> None:
@@ -108,6 +111,28 @@ def text(response) -> str:
     return response.body.decode("utf-8", errors="replace")
 
 
+def db(sql: str) -> str:
+    command, child_env, _ = psql_target()
+    result = subprocess.run(
+        [*command, "-At", "-v", "ON_ERROR_STOP=1", "-c", sql],
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=child_env,
+    )
+    return result.stdout.strip()
+
+
+def verify_database_target() -> None:
+    _, _, expected_database = psql_target()
+    if expected_database is not None:
+        require(
+            db("SELECT current_database()") == expected_database,
+            "connected PostgreSQL database differs from STATEFUL_EXPECTED_DATABASE",
+        )
+
+
 def selected_radio_value(page: str, name: str) -> str:
     match = re.search(
         rf'<input[^>]*name="{re.escape(name)}"[^>]*value="([^"]+)"[^>]*checked',
@@ -129,6 +154,7 @@ def main() -> int:
     if os.environ.get("WRITE_FLOW_ALLOW_MUTATION") != "yes":
         print("WRITE_FLOW_ALLOW_MUTATION=yes is required", file=sys.stderr)
         return 2
+    verify_database_target()
 
     base = os.environ.get("NEW_BASE_URL", "http://127.0.0.1:8181")
     author_nick = os.environ["WRITE_FLOW_AUTHOR_NICK"]
@@ -328,7 +354,14 @@ def main() -> int:
     require('name="tags"' in text(form), "topic form has no tags field")
 
     suffix = str(int(time.time() * 1000))
-    title = f"Rust compatibility write flow {suffix}"
+    title = f"Rust compatibility write flow {suffix} & < > \"quoted\" 'apostrophe'"
+    visible_title = (
+        f"Rust compatibility write flow {suffix} & < > «quoted» 'apostrophe'"
+    )
+    stored_title = (
+        f"Rust compatibility write flow {suffix} &amp; &lt; &gt; "
+        "&quot;quoted&quot; &#39;apostrophe&#39;"
+    )
     body = f"Transactional topic body {suffix}"
     created = post(
         author,
@@ -351,7 +384,15 @@ def main() -> int:
     topic = author.request(created.location_target, "GET")
     topic_html = text(topic)
     require(topic.status == 200, f"canonical topic returned {topic.status}")
-    require(title in topic_html and body in topic_html, "created title/body are missing")
+    require(
+        visible_topic_title(topic_html, created.location_target) == visible_title,
+        "created title is missing or is visibly double-escaped",
+    )
+    require(body in visible_text(topic_html), "created body is missing")
+    require(
+        db(f"SELECT title FROM topics WHERE id={topic_id}") == stored_title,
+        "topic title bytes differ from Java's HTML-escaped storage contract",
+    )
     require('href="/tag/rust-port-ci"' in topic_html, "first comma-separated tag is missing")
     require('href="/tag/compatibility"' in topic_html, "second comma-separated tag is missing")
     require("rust-port-ci%2C" not in topic_html, "comma-separated tags were stored as one tag")
@@ -387,10 +428,13 @@ def main() -> int:
     for _ in range(20):
         search_response = author.request(search_path, "GET")
         search_html = text(search_response)
-        if search_response.status == 200 and title in search_html:
+        if search_response.status == 200 and visible_title in visible_text(search_html):
             break
         time.sleep(1)
-    require(title in search_html, "durable search queue did not index the created topic")
+    require(
+        visible_title in visible_text(search_html),
+        "durable search queue did not index the created topic",
+    )
 
     reactor_view = reactor.request(created.location_target, "GET")
     reactor_html = text(reactor_view)
@@ -413,7 +457,24 @@ def main() -> int:
 
     reaction_list = reactor.request(f"/reactions?topic={topic_id}", "GET")
     require(reaction_list.status == 200, f"reaction list returned {reaction_list.status}")
-    require(reactor_nick in text(reaction_list), "authoritative reaction list omits reactor")
+    reaction_list_html = text(reaction_list)
+    require(reactor_nick in reaction_list_html, "authoritative reaction list omits reactor")
+    require(
+        "<!doctype html>" in reaction_list_html
+        and "<title>Реакция на сообщение</title>" in reaction_list_html
+        and f'id="topic-{topic_id}"' in reaction_list_html
+        and 'class="reactions-form" action="/reactions" method="POST"' in reaction_list_html
+        and f'class="btn btn-primary" href="{created.location_target}"' in reaction_list_html,
+        "topic reaction GET is not the original full-page topic/reactions view",
+    )
+    anonymous_reaction = HttpClient(base).request(f"/reactions?topic={topic_id}", "GET")
+    require(
+        anonymous_reaction.status == 302
+        and anonymous_reaction.location_target == created.location_target,
+        "anonymous topic reaction GET does not use the original 302 canonical redirect",
+    )
+    msgid_alias = HttpClient(base).request(f"/reactions?msgid={topic_id}", "GET")
+    require(msgid_alias.status == 400, "non-original msgid alias is accepted by reaction GET")
 
     notification_feed = author.request(
         "/show-replies.jsp?" + urllib.parse.urlencode({"output": "rss", "nick": author_nick}),
@@ -433,7 +494,10 @@ def main() -> int:
     notifications_html = text(notifications)
     require(notifications.status == 200, f"reaction notifications returned {notifications.status}")
     require("no-store" in notifications.cache_control, "notifications response is cacheable")
-    require(title in notifications_html, "reaction notification omits topic title")
+    require(
+        visible_title in visible_text(notifications_html),
+        "reaction notification omits topic title",
+    )
     require(reactor_nick in notifications_html and "🎉" in notifications_html,
             "reaction notification omits current reactor/reaction")
     click_ids = re.search(
@@ -468,9 +532,33 @@ def main() -> int:
 
     comment_id_match = re.search(r"[?&]cid=(\d+)", comment_payload["url"])
     require(comment_id_match is not None, "comment URL omits the Java cid parameter")
+    comment_id = comment_id_match.group(1)
+    comment_reactions = author.request(
+        f"/reactions?topic=1&comment={comment_id}", "GET"
+    )
+    comment_reactions_html = text(comment_reactions)
+    require(
+        comment_reactions.status == 200
+        and "<title>Реакция на комментарий</title>" in comment_reactions_html
+        and f'id="comment-{comment_id}"' in comment_reactions_html
+        and f"Comment body {suffix}" in comment_reactions_html
+        and f'name="comment" value="{comment_id}"' in comment_reactions_html,
+        "comment reaction GET does not reproduce reaction-comment.jsp",
+    )
+    anonymous_comment_reaction = HttpClient(base).request(
+        f"/reactions?comment={comment_id}", "GET"
+    )
+    require(
+        anonymous_comment_reaction.status == 302
+        and anonymous_comment_reaction.location_target == comment_payload["url"],
+        "anonymous comment reaction GET does not use the original 302 cid redirect",
+    )
     tracker = author.request("/tracker/?filter=all", "GET")
     tracker_html = text(tracker)
-    require(tracker.status == 200 and title in tracker_html, "created topic is absent from tracker")
+    require(
+        tracker.status == 200 and visible_title in visible_text(tracker_html),
+        "created topic is absent from tracker",
+    )
     tracker_item = re.search(
         rf'<a href="([^"]*lastmod={comment_id_match.group(1)})" class="tracker-item">(.*?)</a>',
         tracker_html,
@@ -498,8 +586,10 @@ def main() -> int:
     require(removed.status == 200 and json.loads(text(removed)) == {"count": 0}, "reaction removal failed")
     after_removal = author.request("/notifications?filter=reaction", "GET")
     require(after_removal.status == 200, "notifications failed after reaction removal")
-    require(title not in text(after_removal),
-            "read notification for a removed reaction remains visible")
+    require(
+        visible_title not in visible_text(text(after_removal)),
+        "read notification for a removed reaction remains visible",
+    )
 
     # Gallery has two distinct original DOM modes: a responsive single image
     # and a Swiffy slider for several images. Exercise the real multipart

@@ -74,6 +74,14 @@
     <input id="tags" name="tags" type="text" required autocapitalize="off" data-tags-autocomplete="data-tags-autocomplete" value="{{ form_tags }}">
   </div>
   {% if image_allowed %}
+  {% for image in existing_images %}
+  <div style="display: flex; align-items: center; gap: 1em">
+    <a href="{{ image.original_url }}" target="_blank">
+      <img src="{{ image.medium_url }}" style="height: 50px; width: auto">
+    </a>
+    <a href="/delete_image?id={{ image.id }}">удалить изображение</a>
+  </div>
+  {% endfor %}
   {% for image in uploaded_images %}<input type="hidden" name="uploadedImages[{{ loop.index0 }}]" value="{{ image }}">{% endfor %}
   <div class="control-group"><label for="image">{% if is_edit %}Добавить изображение:{% else %}Изображение:{% endif %} <input id="image" type="file" name="images" accept=".jpg,.jpeg,.png,.gif,image/jpeg,image/png,image/gif"{% if image_required && !is_edit && uploaded_images.is_empty() %} required{% endif %}></label></div>
   {% if additional_image_rows.len() > 0 %}<div class="control-group">{% for _ in additional_image_rows %}<label>Дополнительное изображение #{{ loop.index0 }}: <input type="file" name="images" accept=".jpg,.jpeg,.png,.gif,image/jpeg,image/png,image/gif"></label>{% endfor %}</div>{% endif %}

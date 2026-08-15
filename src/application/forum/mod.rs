@@ -21,10 +21,6 @@ where
         self.oRepository.vecListGroupsBySection(Some("forum")).await
     }
 
-    pub async fn vecListGroups(&self) -> Result<Vec<StGroup>> {
-        self.oRepository.vecListGroups().await
-    }
-
     pub async fn vecListGroupsBySection(
         &self,
         optSectionPrefix: Option<&str>,

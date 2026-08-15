@@ -44,7 +44,7 @@ CONFIG_CHECKS = {
     "public_https",
     "websocket_wss_same_authority",
     "runtime_database_role_least_privilege",
-    "cookie_and_site_secrets_distinct",
+    "java_site_secret_continuity_verified",
     "secret_values_redacted",
     "trusted_proxy_cidrs_configured",
     "opensearch_configured",

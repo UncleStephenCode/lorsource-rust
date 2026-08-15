@@ -34,6 +34,40 @@ demo hash. `schema-contract.tsv` is derived from a PostgreSQL 17 schema-only
 dump after applying this bootstrap; it is a Rust runtime compatibility
 contract, not a replacement migration source.
 
+`schema-objects-contract.tsv` complements the column contract with the
+catalog objects that a column-only inventory cannot prove. It was generated
+on 2026-08-15 from a fresh application of the same vendored bootstrap using
+PostgreSQL 16.14, through the read-only, bounded query in
+`export-schema-objects.sql`, then verified through the `linuxweb` runtime role.
+It contains 605 sorted records:
+
+- 82 primary/foreign/unique constraints (and any canonical checks; currently
+  none);
+- 61 column defaults, including every canonical `nextval(...)` binding;
+- 101 index definitions;
+- 15 sequence definitions and `OWNED BY` links;
+- 12 application function definitions and five trigger definitions;
+- 168 effective `linuxweb`/`PUBLIC` relation grants;
+- 161 table/index/sequence/function owner records.
+
+The contract SHA-256 is
+`95c94e345eff1cd0a405b6f99bf83994efe76e95cab13692da03eb09d70152c7`;
+the exporter SHA-256 is
+`cc87808b9476532d1d61502b0c062b1ce701e5c59d9c8087e17484571525ff97`.
+`check-vendor.sh` pins both. To prove reproducibility against a freshly
+bootstrapped disposable database, run:
+
+```bash
+JAVA_DATABASE_RUNTIME_URL=postgres://linuxweb:linuxweb@localhost:5432/lor \
+  bash compat/java-db/check-schema-object-contract.sh
+```
+
+This exact comparison is a regeneration/evidence check. Application startup
+uses the canonical records as a required subset: additional operator-created
+objects are reported as fingerprint drift rather than rejected. A production
+clone and other PostgreSQL major versions have not been validated by this
+local derivation and remain cutover evidence requirements.
+
 The audit-time diagnostic dump (not vendored) was produced with PostgreSQL
 17.10 using `pg_dump --schema-only --no-owner --no-privileges` and had SHA-256
 `66495e69b0d9442861f4905f08546e06f7633072b61686ac73f960681803c326`.

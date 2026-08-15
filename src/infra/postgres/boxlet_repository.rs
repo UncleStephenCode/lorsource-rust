@@ -3,7 +3,10 @@ use sqlx::PgPool;
 
 use crate::{
     domain::boxlet::{
-        model::{StGalleryBoxletRow, StTagCloudRow},
+        model::{
+            StGalleryBoxletRow, StPollBoxletRow, StPollVariantResult, StTagCloudRow,
+            StTopicBoxletRow,
+        },
         repository::TrBoxletRepository,
     },
     error::Result,
@@ -76,5 +79,124 @@ impl TrBoxletRepository for CBoxletPgRepository {
             .bind(iUserId)
             .fetch_one(&self.oPool)
             .await?)
+    }
+
+    async fn vecTopTopics(&self) -> Result<Vec<StTopicBoxletRow>> {
+        Ok(sqlx::query_as::<_, StTopicBoxletRow>(
+            r#"SELECT topics.id AS "iMsgId",
+                      groups.urlname AS "sGroupUrlName",
+                      groups.section AS "iSectionId",
+                      topics.title AS "sTitle",
+                      topics.lastmod AS "dtLastModified",
+                      topics.stat1 AS "iCommentCount"
+               FROM topics
+               JOIN groups ON groups.id=topics.groupid
+               WHERE topics.postdate > (CURRENT_TIMESTAMP - '1 month 1 day'::interval)
+                 AND NOT topics.deleted
+                 AND NOT topics.notop
+                 AND topics.open_warnings <= 2
+                 AND topics.postscore IS DISTINCT FROM 10002
+               ORDER BY topics.stat1 DESC, topics.id
+               LIMIT 10"#,
+        )
+        .fetch_all(&self.oPool)
+        .await?)
+    }
+
+    async fn vecArticles(&self) -> Result<Vec<StTopicBoxletRow>> {
+        Ok(sqlx::query_as::<_, StTopicBoxletRow>(
+            r#"SELECT topics.id AS "iMsgId",
+                      groups.urlname AS "sGroupUrlName",
+                      groups.section AS "iSectionId",
+                      topics.title AS "sTitle",
+                      topics.lastmod AS "dtLastModified",
+                      topics.stat1 AS "iCommentCount"
+               FROM topics
+               JOIN groups ON groups.id=topics.groupid
+               WHERE NOT topics.deleted
+                 AND NOT topics.notop
+                 AND topics.moderate
+                 AND topics.commitdate IS NOT NULL
+                 AND topics.postscore IS DISTINCT FROM 10002
+                 AND groups.section=6
+               ORDER BY topics.commitdate DESC, topics.id
+               LIMIT 10"#,
+        )
+        .fetch_all(&self.oPool)
+        .await?)
+    }
+
+    async fn optUserSettings(&self, iUserId: i32) -> Result<Option<String>> {
+        Ok(
+            sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
+                .bind(iUserId)
+                .fetch_optional(&self.oPool)
+                .await?,
+        )
+    }
+
+    async fn vecMostRecentPolls(&self) -> Result<Vec<StPollBoxletRow>> {
+        Ok(sqlx::query_as::<_, StPollBoxletRow>(
+            r#"SELECT polls.id AS "iPollId",
+                      polls.topic AS "iTopicId",
+                      polls.multiselect AS "bMultiSelect",
+                      topics.title AS "sTitle"
+               FROM polls,topics
+               WHERE topics.id=polls.topic
+                 AND topics.moderate='t'
+                 AND topics.deleted='f'
+                 AND topics.commitdate=(
+                     SELECT max(commitdate)
+                     FROM topics
+                     WHERE groupid=19387 AND moderate AND NOT deleted
+                 )"#,
+        )
+        .fetch_all(&self.oPool)
+        .await?)
+    }
+
+    async fn vecPollResults(&self, iPollId: i32, iUserId: i32) -> Result<Vec<StPollVariantResult>> {
+        Ok(sqlx::query_as::<_, StPollVariantResult>(
+            r#"SELECT v.id AS "iId",
+                      v.label AS "sLabel",
+                      v.votes AS "iVotes",
+                      EXISTS(
+                          SELECT 1
+                          FROM vote_users u
+                          WHERE u.vote=v.vote
+                            AND u.variant_id=v.id
+                            AND u.userid>0
+                            AND u.userid=$2
+                          LIMIT 1
+                      ) AS "bUserVoted"
+               FROM polls_variants v
+               WHERE v.vote=$1
+               ORDER BY v.id"#,
+        )
+        .bind(iPollId)
+        .bind(iUserId)
+        .fetch_all(&self.oPool)
+        .await?)
+    }
+
+    async fn iPollVotes(&self, iPollId: i32) -> Result<i32> {
+        Ok(sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT sum(votes)::bigint FROM polls_variants WHERE vote=$1",
+        )
+        .bind(iPollId)
+        .fetch_optional(&self.oPool)
+        .await?
+        .flatten()
+        .unwrap_or(0) as i32)
+    }
+
+    async fn iPollUsers(&self, iPollId: i32) -> Result<i32> {
+        Ok(sqlx::query_scalar::<_, i64>(
+            "SELECT count(DISTINCT userid) FROM vote_users WHERE vote=$1",
+        )
+        .bind(iPollId)
+        .fetch_optional(&self.oPool)
+        .await?
+        .unwrap_or(0) as i32)
     }
 }

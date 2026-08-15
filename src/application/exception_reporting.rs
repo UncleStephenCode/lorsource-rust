@@ -1,10 +1,18 @@
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::HashSet,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
 use tokio::sync::mpsc;
 
 use crate::domain::{email::model::StEmailMessage, email::repository::TrEmailSender};
 
 const I_MAX_MESSAGES: usize = 5;
+const I_REPORT_QUEUE_CAPACITY: usize = 128;
 const DT_RESET: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug, Clone)]
@@ -15,7 +23,15 @@ pub struct StExceptionReport {
 
 #[derive(Debug, Clone, Default)]
 pub struct CExceptionReporter {
-    optSender: Option<mpsc::UnboundedSender<StExceptionReport>>,
+    optSender: Option<mpsc::Sender<StExceptionReport>>,
+    stMetrics: Arc<StExceptionReporterMetrics>,
+    iQueueCapacity: usize,
+}
+
+#[derive(Debug, Default)]
+struct StExceptionReporterMetrics {
+    iDroppedPending: AtomicUsize,
+    iDroppedTotal: AtomicUsize,
 }
 
 impl CExceptionReporter {
@@ -23,16 +39,40 @@ impl CExceptionReporter {
     where
         S: TrEmailSender + 'static,
     {
+        Self::stNewWithOptions(
+            optAdminEmail,
+            oEmailSender,
+            I_REPORT_QUEUE_CAPACITY,
+            DT_RESET,
+        )
+    }
+
+    fn stNewWithOptions<S>(
+        optAdminEmail: Option<String>,
+        oEmailSender: S,
+        iQueueCapacity: usize,
+        dtReset: Duration,
+    ) -> Self
+    where
+        S: TrEmailSender + 'static,
+    {
         let Some(sAdminEmail) = optAdminEmail else {
             return Self::default();
         };
-        // Pekko's default actor mailbox is unbounded. The five-minute actor
-        // state, not mailbox overflow, decides what is sent or summarized.
-        // Keeping every report also preserves the real high-rate count.
-        let (oSender, oReceiver) = mpsc::unbounded_channel();
-        tokio::spawn(vRunReporter(oReceiver, oEmailSender, sAdminEmail));
+        let iQueueCapacity = iQueueCapacity.max(1);
+        let stMetrics = Arc::new(StExceptionReporterMetrics::default());
+        let (oSender, oReceiver) = mpsc::channel(iQueueCapacity);
+        tokio::spawn(vRunReporter(
+            oReceiver,
+            oEmailSender,
+            sAdminEmail,
+            Arc::clone(&stMetrics),
+            dtReset,
+        ));
         Self {
             optSender: Some(oSender),
+            stMetrics,
+            iQueueCapacity,
         }
     }
 
@@ -40,52 +80,109 @@ impl CExceptionReporter {
         let Some(oSender) = &self.optSender else {
             return;
         };
-        if oSender.send(stReport).is_err() {
-            tracing::error!("exception-report actor is closed");
+        match oSender.try_send(stReport) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                vSaturatingIncrement(&self.stMetrics.iDroppedPending);
+                let iDropped = vSaturatingIncrement(&self.stMetrics.iDroppedTotal);
+                if iDropped == 1 || iDropped.is_power_of_two() {
+                    tracing::warn!(
+                        dropped_reports = iDropped,
+                        queue_capacity = self.iQueueCapacity,
+                        "exception-report queue is full; reports are being aggregated"
+                    );
+                }
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                tracing::error!("exception-report actor is closed");
+            }
         }
     }
+
+    #[cfg(test)]
+    fn iDroppedReports(&self) -> usize {
+        self.stMetrics.iDroppedTotal.load(Ordering::Relaxed)
+    }
+}
+
+fn vSaturatingIncrement(oValue: &AtomicUsize) -> usize {
+    let iPrevious = oValue
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |iValue| {
+            Some(iValue.saturating_add(1))
+        })
+        .unwrap_or_else(|iValue| iValue);
+    iPrevious.saturating_add(1)
 }
 
 #[derive(Debug, Default)]
 struct StExceptionRateState {
     iCount: usize,
+    iDropped: usize,
     setTypes: HashSet<String>,
 }
 
 impl StExceptionRateState {
     fn bShouldSend(&mut self, sType: &str) -> bool {
-        self.iCount += 1;
+        self.iCount = self.iCount.saturating_add(1);
         let bNewType = self.setTypes.insert(sType.to_owned());
         self.iCount < I_MAX_MESSAGES || bNewType
+    }
+
+    fn vRecordDropped(&mut self, iDropped: usize) {
+        self.iCount = self.iCount.saturating_add(iDropped);
+        self.iDropped = self.iDropped.saturating_add(iDropped);
     }
 
     fn optResetSummary(&mut self) -> Option<(usize, String)> {
         let optSummary = (self.iCount >= I_MAX_MESSAGES).then(|| {
             let mut vecTypes = self.setTypes.iter().cloned().collect::<Vec<_>>();
             vecTypes.sort();
-            (self.iCount, vecTypes.join("\n"))
+            let mut sBody = vecTypes.join("\n");
+            if self.iDropped > 0 {
+                if !sBody.is_empty() {
+                    sBody.push('\n');
+                }
+                sBody.push_str(&format!(
+                    "[{} crash reports dropped because the bounded reporter queue was full]",
+                    self.iDropped
+                ));
+            }
+            (self.iCount, sBody)
         });
         self.iCount = 0;
+        self.iDropped = 0;
         self.setTypes.clear();
         optSummary
     }
 }
 
 async fn vRunReporter<S>(
-    mut oReceiver: mpsc::UnboundedReceiver<StExceptionReport>,
+    mut oReceiver: mpsc::Receiver<StExceptionReport>,
     oEmailSender: S,
     sAdminEmail: String,
+    stMetrics: Arc<StExceptionReporterMetrics>,
+    dtReset: Duration,
 ) where
     S: TrEmailSender,
 {
-    let mut oReset = tokio::time::interval(DT_RESET);
+    let mut oReset = tokio::time::interval(dtReset);
     oReset.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     oReset.tick().await;
     let mut stRate = StExceptionRateState::default();
     loop {
+        // A full queue means every accepted report precedes the aggregated
+        // drops. Drain those accepted reports in FIFO order before folding the
+        // dropped count into the five-minute Java-compatible rate window.
+        if oReceiver.is_empty() {
+            stRate.vRecordDropped(stMetrics.iDroppedPending.swap(0, Ordering::Relaxed));
+        }
         tokio::select! {
+            biased;
             optReport = oReceiver.recv() => {
-                let Some(stReport) = optReport else { break };
+                let Some(stReport) = optReport else {
+                    stRate.vRecordDropped(stMetrics.iDroppedPending.swap(0, Ordering::Relaxed));
+                    break;
+                };
                 if stRate.bShouldSend(&stReport.sType) {
                     vSendReport(&oEmailSender, &sAdminEmail, &format!("Linux.org.ru: {}", stReport.sType), &stReport.sBody).await;
                 } else {
@@ -93,6 +190,7 @@ async fn vRunReporter<S>(
                 }
             }
             _ = oReset.tick() => {
+                stRate.vRecordDropped(stMetrics.iDroppedPending.swap(0, Ordering::Relaxed));
                 if let Some((iCount, sTypes)) = stRate.optResetSummary() {
                     vSendReport(
                         &oEmailSender,
@@ -124,10 +222,15 @@ async fn vSendReport<S: TrEmailSender>(oSender: &S, sTo: &str, sSubject: &str, s
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use std::sync::Arc;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::sync::Semaphore;
     use tokio::time::{Duration, timeout};
 
-    use crate::{error::Result, infra::smtp::CSmtpEmailSender};
+    use crate::{
+        error::{AppError, Result},
+        infra::smtp::CSmtpEmailSender,
+    };
 
     #[derive(Clone)]
     struct CRecordingSender {
@@ -141,6 +244,23 @@ mod tests {
                 .send(stMessage.clone())
                 .expect("recording receiver");
             Ok(())
+        }
+    }
+
+    #[derive(Clone)]
+    struct CBlockingOutageSender {
+        oStarted: mpsc::UnboundedSender<StEmailMessage>,
+        oRelease: Arc<Semaphore>,
+    }
+
+    #[async_trait]
+    impl TrEmailSender for CBlockingOutageSender {
+        async fn vSend(&self, stMessage: &StEmailMessage) -> Result<()> {
+            self.oStarted
+                .send(stMessage.clone())
+                .expect("outage observer");
+            let _stPermit = self.oRelease.acquire().await.expect("outage release");
+            Err(AppError::Anyhow(anyhow::anyhow!("SMTP unavailable")))
         }
     }
 
@@ -205,6 +325,74 @@ mod tests {
         assert!(vecMessages.iter().all(|stMessage| {
             stMessage.sFrom == "no-reply@linux.org.ru" && stMessage.sTo == "admin@example.org"
         }));
+    }
+
+    #[tokio::test]
+    async fn reporter_bounds_and_aggregates_during_smtp_outage() {
+        let (oStartedSender, mut oStartedReceiver) = mpsc::unbounded_channel();
+        let oRelease = Arc::new(Semaphore::new(0));
+        let cReporter = CExceptionReporter::stNewWithOptions(
+            Some("admin@example.org".to_owned()),
+            CBlockingOutageSender {
+                oStarted: oStartedSender,
+                oRelease: Arc::clone(&oRelease),
+            },
+            2,
+            Duration::from_millis(20),
+        );
+
+        cReporter.vReport(StExceptionReport {
+            sType: "Sqlx".to_owned(),
+            sBody: "failure 0".to_owned(),
+        });
+        let stFirst = timeout(Duration::from_secs(1), oStartedReceiver.recv())
+            .await
+            .expect("first send must start")
+            .expect("outage observer");
+        assert_eq!(stFirst.sBody, "failure 0");
+
+        let dtStarted = std::time::Instant::now();
+        for iIndex in 1..100 {
+            cReporter.vReport(StExceptionReport {
+                sType: "Sqlx".to_owned(),
+                sBody: format!("failure {iIndex}"),
+            });
+        }
+        assert!(
+            dtStarted.elapsed() < Duration::from_millis(100),
+            "reporting must remain nonblocking while SMTP is unavailable"
+        );
+        assert_eq!(cReporter.iDroppedReports(), 97);
+
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        oRelease.add_permits(1);
+
+        let mut vecAttempted = vec![stFirst];
+        while vecAttempted
+            .last()
+            .is_none_or(|stMessage| !stMessage.sSubject.contains("high exception rate"))
+        {
+            vecAttempted.push(
+                timeout(Duration::from_secs(1), oStartedReceiver.recv())
+                    .await
+                    .expect("aggregated report timeout")
+                    .expect("outage observer"),
+            );
+        }
+
+        assert_eq!(vecAttempted[1].sBody, "failure 1");
+        assert_eq!(vecAttempted[2].sBody, "failure 2");
+        assert_eq!(
+            vecAttempted[3].sSubject,
+            "Linux.org.ru: high exception rate (100 in 5 minutes)"
+        );
+        assert!(vecAttempted[3].sBody.contains("Sqlx"));
+        assert!(vecAttempted[3].sBody.contains("97 crash reports dropped"));
+        assert!(
+            vecAttempted
+                .iter()
+                .all(|stMessage| !stMessage.sBody.contains("failure 3"))
+        );
     }
 
     #[tokio::test]

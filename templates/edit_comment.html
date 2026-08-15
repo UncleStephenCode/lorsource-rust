@@ -9,7 +9,6 @@
   <input type="hidden" name="csrf" value="{{ csrf_token }}">
   <input type="hidden" name="topic" value="{{ topic_id }}">
   <input type="hidden" name="original" value="{{ comment_id }}">
-  {% if !title.is_empty() %}<input type="hidden" name="title" value="{{ title }}">{% endif %}
   <div class="control-group" data-format-mode="{{ format_mode }}">
     <div class="markup-tabs"><ul class="markup-tabs__nav"><li class="markup-tabs__tab active" data-tab="editor">{{ format_title }}</li></ul><div class="markup-tabs__content"><div class="markup-tabs__panel active" data-panel="editor"><textarea id="msg" name="msg" required autofocus>{{ msg }}</textarea></div></div></div>
     <div class="help-block">{% if format_mode == "lorcode" %}<b>Внимание:</b> прочитайте описание разметки <a href="/help/lorcode.md" target="_blank">LORCODE</a>.{% endif %}{% if format_mode == "markdown" %}<b>Внимание:</b> прочитайте описание разметки <a target="_blank" href="/help/markdown.md">Markdown</a>.{% endif %}</div>

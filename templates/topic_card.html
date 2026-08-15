@@ -1,0 +1,69 @@
+<article class="msg" id="topic-{{ card.topic.id }}">
+{% if card.show_menu %}{{ card.deleted_header_html|safe }}{% endif %}
+  <header>
+    <div class="msg-top-header">
+      <span{% if card.enable_schema %} itemprop="articleSection"{% endif %}>
+        <a href="/{{ card.topic.section_prefix }}/">{{ card.topic.section_name }}</a> —
+        <a href="/{{ card.topic.section_prefix }}/{{ card.topic.group_urlname }}">{{ card.topic.group_title }}</a>
+        {% if card.topic.section_premoderated && !card.topic.moderate %}<span>(не подтверждено)</span>{% endif %}
+      </span>
+      {% if card.show_menu %}&emsp;
+        {% if card.can_commit %}[<a href="commit.jsp?msgid={{ card.topic.id }}">Подтвердить</a>]{% endif %}
+        {% if card.moderator_menu %}
+          [<a href="setpostscore.jsp?msgid={{ card.topic.id }}">Параметры</a>]
+          {% if card.topic.section_premoderated %}[<a href="mt.jsp?msgid={{ card.topic.id }}">В&nbsp;форум</a>]{% else %}[<a href="mt.jsp?msgid={{ card.topic.id }}">Группа</a>]{% endif %}
+          {% if card.topic.section_premoderated %}[<a href="mtn.jsp?msgid={{ card.topic.id }}">Группа</a>]{% endif %}
+          {% if card.topic.moderate && !card.topic_expired %}[<a href="uncommit.jsp?msgid={{ card.topic.id }}">Отменить подтверждение</a>]{% endif %}
+        {% endif %}
+      {% endif %}
+    </div>
+
+    <h1{% if card.enable_schema %} itemprop="headline"{% endif %}>
+      {% if card.resolved %}<i class="icon-check" title="решено"></i>{% endif %}
+      <a href="{{ card.topic.topic_url() }}">{{ card.title_plain }}</a>
+      {% if card.topic.draft %}<span style="color:red">(черновик)</span>{% endif %}
+    </h1>
+    {% if card.topic.tags_vec().len() > 0 %}<p class="tags"><i class="icon-tag"></i>&nbsp;{% for tag in card.topic.tags_vec() %}<a class="tag" href="/tag/{{ tag }}">{{ tag }}</a>{% if !loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
+  </header>
+
+  <div class="msg-container">
+    <div class="msg_body">
+      {{ card.images_html|safe }}
+      {{ card.memories_buttons_html|safe }}
+      <div class="msg-text"{% if card.enable_schema %} itemprop="articleBody"{% endif %}>
+        {{ card.topic_html|safe }}
+        {% match card.poll %}{% when Some with (p) %}{% include "poll_view.html" %}{% when None %}{% endmatch %}
+        {% if card.links_allowed %}{% match card.topic.url %}{% when Some with (url) %}{% if url.len() > 0 %}<p>&gt;&gt;&gt; <a href="{{ url }}">{% match card.topic.linktext %}{% when Some with (lt) %}{% if lt.len() > 0 %}{{ lt }}{% else %}Подробности{% endif %}{% when None %}Подробности{% endmatch %}</a></p>{% endif %}{% when None %}{% endmatch %}{% endif %}
+      </div>
+
+      <footer>
+        {{ card.userpic_html|safe }}
+        <div class="sign"{% if card.userpic_html.len() == 0 %} style="margin-left: 0"{% endif %}>
+          {{ card.author_html|safe }} {% if !card.topic.author_anonymous %}{{ card.topic_author_signature.stars_html|safe }}{% endif %}{% if card.topic_author_signature.show_score && !card.topic.author_anonymous %} (Score: {{ card.topic_author_signature.score }} MaxScore: {{ card.topic_author_signature.max_score }}){% endif %}
+          {{ card.remark_html|safe }}<br>
+          <time data-format="default" datetime="{{ card.topic.postdate.to_rfc3339() }}"{% if card.enable_schema %} itemprop="dateCreated"{% endif %}>{{ card.topic.postdate }}</time>
+          {{ card.moderator_ip_html|safe }}
+          <span class="sign_more">{{ card.committer_html|safe }}{{ card.edit_summary_html|safe }}{{ card.moderator_user_agent_html|safe }}</span>
+        </div>
+      </footer>
+
+      {% if card.show_menu && card.can_commit %}<nav><a class="btn btn-primary" href="commit.jsp?msgid={{ card.topic.id }}">Подтвердить</a> <a class="btn btn-default" href="edit.jsp?msgid={{ card.topic.id }}">Править</a></nav>{% endif %}
+
+      {% if !card.topic.deleted && card.show_menu %}
+      <div class="reply"><ul id="topicMenu">
+        {% if !card.topic_expired && card.can_comment %}<li><a href="comment-message.jsp?topic={{ card.topic.id }}">Ответить</a></li>{% endif %}
+        {% if card.topic_show_reactions_link %}<li><a class="reaction-show" href="/reactions?topic={{ card.topic.id }}">Реакции</a></li>{% endif %}
+        {% if card.can_edit %}<li><a href="edit.jsp?msgid={{ card.topic.id }}">Править</a></li>{% endif %}
+        {% if card.can_delete %}<li><a href="delete.jsp?msgid={{ card.topic.id }}">Удалить</a></li>{% endif %}
+        {% if card.can_resolve %}{% if card.resolved %}<li><a href="resolve.jsp?msgid={{ card.topic.id }}&amp;resolve=no">Отметить как нерешённую</a></li>{% else %}<li><a href="resolve.jsp?msgid={{ card.topic.id }}&amp;resolve=yes">Отметить как решённую</a></li>{% endif %}{% endif %}
+        {% if card.can_warn %}<li><a href="/post-warning?topic={{ card.topic.id }}">Уведомить модераторов</a></li>{% endif %}
+        <li><a href="{{ card.topic.topic_url() }}">Ссылка</a></li>
+      </ul>{% if card.show_postscore %}<br>{{ card.postscore_info_html|safe }}{% endif %}</div>
+      {% endif %}
+
+      {{ card.warnings_html|safe }}
+      {{ card.topic_reactions_html|safe }}
+    </div>
+  </div>
+</article>
+{{ card.memories_script_html|safe }}

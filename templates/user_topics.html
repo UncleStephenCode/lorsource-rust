@@ -1,11 +1,14 @@
 {% extends "base.html" %}
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
-<h1>Сообщения <a href="/people/{{ nick }}/profile">{{ nick }}</a></h1>
+<h1>{{ nav_title }} <a href="{{ profile_url }}">{{ nick }}</a></h1>
 <nav>
+{% if sections.len() > 0 %}
   <a href="/people/{{ nick }}/" class="btn {% if all_selected %}btn-selected{% else %}btn-default{% endif %}">Все</a>
   {% for section in sections %}<a href="/people/{{ nick }}/?section={{ section.id }}" class="btn {% if section.selected %}btn-selected{% else %}btn-default{% endif %}">{{ section.name }}</a>{% endfor %}
+{% endif %}
 </nav>
+{% if show_search %}
 <div class="infoblock">
   <form method="get" action="/search.jsp">
     <div class="control-group"><input name="q" type="search" size="50" maxlength="250" placeholder="Поиск в темах пользователя">&nbsp;<button type="submit" class="btn btn-default btn-small">Поиск</button></div>
@@ -13,8 +16,9 @@
     <input type="hidden" name="user" value="{{ nick }}"><input type="hidden" name="usertopic" value="true">
   </form>
 </div>
+{% endif %}
 {% for t in topics %}
 {% include "news_card.html" %}
 {% endfor %}
-<table class="nav"><tr><td width="35%" align="left">{% match prev_link %}{% when Some with (url) %}<a rel="prev" href="{{ url }}">← предыдущие</a>{% when None %}{% endmatch %}</td><td width="35%" align="right">{% match next_link %}{% when Some with (url) %}<a rel="next" href="{{ url }}">следующие →</a>{% when None %}{% endmatch %}</td></tr></table>
+<table class="nav"><tr>{% match prev_link %}{% when Some with (url) %}<td width="35%" align="left"><a href="{{ url }}">{{ prev_label }}</a></td>{% when None %}{% endmatch %}{% match next_link %}{% when Some with (url) %}<td width="35%" align="right"><a href="{{ url }}">следующие →</a></td>{% when None %}{% endmatch %}</tr></table>
 {% endblock %}

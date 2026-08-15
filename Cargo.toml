@@ -22,6 +22,7 @@ chrono-tz = "0.10.4"
 html-escape = "0.2.15"
 hmac = "0.13.0"
 http = "1.5.0"
+httpdate = "1.0.3"
 futures-util = { version = "0.3.33", default-features = false, features = ["std"] }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 ipnetwork = "0.21.1"

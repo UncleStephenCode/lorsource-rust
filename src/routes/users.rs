@@ -3,7 +3,6 @@ use crate::{
     error::{AppError, Result},
     markup,
     models::{PagerQuery, TopicSummary, UserSummary},
-    pagination::Pager,
     profile::{ChoiceOption, NumberOption, ProfileSettings, ThemeOption},
     request_timezone::stRequestTimezone,
     security,
@@ -179,12 +178,57 @@ struct UserSectionLink {
 #[template(path = "user_topics.html")]
 struct UserTopicsTemplate {
     title: String,
+    nav_title: String,
     nick: String,
+    profile_url: String,
     topics: Vec<crate::routes::topics::NewsTopicView>,
     sections: Vec<UserSectionLink>,
     all_selected: bool,
+    show_search: bool,
     prev_link: Option<String>,
+    prev_label: &'static str,
     next_link: Option<String>,
+}
+
+#[derive(Template)]
+#[template(path = "tracked_topics.html")]
+struct StTrackedTopicsTemplate {
+    sTitle: String,
+    sNick: String,
+    vecTopics: Vec<crate::routes::topics::NewsTopicView>,
+    optPrevLink: Option<String>,
+    optNextLink: Option<String>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct StDeletedTopicRow {
+    sDeleterNick: String,
+    iId: i32,
+    sTitle: String,
+    sReason: String,
+    dtPostDate: chrono::DateTime<chrono::Utc>,
+    dtDeleteDate: chrono::DateTime<chrono::Utc>,
+    iBonus: i32,
+}
+
+impl StDeletedTopicRow {
+    fn sTitlePlain(&self) -> String {
+        crate::domain::title::sPlainForDisplay(&self.sTitle)
+    }
+}
+
+#[derive(Template)]
+#[template(path = "deleted_topics.html")]
+struct StDeletedTopicsTemplate {
+    sNick: String,
+    vecTopics: Vec<StDeletedTopicRow>,
+}
+
+#[derive(Template)]
+#[template(path = "private_page.html")]
+struct StPrivatePageTemplate {
+    sTitle: String,
+    sContentHtml: String,
 }
 
 #[derive(Deserialize)]
@@ -192,6 +236,37 @@ pub struct UserTopicFeedQuery {
     pub offset: Option<i64>,
     pub section: Option<i32>,
     pub output: Option<String>,
+}
+
+fn sUserTopicFeedPageUrl(sBase: &str, optSection: Option<i32>, iOffset: i64) -> String {
+    let mut vecParams = Vec::new();
+    if let Some(iSection) = optSection {
+        vecParams.push(format!("section={iSection}"));
+    }
+    if iOffset > 0 {
+        vecParams.push(format!("offset={iOffset}"));
+    }
+    if vecParams.is_empty() {
+        sBase.to_owned()
+    } else {
+        format!("{sBase}?{}", vecParams.join("&"))
+    }
+}
+
+fn sUserTopicCollectionPageUrl(sBase: &str, iOffset: i64) -> String {
+    if iOffset > 0 {
+        format!("{sBase}?offset={iOffset}")
+    } else {
+        sBase.to_owned()
+    }
+}
+
+fn sUserTopicPrevLabel(iOffset: i64) -> &'static str {
+    if iOffset > crate::pagination::TOPIC_FEED_PAGE_SIZE {
+        "← назад"
+    } else {
+        "← предыдущие"
+    }
 }
 
 /// UserTopicListController.showUserTopics: `/people/{nick}` (bare, no
@@ -217,7 +292,8 @@ pub async fn topic_feed(
             "Лента для пользователя anonymous не доступна".into(),
         ));
     }
-    let pager = Pager::new(q.offset.unwrap_or(0).max(0), state.config.page_size);
+    let pager = crate::pagination::topic_feed_pager(q.offset.unwrap_or(0));
+    let optSection = q.section.filter(|iSection| *iSection != 0);
 
     let sql = format!(
         r#"SELECT t.id, t.title, t.url, t.postdate, t.lastmod, u.id AS author_id, u.nick AS author,
@@ -234,8 +310,8 @@ pub async fn topic_feed(
            JOIN sections s ON s.id=g.section
            WHERE u.id=$1 AND NOT t.deleted AND NOT COALESCE(t.draft,false)
              {section_clause}
-           ORDER BY t.postdate DESC OFFSET $2 LIMIT $3"#,
-        section_clause = if q.section.is_some() {
+           ORDER BY COALESCE(t.commitdate,t.postdate) DESC OFFSET $2 LIMIT $3"#,
+        section_clause = if optSection.is_some() {
             "AND s.id=$4"
         } else {
             ""
@@ -245,7 +321,7 @@ pub async fn topic_feed(
         .bind(user.id)
         .bind(pager.offset)
         .bind(pager.limit);
-    if let Some(section) = q.section {
+    if let Some(section) = optSection {
         query = query.bind(section);
     }
     let topics = query.fetch_all(&state.pool).await?;
@@ -261,32 +337,18 @@ pub async fn topic_feed(
         .map(|(id, name)| UserSectionLink {
             id,
             name,
-            selected: q.section == Some(id),
+            selected: optSection == Some(id),
         })
         .collect();
     let base = format!("/people/{}/", urlencoding::encode(&user.nick));
-    let query_prefix = q.section.map(|id| format!("section={id}"));
-    let page_url = |new_offset: i64| {
-        let mut params = Vec::new();
-        if let Some(section) = &query_prefix {
-            params.push(section.clone());
-        }
-        if new_offset > 0 {
-            params.push(format!("offset={new_offset}"));
-        }
-        if params.is_empty() {
-            base.clone()
-        } else {
-            format!("{base}?{}", params.join("&"))
-        }
-    };
-    let prev_link = (pager.offset > 0).then(|| page_url((pager.offset - pager.limit).max(0)));
-    let next_link = (topics.len() as i64 == pager.limit && pager.offset < 200)
-        .then(|| page_url(pager.offset + pager.limit));
+    let prev_link = (pager.offset >= pager.limit)
+        .then(|| sUserTopicFeedPageUrl(&base, optSection, (pager.offset - pager.limit).max(0)));
+    let next_link = crate::pagination::topic_feed_has_next(&pager, topics.len())
+        .then(|| sUserTopicFeedPageUrl(&base, optSection, pager.offset + pager.limit));
     let topics = crate::routes::topics::prepare_news_topics_for_viewer(
         &state,
         topics,
-        q.section.is_none(),
+        optSection.is_none(),
         &current.0,
         &csrf_token,
     )
@@ -294,11 +356,15 @@ pub async fn topic_feed(
     Ok(Html(
         UserTopicsTemplate {
             title: format!("Сообщения {}", user.nick),
+            nav_title: "Сообщения".to_owned(),
+            profile_url: format!("/people/{}/profile", urlencoding::encode(&user.nick)),
             nick: user.nick,
             topics,
             sections,
-            all_selected: q.section.is_none(),
+            all_selected: optSection.is_none(),
+            show_search: true,
             prev_link,
+            prev_label: sUserTopicPrevLabel(pager.offset),
             next_link,
         }
         .render()?,
@@ -504,20 +570,6 @@ async fn render_profile(
         .lastlogin
         .filter(|_| bShowFuzzyLastLogin)
         .map(|dtLastLogin| sFuzzyDate(dtLastLogin, stTimezone, chrono::Utc::now()));
-    // Was rendered with Askama's `|safe` straight from the raw DB column -
-    // stored XSS via the "about me" field (POST /people/{nick}/edit). Route
-    // it through the same sanitizing markup pipeline as comments/topics.
-    let is_markdown = profile
-        .userinfo_markup
-        .as_deref()
-        .map(|m| m.to_uppercase().contains("MARKDOWN"))
-        .unwrap_or(false);
-    let userinfo_html = profile
-        .userinfo
-        .as_deref()
-        .filter(|s| !s.trim().is_empty())
-        .map(|text| markup::render_message(text, Some(!is_markdown)));
-
     // Moderation info: matches WhoisController's banInfo/isFrozen/
     // blockable/freezable/otherUsers/userlog fields, which the previous
     // implementation didn't surface at all - a moderator had no way to see
@@ -548,6 +600,34 @@ async fn render_profile(
     let is_frozen = frozen_until
         .map(|u| u > chrono::Utc::now())
         .unwrap_or(false);
+    // WhoisController renders profile text through MessageTextService using
+    // the target profile owner (not the current viewer) as link-policy
+    // author. Activation is intentionally irrelevant to this Java rule.
+    let bUserinfoNofollow = !crate::domain::topic::link_policy::StAuthorLinkState {
+        iScore: profile.score,
+        bBlocked: profile.blocked,
+        bAnonymous: profile.anonymous,
+        bFrozen: is_frozen,
+    }
+    .bFollowAuthorLinks();
+    let userinfo_html = if let Some(sText) = profile
+        .userinfo
+        .as_deref()
+        .filter(|sValue| !sValue.trim().is_empty())
+    {
+        let sMarkup = profile.userinfo_markup.as_deref().unwrap_or("BBCODE_TEX");
+        let stMarkupUsers = state.markup.stResolveBatch([(sText, sMarkup)]).await?;
+        Some(markup::render_message_with_markup_policy_and_users(
+            sText,
+            Some(sMarkup),
+            None,
+            bUserinfoNofollow,
+            Some(&state.config.public_url),
+            Some(&stMarkupUsers),
+        ))
+    } else {
+        None
+    };
     let (frozen_within_three_days, recent_score_loss): (bool, i64) = sqlx::query_as(
         r#"SELECT COALESCE(frozen_until>CURRENT_TIMESTAMP-interval '3 days',false),
                   COALESCE(abs((SELECT sum(di.bonus)::bigint FROM del_info di
@@ -585,7 +665,9 @@ async fn render_profile(
     } else {
         (None, None)
     };
-    let url_nofollow = profile.score < 100 || profile.blocked || !profile.activated || is_frozen;
+    // whois.jsp always marks the standalone user-supplied homepage URL as
+    // nofollow; the score policy applies only to links inside `userinfo`.
+    let url_nofollow = true;
     let long_freeze_durations = frozen_until
         .and_then(|dtUntil| dtUntil.checked_add_months(chrono::Months::new(24)))
         .is_some_and(|dtTwoYearsAfterFreeze| dtTwoYearsAfterFreeze > chrono::Utc::now());
@@ -764,6 +846,10 @@ struct ReactionViewRow {
 }
 
 impl ReactionViewRow {
+    fn sTitlePlain(&self) -> String {
+        crate::domain::title::sPlainForDisplay(&self.title)
+    }
+
     fn link(&self) -> String {
         let anchor = self
             .comment_id
@@ -994,6 +1080,7 @@ async fn reactions_view(
             .map(|s| s.as_str())
             .unwrap_or("");
         let sDate = crate::request_timezone::sTimeTag("compact-interval", item.set_date);
+        let sTitlePlain = item.sTitlePlain();
         html.push_str(&format!(
             r#"<a class="reactions-view-item" href="{}">
                  <div class="reactions-view-reaction"><p>{}</p></div>
@@ -1004,7 +1091,7 @@ async fn reactions_view(
             html_escape::encode_text(&item.link()),
             html_escape::encode_text(&item.reaction),
             if item.comment_id.is_some() { "<i class=\"icon-comment\"></i> " } else { "" },
-            html_escape::encode_text(&item.title),
+            html_escape::encode_text(&sTitlePlain),
             sDate,
             html_escape::encode_text(target_nick),
             html_escape::encode_text(preview),
@@ -1025,9 +1112,10 @@ async fn reactions_view(
             html_escape::encode_text(&prev_url)
         ));
     }
-    // Java permits offset == MaxOffset and therefore emits the final link
-    // from 9950 to 10000 when a full look-ahead row exists.
-    if has_more && offset < REACTIONS_MAX_OFFSET {
+    // The original `items.sizeIs < MaxOffset - ItemsPerPage` compares the
+    // page size (51), not the offset, so a full look-ahead row always emits
+    // a next link. Preserve that observable edge case even at offset=10000.
+    if has_more {
         html.push_str(&format!(
             r#"<td align="right" width="35%"><a href="{url}?offset={}">следующие →</a></td>"#,
             offset + REACTIONS_ITEMS_PER_PAGE,
@@ -1036,7 +1124,13 @@ async fn reactions_view(
     }
     html.push_str("</tr></table>");
 
-    Ok(Html(html))
+    Ok(Html(
+        StPrivatePageTemplate {
+            sTitle: "Реакции".to_owned(),
+            sContentHtml: html,
+        }
+        .render()?,
+    ))
 }
 
 #[derive(Deserialize)]
@@ -1131,6 +1225,18 @@ pub async fn get_user(state: &AppState, nick: &str) -> Result<UserSummary> {
     .ok_or(AppError::NotFound)
 }
 
+/// Exact nickname lookup for legacy controllers backed by
+/// `UserDao.getUser(String)`, whose PostgreSQL predicate is `nick = ?`.
+pub async fn get_user_exact(state: &AppState, nick: &str) -> Result<UserSummary> {
+    sqlx::query_as::<_, UserSummary>(
+        "SELECT id,nick,name,score,max_score,photo,town,regdate,canmod,COALESCE(candel,false) AS candel,COALESCE(corrector,false) AS corrector,blocked,userinfo FROM users WHERE nick=$1",
+    )
+    .bind(nick)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)
+}
+
 async fn get_user_profile(state: &AppState, nick: &str) -> Result<UserProfileData> {
     sqlx::query_as::<_, UserProfileData>(
         r#"SELECT id, nick, name,
@@ -1210,12 +1316,40 @@ async fn count_drafts(state: &AppState, user_id: i32) -> Result<i64> {
 pub async fn deleted_topics(
     State(state): State<AppState>,
     Path(nick): Path<String>,
-    Query(q): Query<PagerQuery>,
+    Query(_q): Query<PagerQuery>,
     current: CurrentUser,
 ) -> Result<Html<String>> {
     let stTarget = get_user(&state, &nick).await?;
     ensure_self_or_moderator(&current.0, &stTarget)?;
-    render_user_topic_list(state, nick, q, "Удалённые темы", "t.deleted").await
+    let stViewer = current.0.expect("checked by ensure_self_or_moderator");
+    let optSettings: Option<String> =
+        sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
+            .bind(stViewer.id)
+            .fetch_optional(&state.pool)
+            .await?
+            .flatten();
+    let iLimit = i64::from(ProfileSettings::from_hstore_text(optSettings).topics.max(1));
+    let vecTopics = sqlx::query_as::<_, StDeletedTopicRow>(
+        r#"SELECT du.nick AS "sDeleterNick", t.id AS "iId", t.title AS "sTitle",
+                  di.reason AS "sReason", t.postdate AS "dtPostDate",
+                  di.deldate AS "dtDeleteDate", di.bonus AS "iBonus"
+             FROM topics t
+             JOIN del_info di ON di.msgid=t.id
+             JOIN users du ON du.id=di.delby
+            WHERE t.userid=$1 AND t.deleted AND di.deldate IS NOT NULL
+            ORDER BY di.deldate DESC LIMIT $2"#,
+    )
+    .bind(stTarget.id)
+    .bind(iLimit)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Html(
+        StDeletedTopicsTemplate {
+            sNick: stTarget.nick,
+            vecTopics,
+        }
+        .render()?,
+    ))
 }
 
 pub async fn drafts(
@@ -1223,20 +1357,120 @@ pub async fn drafts(
     Path(nick): Path<String>,
     Query(q): Query<PagerQuery>,
     current: CurrentUser,
+    headers: HeaderMap,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
+    crate::csrf::CsrfToken(sCsrfToken): crate::csrf::CsrfToken,
 ) -> Result<Html<String>> {
-    let stTarget = get_user(&state, &nick).await?;
+    // AuthorizedOnly executes before `mkModel` in Java.  Keep the same
+    // ordering so an anonymous request cannot use this private endpoint to
+    // probe whether a nickname exists.
+    let stViewer = current.0.as_ref().ok_or(AppError::Forbidden)?;
+    let stTarget = get_user_exact(&state, &nick).await?;
     ensure_self_or_moderator(&current.0, &stTarget)?;
-    render_user_topic_list(state, nick, q, "Черновики", "t.draft").await
+
+    let stPager = crate::pagination::topic_feed_pager(q.offset.unwrap_or(0));
+    let vecTopics = sqlx::query_as::<_, TopicSummary>(
+        r#"SELECT t.id, t.title, t.url, t.postdate, t.lastmod,
+                  u.id AS author_id, u.nick AS author,
+                  g.id AS group_id, g.title AS group_title, g.urlname AS group_urlname,
+                  s.id AS section_id, s.name AS section_name,
+                  CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery'
+                            WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(s.name) END AS section_prefix,
+                  t.stat1 AS comments, t.deleted, t.sticky, t.resolved,
+                  (SELECT string_agg(tv.value, ',' ORDER BY tv.value)
+                     FROM tags tg JOIN tags_values tv ON tv.id=tg.tagid
+                    WHERE tg.msgid=t.id) AS tags
+             FROM topics t
+             JOIN users u ON u.id=t.userid
+             JOIN groups g ON g.id=t.groupid
+             JOIN sections s ON s.id=g.section
+            WHERE t.userid=$1 AND NOT t.deleted AND t.draft
+              AND ($4=t.userid
+                   OR (s.moderate AND t.commitdate IS NOT NULL)
+                   OR NOT EXISTS (
+                        SELECT 1 FROM ignore_list il
+                         WHERE il.userid=$4 AND il.ignored=t.userid
+                   ))
+            ORDER BY COALESCE(t.commitdate,t.postdate) DESC
+            OFFSET $2 LIMIT $3"#,
+    )
+    .bind(stTarget.id)
+    .bind(stPager.offset)
+    .bind(stPager.limit)
+    .bind(stViewer.id)
+    .fetch_all(&state.pool)
+    .await?;
+    let bFullPage = vecTopics.len() == stPager.limit as usize;
+    let mut vecTopics = crate::routes::topics::prepare_news_topics_for_viewer(
+        &state,
+        vecTopics,
+        true,
+        &current.0,
+        &sCsrfToken,
+    )
+    .await?;
+
+    // `prepareTopics(..., loadUserpics=false)` is intentional in the source:
+    // user-topic lists keep group images but never load author userpics.
+    // `minorAsMajor=true` forces even minor drafts through the complete card.
+    let sRemoteIp = security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
+    let bEditActorAllowed =
+        crate::routes::comments::optCommentActorError(&state, stViewer, false, &sRemoteIp)
+            .await?
+            .is_none();
+    for stTopic in &mut vecTopics {
+        stTopic.minor = false;
+        stTopic.can_delete = stViewer.id == stTopic.topic.author_id
+            || stViewer.candel
+            || (stViewer.canmod
+                && (!stTopic.section_premoderated
+                    || !stTopic.committed
+                    || chrono::Utc::now() <= stTopic.topic.postdate + chrono::Duration::days(30)));
+        stTopic.can_edit = bEditActorAllowed
+            && (stTopic.markup != "PLAIN" || stViewer.candel)
+            && stTopic.postscore != crate::domain::topic::posting::POSTSCORE_NO_COMMENTS
+            && (stViewer.id == stTopic.topic.author_id || stViewer.canmod || stViewer.candel);
+    }
+
+    let sBaseUrl = format!("/people/{}/drafts", urlencoding::encode(&stTarget.nick));
+    let optPrevLink = (stPager.offset >= stPager.limit)
+        .then(|| sUserTopicCollectionPageUrl(&sBaseUrl, (stPager.offset - stPager.limit).max(0)));
+    let optNextLink = (stPager.offset < crate::pagination::TOPIC_FEED_NEXT_OFFSET_CEILING
+        && bFullPage)
+        .then(|| sUserTopicCollectionPageUrl(&sBaseUrl, stPager.offset + stPager.limit));
+    Ok(Html(
+        UserTopicsTemplate {
+            title: format!("Черновики {}", stTarget.nick),
+            nav_title: "Черновики".to_owned(),
+            profile_url: format!("/people/{}/profile", urlencoding::encode(&stTarget.nick)),
+            nick: stTarget.nick,
+            topics: vecTopics,
+            sections: Vec::new(),
+            all_selected: false,
+            show_search: false,
+            prev_link: optPrevLink,
+            prev_label: sUserTopicPrevLabel(stPager.offset),
+            next_link: optNextLink,
+        }
+        .render()?,
+    ))
 }
 
 pub async fn favs(
     State(state): State<AppState>,
     Path(nick): Path<String>,
     Query(q): Query<PagerQuery>,
+    current: CurrentUser,
+    crate::csrf::CsrfToken(sCsrfToken): crate::csrf::CsrfToken,
 ) -> Result<Html<String>> {
-    let user = get_user(&state, &nick).await?;
-    let pager = Pager::new(q.offset.unwrap_or(0), state.config.page_size);
-    let topics = sqlx::query_as::<_, TopicSummary>(
+    let stTarget = get_user_exact(&state, &nick).await?;
+    let stPager = crate::pagination::topic_feed_pager(q.offset.unwrap_or(0));
+    let vecTopics = sqlx::query_as::<_, TopicSummary>(
         r#"SELECT t.id, t.title, t.url, t.postdate, t.lastmod, au.id AS author_id, au.nick AS author,
                   g.id AS group_id, g.title AS group_title, g.urlname AS group_urlname,
                   s.id AS section_id, s.name AS section_name,
@@ -1250,18 +1484,52 @@ pub async fn favs(
            JOIN users au ON au.id=t.userid
            JOIN groups g ON g.id=t.groupid
            JOIN sections s ON s.id=g.section
-           WHERE mem.userid=$1 AND NOT mem.watch AND NOT t.deleted
-           ORDER BY mem.add_date DESC OFFSET $2 LIMIT $3"#,
+           WHERE mem.userid=$1 AND NOT mem.watch AND NOT t.deleted AND NOT t.draft
+             AND ($4::boolean OR t.open_warnings<=2)
+           ORDER BY mem.id DESC OFFSET $2 LIMIT $3"#,
     )
-    .bind(user.id)
-    .bind(pager.offset)
-    .bind(pager.limit)
+    .bind(stTarget.id)
+    .bind(stPager.offset)
+    .bind(stPager.limit)
+    .bind(current.0.is_some())
     .fetch_all(&state.pool)
     .await?;
-    Ok(Html(simple_topic_list(
-        &format!("Избранное {}", user.nick),
-        &topics,
-    )))
+    let bFullPage = vecTopics.len() == stPager.limit as usize;
+    let mut vecTopics = crate::routes::topics::prepare_news_topics_for_viewer(
+        &state,
+        vecTopics,
+        true,
+        &current.0,
+        &sCsrfToken,
+    )
+    .await?;
+    // user-topics.jsp passes minorAsMajor=true and loadUserpics=false.
+    for stTopic in &mut vecTopics {
+        stTopic.minor = false;
+    }
+
+    let sBaseUrl = format!("/people/{}/favs", urlencoding::encode(&stTarget.nick));
+    let optPrevLink = (stPager.offset >= stPager.limit)
+        .then(|| sUserTopicCollectionPageUrl(&sBaseUrl, (stPager.offset - stPager.limit).max(0)));
+    let optNextLink = (stPager.offset < crate::pagination::TOPIC_FEED_NEXT_OFFSET_CEILING
+        && bFullPage)
+        .then(|| sUserTopicCollectionPageUrl(&sBaseUrl, stPager.offset + stPager.limit));
+    Ok(Html(
+        UserTopicsTemplate {
+            title: format!("Избранные сообщения {}", stTarget.nick),
+            nav_title: "Избранные сообщения".to_owned(),
+            profile_url: format!("/people/{}/profile", urlencoding::encode(&stTarget.nick)),
+            nick: stTarget.nick,
+            topics: vecTopics,
+            sections: Vec::new(),
+            all_selected: false,
+            show_search: false,
+            prev_link: optPrevLink,
+            prev_label: sUserTopicPrevLabel(stPager.offset),
+            next_link: optNextLink,
+        }
+        .render()?,
+    ))
 }
 
 pub async fn tracked(
@@ -1269,10 +1537,14 @@ pub async fn tracked(
     Path(nick): Path<String>,
     Query(q): Query<PagerQuery>,
     current: CurrentUser,
+    crate::csrf::CsrfToken(sCsrfToken): crate::csrf::CsrfToken,
 ) -> Result<Html<String>> {
     let user = get_user(&state, &nick).await?;
     ensure_self_or_moderator(&current.0, &user)?;
-    let pager = Pager::new(q.offset.unwrap_or(0), state.config.page_size);
+    // TopicListService.fixOffset clamps to 0..=300, while user-topics.jsp
+    // deliberately uses a fixed 20-item page independent of profile settings.
+    let iOffset = q.offset.unwrap_or(0).clamp(0, 300);
+    let iLimit = 20_i64;
     let topics = sqlx::query_as::<_, TopicSummary>(
         r#"SELECT t.id, t.title, t.url, t.postdate, t.lastmod, au.id AS author_id, au.nick AS author,
                   g.id AS group_id, g.title AS group_title, g.urlname AS group_urlname,
@@ -1288,66 +1560,42 @@ pub async fn tracked(
            JOIN groups g ON g.id=t.groupid
            JOIN sections s ON s.id=g.section
            WHERE mem.userid=$1 AND mem.watch AND NOT t.deleted
-           ORDER BY mem.add_date DESC OFFSET $2 LIMIT $3"#,
+           ORDER BY mem.id DESC OFFSET $2 LIMIT $3"#,
     )
     .bind(user.id)
-    .bind(pager.offset)
-    .bind(pager.limit)
+    .bind(iOffset)
+    .bind(iLimit)
     .fetch_all(&state.pool)
     .await?;
-    Ok(Html(simple_topic_list(
-        &format!("Отслеживаемое {}", user.nick),
-        &topics,
-    )))
-}
-
-async fn render_user_topic_list(
-    state: AppState,
-    nick: String,
-    q: PagerQuery,
-    title: &str,
-    predicate: &'static str,
-) -> Result<Html<String>> {
-    let user = get_user(&state, &nick).await?;
-    let pager = Pager::new(q.offset.unwrap_or(0), state.config.page_size);
-    let sql = format!(
-        r#"SELECT t.id, t.title, t.url, t.postdate, t.lastmod, u.id AS author_id, u.nick AS author,
-                  g.id AS group_id, g.title AS group_title, g.urlname AS group_urlname,
-                  s.id AS section_id, s.name AS section_name,
-                  CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(s.name) END AS section_prefix,
-                  t.stat1 AS comments, t.deleted, t.sticky, t.resolved,
-                  (SELECT string_agg(tv.value, ',' ORDER BY tv.value)
-                     FROM tags tg JOIN tags_values tv ON tv.id=tg.tagid
-                    WHERE tg.msgid=t.id) AS tags
-           FROM topics t
-           JOIN users u ON u.id=t.userid
-           JOIN groups g ON g.id=t.groupid
-           JOIN sections s ON s.id=g.section
-           WHERE u.id=$1 AND {predicate}
-           ORDER BY t.postdate DESC OFFSET $2 LIMIT $3"#
-    );
-    let topics = sqlx::query_as::<_, TopicSummary>(sqlx::AssertSqlSafe(sql))
-        .bind(user.id)
-        .bind(pager.offset)
-        .bind(pager.limit)
-        .fetch_all(&state.pool)
-        .await?;
-    Ok(Html(simple_topic_list(
-        &format!("{title} {}", user.nick),
-        &topics,
-    )))
-}
-
-fn simple_topic_list(title: &str, topics: &[TopicSummary]) -> String {
-    let mut html = format!(
-        "<h1>{}</h1><div class=\"topic-list\">",
-        html_escape::encode_text(title)
-    );
-    for t in topics {
-        html.push_str(&format!("<article class=\"topic-card\"><h3><a href=\"{}\">{}</a></h3><div class=\"meta\">{} · {} комментариев</div></article>", t.topic_url(), html_escape::encode_text(&t.title), crate::request_timezone::sTimeTag("default", t.postdate), t.comments));
-    }
-    html.push_str("</div>");
-    html
+    let bFullPage = topics.len() == iLimit as usize;
+    let vecTopics = crate::routes::topics::prepare_news_topics_for_viewer(
+        &state,
+        topics,
+        true,
+        &current.0,
+        &sCsrfToken,
+    )
+    .await?;
+    let sBaseUrl = format!("/people/{}/tracked", urlencoding::encode(&user.nick));
+    let optPrevLink = if iOffset == 20 {
+        Some(sBaseUrl.clone())
+    } else if iOffset > 20 {
+        Some(format!("{sBaseUrl}?offset={}", iOffset - 20))
+    } else {
+        None
+    };
+    let optNextLink =
+        (iOffset < 200 && bFullPage).then(|| format!("{sBaseUrl}?offset={}", iOffset + 20));
+    Ok(Html(
+        StTrackedTopicsTemplate {
+            sTitle: format!("Отслеживаемые сообщения {}", user.nick),
+            sNick: user.nick,
+            vecTopics,
+            optPrevLink,
+            optNextLink,
+        }
+        .render()?,
+    ))
 }
 
 fn optEditProfileInfoRestriction(
@@ -1976,8 +2224,9 @@ fn ensure_self(current: &Option<UserSummary>, target: &UserSummary) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::{
-        bHasRequestParameter, edit_profile_form, ensure_self_service_actor,
-        optEditProfileInfoRestriction, optFixedProfileUrl, sMarkupIdFromForm, settings,
+        bHasRequestParameter, drafts, edit_profile_form, ensure_self_service_actor,
+        optEditProfileInfoRestriction, optFixedProfileUrl, sMarkupIdFromForm,
+        sUserTopicCollectionPageUrl, sUserTopicFeedPageUrl, sUserTopicPrevLabel, settings,
     };
     use crate::{config::StConfig, error::AppError, models::UserSummary, state::AppState};
     use axum::{Router, http::header, routing::get};
@@ -2008,6 +2257,47 @@ mod tests {
             ensure_self_service_actor(&optCurrent, "other"),
             Err(AppError::Forbidden)
         ));
+    }
+
+    #[test]
+    fn user_topic_pager_preserves_section_filter() {
+        assert_eq!(
+            sUserTopicFeedPageUrl("/people/crane2000/", Some(2), 20),
+            "/people/crane2000/?section=2&offset=20"
+        );
+        assert_eq!(
+            sUserTopicFeedPageUrl("/people/crane2000/", Some(2), 0),
+            "/people/crane2000/?section=2"
+        );
+        assert_eq!(
+            sUserTopicFeedPageUrl("/people/crane2000/", None, 0),
+            "/people/crane2000/"
+        );
+    }
+
+    #[test]
+    fn private_user_topic_pager_matches_user_topics_jsp() {
+        let sBase = "/people/crane2000/drafts";
+        assert_eq!(sUserTopicCollectionPageUrl(sBase, 0), sBase);
+        assert_eq!(
+            sUserTopicCollectionPageUrl(sBase, 20),
+            "/people/crane2000/drafts?offset=20"
+        );
+        assert_eq!(sUserTopicPrevLabel(20), "← предыдущие");
+        assert_eq!(sUserTopicPrevLabel(40), "← назад");
+    }
+
+    #[test]
+    fn user_topic_collections_use_full_base_and_news_card_dom() {
+        let sTemplate = include_str!("../../templates/user_topics.html");
+        let sNewsCard = include_str!("../../templates/news_card.html");
+        assert!(sTemplate.contains("{% extends \"base.html\" %}"));
+        assert!(sTemplate.contains("<h1>{{ nav_title }}"));
+        assert!(sTemplate.contains("{% include \"news_card.html\" %}"));
+        assert!(sTemplate.contains("{% if show_search %}"));
+        assert!(sNewsCard.contains("{% if t.draft %}"));
+        assert!(sNewsCard.contains("delete.jsp?msgid={{ t.topic.id }}"));
+        assert!(sNewsCard.contains("edit.jsp?msgid={{ t.topic.id }}"));
     }
 
     #[test]
@@ -2094,22 +2384,30 @@ mod tests {
         let cApp = Router::new()
             .route("/people/{nick}/settings", get(settings))
             .route("/people/{nick}/edit", get(edit_profile_form))
+            .route("/people/{nick}/drafts", get(drafts))
             .with_state(stState);
         let stListener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("test listener");
         let stAddress = stListener.local_addr().expect("listener address");
         let hServer = tokio::spawn(async move {
-            axum::serve(stListener, cApp)
-                .await
-                .expect("test server must serve");
+            axum::serve(
+                stListener,
+                cApp.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .expect("test server must serve");
         });
         let cClient = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("test client");
 
-        for sPath in ["/people/maxcom/settings?tab=display", "/people/maxcom/edit"] {
+        for sPath in [
+            "/people/maxcom/settings?tab=display",
+            "/people/maxcom/edit",
+            "/people/maxcom/drafts",
+        ] {
             let stResponse = cClient
                 .get(format!("http://{stAddress}{sPath}"))
                 .send()

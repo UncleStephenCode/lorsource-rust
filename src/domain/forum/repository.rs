@@ -5,7 +5,6 @@ use crate::error::Result;
 
 #[async_trait]
 pub trait TrForumRepository: Send + Sync {
-    async fn vecListGroups(&self) -> Result<Vec<StGroup>>;
     async fn vecListGroupsBySection(&self, optSectionPrefix: Option<&str>) -> Result<Vec<StGroup>>;
     async fn stFindGroupBySectionAndUrlName(
         &self,

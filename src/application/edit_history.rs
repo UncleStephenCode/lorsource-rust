@@ -3,7 +3,9 @@ use std::collections::HashSet;
 use chrono::{DateTime, Utc};
 
 use crate::{
+    application::markup::CMarkupService,
     domain::edit_history::{StHistoryPoll, TrEditHistoryRepository},
+    domain::markup::repository::TrMarkupUserRepository,
     error::{AppError, Result},
     markup,
 };
@@ -53,7 +55,12 @@ impl<R: TrEditHistoryRepository> CEditHistoryService<R> {
         Self { oRepository }
     }
 
-    pub async fn vecTopicHistory(&self, iTopicId: i32) -> Result<Vec<StPreparedEditHistory>> {
+    pub async fn vecTopicHistory<M: TrMarkupUserRepository>(
+        &self,
+        iTopicId: i32,
+        cMarkupService: &CMarkupService<M>,
+        sSiteOrigin: &str,
+    ) -> Result<Vec<StPreparedEditHistory>> {
         let stSource = self.oRepository.stTopicSource(iTopicId).await?;
         let vecRows = self.oRepository.vecRows(iTopicId, "TOPIC").await?;
         if vecRows.is_empty() {
@@ -70,6 +77,7 @@ impl<R: TrEditHistoryRepository> CEditHistoryService<R> {
         let mut optPoll = stSource.optPoll;
         let mut optLastMessageId = None;
         let mut vecPrepared = Vec::with_capacity(vecRows.len() + 1);
+        let mut vecPendingRender = Vec::new();
 
         for (iIndex, stRow) in vecRows.into_iter().enumerate() {
             let mut vecAddedImages = Vec::new();
@@ -98,10 +106,7 @@ impl<R: TrEditHistoryRepository> CEditHistoryService<R> {
                 vecRemovedMainImages.push(iOldImage);
             }
 
-            let optMessageHtml = stRow
-                .optOldMessage
-                .as_ref()
-                .map(|_| markup::render_message_with_markup(&sMessage, Some(&sMarkup), None));
+            let bRenderMessage = stRow.optOldMessage.is_some();
             let optRestoreFrom = stRow.optOldMessage.as_ref().and(optLastMessageId);
             vecPrepared.push(StPreparedEditHistory {
                 bOriginal: false,
@@ -113,7 +118,7 @@ impl<R: TrEditHistoryRepository> CEditHistoryService<R> {
                     .as_ref()
                     .map(|_| sTitle.clone())
                     .unwrap_or_default(),
-                optMessageHtml,
+                optMessageHtml: None,
                 optTags: stRow.optOldTags.as_ref().map(|_| vecTags.clone()),
                 optUrl: stRow.optOldUrl.as_ref().and(optUrl.clone()),
                 optLinkText: stRow.optOldLinkText.as_ref().and(optLinkText.clone()),
@@ -125,6 +130,9 @@ impl<R: TrEditHistoryRepository> CEditHistoryService<R> {
                 vecAddedMainImages,
                 vecRemovedMainImages,
             });
+            if bRenderMessage {
+                vecPendingRender.push((vecPrepared.len() - 1, sMessage.clone(), sMarkup.clone()));
+            }
 
             if let Some(sOldMessage) = stRow.optOldMessage {
                 sMessage = sOldMessage;
@@ -159,11 +167,7 @@ impl<R: TrEditHistoryRepository> CEditHistoryService<R> {
             sEditor: stSource.sAuthor,
             dtEdit: stSource.dtPost,
             sTitle,
-            optMessageHtml: Some(markup::render_message_with_markup(
-                &sMessage,
-                Some(&sMarkup),
-                None,
-            )),
+            optMessageHtml: None,
             optTags: (!vecTags.is_empty()).then_some(vecTags),
             optUrl,
             optLinkText,
@@ -175,13 +179,23 @@ impl<R: TrEditHistoryRepository> CEditHistoryService<R> {
             vecAddedMainImages: Vec::new(),
             vecRemovedMainImages: Vec::new(),
         });
+        vecPendingRender.push((vecPrepared.len() - 1, sMessage, sMarkup));
+        vRenderPendingHistory(
+            &mut vecPrepared,
+            vecPendingRender,
+            cMarkupService,
+            sSiteOrigin,
+        )
+        .await?;
         Ok(vecPrepared)
     }
 
-    pub async fn vecCommentHistory(
+    pub async fn vecCommentHistory<M: TrMarkupUserRepository>(
         &self,
         iTopicId: i32,
         iCommentId: i32,
+        cMarkupService: &CMarkupService<M>,
+        sSiteOrigin: &str,
     ) -> Result<Vec<StPreparedEditHistory>> {
         let stSource = self.oRepository.stCommentSource(iCommentId).await?;
         if stSource.iTopicId != iTopicId {
@@ -194,7 +208,9 @@ impl<R: TrEditHistoryRepository> CEditHistoryService<R> {
         let mut sMessage = stSource.sMessage;
         let mut sTitle = stSource.sTitle;
         let mut vecPrepared = Vec::with_capacity(vecRows.len() + 1);
+        let mut vecPendingRender = Vec::new();
         for (iIndex, stRow) in vecRows.into_iter().enumerate() {
+            let bRenderMessage = stRow.optOldMessage.is_some();
             vecPrepared.push(StPreparedEditHistory {
                 bOriginal: false,
                 bCurrent: iIndex == 0,
@@ -205,9 +221,7 @@ impl<R: TrEditHistoryRepository> CEditHistoryService<R> {
                     .as_ref()
                     .map(|_| sTitle.clone())
                     .unwrap_or_default(),
-                optMessageHtml: stRow.optOldMessage.as_ref().map(|_| {
-                    markup::render_message_with_markup(&sMessage, Some(&stSource.sMarkup), None)
-                }),
+                optMessageHtml: None,
                 optTags: None,
                 optUrl: None,
                 optLinkText: None,
@@ -219,6 +233,13 @@ impl<R: TrEditHistoryRepository> CEditHistoryService<R> {
                 vecAddedMainImages: Vec::new(),
                 vecRemovedMainImages: Vec::new(),
             });
+            if bRenderMessage {
+                vecPendingRender.push((
+                    vecPrepared.len() - 1,
+                    sMessage.clone(),
+                    stSource.sMarkup.clone(),
+                ));
+            }
             if let Some(sOldMessage) = stRow.optOldMessage {
                 sMessage = sOldMessage;
             }
@@ -232,11 +253,7 @@ impl<R: TrEditHistoryRepository> CEditHistoryService<R> {
             sEditor: stSource.sAuthor,
             dtEdit: stSource.dtPost,
             sTitle,
-            optMessageHtml: Some(markup::render_message_with_markup(
-                &sMessage,
-                Some(&stSource.sMarkup),
-                None,
-            )),
+            optMessageHtml: None,
             optTags: None,
             optUrl: None,
             optLinkText: None,
@@ -248,6 +265,14 @@ impl<R: TrEditHistoryRepository> CEditHistoryService<R> {
             vecAddedMainImages: Vec::new(),
             vecRemovedMainImages: Vec::new(),
         });
+        vecPendingRender.push((vecPrepared.len() - 1, sMessage, stSource.sMarkup));
+        vRenderPendingHistory(
+            &mut vecPrepared,
+            vecPendingRender,
+            cMarkupService,
+            sSiteOrigin,
+        )
+        .await?;
         Ok(vecPrepared)
     }
 
@@ -256,6 +281,33 @@ impl<R: TrEditHistoryRepository> CEditHistoryService<R> {
             .sRestorableTopicMessage(iTopicId, iRecordId)
             .await
     }
+}
+
+async fn vRenderPendingHistory<M: TrMarkupUserRepository>(
+    vecPrepared: &mut [StPreparedEditHistory],
+    vecPending: Vec<(usize, String, String)>,
+    cMarkupService: &CMarkupService<M>,
+    sSiteOrigin: &str,
+) -> Result<()> {
+    let stMarkupUsers = cMarkupService
+        .stResolveBatch(
+            vecPending
+                .iter()
+                .map(|(_, sMessage, sMarkup)| (&**sMessage, &**sMarkup)),
+        )
+        .await?;
+    for (iIndex, sMessage, sMarkup) in vecPending {
+        vecPrepared[iIndex].optMessageHtml =
+            Some(markup::render_message_with_markup_policy_and_users(
+                &sMessage,
+                Some(&sMarkup),
+                None,
+                false,
+                Some(sSiteOrigin),
+                Some(&stMarkupUsers),
+            ));
+    }
+    Ok(())
 }
 
 fn vecParseTags(sRaw: &str) -> Vec<String> {

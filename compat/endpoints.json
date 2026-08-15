@@ -62,10 +62,15 @@
     "compare": true,
     "requires_seed": true,
     "new_body_contains": [
-      "class=\"tracker-item\"",
-      "class=\"tracker-src\"",
+      "class=\"group-item\"",
+      "class=\"tracker-count\"",
+      "class=\"tracker-title\"",
       "class=\"tracker-last\"",
       "lastmod="
+    ],
+    "new_body_not_contains": [
+      "class=\"tracker-item\"",
+      "class=\"tracker-src\""
     ]
   },
   {
@@ -284,6 +289,138 @@
     "requires_seed": true
   },
   {
+    "name": "legacy show topics redirects to user feed",
+    "method": "GET",
+    "old": "/show-topics.jsp?nick=maxcom",
+    "new": "/show-topics.jsp?nick=maxcom",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 302,
+    "expected_location": "/people/maxcom/"
+  },
+  {
+    "name": "legacy show topics output presence selects removed rss feed",
+    "method": "GET",
+    "old": "/show-topics.jsp?nick=maxcom&output=atom",
+    "new": "/show-topics.jsp?nick=maxcom&output=atom",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 302,
+    "expected_location": "/people/maxcom/?output=rss"
+  },
+  {
+    "name": "legacy show topics requires nick",
+    "method": "GET",
+    "old": "/show-topics.jsp",
+    "new": "/show-topics.jsp",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 400,
+    "expected_content_type": "text/html"
+  },
+  {
+    "name": "legacy show comments resolves canonical nick",
+    "method": "GET",
+    "old": "/show-comments.jsp?nick=maxcom",
+    "new": "/show-comments.jsp?nick=maxcom",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 302,
+    "expected_location": "/search.jsp?range=COMMENTS&user=maxcom&sort=DATE",
+    "requires_seed": true
+  },
+  {
+    "name": "legacy show comments keeps Java case-sensitive user lookup",
+    "method": "GET",
+    "old": "/show-comments.jsp?nick=MAXCOM",
+    "new": "/show-comments.jsp?nick=MAXCOM",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 404,
+    "expected_content_type": "text/html",
+    "requires_seed": true
+  },
+  {
+    "name": "legacy show comments rejects unknown user",
+    "method": "GET",
+    "old": "/show-comments.jsp?nick=definitely-no-such-user",
+    "new": "/show-comments.jsp?nick=definitely-no-such-user",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 404,
+    "expected_content_type": "text/html"
+  },
+  {
+    "name": "legacy view news requires tag mapping condition",
+    "method": "GET",
+    "old": "/view-news.jsp",
+    "new": "/view-news.jsp",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 400,
+    "expected_content_type": "text/html"
+  },
+  {
+    "name": "legacy view news redirects encoded tag",
+    "method": "GET",
+    "old": "/view-news.jsp?tag=c%2B%2B",
+    "new": "/view-news.jsp?tag=c%2B%2B",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 302,
+    "expected_location": "/tag/c++"
+  },
+  {
+    "name": "legacy view news uses Spring URI path encoding",
+    "method": "GET",
+    "old": "/view-news.jsp?tag=c%2B%2B%20%2F%20rust",
+    "new": "/view-news.jsp?tag=c%2B%2B%20%2F%20rust",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 302,
+    "expected_location": "/tag/c++%20/%20rust"
+  },
+  {
+    "name": "direct exception resolver redirects home without servlet error",
+    "method": "GET",
+    "old": "/ExceptionResolver",
+    "new": "/ExceptionResolver",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 302,
+    "expected_location": "/"
+  },
+  {
+    "name": "legacy forbidden error page",
+    "method": "GET",
+    "old": "/errors/403",
+    "new": "/errors/403",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 403,
+    "expected_content_type": "text/html",
+    "body_contains": [
+      "<title>Error 403</title>",
+      "id=\"warning-body\"",
+      "403 Forbidden"
+    ]
+  },
+  {
+    "name": "legacy not found error page",
+    "method": "GET",
+    "old": "/errors/404",
+    "new": "/errors/404",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 404,
+    "expected_content_type": "text/html",
+    "body_contains": [
+      "<title>Error 404</title>",
+      "id=\"warning-body\"",
+      "The URL you requested was not found on this server."
+    ]
+  },
+  {
     "name": "anonymous user filter forbidden",
     "method": "GET",
     "old": "/user-filter",
@@ -469,8 +606,8 @@
     "csrf_mode": "omit",
     "compare": false,
     "new_expected_status": 403,
-    "new_expected_content_type": "text/plain",
-    "new_body_contains": ["CSRF"]
+    "new_expected_content_type": "text/html",
+    "new_body_contains": ["<title>Error 403</title>", "id=\"warning-body\""]
   },
   {
     "name": "check login availability",
@@ -502,6 +639,339 @@
     "new": "/deregister.jsp",
     "compare": false,
     "new_expected_status": 403
+  },
+  {
+    "name": "setpostscore requires msgid before authorization",
+    "method": "GET",
+    "old": "/setpostscore.jsp",
+    "new": "/setpostscore.jsp",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 400,
+    "expected_content_type": "text/html"
+  },
+  {
+    "name": "topic delete binds missing msgid before authorization",
+    "method": "GET",
+    "old": "/delete.jsp",
+    "new": "/delete.jsp",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 400,
+    "expected_content_type": "text/html"
+  },
+  {
+    "name": "topic delete rejects an unsupported method before binding",
+    "method": "PUT",
+    "old": "/delete.jsp",
+    "new": "/delete.jsp",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 405,
+    "expected_allow": "GET, POST",
+    "compare_allow": true
+  },
+  {
+    "name": "topic delete options",
+    "method": "OPTIONS",
+    "old": "/delete.jsp",
+    "new": "/delete.jsp",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 200,
+    "expected_allow": "GET,HEAD,POST,OPTIONS",
+    "expected_content_length": "0",
+    "compare_allow": true
+  },
+  {
+    "name": "topic undelete binds missing msgid before authorization",
+    "method": "GET",
+    "old": "/undelete",
+    "new": "/undelete",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 400,
+    "expected_content_type": "text/html"
+  },
+  {
+    "name": "topic undelete rejects an unsupported method before binding",
+    "method": "PUT",
+    "old": "/undelete",
+    "new": "/undelete",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 405,
+    "expected_allow": "GET, POST",
+    "compare_allow": true
+  },
+  {
+    "name": "topic undelete options",
+    "method": "OPTIONS",
+    "old": "/undelete",
+    "new": "/undelete",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 200,
+    "expected_allow": "GET,HEAD,POST,OPTIONS",
+    "expected_content_length": "0",
+    "compare_allow": true
+  },
+  {
+    "name": "uncommit binds missing msgid before moderator authorization",
+    "method": "GET",
+    "old": "/uncommit.jsp",
+    "new": "/uncommit.jsp",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 400,
+    "expected_content_type": "text/html"
+  },
+  {
+    "name": "uncommit rejects an unsupported method before binding",
+    "method": "PUT",
+    "old": "/uncommit.jsp",
+    "new": "/uncommit.jsp",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 405,
+    "expected_allow": "POST, GET",
+    "compare_allow": true
+  },
+  {
+    "name": "uncommit options",
+    "method": "OPTIONS",
+    "old": "/uncommit.jsp",
+    "new": "/uncommit.jsp",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 200,
+    "expected_allow": "POST,GET,HEAD,OPTIONS",
+    "expected_content_length": "0",
+    "compare_allow": true
+  },
+  {
+    "name": "move binds invalid msgid before moderator authorization",
+    "method": "GET",
+    "old": "/mt.jsp?msgid=not-an-integer",
+    "new": "/mt.jsp?msgid=not-an-integer",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 400,
+    "expected_content_type": "text/html"
+  },
+  {
+    "name": "move rejects an unsupported method before binding",
+    "method": "DELETE",
+    "old": "/mt.jsp",
+    "new": "/mt.jsp",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 405,
+    "expected_allow": "POST, GET",
+    "compare_allow": true
+  },
+  {
+    "name": "move options",
+    "method": "OPTIONS",
+    "old": "/mt.jsp",
+    "new": "/mt.jsp",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 200,
+    "expected_allow": "POST,GET,HEAD,OPTIONS",
+    "expected_content_length": "0",
+    "compare_allow": true
+  },
+  {
+    "name": "premoderated move binds missing msgid before moderator authorization",
+    "method": "GET",
+    "old": "/mtn.jsp",
+    "new": "/mtn.jsp",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 400,
+    "expected_content_type": "text/html"
+  },
+  {
+    "name": "premoderated move rejects post",
+    "method": "POST",
+    "old": "/mtn.jsp",
+    "new": "/mtn.jsp",
+    "data": "msgid=1927836",
+    "csrf_mode": "omit",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 405,
+    "expected_allow": "GET",
+    "compare_allow": true
+  },
+  {
+    "name": "premoderated move options",
+    "method": "OPTIONS",
+    "old": "/mtn.jsp",
+    "new": "/mtn.jsp",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 200,
+    "expected_allow": "GET,HEAD,OPTIONS",
+    "expected_content_length": "0",
+    "compare_allow": true
+  },
+  {
+    "name": "resolve binds missing parameters on get before authorization",
+    "method": "GET",
+    "old": "/resolve.jsp",
+    "new": "/resolve.jsp",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 400,
+    "expected_content_type": "text/html"
+  },
+  {
+    "name": "resolve binds missing parameters on put before authorization",
+    "method": "PUT",
+    "old": "/resolve.jsp",
+    "new": "/resolve.jsp",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 400,
+    "expected_content_type": "",
+    "expected_content_length": "0"
+  },
+  {
+    "name": "resolve options",
+    "method": "OPTIONS",
+    "old": "/resolve.jsp",
+    "new": "/resolve.jsp",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 200,
+    "expected_allow": "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS",
+    "expected_content_length": "0",
+    "compare_allow": true
+  },
+  {
+    "name": "comment message binds missing topic on get",
+    "method": "GET",
+    "old": "/comment-message.jsp",
+    "new": "/comment-message.jsp",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 400,
+    "expected_content_type": "text/html"
+  },
+  {
+    "name": "comment message checks post csrf before model binding",
+    "method": "POST",
+    "old": "/comment-message.jsp",
+    "new": "/comment-message.jsp",
+    "csrf_mode": "omit",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 403,
+    "expected_content_type": "text/html"
+  },
+  {
+    "name": "comment message accepts query csrf before conflicting form csrf",
+    "method": "POST",
+    "old": "/comment-message.jsp",
+    "new": "/comment-message.jsp",
+    "data": "csrf=wrong",
+    "csrf_mode": "query",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 400,
+    "expected_content_type": "text/html"
+  },
+  {
+    "name": "comment message binds put query and ignores form body",
+    "method": "PUT",
+    "old": "/comment-message.jsp",
+    "new": "/comment-message.jsp",
+    "data": "topic=1",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 400,
+    "expected_content_type": "",
+    "expected_content_length": "0"
+  },
+  {
+    "name": "comment message options",
+    "method": "OPTIONS",
+    "old": "/comment-message.jsp",
+    "new": "/comment-message.jsp",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 200,
+    "expected_allow": "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS",
+    "expected_content_length": "0",
+    "compare_allow": true
+  },
+  {
+    "name": "comment delete rejects unsupported methods before binding",
+    "method": "PUT",
+    "old": "/delete_comment.jsp",
+    "new": "/delete_comment.jsp",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 405,
+    "expected_allow": "GET, POST",
+    "compare_allow": true
+  },
+  {
+    "name": "comment delete options",
+    "method": "OPTIONS",
+    "old": "/delete_comment.jsp",
+    "new": "/delete_comment.jsp",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 200,
+    "expected_allow": "GET,HEAD,POST,OPTIONS",
+    "expected_content_length": "0",
+    "compare_allow": true
+  },
+  {
+    "name": "comment undelete rejects unsupported methods before binding",
+    "method": "PUT",
+    "old": "/undelete_comment",
+    "new": "/undelete_comment",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 405,
+    "expected_allow": "GET, POST",
+    "compare_allow": true
+  },
+  {
+    "name": "comment undelete options",
+    "method": "OPTIONS",
+    "old": "/undelete_comment",
+    "new": "/undelete_comment",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 200,
+    "expected_allow": "GET,HEAD,POST,OPTIONS",
+    "expected_content_length": "0",
+    "compare_allow": true
+  },
+  {
+    "name": "setpostscore requires moderator",
+    "method": "GET",
+    "old": "/setpostscore.jsp?msgid=1927836",
+    "new": "/setpostscore.jsp?msgid=1927836",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 403,
+    "expected_content_type": "text/html",
+    "requires_seed": true
+  },
+  {
+    "name": "setpostscore unsupported method",
+    "method": "PUT",
+    "old": "/setpostscore.jsp",
+    "new": "/setpostscore.jsp",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 405
   },
   {
     "name": "vote requires auth with current Java form shape",

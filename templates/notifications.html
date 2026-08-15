@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}Уведомления{% endblock %}
+{% block head_extra %}
+<link rel="alternate" title="RSS" href="/show-replies.jsp?output=rss&amp;nick={{ sNick }}" type="application/rss+xml">
+<link rel="alternate" title="Atom" href="/show-replies.jsp?output=atom&amp;nick={{ sNick }}" type="application/atom+xml">
+{% endblock %}
+{% block content %}{{ sContentHtml|safe }}{% endblock %}

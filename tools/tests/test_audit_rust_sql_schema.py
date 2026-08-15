@@ -104,6 +104,57 @@ fn valid_queries() {
         self.assertEqual([], report["findings"])
         self.assertEqual(6, report["summary"]["clean_queries"])
 
+    def test_postgresql_lock_and_like_escape_keywords_are_not_columns(self) -> None:
+        self.write_rust(
+            r'''
+fn valid_postgresql_grammar() {
+    sqlx::query("SELECT topic FROM comments WHERE id=$1 FOR SHARE");
+    sqlx::query(r#"SELECT id FROM topics WHERE title LIKE $1 ESCAPE '\\'"#);
+}
+'''
+        )
+        report = self.report()
+        self.assertEqual([], report["findings"])
+        self.assertEqual(2, report["summary"]["clean_queries"])
+
+    def test_template_expression_with_known_sql_alias_is_not_sql(self) -> None:
+        self.write_rust(
+            r'''
+fn load_comments() {
+    sqlx::query("SELECT c.id FROM comments c");
+}
+
+#[test]
+fn template_contract() {
+    assert!(template.contains("c.answer_count == 1"));
+}
+'''
+        )
+        report = self.report()
+        self.assertEqual([], report["findings"])
+        self.assertEqual(1, report["summary"]["sql_literals"])
+
+    def test_generated_csv_uses_lf_without_trailing_whitespace(self) -> None:
+        path = self.root / "audit.csv"
+        audit.write_csv(
+            path,
+            {
+                "findings": [
+                    {
+                        "criticality": "P1",
+                        "kind": "missing_column",
+                        "identifier": "topics.missing",
+                        "sql_preview": "SELECT missing FROM topics",
+                    }
+                ],
+                "intentional_absence_probes": [],
+            },
+        )
+        contents = path.read_bytes()
+        self.assertNotIn(b"\r", contents)
+        self.assertTrue(contents.endswith(b"\n"))
+        self.assertTrue(all(not line.endswith((b" ", b"\t")) for line in contents.splitlines()))
+
     def test_legacy_catalog_tuples_are_probes_not_column_references(self) -> None:
         self.write_rust(
             r'''

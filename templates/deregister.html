@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Удаление пользователя{% endblock %}
+{% block content %}
+<h1>Удаление пользователя</h1>
+<p>Аккаунт становится недоступен для входа.</p>
+
+<form method="post" action="deregister.jsp" id="registerForm">
+  <input type="hidden" name="csrf" value="{{ csrf_token }}">
+  {% if !errors.is_empty() %}<div class="error">{% for error in errors %}<div>{{ error }}</div>{% endfor %}</div>{% endif %}
+
+  <div class="control-group">
+    <label for="password">Пароль</label>
+    <input type="password" id="password" name="password" size="40" required>
+  </div>
+
+  <div class="control-group">
+    <script src="https://js.hcaptcha.com/1/api.js" async defer></script>
+    <div class="h-captcha" data-sitekey="{{ captcha_site_key }}"></div>
+  </div>
+
+  <div class="control-group">
+    <label>Заблокировать мой аккаунт
+      <input type="checkbox" name="acceptBlock" value="true" required{% if accept_block %} checked{% endif %}>
+    </label>
+    <label>Согласен с невозможностью восстановления
+      <input type="checkbox" name="acceptOneway" value="true" required{% if accept_oneway %} checked{% endif %}>
+    </label>
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">Удалить аккаунт</button>
+  </div>
+</form>
+{% endblock %}

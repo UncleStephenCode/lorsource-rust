@@ -1,14 +1,38 @@
 use anyhow::Context;
+use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use std::{
     collections::{BTreeMap, BTreeSet},
     time::Duration,
 };
-use tracing::info;
+use tracing::{info, warn};
 
 pub type TyPgPool = PgPool;
 
 const S_SCHEMA_CONTRACT: &str = include_str!("../../../compat/java-db/schema-contract.tsv");
+const S_SCHEMA_OBJECTS_CONTRACT: &str =
+    include_str!("../../../compat/java-db/schema-objects-contract.tsv");
+const S_SCHEMA_OBJECTS_QUERY: &str =
+    include_str!("../../../compat/java-db/export-schema-objects.sql");
+
+const VEC_SCHEMA_OBJECT_KINDS: &[&str] = &[
+    "constraint",
+    "default",
+    "function",
+    "grant",
+    "index",
+    "owner",
+    "sequence",
+    "trigger",
+];
+
+/// Owner role names are deployment metadata rather than application schema
+/// semantics. A different migration-owner role is reported in the fingerprint
+/// drift, but it does not make an otherwise compatible database unusable.
+const VEC_ADVISORY_SCHEMA_OBJECT_KINDS: &[&str] = &["owner"];
+
+const I_SCHEMA_DRIFT_LOG_LIMIT: usize = 25;
+const I_SCHEMA_ERROR_LIMIT: usize = 50;
 
 const VEC_REQUIRED_EXTENSIONS: &[&str] = &["fuzzystrmatch", "hstore"];
 
@@ -116,13 +140,25 @@ struct StExpectedColumn {
     bNotNull: bool,
 }
 
+type TySchemaObjectKey = (String, String);
+type TySchemaObjectMap = BTreeMap<TySchemaObjectKey, String>;
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct StSchemaObjectComparison {
+    vecBlockingProblems: Vec<String>,
+    vecAdvisoryDrift: Vec<String>,
+}
+
 pub async fn oConnect(sDatabaseUrl: &str) -> anyhow::Result<TyPgPool> {
     PgPoolOptions::new()
         .max_connections(20)
         .acquire_timeout(Duration::from_secs(5))
         .connect(sDatabaseUrl)
         .await
-        .with_context(|| format!("failed to connect to PostgreSQL: {sDatabaseUrl}"))
+        // Never include the connection URL here: anyhow's context is logged
+        // during startup and a normal PostgreSQL URL commonly contains the
+        // runtime password.
+        .context("failed to connect to PostgreSQL")
 }
 
 /// Validate the Java/Liquibase schema without mutating it.
@@ -157,9 +193,10 @@ pub async fn vVerifySchema(oPool: &TyPgPool) -> anyhow::Result<()> {
     vVerifySequences(oPool).await?;
     vVerifyFunctions(oPool).await?;
     vVerifyTriggers(oPool).await?;
+    vVerifySchemaObjects(oPool).await?;
 
     info!(
-        "validated current Java database structure without reading or changing the Liquibase ledger"
+        "validated current Java database structure and canonical schema-object contract without reading or changing the Liquibase ledger"
     );
     Ok(())
 }
@@ -504,6 +541,188 @@ async fn vVerifyTriggers(oPool: &TyPgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn mapExpectedSchemaObjects() -> anyhow::Result<TySchemaObjectMap> {
+    let mut mapObjects = BTreeMap::new();
+
+    for (iLine, sLine) in S_SCHEMA_OBJECTS_CONTRACT.lines().enumerate() {
+        let mut itFields = sLine.splitn(3, '\t');
+        let sKind = itFields.next().context("missing schema-object kind")?;
+        let sIdentity = itFields.next().context("missing schema-object identity")?;
+        let sDefinition = itFields
+            .next()
+            .context("missing schema-object definition")?;
+
+        anyhow::ensure!(
+            VEC_SCHEMA_OBJECT_KINDS.contains(&sKind),
+            "unknown schema-object kind {sKind:?} on contract line {}",
+            iLine + 1
+        );
+        anyhow::ensure!(
+            !sIdentity.is_empty(),
+            "empty schema-object identity on contract line {}",
+            iLine + 1
+        );
+        let stDefinition: serde_json::Value =
+            serde_json::from_str(sDefinition).with_context(|| {
+                format!("invalid schema-object JSON on contract line {}", iLine + 1)
+            })?;
+        let sCanonicalDefinition = serde_json::to_string(&stDefinition)?;
+        let optPrevious = mapObjects.insert(
+            (sKind.to_string(), sIdentity.to_string()),
+            sCanonicalDefinition,
+        );
+        anyhow::ensure!(
+            optPrevious.is_none(),
+            "duplicate schema-object contract entry {sKind}.{sIdentity}"
+        );
+    }
+
+    anyhow::ensure!(
+        !mapObjects.is_empty(),
+        "schema-object contract must not be empty"
+    );
+    Ok(mapObjects)
+}
+
+async fn mapReadSchemaObjects(oPool: &TyPgPool) -> anyhow::Result<TySchemaObjectMap> {
+    let vecRows = sqlx::query(S_SCHEMA_OBJECTS_QUERY)
+        .fetch_all(oPool)
+        .await
+        .context("failed to inspect canonical Java schema objects")?;
+    let mut mapObjects = BTreeMap::new();
+
+    for stRow in vecRows {
+        let sKind: String = stRow.try_get("object_kind")?;
+        let sIdentity: String = stRow.try_get("object_identity")?;
+        let sDefinition: String = stRow.try_get("object_definition")?;
+        anyhow::ensure!(
+            VEC_SCHEMA_OBJECT_KINDS.contains(&sKind.as_str()),
+            "catalog query returned unknown schema-object kind {sKind:?}"
+        );
+        let stDefinition: serde_json::Value = serde_json::from_str(&sDefinition)
+            .with_context(|| format!("catalog returned invalid JSON for {sKind}.{sIdentity}"))?;
+        let sCanonicalDefinition = serde_json::to_string(&stDefinition)?;
+        let optPrevious =
+            mapObjects.insert((sKind.clone(), sIdentity.clone()), sCanonicalDefinition);
+        anyhow::ensure!(
+            optPrevious.is_none(),
+            "catalog returned duplicate schema object {sKind}.{sIdentity}"
+        );
+    }
+
+    Ok(mapObjects)
+}
+
+fn bSchemaObjectKindIsAdvisory(sKind: &str) -> bool {
+    VEC_ADVISORY_SCHEMA_OBJECT_KINDS.contains(&sKind)
+}
+
+fn stCompareSchemaObjects(
+    mapExpected: &TySchemaObjectMap,
+    mapActual: &TySchemaObjectMap,
+) -> StSchemaObjectComparison {
+    let mut stComparison = StSchemaObjectComparison::default();
+
+    for ((sKind, sIdentity), sExpectedDefinition) in mapExpected {
+        let optActualDefinition = mapActual.get(&(sKind.clone(), sIdentity.clone()));
+        let optProblem = match optActualDefinition {
+            None => Some(format!("missing {sKind} {sIdentity}")),
+            Some(sActualDefinition) if sActualDefinition != sExpectedDefinition => Some(format!(
+                "changed {sKind} {sIdentity}: expected {sExpectedDefinition}, found {sActualDefinition}"
+            )),
+            Some(_) => None,
+        };
+
+        if let Some(sProblem) = optProblem {
+            if bSchemaObjectKindIsAdvisory(sKind) {
+                stComparison.vecAdvisoryDrift.push(sProblem);
+            } else {
+                stComparison.vecBlockingProblems.push(sProblem);
+            }
+        }
+    }
+
+    // Additional operator-created indexes, constraints, grants and other
+    // objects on canonical tables are visible in the drift fingerprint but do
+    // not prove incompatibility with the Java/Liquibase required subset.
+    for (sKind, sIdentity) in mapActual.keys() {
+        if !mapExpected.contains_key(&(sKind.clone(), sIdentity.clone())) {
+            stComparison
+                .vecAdvisoryDrift
+                .push(format!("additional {sKind} {sIdentity}"));
+        }
+    }
+
+    stComparison
+}
+
+fn sSchemaObjectFingerprint(mapObjects: &TySchemaObjectMap) -> String {
+    use std::fmt::Write as _;
+
+    let mut stDigest = Sha256::new();
+    for ((sKind, sIdentity), sDefinition) in mapObjects {
+        stDigest.update(sKind.as_bytes());
+        stDigest.update([0]);
+        stDigest.update(sIdentity.as_bytes());
+        stDigest.update([0]);
+        stDigest.update(sDefinition.as_bytes());
+        stDigest.update(b"\n");
+    }
+    let arrDigest = stDigest.finalize();
+    let mut sHex = String::with_capacity(arrDigest.len() * 2);
+    for iByte in arrDigest {
+        write!(&mut sHex, "{iByte:02x}").expect("writing to String cannot fail");
+    }
+    sHex
+}
+
+fn sLimitedProblems(vecProblems: &[String], iLimit: usize) -> String {
+    let mut vecVisible: Vec<&str> = vecProblems
+        .iter()
+        .take(iLimit)
+        .map(String::as_str)
+        .collect();
+    if vecProblems.len() > iLimit {
+        vecVisible.push("(additional differences omitted)");
+    }
+    vecVisible.join("\n- ")
+}
+
+async fn vVerifySchemaObjects(oPool: &TyPgPool) -> anyhow::Result<()> {
+    let mapExpected = mapExpectedSchemaObjects()?;
+    let mapActual = mapReadSchemaObjects(oPool).await?;
+    let stComparison = stCompareSchemaObjects(&mapExpected, &mapActual);
+    let sExpectedFingerprint = sSchemaObjectFingerprint(&mapExpected);
+    let sActualFingerprint = sSchemaObjectFingerprint(&mapActual);
+
+    info!(
+        expected_objects = mapExpected.len(),
+        actual_objects = mapActual.len(),
+        expected_sha256 = %sExpectedFingerprint,
+        actual_sha256 = %sActualFingerprint,
+        "computed bounded Java schema-object fingerprint"
+    );
+
+    if !stComparison.vecAdvisoryDrift.is_empty() {
+        warn!(
+            drift_count = stComparison.vecAdvisoryDrift.len(),
+            drift = %sLimitedProblems(
+                &stComparison.vecAdvisoryDrift,
+                I_SCHEMA_DRIFT_LOG_LIMIT
+            ),
+            "PostgreSQL schema has non-blocking drift from the canonical Java object fingerprint"
+        );
+    }
+
+    anyhow::ensure!(
+        stComparison.vecBlockingProblems.is_empty(),
+        "PostgreSQL schema objects do not satisfy the vendored Java/Liquibase contract ({} blocking differences):\n- {}",
+        stComparison.vecBlockingProblems.len(),
+        sLimitedProblems(&stComparison.vecBlockingProblems, I_SCHEMA_ERROR_LIMIT)
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -568,5 +787,218 @@ mod tests {
         );
         assert!(!mapColumns.contains_key(&("comments", "editor")));
         assert!(!mapColumns.contains_key(&("topics", "stat2")));
+    }
+
+    #[test]
+    fn parsesCompleteCanonicalSchemaObjectContract() {
+        let mapObjects = mapExpectedSchemaObjects().expect("schema-object contract must parse");
+        let mut mapCounts = BTreeMap::<String, usize>::new();
+        for (sKind, _) in mapObjects.keys() {
+            *mapCounts.entry(sKind.clone()).or_default() += 1;
+        }
+
+        assert_eq!(mapObjects.len(), 605);
+        assert_eq!(mapCounts.get("constraint"), Some(&82));
+        assert_eq!(mapCounts.get("default"), Some(&61));
+        assert_eq!(mapCounts.get("function"), Some(&12));
+        assert_eq!(mapCounts.get("grant"), Some(&168));
+        assert_eq!(mapCounts.get("index"), Some(&101));
+        assert_eq!(mapCounts.get("owner"), Some(&161));
+        assert_eq!(mapCounts.get("sequence"), Some(&15));
+        assert_eq!(mapCounts.get("trigger"), Some(&5));
+        assert_eq!(
+            mapObjects.get(&(
+                "constraint".to_string(),
+                "comments.comments_topic_fkey".to_string()
+            )),
+            Some(
+                &"[\"f\",false,false,true,\"FOREIGN KEY (topic) REFERENCES topics(id)\"]"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            mapObjects.get(&("sequence".to_string(), "images_id_seq".to_string())),
+            Some(&"[\"integer\",1,1,2147483647,1,1,false,\"images\",\"id\",\"i\"]".to_string())
+        );
+    }
+
+    #[test]
+    fn schemaObjectComparisonFailsForMissingOrChangedRequiredObjects() {
+        let mapExpected = TySchemaObjectMap::from([
+            (
+                ("constraint".to_string(), "topics.topics_pkey".to_string()),
+                "[\"p\"]".to_string(),
+            ),
+            (
+                ("default".to_string(), "topics.stat1".to_string()),
+                "[\"0\"]".to_string(),
+            ),
+        ]);
+        let mapActual = TySchemaObjectMap::from([(
+            ("default".to_string(), "topics.stat1".to_string()),
+            "[\"1\"]".to_string(),
+        )]);
+
+        let stComparison = stCompareSchemaObjects(&mapExpected, &mapActual);
+        assert_eq!(stComparison.vecBlockingProblems.len(), 2);
+        assert!(
+            stComparison.vecBlockingProblems[0].contains("missing constraint topics.topics_pkey")
+        );
+        assert!(stComparison.vecBlockingProblems[1].contains("changed default topics.stat1"));
+    }
+
+    #[test]
+    fn schemaObjectComparisonReportsPermittedAdditionalObjectsAsDrift() {
+        let mapExpected = TySchemaObjectMap::from([(
+            ("index".to_string(), "topics.topics_pkey".to_string()),
+            "[true]".to_string(),
+        )]);
+        let mapActual = TySchemaObjectMap::from([
+            (
+                ("index".to_string(), "topics.topics_pkey".to_string()),
+                "[true]".to_string(),
+            ),
+            (
+                (
+                    "index".to_string(),
+                    "topics.operator_observability_idx".to_string(),
+                ),
+                "[false]".to_string(),
+            ),
+        ]);
+
+        let stComparison = stCompareSchemaObjects(&mapExpected, &mapActual);
+        assert!(stComparison.vecBlockingProblems.is_empty());
+        assert_eq!(
+            stComparison.vecAdvisoryDrift,
+            ["additional index topics.operator_observability_idx"]
+        );
+    }
+
+    #[test]
+    fn schemaOwnerDifferencesAreAdvisoryButRequiredRuntimeGrantsAreBlocking() {
+        let mapExpected = TySchemaObjectMap::from([
+            (
+                ("owner".to_string(), "table.topics".to_string()),
+                "[\"maxcom\"]".to_string(),
+            ),
+            (
+                (
+                    "grant".to_string(),
+                    "table.topics.linuxweb.SELECT".to_string(),
+                ),
+                "[false]".to_string(),
+            ),
+        ]);
+        let mapActual = TySchemaObjectMap::from([(
+            ("owner".to_string(), "table.topics".to_string()),
+            "[\"migration_owner\"]".to_string(),
+        )]);
+
+        let stComparison = stCompareSchemaObjects(&mapExpected, &mapActual);
+        assert_eq!(stComparison.vecBlockingProblems.len(), 1);
+        assert!(stComparison.vecBlockingProblems[0].contains("missing grant"));
+        assert_eq!(stComparison.vecAdvisoryDrift.len(), 1);
+        assert!(stComparison.vecAdvisoryDrift[0].contains("changed owner"));
+    }
+
+    #[test]
+    fn schemaObjectFingerprintIsDeterministicAndDefinitionSensitive() {
+        let mapFirst = TySchemaObjectMap::from([
+            (
+                ("default".to_string(), "topics.stat1".to_string()),
+                "[\"0\"]".to_string(),
+            ),
+            (
+                ("sequence".to_string(), "s_msgid".to_string()),
+                "[\"bigint\"]".to_string(),
+            ),
+        ]);
+        let mapSameDifferentInsertionOrder = TySchemaObjectMap::from([
+            (
+                ("sequence".to_string(), "s_msgid".to_string()),
+                "[\"bigint\"]".to_string(),
+            ),
+            (
+                ("default".to_string(), "topics.stat1".to_string()),
+                "[\"0\"]".to_string(),
+            ),
+        ]);
+        let mut mapChanged = mapFirst.clone();
+        mapChanged.insert(
+            ("default".to_string(), "topics.stat1".to_string()),
+            "[\"1\"]".to_string(),
+        );
+
+        assert_eq!(
+            sSchemaObjectFingerprint(&mapFirst),
+            sSchemaObjectFingerprint(&mapSameDifferentInsertionOrder)
+        );
+        assert_ne!(
+            sSchemaObjectFingerprint(&mapFirst),
+            sSchemaObjectFingerprint(&mapChanged)
+        );
+    }
+
+    #[test]
+    fn schemaObjectCatalogQueryIsReadOnlyAndBounded() {
+        let sLower = S_SCHEMA_OBJECTS_QUERY.to_ascii_lowercase();
+        assert!(sLower.contains("canonical_tables(table_name)"));
+        assert!(sLower.contains("canonical_sequences(sequence_name)"));
+        assert!(sLower.contains("canonical_functions(function_name)"));
+        for sMutation in [" insert ", " update ", " delete ", " alter ", " drop "] {
+            assert!(
+                !sLower.contains(sMutation),
+                "catalog query must not contain mutation token {sMutation:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an explicitly selected canonical Java/Liquibase PostgreSQL database"]
+    async fn canonicalSchemaObjectContractMatchesRuntimeCatalog() {
+        assert_eq!(
+            std::env::var("LOR_SCHEMA_INTEGRATION_CONFIRM").as_deref(),
+            Ok("read-only-canonical-contract"),
+            "set LOR_SCHEMA_INTEGRATION_CONFIRM=read-only-canonical-contract"
+        );
+        let sDatabaseUrl = std::env::var("LOR_SCHEMA_INTEGRATION_DATABASE_URL")
+            .expect("set LOR_SCHEMA_INTEGRATION_DATABASE_URL to a disposable canonical database");
+        let oPool = oConnect(&sDatabaseUrl)
+            .await
+            .expect("canonical test database must be reachable");
+        let mapExpected = mapExpectedSchemaObjects().expect("contract must parse");
+        let mapActual = mapReadSchemaObjects(&oPool)
+            .await
+            .expect("catalog query must succeed through the runtime role");
+        let stComparison = stCompareSchemaObjects(&mapExpected, &mapActual);
+
+        assert!(
+            stComparison.vecBlockingProblems.is_empty(),
+            "blocking differences: {:?}",
+            stComparison.vecBlockingProblems
+        );
+        assert!(
+            stComparison.vecAdvisoryDrift.is_empty(),
+            "fresh canonical bootstrap must have no drift: {:?}",
+            stComparison.vecAdvisoryDrift
+        );
+        assert_eq!(
+            sSchemaObjectFingerprint(&mapExpected),
+            sSchemaObjectFingerprint(&mapActual)
+        );
+    }
+
+    #[tokio::test]
+    async fn database_connect_errors_do_not_disclose_credentials() {
+        let sSecretUrl = "postgres://runtime:super-secret@127.0.0.1:1/lor";
+        let stError = oConnect(sSecretUrl)
+            .await
+            .expect_err("closed local port must reject the connection");
+        let sError = format!("{stError:#}");
+
+        assert!(sError.contains("failed to connect to PostgreSQL"));
+        assert!(!sError.contains("super-secret"));
+        assert!(!sError.contains(sSecretUrl));
     }
 }

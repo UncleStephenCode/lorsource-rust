@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
+import hashlib
 import io
 import json
 import re
@@ -19,11 +21,75 @@ CONTENT = json.loads((HERE / "browser_content.json").read_text("utf-8"))
 PASSWORD = "Birds-ProdReady-2026"
 TOPIC_INTERVAL_SECONDS = 31
 COMMENT_INTERVAL_SECONDS = 4
+CHECKPOINT_VERSION = 1
+MIN_FREE_DISK_BYTES = 1024 * 1024 * 1024
+LORCODE_BOLD_SELECTOR = "b"
+
+
+def content_fingerprint() -> str:
+    payload = json.dumps(CONTENT, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def empty_checkpoint() -> dict[str, object]:
+    return {
+        "version": CHECKPOINT_VERSION,
+        "content_fingerprint": content_fingerprint(),
+        "topics": {},
+        "comments": {},
+    }
+
+
+def read_checkpoint(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return empty_checkpoint()
+    try:
+        state = json.loads(path.read_text("utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return empty_checkpoint()
+    if not isinstance(state, dict):
+        return empty_checkpoint()
+    if state.get("version") != CHECKPOINT_VERSION:
+        return empty_checkpoint()
+    if state.get("content_fingerprint") != content_fingerprint():
+        return empty_checkpoint()
+    if not isinstance(state.get("topics"), dict) or not isinstance(
+        state.get("comments"), dict
+    ):
+        return empty_checkpoint()
+    return state
+
+
+def write_checkpoint(path: Path, state: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
 
 
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise RuntimeError(message)
+
+
+def needs_flood_wait(created_count: int, existing_seen: bool) -> bool:
+    """Keep a resume inside the same conservative flood-control envelope."""
+    return created_count > 0 or existing_seen
+
+
+def commit_link_selector(topic_id: int) -> str:
+    """Match both valid Commit href forms, never the Uncommit suffix."""
+    scope = f"#topic-{topic_id}"
+    query = f"commit.jsp?msgid={topic_id}"
+    return f'{scope} a[href="/{query}"], {scope} a[href="{query}"]'
+
+
+def comment_author_selector(nick: str) -> str:
+    """Comments expose their author through ``.sign``, without itemprop."""
+    return f'.sign > a[href="/people/{nick}/profile"]'
 
 
 def image_payload(index: int) -> dict[str, object]:
@@ -48,7 +114,15 @@ def image_payload(index: int) -> dict[str, object]:
 
 
 class BrowserSeed:
-    def __init__(self, playwright, base: str, headed: bool, output: Path) -> None:
+    def __init__(
+        self,
+        playwright,
+        base: str,
+        headed: bool,
+        output: Path,
+        checkpoint: Path | None = None,
+        max_actor_contexts: int | None = None,
+    ) -> None:
         executable = next(
             (
                 path
@@ -61,6 +135,12 @@ class BrowserSeed:
         self.base = base.rstrip("/") + "/"
         self.output = output
         self.output.mkdir(parents=True, exist_ok=True)
+        self.checkpoint = checkpoint
+        self.checkpoint_state = (
+            read_checkpoint(checkpoint) if checkpoint is not None else empty_checkpoint()
+        )
+        self.max_actor_contexts = max_actor_contexts
+        self.ensure_free_disk("Chrome startup")
         self.browser = playwright.chromium.launch(
             executable_path=executable,
             headless=not headed,
@@ -68,13 +148,77 @@ class BrowserSeed:
         )
         self.contexts = {}
         self.pages = {}
-        self.topics: dict[str, dict[str, object]] = {}
-        self.comments: dict[str, dict[str, object]] = {}
+        self.topics: dict[str, dict[str, object]] = dict(
+            self.checkpoint_state["topics"]
+        )
+        self.comments: dict[str, dict[str, object]] = dict(
+            self.checkpoint_state["comments"]
+        )
         self.current_formats: dict[str, str] = {}
         self.metrics: list[dict[str, object]] = []
+        self.peak_actor_contexts = 0
+        self.closing = False
+        self.browser.on(
+            "disconnected",
+            lambda _: None
+            if self.closing
+            else self.write_failure_diagnostic("browser disconnected"),
+        )
 
     def close(self) -> None:
-        self.browser.close()
+        self.closing = True
+        self.close_all_actors()
+        if self.browser.is_connected():
+            self.browser.close()
+
+    def ensure_free_disk(self, operation: str) -> None:
+        usage = shutil.disk_usage(self.output)
+        require(
+            usage.free >= MIN_FREE_DISK_BYTES,
+            f"{operation}: only {usage.free // (1024 * 1024)} MiB are free on "
+            f"{self.output}; Chrome requires at least "
+            f"{MIN_FREE_DISK_BYTES // (1024 * 1024)} MiB",
+        )
+
+    def write_failure_diagnostic(self, reason: object) -> None:
+        try:
+            usage = shutil.disk_usage(self.output)
+            diagnostic = {
+                "reason": str(reason),
+                "free_disk_mib": usage.free // (1024 * 1024),
+                "active_actors": sorted(self.contexts),
+                "peak_actor_contexts": self.peak_actor_contexts,
+                "topics_checkpointed": sorted(self.topics),
+                "comments_checkpointed": sorted(self.comments),
+            }
+            (self.output / "browser-seed-failure.json").write_text(
+                json.dumps(diagnostic, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+
+    def save_checkpoint(self) -> None:
+        if self.checkpoint is None:
+            return
+        self.checkpoint_state["topics"] = self.topics
+        self.checkpoint_state["comments"] = self.comments
+        write_checkpoint(self.checkpoint, self.checkpoint_state)
+
+    def close_actor(self, nick: str) -> None:
+        self.pages.pop(nick, None)
+        context = self.contexts.pop(nick, None)
+        self.current_formats.pop(nick, None)
+        if context is not None:
+            try:
+                context.close()
+            except Exception:
+                if self.browser.is_connected():
+                    raise
+
+    def close_all_actors(self) -> None:
+        for nick in list(self.contexts):
+            self.close_actor(nick)
 
     def metric(self, name: str, started: float, **details: object) -> None:
         self.metrics.append(
@@ -88,16 +232,27 @@ class BrowserSeed:
     def page_for(self, nick: str):
         if nick in self.pages:
             return self.pages[nick]
+        if (
+            self.max_actor_contexts is not None
+            and len(self.contexts) >= self.max_actor_contexts
+        ):
+            raise RuntimeError(
+                f"actor context limit ({self.max_actor_contexts}) reached before "
+                f"opening {nick}; close an inactive actor first"
+            )
+        self.ensure_free_disk(f"opening browser context for {nick}")
         context = self.browser.new_context(
             viewport={"width": 1440, "height": 1100},
             locale="ru-RU",
             timezone_id="Europe/Moscow",
         )
         page = context.new_page()
+        page.on("crash", lambda _: self.write_failure_diagnostic(f"page crashed for {nick}"))
         page.set_default_timeout(30_000)
         page.set_default_navigation_timeout(45_000)
         self.contexts[nick] = context
         self.pages[nick] = page
+        self.peak_actor_contexts = max(self.peak_actor_contexts, len(self.contexts))
         self.login(page, nick)
         return page
 
@@ -175,6 +330,66 @@ class BrowserSeed:
         require(bool(href), f"empty Add link: {group_path}")
         return str(href)
 
+    @staticmethod
+    def topic_record(
+        item: dict[str, object], topic_id: int, url: str
+    ) -> dict[str, object]:
+        return {
+            "key": item["key"],
+            "id": topic_id,
+            "url": url,
+            "title": item["title"],
+            "moderation": str(item["moderation"]),
+            "format": str(item.get("format", "markdown")),
+            "poll_variants": [str(value) for value in item.get("poll_variants", [])],
+            "multiselect": bool(item.get("multiselect", False)),
+        }
+
+    def checkpointed_topic_is_live(
+        self, page, item: dict[str, object], topic: dict[str, object]
+    ) -> bool:
+        try:
+            topic_id = int(topic["id"])
+            topic_url = str(topic["url"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        expected_prefix = str(item["group_path"]).rstrip("/") + "/"
+        if not topic_url.startswith(expected_prefix):
+            return False
+        try:
+            self.goto(page, topic_url)
+        except RuntimeError:
+            return False
+        node = page.locator(f"#topic-{topic_id}")
+        if node.count() != 1:
+            return False
+        title = node.locator("h1").first
+        return title.count() == 1 and title.inner_text().strip() == str(item["title"])
+
+    def restore_topics(self, page) -> None:
+        items = {str(item["key"]): item for item in CONTENT["topics"]}
+        restored: dict[str, dict[str, object]] = {}
+        for key, topic in self.topics.items():
+            item = items.get(key)
+            if item is None or not isinstance(topic, dict):
+                continue
+            if self.checkpointed_topic_is_live(page, item, topic):
+                restored[key] = self.topic_record(
+                    item,
+                    int(topic["id"]),
+                    str(topic["url"]),
+                )
+                print(f"RESUMED {key} {topic['url']}", flush=True)
+        if len(restored) != len(self.topics):
+            valid_topic_keys = set(restored)
+            self.comments = {
+                key: comment
+                for key, comment in self.comments.items()
+                if isinstance(comment, dict) and comment.get("topic") in valid_topic_keys
+            }
+        self.topics = restored
+        self.save_checkpoint()
+
     def create_topic(self, page, item: dict[str, object], image_offset: int) -> dict[str, object]:
         started = time.perf_counter()
         add_url = self.discover_add_url(page, str(item["group_path"]))
@@ -227,16 +442,7 @@ class BrowserSeed:
             f"{item['key']}: unexpected create redirect {page.url}; {page_text[:1000]!r}",
         )
         topic_id = int(match.group(2))
-        result = {
-            "key": item["key"],
-            "id": topic_id,
-            "url": urlparse(page.url).path,
-            "title": item["title"],
-            "moderation": str(item["moderation"]),
-            "format": str(item.get("format", "markdown")),
-            "poll_variants": poll_variants,
-            "multiselect": bool(item.get("multiselect", False)),
-        }
+        result = self.topic_record(item, topic_id, urlparse(page.url).path)
         self.metric(
             "topic.create",
             started,
@@ -249,12 +455,62 @@ class BrowserSeed:
     def commit_topic(self, page, topic: dict[str, object]) -> None:
         started = time.perf_counter()
         self.goto(page, f"/commit.jsp?msgid={topic['id']}")
-        form = page.locator('form[action="/commit.jsp"]')
+        form = page.locator('form[action="edit.jsp"]')
         require(form.count() == 1, f"commit form is absent for topic {topic['id']}")
-        form.locator('button[type="submit"]').click()
+        form.locator('button[type="submit"][name="commit"]').click()
         page.wait_for_load_state("domcontentloaded")
         require("jump-message.jsp" not in page.url, f"commit redirect was not resolved: {page.url}")
         self.metric("topic.commit", started, key=topic["key"], topic_id=topic["id"])
+
+    def ensure_topic_committed(self, page, topic: dict[str, object]) -> None:
+        self.goto(page, str(topic["url"]))
+        commit_link = page.locator(commit_link_selector(int(topic["id"])))
+        if commit_link.count() == 0:
+            self.metric(
+                "topic.commit.resume",
+                time.perf_counter(),
+                key=topic["key"],
+                topic_id=topic["id"],
+            )
+            return
+        self.commit_topic(page, topic)
+
+    def find_existing_comment(
+        self,
+        page,
+        topic: dict[str, object],
+        item: dict[str, object],
+        expected_reply: int | None,
+    ) -> dict[str, object] | None:
+        self.goto(page, str(topic["url"]))
+        candidates: list[tuple[int, object]] = []
+        for node in page.locator('#comments article.msg[id^="comment-"]').all():
+            match = re.fullmatch(r"comment-(\d+)", node.get_attribute("id") or "")
+            if match is None:
+                continue
+            if node.locator(comment_author_selector(str(item["author"]))).count() != 1:
+                continue
+            body = node.locator(".msg-text")
+            if body.count() != 1 or str(item["body"]) not in body.inner_text():
+                continue
+            candidates.append((int(match.group(1)), node))
+        if not candidates:
+            return None
+        comment_id, node = max(candidates, key=lambda candidate: candidate[0])
+        if expected_reply is not None:
+            context = node.locator(":scope > .title")
+            if (
+                context.count() != 1
+                or context.locator(f'a[href*="cid={expected_reply}"]').count() != 1
+            ):
+                return None
+        return {
+            "id": comment_id,
+            "url": f'{topic["url"]}?cid={comment_id}',
+            "topic": topic["key"],
+            "reply_to": expected_reply,
+            "body": item["body"],
+        }
 
     def add_comment(
         self,
@@ -349,6 +605,20 @@ class BrowserSeed:
         scope = page if comment_id is None else page.locator(f"#comment-{comment_id}")
         if comment_id is not None:
             require(scope.count() == 1, f"reaction target comment {comment_id} is absent")
+        selected = scope.locator(
+            f'form.reactions-form button[name="reaction"][value^="{emoji}-false"]'
+        ).first
+        if selected.count() == 1:
+            count_text = selected.locator(".reaction-count").inner_text()
+            require(int(count_text) >= 1, "persisted reaction has an invalid count")
+            self.metric(
+                "reaction.resume",
+                started,
+                topic_id=topic["id"],
+                comment_id=comment_id,
+                emoji=emoji,
+            )
+            return
         button = scope.locator(
             f'form.reactions-form button[name="reaction"][value^="{emoji}-true"]'
         ).first
@@ -372,7 +642,7 @@ class BrowserSeed:
         ).first
         selected.wait_for(state="visible")
         require(
-            selected.locator(".reaction-count").inner_text() == "1",
+            int(selected.locator(".reaction-count").inner_text()) >= 1,
             "reaction count was not updated after AJAX submit",
         )
         self.metric(
@@ -387,7 +657,19 @@ class BrowserSeed:
         started = time.perf_counter()
         self.goto(page, str(topic["url"]))
         form = page.locator('form[action="/vote.jsp"]')
-        require(form.count() == 1, f"poll form is absent for {topic['key']} and {actor}")
+        if form.count() == 0:
+            require(
+                page.locator(".poll-result").count() == 1,
+                f"poll form and persisted results are absent for {topic['key']} and {actor}",
+            )
+            self.metric(
+                "poll.vote.resume",
+                started,
+                actor=actor,
+                topic_id=topic["id"],
+                choices=variants,
+            )
+            return
         inputs = form.locator('input[name="vote"]')
         require(inputs.count() == len(topic["poll_variants"]), "poll variant count differs")
         for index in variants:
@@ -463,7 +745,10 @@ class BrowserSeed:
         self.goto(page, str(lorcode["url"]))
         lorcode_body = page.locator(f"#topic-{lorcode['id']} .msg-text")
         require(
-            lorcode_body.locator("strong").filter(has_text="LORCODE").count() == 1,
+            lorcode_body.locator(LORCODE_BOLD_SELECTOR)
+            .filter(has_text="LORCODE")
+            .count()
+            == 1,
             "LORCODE bold markup is not rendered",
         )
         require(
@@ -676,7 +961,12 @@ class BrowserSeed:
 
         self.goto(page, "/gallery/archive/")
         require(page.locator('form[action="/search.jsp"]').count() == 1, "archive search form is absent")
-        require(page.locator(f'a[href="/gallery/archive/2026/8/"]').count() == 1, "current archive month is absent")
+        now = datetime.now(timezone.utc)
+        current_archive = f"/gallery/archive/{now.year}/{now.month}/"
+        require(
+            page.locator(f'a[href="{current_archive}"]').count() == 1,
+            "current archive month is absent",
+        )
         page.screenshot(path=self.output / "gallery-archive-desktop.png", full_page=True)
 
         self.goto(page, "/forum/")
@@ -685,47 +975,76 @@ class BrowserSeed:
             require(stale_group not in forum_text, f"stale forum counter remains: {stale_group}")
 
     def run(self) -> dict[str, object]:
-        author_page = self.page_for(str(CONTENT["author"]))
-        moderator_page = self.page_for(str(CONTENT["moderator"]))
-        commenter_page = self.page_for(str(CONTENT["commenter"]))
-        self.page_for(str(CONTENT["reply_author"]))
+        author = str(CONTENT["author"])
+        moderator = str(CONTENT["moderator"])
+        commenter = str(CONTENT["commenter"])
+        author_page = self.page_for(author)
+        self.restore_topics(author_page)
 
         image_offset = 0
-        for index, item in enumerate(CONTENT["topics"]):
-            if index:
+        created_topics = 0
+        resumed_topics = bool(self.topics)
+        for item in CONTENT["topics"]:
+            key = str(item["key"])
+            if key in self.topics:
+                image_offset += int(item.get("images", 0))
+                continue
+            if needs_flood_wait(created_topics, resumed_topics):
                 print(f"WAIT topic flood interval {TOPIC_INTERVAL_SECONDS}s", flush=True)
                 time.sleep(TOPIC_INTERVAL_SECONDS)
             self.set_format_mode(
                 author_page,
-                str(CONTENT["author"]),
+                author,
                 str(item.get("format", "markdown")),
             )
             topic = self.create_topic(author_page, item, image_offset)
-            self.topics[str(item["key"])] = topic
+            self.topics[key] = topic
+            self.save_checkpoint()
             image_offset += int(item.get("images", 0))
+            created_topics += 1
             print(f"CREATED {topic['key']} {topic['url']}", flush=True)
+        self.close_all_actors()
 
+        moderator_page = self.page_for(moderator)
         for topic in self.topics.values():
             if topic["moderation"] == "commit":
-                self.commit_topic(moderator_page, topic)
+                self.ensure_topic_committed(moderator_page, topic)
                 print(f"COMMITTED {topic['key']}")
+        self.close_all_actors()
 
         comment_urls: list[str] = []
-        for index, item in enumerate(CONTENT["comments"]):
-            if index:
-                print(f"WAIT comment flood interval {COMMENT_INTERVAL_SECONDS}s", flush=True)
-                time.sleep(COMMENT_INTERVAL_SECONDS)
+        created_comments = 0
+        existing_comments_seen = bool(self.comments)
+        for item in CONTENT["comments"]:
             topic = self.topics[str(item["topic"])]
             actor = str(item["author"])
             actor_page = self.page_for(actor)
             reply_key = item.get("reply_to")
             reply_to = self.comments[str(reply_key)]["id"] if reply_key is not None else None
-            comment = self.add_comment(actor_page, topic, str(item["body"]), reply_to)
-            self.comments[str(item["key"])] = comment
+            key = str(item["key"])
+            comment = self.find_existing_comment(actor_page, topic, item, reply_to)
+            if comment is None:
+                if needs_flood_wait(created_comments, existing_comments_seen):
+                    print(
+                        f"WAIT comment flood interval {COMMENT_INTERVAL_SECONDS}s",
+                        flush=True,
+                    )
+                    time.sleep(COMMENT_INTERVAL_SECONDS)
+                comment = self.add_comment(actor_page, topic, str(item["body"]), reply_to)
+                created_comments += 1
+                print(f"COMMENTED {topic['key']} {item['key']}", flush=True)
+            else:
+                existing_comments_seen = True
+                print(f"RESUMED COMMENT {topic['key']} {item['key']}", flush=True)
+            self.comments[key] = comment
+            self.save_checkpoint()
             comment_urls.append(str(comment["url"]))
-            print(f"COMMENTED {topic['key']} {item['key']}", flush=True)
+            self.close_actor(actor)
 
+        commenter_page = self.page_for(commenter)
         self.add_reaction(commenter_page, self.topics["esp32-news"], emoji="👍")
+        self.close_all_actors()
+        author_page = self.page_for(author)
         self.add_reaction(
             author_page,
             self.topics["forum-markdown"],
@@ -733,13 +1052,22 @@ class BrowserSeed:
             "🎉",
         )
         print("REACTED topic and comment", flush=True)
+        self.close_all_actors()
 
         for topic_key, actors in CONTENT["poll_votes"].items():
             topic = self.topics[str(topic_key)]
             for actor, choices in actors.items():
-                self.vote(self.page_for(str(actor)), topic, [int(value) for value in choices], str(actor))
+                actor_name = str(actor)
+                self.vote(
+                    self.page_for(actor_name),
+                    topic,
+                    [int(value) for value in choices],
+                    actor_name,
+                )
                 print(f"VOTED {topic_key} {actor}", flush=True)
+                self.close_actor(actor_name)
 
+        author_page = self.page_for(author)
         for topic_key, actors in CONTENT["poll_votes"].items():
             topic = self.topics[str(topic_key)]
             expected_votes = [0] * len(topic["poll_variants"])
@@ -750,8 +1078,10 @@ class BrowserSeed:
 
         self.verify_created_content(author_page)
         self.verify_archive_comments_and_forum(author_page)
+        commenter_page = self.page_for(commenter)
         self.verify_histories(author_page, commenter_page)
         self.benchmark_pages(author_page)
+        self.save_checkpoint()
         return {
             "source_window_hours": CONTENT["source_window_hours"],
             "topics": list(self.topics.values()),
@@ -760,6 +1090,8 @@ class BrowserSeed:
             "metrics": self.metrics,
             "benchmark": self.benchmark_summary(),
             "artifacts": str(self.output),
+            "peak_actor_contexts": self.peak_actor_contexts,
+            "checkpoint": str(self.checkpoint) if self.checkpoint is not None else None,
         }
 
 
@@ -772,6 +1104,17 @@ def parse_args() -> argparse.Namespace:
         "--result",
         type=Path,
         default=Path("/tmp/prod_ready_browser_seed_result.json"),
+    )
+    parser.add_argument(
+        "--checkpoint",
+        type=Path,
+        default=Path("/tmp/prod_ready_browser_seed_checkpoint.json"),
+        help="atomic resume state; only browser-observed topic/comment IDs are stored",
+    )
+    parser.add_argument(
+        "--restart",
+        action="store_true",
+        help="discard the browser resume checkpoint after a fresh fixture seed",
     )
     return parser.parse_args()
 
@@ -788,10 +1131,25 @@ def main() -> int:
         )
         return 2
 
+    output = args.output.resolve()
+    (output / "browser-seed-failure.json").unlink(missing_ok=True)
+    checkpoint = args.checkpoint.resolve()
+    if args.restart:
+        checkpoint.unlink(missing_ok=True)
     with sync_playwright() as playwright:
-        seed = BrowserSeed(playwright, args.base, args.headed, args.output.resolve())
+        seed = BrowserSeed(
+            playwright,
+            args.base,
+            args.headed,
+            output,
+            checkpoint=checkpoint,
+            max_actor_contexts=2,
+        )
         try:
             result = seed.run()
+        except Exception as error:
+            seed.write_failure_diagnostic(error)
+            raise
         finally:
             seed.close()
     args.result.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", "utf-8")

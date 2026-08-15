@@ -29,7 +29,7 @@ boolean checks to `true` inside `evidence`:
 - `lor_env_production`;
 - `public_https` and `websocket_wss_same_authority`;
 - `runtime_database_role_least_privilege`;
-- `cookie_and_site_secrets_distinct` and `secret_values_redacted`;
+- `java_site_secret_continuity_verified` and `secret_values_redacted`;
 - `trusted_proxy_cidrs_configured`;
 - `opensearch_configured`, `captcha_configured`, `smtp_configured` and
   `admin_email_configured`;
@@ -39,6 +39,15 @@ boolean checks to `true` inside `evidence`:
 
 Do not store secret values, passwords, tokens or private CAPTCHA keys in this
 document.
+
+`java_site_secret_continuity_verified` means that the mounted `SITE_SECRET`
+was compared through a credential-free probe with the Java `Secret` used by
+the rehearsed source deployment.  The value must remain the same during an
+in-place migration: current Java uses that single secret both as the
+remember-me signing key and as the base for activation/reset tokens.  Requiring
+a separate cookie key would invalidate live Java cookies and would not be
+behaviorally compatible.  Evidence records only the successful comparison,
+never either secret value.
 
 The media document (`kind: media`) records the dedicated absolute upload root,
 runtime UID/GID `8181`, the exact directories `photos`, `gallery`, `images`, a

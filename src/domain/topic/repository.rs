@@ -2,8 +2,11 @@ use async_trait::async_trait;
 use sqlx::{Postgres, Transaction};
 
 use crate::domain::comment::model::StCommentItem;
-use crate::domain::topic::model::{StRssContext, StTopicDetail, StTopicSummary};
+use crate::domain::topic::model::{
+    StMainTopicSummary, StRssContext, StRssTopic, StTopicDetail, StTopicSummary,
+};
 use crate::error::Result;
+use chrono::{DateTime, Utc};
 
 #[async_trait]
 pub trait TrTopicRepository: Send + Sync {
@@ -13,7 +16,15 @@ pub trait TrTopicRepository: Send + Sync {
         optGroup: Option<&str>,
         iOffset: i64,
         iLimit: i64,
+        bNoTalks: bool,
+        bTech: bool,
     ) -> Result<Vec<StTopicSummary>>;
+    async fn vecListMainTopics(
+        &self,
+        bShowGalleryOnMain: bool,
+        optViewerId: Option<i32>,
+        iLimit: i64,
+    ) -> Result<Vec<StMainTopicSummary>>;
     async fn stRssContext(&self, iSectionId: i32, iGroupId: i32) -> Result<StRssContext>;
     async fn vecListRssTopics(
         &self,
@@ -21,7 +32,9 @@ pub trait TrTopicRepository: Send + Sync {
         iGroupId: i32,
         bNoTalks: bool,
         bTech: bool,
-    ) -> Result<Vec<StTopicSummary>>;
+        optViewerId: Option<i32>,
+        dtFrom: DateTime<Utc>,
+    ) -> Result<Vec<StRssTopic>>;
     async fn stGetTopic(&self, iTopicId: i32) -> Result<StTopicDetail>;
     async fn vecListComments(&self, iTopicId: i32) -> Result<Vec<StCommentItem>>;
     async fn iNextMessageId(&self, txPg: &mut Transaction<'_, Postgres>) -> Result<i32>;
@@ -37,28 +50,12 @@ pub trait TrTopicRepository: Send + Sync {
         txPg: &mut Transaction<'_, Postgres>,
         stNewTopic: StNewTopic<'_>,
     ) -> Result<()>;
-    async fn vUpdateTopicMessage(
-        &self,
-        txPg: &mut Transaction<'_, Postgres>,
-        iMsgId: i32,
-        sMessage: &str,
-    ) -> Result<()>;
-    async fn vUpdateTopicHeader(
-        &self,
-        txPg: &mut Transaction<'_, Postgres>,
-        stEditTopic: StEditTopic<'_>,
-    ) -> Result<()>;
     async fn vReplaceTags(
         &self,
         txPg: &mut Transaction<'_, Postgres>,
         iMsgId: i32,
         optTags: Option<&str>,
     ) -> Result<()>;
-    async fn optResolveMeta(&self, iTopicId: i32) -> Result<Option<(i32, bool)>>;
-    async fn vSetResolved(&self, iTopicId: i32, optResolved: Option<bool>) -> Result<()>;
-    async fn vCommitTopic(&self, iTopicId: i32, iModeratorId: i32) -> Result<()>;
-    async fn vUncommitTopic(&self, iTopicId: i32) -> Result<()>;
-    async fn vMoveTopic(&self, iTopicId: i32, iGroupId: i32) -> Result<()>;
 }
 
 #[derive(Debug, Clone)]
@@ -73,12 +70,4 @@ pub struct StNewTopic<'a> {
     pub sPostIp: &'a str,
     pub optUserAgent: Option<&'a str>,
     pub bAllowAnonymous: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct StEditTopic<'a> {
-    pub iMsgId: i32,
-    pub sTitle: &'a str,
-    pub optUrl: Option<String>,
-    pub optLinkText: Option<String>,
 }

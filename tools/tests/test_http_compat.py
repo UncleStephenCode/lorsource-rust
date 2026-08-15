@@ -65,8 +65,11 @@ class StubOpener:
         if request.get_method() == "GET":
             self.client.cookies.set_cookie(csrf_cookie())
             return StubResponse(200, "text/html; charset=utf-8", b'<input name="csrf">')
+        query = urllib.parse.parse_qs(
+            urllib.parse.urlsplit(request.full_url).query, keep_blank_values=True
+        )
         form = urllib.parse.parse_qs((request.data or b"").decode("utf-8"))
-        if form.get("csrf") != ["compat-token"]:
+        if query.get("csrf", form.get("csrf")) != ["compat-token"]:
             return StubResponse(403, "text/plain", b"forbidden")
         return StubResponse(200, "application/json", b'{"html":"ok"}')
 
@@ -92,6 +95,15 @@ class HttpCompatibilityClientTest(unittest.TestCase):
         response = http_client.request("/submit", "POST", "value=one", csrf_mode="omit")
 
         self.assertEqual(403, response.status)
+
+    def test_query_csrf_precedes_a_conflicting_form_value(self) -> None:
+        http_client = client()
+
+        response = http_client.request(
+            "/submit?topic=42", "POST", "csrf=wrong", csrf_mode="query"
+        )
+
+        self.assertEqual(200, response.status)
 
     def test_redirect_target_preserves_query_for_exact_comparison(self) -> None:
         headers = email.message.Message()
@@ -147,6 +159,8 @@ class HttpCompatibilityClientTest(unittest.TestCase):
                 "location_raw": "/target?from=compat",
                 "set_cookie_names": ["CSRF_TOKEN"],
                 "cache_control": "",
+                "allow": "",
+                "content_length": "",
             },
             compat.report_response(response),
         )

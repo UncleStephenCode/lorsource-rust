@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Смена параметров сообщения{% endblock %}
+{% block content %}
+<h1>Смена режима параметров сообщения</h1>
+Данная форма предназначена для администраторов сайта и пользователей,
+имеющих права подтверждения сообщений.
+<form method=POST action="setpostscore.jsp">
+  <input type="hidden" name="csrf" value="{{ csrf_token }}">
+  <input type=hidden name=msgid value="{{ topic_id }}">
+  <br>
+  <label>
+  Ограничение комментирования:
+
+  <select name="postscore">
+    <option {% if postscore == -9999 %}selected{% endif %} value="-9999">без ограничений</option>
+    <option {% if postscore == -50 %}selected{% endif %} value="-50">для зарегистрированных</option>
+    <option {% if postscore == 50 %}selected{% endif %} value="50">score>=50</option>
+    <option {% if postscore == 100 %}selected{% endif %} value="100">100 - одна "звезда"</option>
+    <option {% if postscore == 200 %}selected{% endif %} value="200">200 - две "звезды"</option>
+    <option {% if postscore == 300 %}selected{% endif %} value="300">300 - три "звезды"</option>
+    <option {% if postscore == 400 %}selected{% endif %} value="400">400 - четыре "звезды"</option>
+    <option {% if postscore == 500 %}selected{% endif %} value="500">500 - пять "звезд"</option>
+    <option {% if postscore == 9999 %}selected{% endif %} value="9999">только для модераторов и автора</option>
+    <option {% if postscore == 10000 %}selected{% endif %} value="10000">только для модераторов</option>
+    <option {% if postscore == 10001 %}selected{% endif %} value="10001">комментарии запрещены</option>
+    <option {% if postscore == 10002 %}selected{% endif %} value="10002">без комментариев</option>
+  </select>
+    </label>
+
+  {% if !premoderated %}<label>Прикрепить сообщение <input type=checkbox name="sticky" {% if sticky %}checked{% endif %}></label>{% endif %}
+  <label>Удалить из top10 и Telegram <input type=checkbox name="notop" {% if notop %}checked{% endif %}></label>
+  <div class="form-actions">
+    <button type=submit class="btn btn-primary">Изменить</button>
+  </div>
+</form>
+{% endblock %}

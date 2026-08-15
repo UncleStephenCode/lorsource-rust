@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Удаленные темы {{ sNick }}{% endblock %}
+{% block content %}
+<h1>Удаленные темы {{ sNick }}</h1>
+<div class="forum">
+  <table class="message-table" width="100%">
+    <thead><tr><th>Заголовок</th><th>Причина удаления</th><th>Штраф</th><th>Дата</th></tr></thead>
+    <tbody>
+    {% for t in vecTopics %}
+      <tr>
+        <td><a href="/view-message.jsp?msgid={{ t.iId }}">{{ t.sTitlePlain() }}</a> ({{ t.sDeleterNick }})</td>
+        <td>{{ t.sReason }}</td>
+        <td>{{ t.iBonus }}</td>
+        <td>написано <time data-format="interval" datetime="{{ t.dtPostDate.to_rfc3339() }}">{{ t.dtPostDate }}</time><br>удалено <time data-format="interval" datetime="{{ t.dtDeleteDate.to_rfc3339() }}">{{ t.dtDeleteDate }}</time></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

@@ -15,7 +15,10 @@
 //! restarts, retries are idempotent, and indexing remains fire-and-forget from
 //! the HTTP request's point of view.
 
-use crate::state::AppState;
+use crate::{
+    domain::{markup::model::StMarkupUserDirectory, title::sMakeTitlePlainForDisplay},
+    state::AppState,
+};
 use chrono::{Datelike, TimeZone};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
@@ -29,6 +32,7 @@ pub const INDEX: &str = "messages";
 enum EnSearchQueueJob {
     Topic { id: i32, with_comments: bool },
     Comment { id: i32 },
+    Comments { ids: Vec<i32> },
 }
 
 fn base_url(state: &AppState) -> Option<&str> {
@@ -236,6 +240,7 @@ struct TopicRow {
     /// topics in a premoderated section are excluded from the index too.
     comments_hidden: bool,
     premoderated_anonymous_uncommitted: bool,
+    nofollow: bool,
 }
 
 struct CommentRow {
@@ -246,23 +251,37 @@ struct CommentRow {
     markup: String,
     postdate: chrono::DateTime<chrono::Utc>,
     deleted: bool,
+    nofollow: bool,
 }
 
 type TySearchCommentRow = (
     i32,
     String,
     String,
+    i32,
+    bool,
+    bool,
+    bool,
     String,
     String,
     chrono::DateTime<chrono::Utc>,
     bool,
 );
 
-fn stCommentIndexDocument(stTopic: &TopicRow, stComment: &CommentRow) -> MessageIndexDocument {
-    let optTitle =
-        Some(html_escape::decode_html_entities(&stComment.title).into_owned()).filter(|sTitle| {
-            !sTitle.is_empty() && *sTitle != stTopic.title && !sTitle.starts_with("Re:")
-        });
+fn stCommentIndexDocument(
+    stTopic: &TopicRow,
+    stComment: &CommentRow,
+    sSiteOrigin: &str,
+    stMarkupUsers: &StMarkupUserDirectory,
+) -> MessageIndexDocument {
+    // Java applies the empty/topic-title/`Re:` filters to Comment.title as
+    // stored and only then runs `StringEscapeUtils.unescapeHtml4`. It does not
+    // apply Topic's `makeTitle` typography to legacy comment titles.
+    let optTitle = Some(stComment.title.as_str())
+        .filter(|sTitle| {
+            !sTitle.is_empty() && *sTitle != stTopic.title.as_str() && !sTitle.starts_with("Re:")
+        })
+        .map(|sTitle| html_escape::decode_html_entities(sTitle).into_owned());
 
     MessageIndexDocument {
         section: stTopic.section.clone(),
@@ -275,10 +294,13 @@ fn stCommentIndexDocument(stTopic: &TopicRow, stComment: &CommentRow) -> Message
         // OpenSearchIndexService stores MessageTextService's sanitized HTML,
         // not a plain-text approximation. The analyzer strips tags while the
         // search page can retain safe formatting around highlighted text.
-        message: markup::render_message_with_markup(
+        message: markup::render_message_with_markup_policy_and_users(
             &stComment.message,
             Some(&stComment.markup),
             None,
+            stComment.nofollow,
+            Some(sSiteOrigin),
+            Some(stMarkupUsers),
         ),
         postdate: stComment.postdate.to_rfc3339(),
         tag: stTopic.tags.clone(),
@@ -298,28 +320,47 @@ fn topic_awaits_commit(section_premoderated: bool, topic_committed: bool) -> boo
     section_premoderated && !topic_committed
 }
 
-type TySearchTopicRow = (
-    String,
-    String,
-    String,
-    i32,
-    String,
-    String,
-    String,
-    chrono::DateTime<chrono::Utc>,
-    bool,
-    bool,
-    bool,
-    i32,
-    bool,
-);
+#[derive(sqlx::FromRow)]
+struct StSearchTopicSourceRow {
+    section: String,
+    group_name: String,
+    author: String,
+    author_id: i32,
+    author_score: i32,
+    author_blocked: bool,
+    author_anonymous: bool,
+    author_frozen: bool,
+    title: String,
+    message: String,
+    markup: String,
+    postdate: chrono::DateTime<chrono::Utc>,
+    deleted: bool,
+    draft: bool,
+    committed: bool,
+    postscore: i32,
+    section_premoderated: bool,
+}
+
+/// `TopicDao` materializes every topic through `Topic.fromResultSet`, which
+/// applies `StringUtil.makeTitle`; `OpenSearchIndexService` then indexes
+/// `Topic.getTitleUnescaped`.  Search therefore stores the typographic title,
+/// not a direct one-layer decode of the database value.
+fn sTopicTitleForSearchIndex(sStoredTitle: &str) -> String {
+    sMakeTitlePlainForDisplay(sStoredTitle)
+}
 
 async fn optLoadTopicRow(state: &AppState, topic_id: i32) -> Result<Option<TopicRow>, String> {
-    let row: Option<TySearchTopicRow> = sqlx::query_as(
-        r#"SELECT CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(s.name) END,
-                  g.urlname, u.nick, u.id, t.title, m.message, m.markup::text,
-                  t.postdate, t.deleted, COALESCE(t.draft,false), t.moderate,
-                  COALESCE(t.postscore, -9999), s.moderate
+    let row: Option<StSearchTopicSourceRow> = sqlx::query_as(
+        r#"SELECT CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(s.name) END AS section,
+                  g.urlname AS group_name, u.nick AS author, u.id AS author_id,
+                  COALESCE(u.score,0) AS author_score,
+                  COALESCE(u.blocked,false) AS author_blocked,
+                  COALESCE(u.passwd,'')='' AS author_anonymous,
+                  COALESCE(u.frozen_until > CURRENT_TIMESTAMP,false) AS author_frozen,
+                  t.title, m.message, m.markup::text AS markup,
+                  t.postdate, t.deleted, COALESCE(t.draft,false) AS draft,
+                  t.moderate AS committed, COALESCE(t.postscore, -9999) AS postscore,
+                  s.moderate AS section_premoderated
            FROM topics t
            JOIN msgbase m ON m.id=t.id
            JOIN users u ON u.id=t.userid
@@ -334,21 +375,6 @@ async fn optLoadTopicRow(state: &AppState, topic_id: i32) -> Result<Option<Topic
     let Some(row) = row else {
         return Ok(None);
     };
-    let (
-        section,
-        group,
-        author,
-        author_id,
-        title,
-        message,
-        markup,
-        postdate,
-        deleted,
-        draft,
-        committed,
-        postscore,
-        section_premoderated,
-    ) = row;
     let tags: Vec<String> = sqlx::query_scalar(
         "SELECT tv.value FROM tags tg JOIN tags_values tv ON tv.id=tg.tagid WHERE tg.msgid=$1",
     )
@@ -356,25 +382,33 @@ async fn optLoadTopicRow(state: &AppState, topic_id: i32) -> Result<Option<Topic
     .fetch_all(&state.pool)
     .await
     .map_err(|stError| stError.to_string())?;
-    let comments_hidden = postscore == POSTSCORE_HIDE_COMMENTS;
-    let awaits_commit = topic_awaits_commit(section_premoderated, committed);
+    let comments_hidden = row.postscore == POSTSCORE_HIDE_COMMENTS;
+    let awaits_commit = topic_awaits_commit(row.section_premoderated, row.committed);
     // TopicPermissionService.isTopicSearchable excludes an anonymous topic
     // only while it awaits commit in a premoderated section.
-    let premoderated_anonymous_uncommitted = awaits_commit && author_id == ANONYMOUS_USER_ID;
+    let premoderated_anonymous_uncommitted = awaits_commit && row.author_id == ANONYMOUS_USER_ID;
+    let nofollow = !crate::domain::topic::link_policy::StAuthorLinkState {
+        iScore: row.author_score,
+        bBlocked: row.author_blocked,
+        bAnonymous: row.author_anonymous,
+        bFrozen: row.author_frozen,
+    }
+    .bFollowInTopic(row.committed);
     Ok(Some(TopicRow {
-        section,
-        group,
-        author,
-        title: html_escape::decode_html_entities(&title).into_owned(),
-        message,
-        markup,
-        postdate,
+        section: row.section,
+        group: row.group_name,
+        author: row.author,
+        title: sTopicTitleForSearchIndex(&row.title),
+        message: row.message,
+        markup: row.markup,
+        postdate: row.postdate,
         tags,
-        deleted,
-        draft,
+        deleted: row.deleted,
+        draft: row.draft,
         awaits_commit,
         comments_hidden,
         premoderated_anonymous_uncommitted,
+        nofollow,
     }))
 }
 
@@ -386,6 +420,23 @@ async fn vIndexTopic(state: &AppState, topic_id: i32, with_comments: bool) -> Re
     let Some(row) = optLoadTopicRow(state, topic_id).await? else {
         return Ok(());
     };
+    let comment_ids: Vec<i32> = if with_comments {
+        sqlx::query_scalar("SELECT id FROM comments WHERE topic=$1")
+            .bind(topic_id)
+            .fetch_all(&state.pool)
+            .await
+            .map_err(|stError| stError.to_string())?
+    } else {
+        Vec::new()
+    };
+    let mut vecMessageIds = Vec::with_capacity(comment_ids.len() + 1);
+    vecMessageIds.push(topic_id);
+    vecMessageIds.extend(comment_ids.iter().copied());
+    let stMarkupUsers = state
+        .markup
+        .stResolveMessageIds(&vecMessageIds)
+        .await
+        .map_err(|stError| stError.to_string())?;
 
     if row.deleted || row.draft || row.comments_hidden || row.premoderated_anonymous_uncommitted {
         vDeleteDoc(state, base, topic_id).await?;
@@ -398,7 +449,14 @@ async fn vIndexTopic(state: &AppState, topic_id: i32, with_comments: bool) -> Re
             group: row.group.clone(),
             title: Some(row.title.clone()),
             topic_title: row.title.clone(),
-            message: markup::render_message_with_markup(&row.message, Some(&row.markup), None),
+            message: markup::render_message_with_markup_policy_and_users(
+                &row.message,
+                Some(&row.markup),
+                None,
+                row.nofollow,
+                Some(&state.config.public_url),
+                Some(&stMarkupUsers),
+            ),
             postdate: row.postdate.to_rfc3339(),
             tag: row.tags.clone(),
             is_comment: false,
@@ -408,13 +466,8 @@ async fn vIndexTopic(state: &AppState, topic_id: i32, with_comments: bool) -> Re
     }
 
     if with_comments {
-        let comment_ids: Vec<i32> = sqlx::query_scalar("SELECT id FROM comments WHERE topic=$1")
-            .bind(topic_id)
-            .fetch_all(&state.pool)
-            .await
-            .map_err(|stError| stError.to_string())?;
         for id in comment_ids {
-            vIndexComment(state, id).await?;
+            vIndexComment(state, id, Some(&stMarkupUsers)).await?;
         }
     }
     Ok(())
@@ -432,12 +485,19 @@ pub async fn index_topic(state: &AppState, topic_id: i32, with_comments: bool) {
     }
 }
 
-async fn vIndexComment(state: &AppState, comment_id: i32) -> Result<(), String> {
+async fn vIndexComment(
+    state: &AppState,
+    comment_id: i32,
+    optMarkupUsers: Option<&StMarkupUserDirectory>,
+) -> Result<(), String> {
     let Some(base) = base_url(state) else {
         return Ok(());
     };
     let row: Option<TySearchCommentRow> = sqlx::query_as(
-        r#"SELECT c.topic,c.title,u.nick,m.message,m.markup::text,c.postdate,c.deleted
+        r#"SELECT c.topic,c.title,u.nick,COALESCE(u.score,0),
+                  COALESCE(u.blocked,false),COALESCE(u.passwd,'')='',
+                  COALESCE(u.frozen_until > CURRENT_TIMESTAMP,false),
+                  m.message,m.markup::text,c.postdate,c.deleted
            FROM comments c
            JOIN users u ON u.id=c.userid
            JOIN msgbase m ON m.id=c.id
@@ -447,9 +507,29 @@ async fn vIndexComment(state: &AppState, comment_id: i32) -> Result<(), String> 
     .fetch_optional(&state.pool)
     .await
     .map_err(|stError| stError.to_string())?;
-    let Some((topic_id, title, author, message, markup, postdate, deleted)) = row else {
+    let Some((
+        topic_id,
+        title,
+        author,
+        author_score,
+        author_blocked,
+        author_anonymous,
+        author_frozen,
+        message,
+        markup,
+        postdate,
+        deleted,
+    )) = row
+    else {
         return Ok(());
     };
+    let nofollow = !crate::domain::topic::link_policy::StAuthorLinkState {
+        iScore: author_score,
+        bBlocked: author_blocked,
+        bAnonymous: author_anonymous,
+        bFrozen: author_frozen,
+    }
+    .bFollowAuthorLinks();
     let comment = CommentRow {
         topic_id,
         title,
@@ -458,7 +538,22 @@ async fn vIndexComment(state: &AppState, comment_id: i32) -> Result<(), String> 
         markup,
         postdate,
         deleted,
+        nofollow,
     };
+    let optOwnedMarkupUsers = if optMarkupUsers.is_none() {
+        Some(
+            state
+                .markup
+                .stResolveBatch([(&*comment.message, &*comment.markup)])
+                .await
+                .map_err(|stError| stError.to_string())?,
+        )
+    } else {
+        None
+    };
+    let stMarkupUsers = optMarkupUsers
+        .or(optOwnedMarkupUsers.as_ref())
+        .expect("borrowed or locally resolved markup users");
     let Some(topic) = optLoadTopicRow(state, topic_id).await? else {
         vDeleteDoc(state, base, comment_id).await?;
         return Ok(());
@@ -474,7 +569,7 @@ async fn vIndexComment(state: &AppState, comment_id: i32) -> Result<(), String> 
         return Ok(());
     }
 
-    let doc = stCommentIndexDocument(&topic, &comment);
+    let doc = stCommentIndexDocument(&topic, &comment, &state.config.public_url, stMarkupUsers);
     vPutDoc(state, base, comment_id, &doc).await
 }
 
@@ -556,7 +651,17 @@ pub(crate) async fn vDrainQueue(stState: &AppState) -> Result<(), String> {
             EnSearchQueueJob::Topic { id, with_comments } => {
                 vIndexTopic(stState, id, with_comments).await
             }
-            EnSearchQueueJob::Comment { id } => vIndexComment(stState, id).await,
+            EnSearchQueueJob::Comment { id } => vIndexComment(stState, id, None).await,
+            EnSearchQueueJob::Comments { ids } => {
+                let mut stResult = Ok(());
+                for id in ids {
+                    if let Err(stError) = vIndexComment(stState, id, None).await {
+                        stResult = Err(stError);
+                        break;
+                    }
+                }
+                stResult
+            }
         };
         match stResult {
             Ok(()) => {
@@ -1759,13 +1864,15 @@ use crate::markup;
 
 #[cfg(test)]
 mod moderation_semantics_tests {
+    use crate::domain::markup::model::StMarkupUserDirectory;
     use chrono::{TimeZone, Utc};
 
     use super::{
         CommentRow, EnSearchQueueJob, SearchInterval, SearchParams, SearchRange, SearchSort,
-        StReindexMonth, TopicRow, stActiveTagsRequestBody, stCommentIndexDocument,
-        stIndexDefinition, stRelatedTagsRequestBody, stSearchRequestBody, stSimilarRequestBody,
-        topic_awaits_commit, vecAllReindexMonths, vecIndexContractProblems, vecRecentReindexMonths,
+        StReindexMonth, TopicRow, sTopicTitleForSearchIndex, stActiveTagsRequestBody,
+        stCommentIndexDocument, stIndexDefinition, stRelatedTagsRequestBody, stSearchRequestBody,
+        stSimilarRequestBody, topic_awaits_commit, vecAllReindexMonths, vecIndexContractProblems,
+        vecRecentReindexMonths,
     };
 
     #[test]
@@ -1832,6 +1939,7 @@ mod moderation_semantics_tests {
                 with_comments: true,
             },
             EnSearchQueueJob::Comment { id: 43 },
+            EnSearchQueueJob::Comments { ids: vec![44, 45] },
         ] {
             let vecPayload = serde_json::to_vec(&stJob).unwrap();
             assert_eq!(
@@ -1839,6 +1947,21 @@ mod moderation_semantics_tests {
                 stJob
             );
         }
+    }
+
+    #[test]
+    fn topic_index_title_matches_topic_from_result_set_and_get_title_unescaped() {
+        assert_eq!(
+            sTopicTitleForSearchIndex(
+                "Rust &amp; &lt; &gt; &quot;quoted&quot; &#39;apostrophe&#39;"
+            ),
+            "Rust & < > «quoted» 'apostrophe'"
+        );
+        assert_eq!(
+            sTopicTitleForSearchIndex("  &quot;LOR&quot; -- Rust  "),
+            "  «LOR» -- Rust  ",
+            "OpenSearchIndexService does not apply the JSP TitleTag/processTitle stage"
+        );
     }
 
     #[test]
@@ -1921,8 +2044,9 @@ mod moderation_semantics_tests {
             awaits_commit: false,
             comments_hidden: false,
             premoderated_anonymous_uncommitted: false,
+            nofollow: false,
         };
-        let stComment = CommentRow {
+        let mut stComment = CommentRow {
             topic_id: 42,
             title: "Комментарий".to_owned(),
             author: "comment-author".to_owned(),
@@ -1930,14 +2054,62 @@ mod moderation_semantics_tests {
             markup: "LORCODE".to_owned(),
             postdate: Utc.with_ymd_and_hms(2026, 2, 3, 4, 5, 6).unwrap(),
             deleted: false,
+            nofollow: false,
         };
+        let stMarkupUsers = StMarkupUserDirectory::default();
 
-        let stDocument = stCommentIndexDocument(&stTopic, &stComment);
+        let stDocument = stCommentIndexDocument(
+            &stTopic,
+            &stComment,
+            "https://www.linux.org.ru",
+            &stMarkupUsers,
+        );
 
         assert_eq!(stDocument.author, "comment-author");
         assert_eq!(stDocument.topic_author, "topic-author");
         assert_eq!(stDocument.postdate, "2026-02-03T04:05:06+00:00");
-        assert_eq!(stDocument.message, "<p><strong>Body</strong></p>");
+        assert_eq!(stDocument.message, "<p><b>Body</b></p>");
+
+        stComment.message = "https://outside.example/".to_owned();
+        stComment.nofollow = true;
+        let stRestricted = stCommentIndexDocument(
+            &stTopic,
+            &stComment,
+            "https://www.linux.org.ru",
+            &stMarkupUsers,
+        );
+        assert!(
+            stRestricted.message.contains("rel=\"nofollow\""),
+            "OpenSearch must receive the same author-policy HTML as the page"
+        );
+
+        stComment.title = "A &quot;quoted&quot; comment".to_owned();
+        assert_eq!(
+            stCommentIndexDocument(
+                &stTopic,
+                &stComment,
+                "https://www.linux.org.ru",
+                &stMarkupUsers,
+            )
+            .title
+            .as_deref(),
+            Some("A \"quoted\" comment"),
+            "legacy comment titles are unescaped once without makeTitle typography"
+        );
+
+        stComment.title = "Re&#58; encoded legacy title".to_owned();
+        assert_eq!(
+            stCommentIndexDocument(
+                &stTopic,
+                &stComment,
+                "https://www.linux.org.ru",
+                &stMarkupUsers,
+            )
+            .title
+            .as_deref(),
+            Some("Re: encoded legacy title"),
+            "Java filters the raw stored comment title before HTML4 unescaping"
+        );
     }
 
     fn stSearchParams() -> SearchParams {

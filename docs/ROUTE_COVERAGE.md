@@ -3,8 +3,8 @@
 > This is not a semantic parity report. It compares normalized path templates and declared methods only. It does not verify request parameters, headers/content negotiation, authentication/authorization, status/redirects, HTML, database changes or side effects.
 
 Expanded original Spring mapping variants: **193**
-Path and all declared methods present in a Rust declaration: **113**
-Path present with only partial/unrestricted-method overlap: **80**
+Path and all declared methods present in a Rust declaration: **119**
+Path present with only partial/unrestricted-method overlap: **74**
 Path exists but method differs: **0**
 Missing route declaration: **0**
 
@@ -13,7 +13,7 @@ Spring `ANY` mappings are intentionally reported as partial unless the Rust inve
 | Structural status | Methods | Original path | Mapping conditions | Controller.handler | Rust declaration |
 |---|---|---|---|---|---|
 | partial-method | `ANY` | `/` | `` | `MainPageController.mainPage` | `GET /` |
-| partial-method | `ANY` | `/ExceptionResolver` | `` | `ExceptionController.defaultExceptionHandler` | `GET /ExceptionResolver` |
+| method-declared | `ANY` | `/ExceptionResolver` | `` | `ExceptionController.defaultExceptionHandler` | `ANY /ExceptionResolver; ANY /ExceptionResolver` |
 | partial-method | `ANY` | `/about` | `` | `ServerInfoController.serverInfo` | `GET /about` |
 | method-declared | `GET` | `/activate` | `` | `RegisterController.activateForm` | `GET,POST /activate` |
 | method-declared | `POST` | `/activate` | `params=action` | `RegisterController.activateNew` | `GET,POST /activate` |
@@ -37,15 +37,15 @@ Spring `ANY` mappings are intentionally reported as partial unless the Rust inve
 | method-declared | `POST` | `/admin/search-reindex` | `params=action=all` | `SearchControlController.reindexAll` | `GET,POST /admin/search-reindex` |
 | method-declared | `POST` | `/admin/search-reindex` | `params=action=current` | `SearchControlController.reindexCurrentMonth` | `GET,POST /admin/search-reindex` |
 | method-declared | `GET` | `/admin/search-reindex` | `` | `SearchControlController.reindex` | `GET,POST /admin/search-reindex` |
-| partial-method | `ANY` | `/articles.boxlet` | `` | `ArticlesBoxlet.getData` | `GET /articles.boxlet` |
-| partial-method | `ANY` | `/articles/archive` | `` | `ArchiveController.articlesArchive` | `GET /articles/archive` |
+| method-declared | `ANY` | `/articles.boxlet` | `` | `ArticlesBoxlet.getData` | `ANY /articles.boxlet` |
+| partial-method | `ANY` | `/articles/archive` | `` | `ArchiveController.articlesArchive` | `GET /articles/archive; GET /articles/archive/` |
 | partial-method | `ANY` | `/articles/{group}/{id}/history` | `` | `EditHistoryController.showEditInfo` | `GET /articles/{group}/{id}/history` |
 | partial-method | `ANY` | `/articles/{group}/{id}/{commentid}/history` | `` | `EditHistoryController.showCommentEditInfo` | `GET /articles/{group}/{id}/{commentid}/history` |
 | method-declared | `POST` | `/banip.jsp` | `` | `BanIPController.banIP` | `POST /banip.jsp` |
 | partial-method | `ANY` | `/check-login` | `` | `RegisterController.ajaxLoginCheck` | `GET /check-login` |
 | method-declared | `POST` | `/clear-warning` | `` | `WarningController.clear` | `POST /clear-warning` |
-| partial-method | `ANY` | `/comment-message.jsp` | `` | `AddCommentController.showFormTopic` | `GET /comment-message.jsp` |
-| method-declared | `GET` | `/commit.jsp` | `` | `EditTopicController.showCommitForm` | `GET,POST /commit.jsp` |
+| partial-method | `ANY` | `/comment-message.jsp` | `` | `AddCommentController.showFormTopic` | `GET,POST,PUT,DELETE,PATCH /comment-message.jsp` |
+| method-declared | `GET` | `/commit.jsp` | `` | `EditTopicController.showCommitForm` | `GET /commit.jsp` |
 | method-declared | `GET` | `/delete.jsp` | `` | `DeleteTopicController.showForm` | `GET,POST /delete.jsp` |
 | method-declared | `POST` | `/delete.jsp` | `` | `DeleteTopicController.deleteMessage` | `GET,POST /delete.jsp` |
 | method-declared | `GET` | `/delete_comment.jsp` | `` | `DeleteCommentController.showForm` | `GET,POST /delete_comment.jsp` |
@@ -59,17 +59,17 @@ Spring `ANY` mappings are intentionally reported as partial unless the Rust inve
 | method-declared | `POST` | `/edit.jsp` | `` | `EditTopicController.edit` | `GET,POST /edit.jsp` |
 | method-declared | `GET` | `/edit_comment` | `` | `EditCommentController.editCommentShowHandler` | `GET,POST /edit_comment` |
 | method-declared | `POST` | `/edit_comment` | `` | `EditCommentController.editCommentPostHandler` | `GET,POST /edit_comment` |
-| partial-method | `ANY` | `/errors/403` | `` | `HttpErrorController.handle403` | `GET /errors/403` |
-| partial-method | `ANY` | `/errors/404` | `` | `HttpErrorController.handle404` | `GET /errors/404` |
+| method-declared | `ANY` | `/errors/403` | `` | `HttpErrorController.handle403` | `ANY /errors/403; ANY /errors/403` |
+| method-declared | `ANY` | `/errors/404` | `` | `HttpErrorController.handle404` | `ANY /errors/404; ANY /errors/404` |
 | partial-method | `ANY` | `/forum` | `` | `SectionController.forum` | `GET /forum; GET /forum/` |
 | partial-method | `ANY` | `/forum/lenta` | `` | `TopicListController.forum` | `GET /forum/lenta` |
 | partial-method | `ANY` | `/forum/{group}` | `` | `GroupController.forum` | `GET,POST /forum/{group}` |
-| partial-method | `ANY` | `/forum/{group}/archive` | `` | `ArchiveController.forumArchive` | `GET /forum/{group}/archive` |
+| partial-method | `ANY` | `/forum/{group}/archive` | `` | `ArchiveController.forumArchive` | `GET /forum/{group}/archive; GET /forum/{group}/archive/` |
 | partial-method | `ANY` | `/forum/{group}/{id}/history` | `` | `EditHistoryController.showEditInfo` | `GET /forum/{group}/{id}/history` |
 | partial-method | `ANY` | `/forum/{group}/{id}/{commentid}/history` | `` | `EditHistoryController.showCommentEditInfo` | `GET /forum/{group}/{id}/{commentid}/history` |
-| partial-method | `ANY` | `/forum/{group}/{year}/{month}` | `` | `GroupController.forumArchive` | `GET /forum/{group}/{id_or_year}/{page_or_month}` |
+| partial-method | `ANY` | `/forum/{group}/{year}/{month}` | `` | `GroupController.forumArchive` | `GET /forum/{group}/{id_or_year}/{page_or_month}; GET /forum/{group}/{id_or_year}/{page_or_month}/` |
 | method-declared | `ANY` | `/gallery.boxlet` | `` | `GalleryBoxlet.getData` | `ANY /gallery.boxlet` |
-| partial-method | `ANY` | `/gallery/archive` | `` | `ArchiveController.galleryArchive` | `GET /gallery/archive` |
+| partial-method | `ANY` | `/gallery/archive` | `` | `ArchiveController.galleryArchive` | `GET /gallery/archive; GET /gallery/archive/` |
 | partial-method | `ANY` | `/gallery/{group}/{id}/history` | `` | `EditHistoryController.showEditInfo` | `GET /gallery/{group}/{id}/history` |
 | partial-method | `ANY` | `/gallery/{group}/{id}/{commentid}/history` | `` | `EditHistoryController.showCommentEditInfo` | `GET /gallery/{group}/{id}/{commentid}/history` |
 | partial-method | `ANY` | `/group-lastmod.jsp` | `` | `GroupController.topicsLastmod` | `GET /group-lastmod.jsp` |
@@ -93,7 +93,7 @@ Spring `ANY` mappings are intentionally reported as partial unless the Rust inve
 | method-declared | `POST` | `/mt.jsp` | `` | `TopicModificationController.moveTopic` | `GET,POST /mt.jsp` |
 | method-declared | `GET` | `/mt.jsp` | `` | `TopicModificationController.moveToForumForm` | `GET,POST /mt.jsp` |
 | method-declared | `GET` | `/mtn.jsp` | `` | `TopicModificationController.movePremoderatedForm` | `GET /mtn.jsp` |
-| partial-method | `ANY` | `/news/archive` | `` | `ArchiveController.newsArchive` | `GET /news/archive` |
+| partial-method | `ANY` | `/news/archive` | `` | `ArchiveController.newsArchive` | `GET /news/archive; GET /news/archive/` |
 | partial-method | `ANY` | `/news/{group}/{id}/history` | `` | `EditHistoryController.showEditInfo` | `GET /news/{group}/{id}/history` |
 | partial-method | `ANY` | `/news/{group}/{id}/{commentid}/history` | `` | `EditHistoryController.showCommentEditInfo` | `GET /news/{group}/{id}/{commentid}/history` |
 | method-declared | `POST` | `/notifications` | `` | `UserEventController.resetNotifications` | `GET,POST /notifications` |
@@ -102,11 +102,11 @@ Spring `ANY` mappings are intentionally reported as partial unless the Rust inve
 | method-declared | `POST` | `/notifications-click/ajax` | `produces=application/json` | `UserEventController.clickNotificationsAjax` | `POST /notifications-click/ajax` |
 | method-declared | `GET` | `/notifications-count` | `` | `UserEventApiController.getEventsCount` | `GET /notifications-count` |
 | method-declared | `POST` | `/notifications-reset` | `` | `UserEventApiController.resetNotifications` | `POST /notifications-reset` |
-| partial-method | `ANY` | `/people/{nick}` | `params=output=rss` | `UserTopicListController.showUserTopicsRssGone` | `GET /people/{nick}` |
-| partial-method | `ANY` | `/people/{nick}` | `` | `UserTopicListController.showUserTopics` | `GET /people/{nick}` |
+| partial-method | `ANY` | `/people/{nick}` | `params=output=rss` | `UserTopicListController.showUserTopicsRssGone` | `GET /people/{nick}; GET /people/{nick}/` |
+| partial-method | `ANY` | `/people/{nick}` | `` | `UserTopicListController.showUserTopics` | `GET /people/{nick}; GET /people/{nick}/` |
 | partial-method | `ANY` | `/people/{nick}/deleted-comments` | `` | `ShowCommentsController.showDeletedComments` | `GET /people/{nick}/deleted-comments` |
 | method-declared | `GET` | `/people/{nick}/deleted-topics` | `` | `UserTopicListController.showDeletedTopics` | `GET /people/{nick}/deleted-topics` |
-| partial-method | `ANY` | `/people/{nick}/drafts` | `` | `UserTopicListController.showUserDrafts` | `GET /people/{nick}/drafts` |
+| partial-method | `ANY` | `/people/{nick}/drafts` | `` | `UserTopicListController.showUserDrafts` | `GET /people/{nick}/drafts; GET /people/{nick}/drafts` |
 | method-declared | `GET` | `/people/{nick}/edit` | `` | `EditProfileController.show` | `GET,POST /people/{nick}/edit; GET /people/{nick}/edit` |
 | method-declared | `POST` | `/people/{nick}/edit` | `` | `EditProfileController.edit` | `GET,POST /people/{nick}/edit` |
 | partial-method | `ANY` | `/people/{nick}/favs` | `` | `UserTopicListController.showUserFavs` | `GET /people/{nick}/favs` |
@@ -122,8 +122,8 @@ Spring `ANY` mappings are intentionally reported as partial unless the Rust inve
 | method-declared | `GET` | `/people/{nick}/settings` | `` | `EditSettingsController.showForm` | `GET,POST /people/{nick}/settings; GET,POST /people/{nick}/settings/; GET /people/{nick}/settings` |
 | method-declared | `POST` | `/people/{nick}/settings` | `` | `EditSettingsController.updateSettings` | `GET,POST /people/{nick}/settings; GET,POST /people/{nick}/settings/` |
 | partial-method | `ANY` | `/people/{nick}/tracked` | `` | `UserTopicListController.showUserWatches` | `GET /people/{nick}/tracked` |
-| partial-method | `ANY` | `/poll.boxlet` | `` | `PollBoxlet.getData` | `GET /poll.boxlet` |
-| partial-method | `ANY` | `/polls/archive` | `` | `ArchiveController.pollsArchive` | `GET /polls/archive` |
+| method-declared | `ANY` | `/poll.boxlet` | `` | `PollBoxlet.getData` | `ANY /poll.boxlet` |
+| partial-method | `ANY` | `/polls/archive` | `` | `ArchiveController.pollsArchive` | `GET /polls/archive; GET /polls/archive/` |
 | partial-method | `ANY` | `/polls/{group}/{id}/history` | `` | `EditHistoryController.showEditInfo` | `GET /polls/{group}/{id}/history` |
 | partial-method | `ANY` | `/polls/{group}/{id}/{commentid}/history` | `` | `EditHistoryController.showCommentEditInfo` | `GET /polls/{group}/{id}/{commentid}/history` |
 | method-declared | `GET` | `/post-warning` | `` | `WarningController.showForm` | `GET,POST /post-warning` |
@@ -139,7 +139,7 @@ Spring `ANY` mappings are intentionally reported as partial unless the Rust inve
 | method-declared | `POST` | `/remove-userpic.jsp` | `` | `UserModificationController.removeUserpic` | `POST /remove-userpic.jsp` |
 | method-declared | `GET` | `/reset-password` | `` | `ResetPasswordController.showCodeForm` | `GET,POST /reset-password` |
 | method-declared | `POST` | `/reset-password` | `` | `ResetPasswordController.resetPassword` | `GET,POST /reset-password` |
-| partial-method | `ANY` | `/resolve.jsp` | `` | `ResolveController.resolve` | `GET,POST /resolve.jsp` |
+| partial-method | `ANY` | `/resolve.jsp` | `` | `ResolveController.resolve` | `GET,POST,PUT,DELETE,PATCH /resolve.jsp` |
 | partial-method | `ANY` | `/sameip.jsp` | `` | `SameIPController.sameIP` | `GET /sameip.jsp` |
 | partial-method | `GET,HEAD` | `/search.jsp` | `` | `SearchController.search` | `GET /search.jsp` |
 | partial-method | `ANY` | `/section-rss.jsp` | `` | `TopicListController.showRSS` | `GET /section-rss.jsp` |
@@ -161,7 +161,7 @@ Spring `ANY` mappings are intentionally reported as partial unless the Rust inve
 | method-declared | `GET` | `/tags/delete` | `` | `TagController.deleteTagShowFormHandler` | `GET,POST /tags/delete` |
 | method-declared | `POST` | `/tags/delete` | `` | `TagController.deleteTagSubmitHandler` | `GET,POST /tags/delete` |
 | partial-method | `ANY` | `/tags/{firstLetter}` | `` | `TagController.showTagListHandler` | `GET /tags/{first_letter}` |
-| partial-method | `ANY` | `/top10.boxlet` | `` | `TopTenBoxlet.getData` | `GET /top10.boxlet` |
+| method-declared | `ANY` | `/top10.boxlet` | `` | `TopTenBoxlet.getData` | `ANY /top10.boxlet` |
 | partial-method | `ANY` | `/tracker` | `` | `TrackerController.tracker` | `GET /tracker; GET /tracker/` |
 | partial-method | `ANY` | `/tracker.jsp` | `` | `TrackerController.trackerOldUrl` | `GET /tracker.jsp` |
 | method-declared | `GET` | `/uncommit.jsp` | `` | `TopicModificationController.uncommitForm` | `GET,POST /uncommit.jsp` |
@@ -200,8 +200,8 @@ Spring `ANY` mappings are intentionally reported as partial unless the Rust inve
 | partial-method | `ANY` | `/whois.jsp` | `` | `WhoisController.getInfo` | `GET /whois.jsp` |
 | method-declared | `GET` | `/yandex-tableau` | `produces=application/json` | `UserEventApiController.getYandexWidget` | `GET /yandex-tableau` |
 | partial-method | `ANY` | `/{section}/` | `` | `TopicListController.topics` | `GET /forum; GET /forum/; GET /news/; GET /polls/; GET /articles/; GET /gallery/` |
-| partial-method | `ANY` | `/{section}/archive/{year}/{month}` | `` | `TopicListController.sectionArchive` | `GET /news/archive/{year}/{month}; GET /polls/archive/{year}/{month}; GET /articles/archive/{year}/{month}; GET /gallery/archive/{year}/{month}` |
+| partial-method | `ANY` | `/{section}/archive/{year}/{month}` | `` | `TopicListController.sectionArchive` | `GET /news/archive/{year}/{month}; GET /news/archive/{year}/{month}/; GET /polls/archive/{year}/{month}; GET /polls/archive/{year}/{month}/; GET /articles/archive/{year}/{month}; GET /articles/archive/{year}/{month}/; GET /gallery/archive/{year}/{month}; GET /gallery/archive/{year}/{month}/` |
 | partial-method | `ANY` | `/{section}/{group}` | `` | `TopicListController.topicsByGroup` | `GET,POST /forum/{group}; GET /news/{group}; GET /polls/{group}; GET /articles/{group}; GET /gallery/{group}` |
 | partial-method | `ANY` | `/{section}/{group}/{id}` | `` | `TopicController.getMessageMain` | `GET /forum/{group}/{id}; GET /news/{group}/{id}; GET /polls/{group}/{id}; GET /articles/{group}/{id}; GET /gallery/{group}/{id}` |
-| method-declared | `GET` | `/{section}/{group}/{id}/page{page}` | `` | `TopicController.getMessagePage` | `GET /forum/{group}/{id_or_year}/{page_or_month}; GET /news/{group}/{id}/{page_marker}; GET /polls/{group}/{id}/{page_marker}; GET /articles/{group}/{id}/{page_marker}; GET /gallery/{group}/{id}/{page_marker}` |
+| method-declared | `GET` | `/{section}/{group}/{id}/page{page}` | `` | `TopicController.getMessagePage` | `GET /forum/{group}/{id_or_year}/{page_or_month}; GET /forum/{group}/{id_or_year}/{page_or_month}/; GET /news/{group}/{id}/{page_marker}; GET /polls/{group}/{id}/{page_marker}; GET /articles/{group}/{id}/{page_marker}; GET /gallery/{group}/{id}/{page_marker}` |
 | method-declared | `GET` | `/{section}/{group}/{id}/thread/{threadRoot}` | `` | `TopicController.getMessageThread` | `GET /forum/{group}/{id}/thread/{thread_root}; GET /news/{group}/{id}/thread/{thread_root}; GET /polls/{group}/{id}/thread/{thread_root}; GET /articles/{group}/{id}/thread/{thread_root}; GET /gallery/{group}/{id}/thread/{thread_root}` |

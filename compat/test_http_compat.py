@@ -38,6 +38,8 @@ class Response:
     body: bytes
     set_cookie_names: frozenset[str]
     cache_control: str
+    allow: str
+    content_length: str
 
 
 class HttpClient:
@@ -75,7 +77,23 @@ class HttpClient:
         extra_headers: dict[str, str] | None = None,
     ) -> Response:
         method = method.upper()
-        if method == "POST" and csrf_mode != "omit":
+        if method == "POST" and csrf_mode == "query":
+            parsed_path = urllib.parse.urlsplit(path)
+            query_pairs = urllib.parse.parse_qsl(
+                parsed_path.query, keep_blank_values=True
+            )
+            if not any(key == "csrf" for key, _value in query_pairs):
+                query_pairs.append(("csrf", self.ensure_csrf()))
+            path = urllib.parse.urlunsplit(
+                (
+                    parsed_path.scheme,
+                    parsed_path.netloc,
+                    parsed_path.path,
+                    urllib.parse.urlencode(query_pairs),
+                    parsed_path.fragment,
+                )
+            )
+        elif method == "POST" and csrf_mode != "omit":
             pairs = urllib.parse.parse_qsl(data or "", keep_blank_values=True)
             if not any(key == "csrf" for key, _value in pairs):
                 token = "invalid-csrf-token" if csrf_mode == "invalid" else self.ensure_csrf()
@@ -121,6 +139,8 @@ def response_value(status: int, headers, body: bytes) -> Response:
         body=body,
         set_cookie_names=cookie_names,
         cache_control=headers.get("cache-control", ""),
+        allow=headers.get("allow", ""),
+        content_length=headers.get("content-length", ""),
     )
 
 
@@ -149,6 +169,8 @@ def report_response(response: Response) -> dict[str, object]:
         "location_raw": response.location_raw,
         "set_cookie_names": sorted(response.set_cookie_names),
         "cache_control": response.cache_control,
+        "allow": response.allow,
+        "content_length": response.content_length,
     }
 
 
@@ -207,6 +229,14 @@ def validate_expected(
         failures.append(
             f"{label} raw redirect {response.location_raw!r}, expected {expected_location_raw!r}"
         )
+    expected_allow = expected(case, side, "expected_allow")
+    if expected_allow is not None and response.allow != str(expected_allow):
+        failures.append(f"{label} Allow {response.allow!r}, expected {expected_allow!r}")
+    expected_content_length = expected(case, side, "expected_content_length")
+    if expected_content_length is not None and response.content_length != str(expected_content_length):
+        failures.append(
+            f"{label} Content-Length {response.content_length!r}, expected {expected_content_length!r}"
+        )
     return failures
 
 
@@ -254,6 +284,10 @@ def compare_responses(
         failures.append(
             f"{case['name']}: raw redirect old={old_response.location_raw!r} "
             f"new={new_response.location_raw!r}"
+        )
+    if case.get("compare_allow") and old_response.allow != new_response.allow:
+        failures.append(
+            f"{case['name']}: Allow old={old_response.allow!r} new={new_response.allow!r}"
         )
     return failures
 

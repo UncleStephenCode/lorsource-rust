@@ -39,8 +39,9 @@ cargo run
 ```
 
 Rust-приложение не выполняет миграций при старте. Оно подключается как
-Java-role `linuxweb` и проверяет 33 таблицы, 214 колонок, enum, sequence,
-function, extension и оставшиеся Java triggers только через PostgreSQL catalog.
+Java-role `linuxweb` и проверяет 33 таблицы, 214 колонок, enum и
+605-строчный required-object контракт PK/FK/UNIQUE/CHECK/default/index/
+sequence/ACL; дрейф owner и дополнительных объектов фиксируется отдельно.
 
 ## Проверка
 
@@ -83,6 +84,8 @@ python3 compat/test_http_compat.py
 Requirement-by-requirement границы локальных доказательств и обязательных
 operator evidence собраны в
 [`docs/PRODUCTION_READINESS_EVIDENCE.md`](docs/PRODUCTION_READINESS_EVIDENCE.md).
+Безопасный read-only аудит смешанного Java/Rust хранения заголовков
+описан в [`docs/TITLE_REPRESENTATION_AUDIT.md`](docs/TITLE_REPRESENTATION_AUDIT.md).
 Готовый hardened runtime-манифест находится в
 [`deploy/compose.production.yml`](deploy/compose.production.yml); его preflight
 выполняет `scripts/check-production-runtime.sh`, а локальную
@@ -142,6 +145,8 @@ go/no-go нужна репетиция на клоне production-БД и media 
 реальными snapshot/WAL identifiers, проверка внешних адаптеров и
 отработанный rollback. `scripts/run-cutover-gate.sh` отказывается
 давать зелёный статус без этих доказательств.
+Кроме того, пока не закрыт единый атомарный `edit.jsp` workflow с
+`commit`/`publish`/`chgrp`, бонусами и optimistic-lock полем `lastEdit`.
 
 Сейчас все извлечённые URL-формы объявлены в Rust-router, и явных `legacy::not_implemented` маршрутов больше нет. SMTP-доставка activation/change-email/password-reset писем и асинхронных administrator exception reports совместима с локальным MTA Java-приложения; детали описаны в `docs/EMAIL_COMPATIBILITY.md`. OpenSearch reindex выполняет оригинальное помесячное разбиение, а write-события проходят через персистентный filesystem spool с retry после рестарта. Перенесены Java-планировщики статистики, тегов, событий, рейтинга, чёрных списков, Telegram и очистки старых файлов. Gallery поддерживает preview/reuse и трёхдневную очистку временных файлов. Это всё ещё не означает production parity: остаются live-проверка production storage/CDN и внешних адаптеров, а также обязательная репетиция на клоне реальной Java-БД и хранилища медиа.
 
@@ -189,6 +194,7 @@ compat/legacy-rust-db/ offline historical Rust SQL (never executed)
 - `docs/COMPATIBILITY_TESTS.md`
 - `docs/DEMO_DB_COMPARISON.md`
 - `docs/DATABASE_COMPATIBILITY.md`
+- `docs/TITLE_REPRESENTATION_AUDIT.md`
 - `docs/PRODUCTION_CUTOVER.md`
 - `docs/FUNCTIONAL_COMPARISON_JAVA_RUST.md`
 - `docs/CURRENT_JAVA_COMPATIBILITY.md`

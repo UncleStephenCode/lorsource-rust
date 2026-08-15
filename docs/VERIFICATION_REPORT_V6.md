@@ -1,7 +1,10 @@
 # Verification report v6: current Java source vs Rust port
 
-> Archived verification report. Mentioned Rust migrations are no longer
-> active and are retained only under `compat/legacy-rust-db/offline-sql/`.
+> Archived verification report. Fixed route totals describe only the v6
+> archives and are not current compatibility evidence. See
+> [`ROUTE_COVERAGE.md`](ROUTE_COVERAGE.md) for the regenerated structural
+> inventory. Mentioned Rust migrations are no longer active and are retained
+> only under `compat/legacy-rust-db/offline-sql/`.
 
 This report was produced from the uploaded archives `lorsource-java(2).zip` and `lorsource-rust(3).zip`.
 The check was repeated from clean unpacked trees, not from the previous generated reports.

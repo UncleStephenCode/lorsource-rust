@@ -1553,6 +1553,7 @@ dependencies = [
  "hmac",
  "html-escape",
  "http",
+ "httpdate",
  "image",
  "ipnetwork",
  "md-5",

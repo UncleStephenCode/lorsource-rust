@@ -14,7 +14,7 @@
     "semantic_parity": "not-evaluated"
   },
   {
-    "status": "partial-method",
+    "status": "method-declared",
     "methods": "ANY",
     "path": "/ExceptionResolver",
     "params": "",
@@ -23,7 +23,7 @@
     "produces": "",
     "controller": "ExceptionController",
     "handler": "defaultExceptionHandler",
-    "rust_match": "GET /ExceptionResolver",
+    "rust_match": "ANY /ExceptionResolver; ANY /ExceptionResolver",
     "source": "src/main/scala/ru/org/linux/exception/ExceptionController.scala:27",
     "semantic_parity": "not-evaluated"
   },
@@ -350,7 +350,7 @@
     "semantic_parity": "not-evaluated"
   },
   {
-    "status": "partial-method",
+    "status": "method-declared",
     "methods": "ANY",
     "path": "/articles.boxlet",
     "params": "",
@@ -359,7 +359,7 @@
     "produces": "",
     "controller": "ArticlesBoxlet",
     "handler": "getData",
-    "rust_match": "GET /articles.boxlet",
+    "rust_match": "ANY /articles.boxlet",
     "source": "src/main/scala/ru/org/linux/boxlets/ArticlesBoxlet.scala:29",
     "semantic_parity": "not-evaluated"
   },
@@ -373,7 +373,7 @@
     "produces": "",
     "controller": "ArchiveController",
     "handler": "articlesArchive",
-    "rust_match": "GET /articles/archive",
+    "rust_match": "GET /articles/archive; GET /articles/archive/",
     "source": "src/main/scala/ru/org/linux/topic/ArchiveController.scala:85",
     "semantic_parity": "not-evaluated"
   },
@@ -457,7 +457,7 @@
     "produces": "",
     "controller": "AddCommentController",
     "handler": "showFormTopic",
-    "rust_match": "GET /comment-message.jsp",
+    "rust_match": "GET,POST,PUT,DELETE,PATCH /comment-message.jsp",
     "source": "src/main/scala/ru/org/linux/comment/AddCommentController.scala:71",
     "semantic_parity": "not-evaluated"
   },
@@ -471,7 +471,7 @@
     "produces": "",
     "controller": "EditTopicController",
     "handler": "showCommitForm",
-    "rust_match": "GET,POST /commit.jsp",
+    "rust_match": "GET /commit.jsp",
     "source": "src/main/scala/ru/org/linux/topic/EditTopicController.scala:58",
     "semantic_parity": "not-evaluated"
   },
@@ -658,7 +658,7 @@
     "semantic_parity": "not-evaluated"
   },
   {
-    "status": "partial-method",
+    "status": "method-declared",
     "methods": "ANY",
     "path": "/errors/403",
     "params": "",
@@ -667,12 +667,12 @@
     "produces": "",
     "controller": "HttpErrorController",
     "handler": "handle403",
-    "rust_match": "GET /errors/403",
+    "rust_match": "ANY /errors/403; ANY /errors/403",
     "source": "src/main/scala/ru/org/linux/site/HttpErrorController.scala:25",
     "semantic_parity": "not-evaluated"
   },
   {
-    "status": "partial-method",
+    "status": "method-declared",
     "methods": "ANY",
     "path": "/errors/404",
     "params": "",
@@ -681,7 +681,7 @@
     "produces": "",
     "controller": "HttpErrorController",
     "handler": "handle404",
-    "rust_match": "GET /errors/404",
+    "rust_match": "ANY /errors/404; ANY /errors/404",
     "source": "src/main/scala/ru/org/linux/site/HttpErrorController.scala:22",
     "semantic_parity": "not-evaluated"
   },
@@ -737,7 +737,7 @@
     "produces": "",
     "controller": "ArchiveController",
     "handler": "forumArchive",
-    "rust_match": "GET /forum/{group}/archive",
+    "rust_match": "GET /forum/{group}/archive; GET /forum/{group}/archive/",
     "source": "src/main/scala/ru/org/linux/topic/ArchiveController.scala:88",
     "semantic_parity": "not-evaluated"
   },
@@ -779,7 +779,7 @@
     "produces": "",
     "controller": "GroupController",
     "handler": "forumArchive",
-    "rust_match": "GET /forum/{group}/{id_or_year}/{page_or_month}",
+    "rust_match": "GET /forum/{group}/{id_or_year}/{page_or_month}; GET /forum/{group}/{id_or_year}/{page_or_month}/",
     "source": "src/main/scala/ru/org/linux/group/GroupController.scala:71",
     "semantic_parity": "not-evaluated"
   },
@@ -807,7 +807,7 @@
     "produces": "",
     "controller": "ArchiveController",
     "handler": "galleryArchive",
-    "rust_match": "GET /gallery/archive",
+    "rust_match": "GET /gallery/archive; GET /gallery/archive/",
     "source": "src/main/scala/ru/org/linux/topic/ArchiveController.scala:76",
     "semantic_parity": "not-evaluated"
   },
@@ -1143,7 +1143,7 @@
     "produces": "",
     "controller": "ArchiveController",
     "handler": "newsArchive",
-    "rust_match": "GET /news/archive",
+    "rust_match": "GET /news/archive; GET /news/archive/",
     "source": "src/main/scala/ru/org/linux/topic/ArchiveController.scala:79",
     "semantic_parity": "not-evaluated"
   },
@@ -1269,7 +1269,7 @@
     "produces": "",
     "controller": "UserTopicListController",
     "handler": "showUserTopicsRssGone",
-    "rust_match": "GET /people/{nick}",
+    "rust_match": "GET /people/{nick}; GET /people/{nick}/",
     "source": "src/main/scala/ru/org/linux/topic/UserTopicListController.scala:84",
     "semantic_parity": "not-evaluated"
   },
@@ -1283,7 +1283,7 @@
     "produces": "",
     "controller": "UserTopicListController",
     "handler": "showUserTopics",
-    "rust_match": "GET /people/{nick}",
+    "rust_match": "GET /people/{nick}; GET /people/{nick}/",
     "source": "src/main/scala/ru/org/linux/topic/UserTopicListController.scala:88",
     "semantic_parity": "not-evaluated"
   },
@@ -1325,7 +1325,7 @@
     "produces": "",
     "controller": "UserTopicListController",
     "handler": "showUserDrafts",
-    "rust_match": "GET /people/{nick}/drafts",
+    "rust_match": "GET /people/{nick}/drafts; GET /people/{nick}/drafts",
     "source": "src/main/scala/ru/org/linux/topic/UserTopicListController.scala:59",
     "semantic_parity": "not-evaluated"
   },
@@ -1540,7 +1540,7 @@
     "semantic_parity": "not-evaluated"
   },
   {
-    "status": "partial-method",
+    "status": "method-declared",
     "methods": "ANY",
     "path": "/poll.boxlet",
     "params": "",
@@ -1549,7 +1549,7 @@
     "produces": "",
     "controller": "PollBoxlet",
     "handler": "getData",
-    "rust_match": "GET /poll.boxlet",
+    "rust_match": "ANY /poll.boxlet",
     "source": "src/main/scala/ru/org/linux/poll/PollBoxlet.scala:30",
     "semantic_parity": "not-evaluated"
   },
@@ -1563,7 +1563,7 @@
     "produces": "",
     "controller": "ArchiveController",
     "handler": "pollsArchive",
-    "rust_match": "GET /polls/archive",
+    "rust_match": "GET /polls/archive; GET /polls/archive/",
     "source": "src/main/scala/ru/org/linux/topic/ArchiveController.scala:82",
     "semantic_parity": "not-evaluated"
   },
@@ -1787,7 +1787,7 @@
     "produces": "",
     "controller": "ResolveController",
     "handler": "resolve",
-    "rust_match": "GET,POST /resolve.jsp",
+    "rust_match": "GET,POST,PUT,DELETE,PATCH /resolve.jsp",
     "source": "src/main/scala/ru/org/linux/topic/ResolveController.scala:29",
     "semantic_parity": "not-evaluated"
   },
@@ -2086,7 +2086,7 @@
     "semantic_parity": "not-evaluated"
   },
   {
-    "status": "partial-method",
+    "status": "method-declared",
     "methods": "ANY",
     "path": "/top10.boxlet",
     "params": "",
@@ -2095,7 +2095,7 @@
     "produces": "",
     "controller": "TopTenBoxlet",
     "handler": "getData",
-    "rust_match": "GET /top10.boxlet",
+    "rust_match": "ANY /top10.boxlet",
     "source": "src/main/scala/ru/org/linux/boxlets/TopTenBoxlet.scala:28",
     "semantic_parity": "not-evaluated"
   },
@@ -2641,7 +2641,7 @@
     "produces": "",
     "controller": "TopicListController",
     "handler": "sectionArchive",
-    "rust_match": "GET /news/archive/{year}/{month}; GET /polls/archive/{year}/{month}; GET /articles/archive/{year}/{month}; GET /gallery/archive/{year}/{month}",
+    "rust_match": "GET /news/archive/{year}/{month}; GET /news/archive/{year}/{month}/; GET /polls/archive/{year}/{month}; GET /polls/archive/{year}/{month}/; GET /articles/archive/{year}/{month}; GET /articles/archive/{year}/{month}/; GET /gallery/archive/{year}/{month}; GET /gallery/archive/{year}/{month}/",
     "source": "src/main/scala/ru/org/linux/topic/TopicListController.scala:218",
     "semantic_parity": "not-evaluated"
   },
@@ -2683,7 +2683,7 @@
     "produces": "",
     "controller": "TopicController",
     "handler": "getMessagePage",
-    "rust_match": "GET /forum/{group}/{id_or_year}/{page_or_month}; GET /news/{group}/{id}/{page_marker}; GET /polls/{group}/{id}/{page_marker}; GET /articles/{group}/{id}/{page_marker}; GET /gallery/{group}/{id}/{page_marker}",
+    "rust_match": "GET /forum/{group}/{id_or_year}/{page_or_month}; GET /forum/{group}/{id_or_year}/{page_or_month}/; GET /news/{group}/{id}/{page_marker}; GET /polls/{group}/{id}/{page_marker}; GET /articles/{group}/{id}/{page_marker}; GET /gallery/{group}/{id}/{page_marker}",
     "source": "src/main/scala/ru/org/linux/topic/TopicController.scala:127",
     "semantic_parity": "not-evaluated"
   },

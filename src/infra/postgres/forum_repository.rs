@@ -17,19 +17,11 @@ impl CForumPgRepository {
 
 #[async_trait]
 impl TrForumRepository for CForumPgRepository {
-    async fn vecListGroups(&self) -> Result<Vec<StGroup>> {
-        Ok(sqlx::query_as::<_, StGroup>(sqlx::AssertSqlSafe(
-            S_GROUP_SELECT_SQL.to_string() + " GROUP BY g.id,s.id ORDER BY s.id,g.title",
-        ))
-        .fetch_all(&self.oPool)
-        .await?)
-    }
-
     async fn vecListGroupsBySection(&self, optSectionPrefix: Option<&str>) -> Result<Vec<StGroup>> {
         Ok(sqlx::query_as::<_, StGroup>(
             sqlx::AssertSqlSafe(
                 S_GROUP_SELECT_SQL.to_string()
-                    + " WHERE ($1::text IS NULL OR CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(s.name) END=$1) GROUP BY g.id,s.id ORDER BY g.title",
+                    + " WHERE ($1::text IS NULL OR CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(s.name) END=$1) GROUP BY g.id,s.id ORDER BY s.id,g.id",
             ),
         )
         .bind(optSectionPrefix)

@@ -5,6 +5,8 @@ COPY Cargo.toml Cargo.lock* ./
 COPY src ./src
 COPY templates ./templates
 COPY compat/java-db/schema-contract.tsv ./compat/java-db/schema-contract.tsv
+COPY compat/java-db/schema-objects-contract.tsv ./compat/java-db/schema-objects-contract.tsv
+COPY compat/java-db/export-schema-objects.sql ./compat/java-db/export-schema-objects.sql
 COPY compat/java-runtime/messages-index.json ./compat/java-runtime/messages-index.json
 COPY static ./static
 RUN --mount=type=cache,target=/usr/local/cargo/registry \

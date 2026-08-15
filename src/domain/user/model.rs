@@ -16,8 +16,8 @@ pub struct StUserSummary {
     /// privileges - e.g. only administrators may rename a group or change
     /// its urlName, see GroupModificationController).
     pub candel: bool,
-    /// Java's `corrector` role: may commit/uncommit news topics (except
-    /// their own) alongside moderators, see EditTopicChecker.checkCommit.
+    /// Java's `corrector` role: may commit news topics (except their own),
+    /// but cannot uncommit them; that action is `ModeratorOnly`.
     pub corrector: bool,
     pub blocked: Option<bool>,
     pub userinfo: Option<String>,

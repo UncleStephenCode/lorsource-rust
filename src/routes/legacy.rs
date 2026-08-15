@@ -1,8 +1,14 @@
 use crate::{
-    application::edit_history::{CEditHistoryService, StPreparedEditHistory},
+    application::{
+        edit_history::{CEditHistoryService, StPreparedEditHistory},
+        user::account::CUserAccountService,
+    },
     auth::CurrentUser,
     error::{AppError, Result},
-    infra::postgres::edit_history_repository::CEditHistoryPgRepository,
+    infra::postgres::{
+        edit_history_repository::CEditHistoryPgRepository,
+        user_account_repository::CUserAccountPgRepository,
+    },
     markup,
     models::{CommentItem, PagerQuery, TopicSummary},
     pagination::Pager,
@@ -28,11 +34,103 @@ pub async fn error_404() -> AppError {
     AppError::NotFound
 }
 
-pub async fn exception_resolver() -> impl IntoResponse {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Html("Exception resolver compatibility endpoint"),
-    )
+pub async fn exception_resolver() -> Response {
+    // ExceptionController.defaultExceptionHandler is reached by the servlet
+    // container with RequestDispatcher.ERROR_EXCEPTION set.  A direct client
+    // request has no such server-side attribute and Java redirects it home;
+    // clients cannot manufacture an exception dispatch in Axum either.
+    stLegacyFoundRedirect("/".to_owned())
+}
+
+#[cfg(test)]
+mod legacy_error_tests {
+    use axum::{Router, http::header, routing::any};
+
+    use super::{error_403, error_404, exception_resolver};
+
+    async fn stStartServer() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+        let cApp = Router::new()
+            .route("/ExceptionResolver", any(exception_resolver))
+            .route("/errors/403", any(error_403))
+            .route("/errors/404", any(error_404));
+        let stListener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener");
+        let stAddress = stListener.local_addr().expect("listener address");
+        let hServer = tokio::spawn(async move {
+            axum::serve(stListener, cApp)
+                .await
+                .expect("legacy error test server");
+        });
+        (stAddress, hServer)
+    }
+
+    #[tokio::test]
+    async fn exception_resolver_direct_requests_match_java_redirect_for_all_mapped_methods() {
+        let (stAddress, hServer) = stStartServer().await;
+        let cClient = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("test client");
+
+        for eMethod in [
+            reqwest::Method::GET,
+            reqwest::Method::HEAD,
+            reqwest::Method::POST,
+            reqwest::Method::PUT,
+        ] {
+            let stResponse = cClient
+                .request(eMethod, format!("http://{stAddress}/ExceptionResolver"))
+                .send()
+                .await
+                .expect("ExceptionResolver request");
+            assert_eq!(stResponse.status(), reqwest::StatusCode::FOUND);
+            assert_eq!(
+                stResponse
+                    .headers()
+                    .get(header::LOCATION)
+                    .and_then(|stValue| stValue.to_str().ok()),
+                Some("/")
+            );
+        }
+
+        hServer.abort();
+    }
+
+    #[tokio::test]
+    async fn legacy_code_pages_keep_status_content_type_and_public_html() {
+        let (stAddress, hServer) = stStartServer().await;
+        let cClient = reqwest::Client::new();
+
+        for (sPath, stExpected, sMarker) in [
+            (
+                "/errors/403",
+                reqwest::StatusCode::FORBIDDEN,
+                "403 Forbidden",
+            ),
+            ("/errors/404", reqwest::StatusCode::NOT_FOUND, "Error 404"),
+        ] {
+            let stResponse = cClient
+                .get(format!("http://{stAddress}{sPath}"))
+                .send()
+                .await
+                .expect("legacy code page request");
+            assert_eq!(stResponse.status(), stExpected);
+            assert_eq!(
+                stResponse
+                    .headers()
+                    .get(header::CONTENT_TYPE)
+                    .and_then(|stValue| stValue.to_str().ok()),
+                Some("text/html; charset=utf-8")
+            );
+            let sBody = stResponse.text().await.expect("legacy code page body");
+            assert!(sBody.contains("id=\"warning-body\""));
+            assert!(sBody.contains(sMarker));
+            assert!(!sBody.contains("Exception resolver compatibility endpoint"));
+        }
+
+        hServer.abort();
+    }
 }
 
 #[derive(Template)]
@@ -41,16 +139,41 @@ struct LegacyIndexTemplate {
     title: String,
     topics: Vec<TopicSummary>,
     news: Vec<crate::routes::topics::NewsTopicView>,
-    pager: Pager,
     main_page: bool,
     tracker_layout: bool,
     navigation: Option<crate::routes::topics::TopicListNavigation>,
+    prev_link: Option<String>,
+    next_link: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct LegacyGroupQuery {
-    pub group: i32,
-    pub offset: Option<i64>,
+    pub group: Option<String>,
+    pub offset: Option<String>,
+}
+
+fn iRequiredLegacyParameter(optValue: Option<&str>, sName: &str) -> Result<i32> {
+    let sValue = optValue.ok_or_else(|| {
+        AppError::BadParameter(format!("Не задан обязательный параметр `{sName}`"))
+    })?;
+    sValue
+        .parse()
+        .map_err(|_| AppError::BadParameter(format!("Некорректное значение параметра `{sName}`")))
+}
+
+fn sRequiredLegacyParameter(optValue: Option<String>, sName: &str) -> Result<String> {
+    optValue
+        .ok_or_else(|| AppError::BadParameter(format!("Не задан обязательный параметр `{sName}`")))
+}
+
+fn optLegacyI64Parameter(optValue: Option<&str>, sName: &str) -> Result<Option<i64>> {
+    optValue
+        .map(|sValue| {
+            sValue.parse().map_err(|_| {
+                AppError::BadParameter(format!("Некорректное значение параметра `{sName}`"))
+            })
+        })
+        .transpose()
 }
 
 pub async fn group_jsp(
@@ -68,19 +191,21 @@ pub async fn group_lastmod_jsp(
 }
 
 async fn group_redirect(state: AppState, q: LegacyGroupQuery, lastmod: bool) -> Result<Redirect> {
+    let iGroupId = iRequiredLegacyParameter(q.group.as_deref(), "group")?;
+    let optOffset = optLegacyI64Parameter(q.offset.as_deref(), "offset")?;
     let (section, group): (String, String) = sqlx::query_as(
         r#"SELECT CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(s.name) END,
                   g.urlname
            FROM groups g JOIN sections s ON s.id=g.section WHERE g.id=$1"#,
     )
-    .bind(q.group)
+    .bind(iGroupId)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
 
     let mut url = format!("/{section}/{group}");
     let mut params = Vec::new();
-    if let Some(offset) = q.offset {
+    if let Some(offset) = optOffset {
         params.push(format!("offset={offset}"));
     }
     if lastmod {
@@ -95,18 +220,19 @@ async fn group_redirect(state: AppState, q: LegacyGroupQuery, lastmod: bool) -> 
 
 #[derive(Deserialize)]
 pub struct LegacySectionQuery {
-    pub section: i32,
+    pub section: Option<String>,
 }
 
 pub async fn view_section_jsp(
     State(state): State<AppState>,
     Query(q): Query<LegacySectionQuery>,
 ) -> Result<Redirect> {
+    let iSectionId = iRequiredLegacyParameter(q.section.as_deref(), "section")?;
     let section: String = sqlx::query_scalar(
         r#"SELECT CASE id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(name) END
            FROM sections WHERE id=$1"#,
     )
-    .bind(q.section)
+    .bind(iSectionId)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
@@ -123,12 +249,68 @@ pub struct ViewNewsQuery {
     pub tag: Option<String>,
 }
 
-pub async fn view_news_jsp(Query(q): Query<ViewNewsQuery>) -> Redirect {
-    if let Some(tag) = q.tag {
-        Redirect::to(&format!("/tag/{}", urlencoding::encode(&tag)))
-    } else {
-        Redirect::to("/news/")
+fn stLegacyFoundRedirect(sLocation: String) -> Response {
+    // The legacy Spring controllers use RedirectView's default 302. Axum's
+    // Redirect::to is a 303 and is therefore not protocol-compatible here.
+    (StatusCode::FOUND, [(header::LOCATION, sLocation)]).into_response()
+}
+
+fn sEncodeSpringUriPath(sValue: &str) -> String {
+    // Spring's UriTemplate expands this value as a URI path, not as a form or
+    // path-segment value. RFC 3986 pchar and '/' remain literal; all other
+    // UTF-8 bytes are percent encoded with upper-case hex digits.
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut sEncoded = String::with_capacity(sValue.len());
+
+    for iByte in sValue.bytes() {
+        if iByte.is_ascii_alphanumeric()
+            || matches!(
+                iByte,
+                b'-' | b'.'
+                    | b'_'
+                    | b'~'
+                    | b'!'
+                    | b'$'
+                    | b'&'
+                    | b'\''
+                    | b'('
+                    | b')'
+                    | b'*'
+                    | b'+'
+                    | b','
+                    | b';'
+                    | b'='
+                    | b':'
+                    | b'@'
+                    | b'/'
+            )
+        {
+            sEncoded.push(char::from(iByte));
+        } else {
+            sEncoded.push('%');
+            sEncoded.push(char::from(HEX[usize::from(iByte >> 4)]));
+            sEncoded.push(char::from(HEX[usize::from(iByte & 0x0f)]));
+        }
     }
+
+    sEncoded
+}
+
+fn stViewNewsRedirect(stQuery: ViewNewsQuery) -> Result<Response> {
+    // TagTopicListController.tagFeedOld is selected only by the Spring
+    // `params = "tag"` mapping condition. A request without that required
+    // parameter is rejected by Spring with HTTP 400 before rendering.
+    let sTag = stQuery
+        .tag
+        .ok_or_else(|| AppError::BadRequest("Required parameter 'tag' is missing".to_owned()))?;
+    Ok(stLegacyFoundRedirect(format!(
+        "/tag/{}",
+        sEncodeSpringUriPath(&sTag)
+    )))
+}
+
+pub async fn view_news_jsp(Query(stQuery): Query<ViewNewsQuery>) -> Result<Response> {
+    stViewNewsRedirect(stQuery)
 }
 
 #[derive(Deserialize)]
@@ -145,9 +327,10 @@ pub struct PreviewForm {
 /// (including e.g. "html", which the site no longer allows anyone to pick,
 /// see profile.rs's FORMAT_MODES) with no permission check at all.
 pub async fn markup_preview(
+    State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
     Form(form): Form<PreviewForm>,
-) -> Json<serde_json::Value> {
+) -> Result<Json<serde_json::Value>> {
     let text = form.text.or(form.msg).or(form.message).unwrap_or_default();
 
     let markup_id = form
@@ -155,15 +338,15 @@ pub async fn markup_preview(
         .as_deref()
         .unwrap_or(crate::profile::DEFAULT_FORMAT_MODE);
     if !crate::profile::is_format_mode(markup_id) {
-        return Json(json!({"error": "Недопустимый режим разметки"}));
+        return Ok(Json(json!({"error": "Недопустимый режим разметки"})));
     }
     let _ = &user; // allowed_formats is identical for anon/registered in this port (see profile::FORMAT_MODES)
 
     if text.is_empty() {
-        return Json(json!({"html": ""}));
+        return Ok(Json(json!({"html": ""})));
     }
     if text.chars().count() > 65_536 {
-        return Json(json!({"error": "Слишком длинный текст"}));
+        return Ok(Json(json!({"error": "Слишком длинный текст"})));
     }
     let stored_markup = match markup_id {
         "markdown" => "MARKDOWN",
@@ -171,8 +354,19 @@ pub async fn markup_preview(
         "lorcode" => "BBCODE_TEX",
         _ => "PLAIN",
     };
-    let html = markup::render_message_with_markup(&text, Some(stored_markup), None);
-    Json(json!({"html": html}))
+    let stMarkupUsers = state
+        .markup
+        .stResolveBatch([(&*text, stored_markup)])
+        .await?;
+    let html = markup::render_message_with_markup_policy_and_users(
+        &text,
+        Some(stored_markup),
+        None,
+        true,
+        Some(&state.config.public_url),
+        Some(&stMarkupUsers),
+    );
+    Ok(Json(json!({"html": html})))
 }
 
 #[derive(Deserialize)]
@@ -434,6 +628,8 @@ async fn render_archive(
     .await?;
     let news =
         crate::routes::topics::prepare_news_topics(&state, topics.clone(), group.is_none()).await?;
+    let prev_link = pager.prev_offset.map(|offset| format!("?offset={offset}"));
+    let next_link = Some(format!("?offset={}", pager.next_offset));
     let title = match (section, group.as_deref(), year, month) {
         (Some(sec), Some(group), Some(y), Some(m)) => {
             format!("Архив: {sec}/{group}, {y:04}-{m:02}")
@@ -447,10 +643,11 @@ async fn render_archive(
             title,
             topics,
             news,
-            pager,
             main_page: false,
             tracker_layout: false,
             navigation: None,
+            prev_link,
+            next_link,
         }
         .render()?,
     ))
@@ -523,7 +720,9 @@ pub async fn topic_history(
     let stRules = crate::routes::topics::load_topic_edit_rules(&state, id).await?;
     let bCanRestore = crate::routes::topics::b_topic_content_editable(&stTopic, &stRules, &stUser);
     let cService = CEditHistoryService::new(CEditHistoryPgRepository::new(state.pool.clone()));
-    let vecHistories = cService.vecTopicHistory(id).await?;
+    let vecHistories = cService
+        .vecTopicHistory(id, &state.markup, &state.config.public_url)
+        .await?;
     Ok(Html(
         StHistoryTemplate {
             topic_id: id,
@@ -542,7 +741,14 @@ pub async fn comment_history(
     let stTopic = crate::routes::topics::get_topic(&state, id).await?;
     crate::routes::topics::check_topic_viewable(&state, id, &user).await?;
     let cService = CEditHistoryService::new(CEditHistoryPgRepository::new(state.pool.clone()));
-    let vecHistories = cService.vecCommentHistory(stTopic.id, commentid).await?;
+    let vecHistories = cService
+        .vecCommentHistory(
+            stTopic.id,
+            commentid,
+            &state.markup,
+            &state.config.public_url,
+        )
+        .await?;
     Ok(Html(
         StHistoryTemplate {
             topic_id: id,
@@ -555,14 +761,110 @@ pub async fn comment_history(
 
 #[derive(Deserialize)]
 pub struct ShowCommentsQuery {
-    pub nick: String,
+    pub nick: Option<String>,
 }
 
-pub async fn show_comments_jsp(Query(q): Query<ShowCommentsQuery>) -> Redirect {
-    Redirect::to(&format!(
+fn sShowCommentsLocation(sCanonicalNick: &str) -> String {
+    // ShowCommentsController constructs a relative RedirectView target, but
+    // the servlet container exposes the normalized context-root path in the
+    // Location header.
+    format!(
         "/search.jsp?range=COMMENTS&user={}&sort=DATE",
-        urlencoding::encode(&q.nick)
-    ))
+        urlencoding::encode(sCanonicalNick)
+    )
+}
+
+pub async fn show_comments_jsp(
+    State(stState): State<AppState>,
+    Query(stQuery): Query<ShowCommentsQuery>,
+) -> Result<Response> {
+    let sRequestedNick = sRequiredLegacyParameter(stQuery.nick, "nick")?;
+    // Java resolves the user before redirecting. Besides rejecting an unknown
+    // nick, this puts the canonical database spelling in Location.
+    let stUser = crate::routes::users::get_user_exact(&stState, &sRequestedNick).await?;
+    Ok(stLegacyFoundRedirect(sShowCommentsLocation(&stUser.nick)))
+}
+
+#[cfg(test)]
+mod legacy_list_redirect_tests {
+    use axum::{
+        http::{StatusCode, header},
+        response::IntoResponse,
+    };
+
+    use super::{
+        ViewNewsQuery, iRequiredLegacyParameter, optLegacyI64Parameter, sEncodeSpringUriPath,
+        sRequiredLegacyParameter, sShowCommentsLocation, stLegacyFoundRedirect, stViewNewsRedirect,
+    };
+    use crate::error::AppError;
+
+    #[test]
+    fn view_news_requires_the_original_tag_mapping_condition() {
+        let stError = stViewNewsRedirect(ViewNewsQuery { tag: None })
+            .expect_err("the tag mapping condition is required");
+
+        assert!(matches!(stError, AppError::BadRequest(_)));
+        assert_eq!(stError.into_response().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn view_news_encodes_the_tag_and_uses_java_302() {
+        let stResponse = stViewNewsRedirect(ViewNewsQuery {
+            tag: Some("c++ / rust".to_owned()),
+        })
+        .expect("legacy tag redirect");
+
+        assert_eq!(stResponse.status(), StatusCode::FOUND);
+        assert_eq!(
+            stResponse
+                .headers()
+                .get(header::LOCATION)
+                .and_then(|stValue| stValue.to_str().ok()),
+            Some("/tag/c++%20/%20rust")
+        );
+    }
+
+    #[test]
+    fn spring_uri_template_path_encoding_preserves_only_path_characters() {
+        assert_eq!(
+            sEncodeSpringUriPath("a:b@c;d,e=f&g!h$i'j(k)l*m+n/o?p#q[r]s%t u"),
+            "a:b@c;d,e=f&g!h$i'j(k)l*m+n/o%3Fp%23q%5Br%5Ds%25t%20u"
+        );
+        assert_eq!(sEncodeSpringUriPath("тег"), "%D1%82%D0%B5%D0%B3");
+    }
+
+    #[test]
+    fn show_comments_uses_the_servlet_normalized_canonical_redirect_target() {
+        let stResponse = stLegacyFoundRedirect(sShowCommentsLocation("maxcom"));
+
+        assert_eq!(stResponse.status(), StatusCode::FOUND);
+        assert_eq!(
+            stResponse
+                .headers()
+                .get(header::LOCATION)
+                .and_then(|stValue| stValue.to_str().ok()),
+            Some("/search.jsp?range=COMMENTS&user=maxcom&sort=DATE")
+        );
+    }
+
+    #[test]
+    fn legacy_spring_binding_failures_use_bad_parameter_404() {
+        for stError in [
+            iRequiredLegacyParameter(None, "group").expect_err("missing group"),
+            iRequiredLegacyParameter(Some("not-an-id"), "section").expect_err("invalid section"),
+            optLegacyI64Parameter(Some("not-an-offset"), "offset").expect_err("invalid offset"),
+            sRequiredLegacyParameter(None, "nick").expect_err("missing nick"),
+        ] {
+            assert!(matches!(stError, AppError::BadParameter(_)));
+            assert_eq!(stError.into_response().status(), StatusCode::NOT_FOUND);
+        }
+
+        assert_eq!(iRequiredLegacyParameter(Some("42"), "group").unwrap(), 42);
+        assert_eq!(
+            optLegacyI64Parameter(Some("300"), "offset").unwrap(),
+            Some(300)
+        );
+    }
 }
 
 #[derive(Deserialize)]
@@ -610,7 +912,15 @@ pub async fn show_replies_jsp(
                 .await?;
 
         let is_atom = output == "atom";
-        let body = render_replies_feed(&state, &target_nick, &events, is_atom);
+        let stMarkupUsers = state
+            .markup
+            .stResolveBatch(
+                events
+                    .iter()
+                    .map(|stEvent| (&*stEvent.message_text, &*stEvent.message_markup)),
+            )
+            .await?;
+        let body = render_replies_feed(&state, &target_nick, &events, is_atom, &stMarkupUsers);
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(
             axum::http::header::CONTENT_TYPE,
@@ -670,11 +980,12 @@ pub async fn show_replies_jsp(
     );
     for e in &events {
         let sDate = crate::request_timezone::sTimeTag("interval", e.event_date);
+        let sSubjectPlain = e.sSubjectPlain();
         html.push_str(&format!(
             "<li{}><a href=\"{}\">{}</a> <small>{} · {}</small></li>",
             if e.unread { " class=\"unread\"" } else { "" },
             e.link(),
-            html_escape::encode_text(&e.subj),
+            html_escape::encode_text(&sSubjectPlain),
             sDate,
             html_escape::encode_text(&e.event_type),
         ));
@@ -691,6 +1002,7 @@ fn render_replies_feed(
     nick: &str,
     events: &[crate::routes::api::NotificationEvent],
     atom: bool,
+    stMarkupUsers: &crate::domain::markup::model::StMarkupUserDirectory,
 ) -> String {
     let title = format!("Уведомления пользователя {nick}");
     if atom {
@@ -704,7 +1016,7 @@ fn render_replies_feed(
         );
         for e in events {
             let link = format!("{}{}", state.config.public_url, e.link());
-            let sDescription = sNotificationFeedDescription(e);
+            let sDescription = sNotificationFeedDescription(e, state, stMarkupUsers);
             let sAuthor = e
                 .cid
                 .map(|_| {
@@ -738,7 +1050,7 @@ fn render_replies_feed(
         );
         for e in events {
             let link = format!("{}{}", state.config.public_url, e.link());
-            let sDescription = sNotificationFeedDescription(e)
+            let sDescription = sNotificationFeedDescription(e, state, stMarkupUsers)
                 .map(|sValue| {
                     format!(
                         "<description>{}</description>",
@@ -770,11 +1082,18 @@ fn render_replies_feed(
     }
 }
 
-fn sNotificationFeedDescription(stEvent: &crate::routes::api::NotificationEvent) -> Option<String> {
-    let sRendered = markup::render_message_with_markup(
+fn sNotificationFeedDescription(
+    stEvent: &crate::routes::api::NotificationEvent,
+    stState: &AppState,
+    stMarkupUsers: &crate::domain::markup::model::StMarkupUserDirectory,
+) -> Option<String> {
+    let sRendered = markup::render_message_with_markup_policy_and_users(
         &stEvent.message_text,
         Some(&stEvent.message_markup),
         None,
+        false,
+        Some(&stState.config.public_url),
+        Some(stMarkupUsers),
     );
     let sRendered = sRemoveInvalidXmlChars(&sRendered);
     if stEvent.event_type == "REACTION" {
@@ -815,7 +1134,12 @@ struct StPreparedDeletedComment {
 async fn optLoadComment(stState: &AppState, iCommentId: i32) -> Result<Option<CommentItem>> {
     Ok(sqlx::query_as::<_, CommentItem>(
         r#"SELECT c.id, c.topic, c.replyto, c.title, m.message, m.markup::text AS markup,
-                  c.postdate, u.id AS author_id, u.nick AS author, c.deleted
+                  c.postdate, u.id AS author_id, u.nick AS author,
+                  COALESCE(u.score,0) AS author_score,
+                  COALESCE(u.blocked,false) AS author_blocked,
+                  COALESCE(u.passwd,'')='' AS author_anonymous,
+                  COALESCE(u.frozen_until > CURRENT_TIMESTAMP,false) AS author_frozen,
+                  c.deleted
            FROM comments c JOIN msgbase m ON m.id=c.id JOIN users u ON u.id=c.userid
            WHERE c.id=$1"#,
     )
@@ -837,7 +1161,11 @@ async fn optLoadDeleteInfo(
     .await?)
 }
 
-fn sRenderDeletedComment(stPrepared: &StPreparedDeletedComment) -> String {
+fn sRenderDeletedComment(
+    stPrepared: &StPreparedDeletedComment,
+    sSiteOrigin: &str,
+    stMarkupUsers: &crate::domain::markup::model::StMarkupUserDirectory,
+) -> String {
     let stComment = &stPrepared.stComment;
     let sDeleteInfo = if stComment.deleted {
         stPrepared
@@ -859,18 +1187,23 @@ fn sRenderDeletedComment(stPrepared: &StPreparedDeletedComment) -> String {
     } else {
         String::new()
     };
-    let sTitle = if !stComment.title.trim().is_empty() {
-        format!("<h1>{}</h1>", html_escape::encode_text(&stComment.title))
-    } else {
-        String::new()
-    };
+    let sTitle = stComment
+        .optTitlePlain()
+        .map(|sTitlePlain| format!("<h1>{}</h1>", html_escape::encode_text(&sTitlePlain)))
+        .unwrap_or_default();
     format!(
         "<article class=\"msg\" id=\"comment-{id}\">{deleted_title}<div class=\"msg-container\"><div class=\"msg_body\"><div class=\"msg-text\">{title}{body}</div><div class=\"sign\"><a href=\"/people/{author_url}/profile\">{author}</a>, {date}</div></div></div></article>",
         id = stComment.id,
         deleted_title = sDeletedTitle,
         title = sTitle,
-        body =
-            markup::render_message_with_markup(&stComment.message, Some(&stComment.markup), None),
+        body = markup::render_message_with_markup_policy_and_users(
+            &stComment.message,
+            Some(&stComment.markup),
+            None,
+            stComment.bNofollowAuthorLinks(),
+            Some(sSiteOrigin),
+            Some(stMarkupUsers),
+        ),
         author_url = urlencoding::encode(&stComment.author),
         author = html_escape::encode_text(&stComment.author),
         date = crate::request_timezone::sTimeTag("default", stComment.postdate),
@@ -980,21 +1313,46 @@ pub async fn view_deleted(
     } else {
         sTopicUrl
     };
+    let stMarkupUsers = stState
+        .markup
+        .stResolveBatch(
+            vecChain
+                .iter()
+                .map(|stPrepared| {
+                    (
+                        stPrepared.stComment.message.as_str(),
+                        stPrepared.stComment.markup.as_str(),
+                    )
+                })
+                .chain(std::iter::once((
+                    stComment.message.as_str(),
+                    stComment.markup.as_str(),
+                ))),
+        )
+        .await?;
     let mut sHtml = format!(
         "<h1>Просмотр удаленного комментария</h1><nav><a class=\"btn btn-default\" href=\"{}\">Перейти в топик</a></nav><div class=\"messages\">",
         html_escape::encode_double_quoted_attribute(&sBackLink)
     );
     for stParent in &vecChain {
         sHtml.push_str("<h2>Ответ на:</h2>");
-        sHtml.push_str(&sRenderDeletedComment(stParent));
+        sHtml.push_str(&sRenderDeletedComment(
+            stParent,
+            &stState.config.public_url,
+            &stMarkupUsers,
+        ));
     }
     if !vecChain.is_empty() {
         sHtml.push_str("<h2>Удаленный комментарий:</h2>");
     }
-    sHtml.push_str(&sRenderDeletedComment(&StPreparedDeletedComment {
-        stComment,
-        optDeleteInfo: Some((sDeletedBy, sDeleteReason)),
-    }));
+    sHtml.push_str(&sRenderDeletedComment(
+        &StPreparedDeletedComment {
+            stComment,
+            optDeleteInfo: Some((sDeletedBy, sDeleteReason)),
+        },
+        &stState.config.public_url,
+        &stMarkupUsers,
+    ));
     sHtml.push_str("</div>");
     Ok(Html(sHtml))
 }
@@ -1721,13 +2079,35 @@ fn validate_userpic_bytes(data: &[u8]) -> Result<&'static str> {
     Ok(extension)
 }
 
-#[derive(Deserialize)]
+#[derive(Template)]
+#[template(path = "deregister.html")]
+struct StDeregisterTemplate {
+    csrf_token: String,
+    captcha_site_key: String,
+    errors: Vec<String>,
+    accept_block: bool,
+    accept_oneway: bool,
+}
+
+#[derive(Template)]
+#[template(path = "action_done.html")]
+struct StDeregisterDoneTemplate {
+    message: String,
+    big_message: Option<String>,
+    link: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct DeregisterForm {
-    pub password: String,
+    pub password: Option<String>,
+    #[serde(alias = "accept_block")]
+    #[serde(rename = "acceptBlock")]
     pub accept_block: Option<String>,
-    pub acceptBlock: Option<String>,
+    #[serde(alias = "accept_oneway")]
+    #[serde(rename = "acceptOneway")]
     pub accept_oneway: Option<String>,
-    pub acceptOneway: Option<String>,
+    #[serde(rename = "h-captcha-response")]
+    pub captcha_response: Option<String>,
 }
 
 pub async fn deregister_form(
@@ -1738,102 +2118,97 @@ pub async fn deregister_form(
     let Some(user) = user else {
         return Err(AppError::Forbidden);
     };
-    ensure_deregister_allowed(&state, &user).await?;
-    Ok(Html(format!(
-        r#"
-<h1>Удаление аккаунта {nick}</h1>
-<p>Операция соответствует исходной логике: аккаунт блокируется, профиль очищается, восстановление через эту форму не предусмотрено.</p>
-<form method="post" action="/deregister.jsp" class="form">
-  <input type="hidden" name="csrf" value="{csrf_token}">
-  <label>Пароль <input name="password" type="password" required></label>
-  <label><input type="checkbox" name="acceptBlock" value="true" required> Я согласен с блокировкой аккаунта</label>
-  <label><input type="checkbox" name="acceptOneway" value="true" required> Я понимаю, что действие необратимо</label>
-  <button type="submit">Удалить аккаунт</button>
-</form>
-"#,
-        nick = html_escape::encode_text(&user.nick)
-    )))
+    let cService = CUserAccountService::new(CUserAccountPgRepository::new(state.pool.clone()));
+    cService.vCheckDeregister(user.id).await?;
+    render_deregister_page(&state, csrf_token, Vec::new(), false, false)
 }
 
 pub async fn deregister_post(
     State(state): State<AppState>,
-    jar: CookieJar,
+    headers: HeaderMap,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
     CurrentUser(user): CurrentUser,
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
     Form(form): Form<DeregisterForm>,
-) -> Result<impl IntoResponse> {
+) -> Result<Response> {
     let Some(user) = user else {
         return Err(AppError::Forbidden);
     };
-    ensure_deregister_allowed(&state, &user).await?;
-    if form.accept_block.or(form.acceptBlock).is_none() {
-        return Err(AppError::BadRequest(
-            "Вы не согласились с блокировкой аккаунта".into(),
-        ));
+    let cService = CUserAccountService::new(CUserAccountPgRepository::new(state.pool.clone()));
+    cService.vCheckDeregister(user.id).await?;
+
+    let bAcceptBlock = form.accept_block.is_some();
+    let bAcceptOneway = form.accept_oneway.is_some();
+    let mut vecErrors = Vec::new();
+    if !bAcceptBlock {
+        vecErrors.push("Вы не согласились с блокировкой аккаунта".to_owned());
     }
-    if form.accept_oneway.or(form.acceptOneway).is_none() {
-        return Err(AppError::BadRequest(
-            "Вы не согласились с невозможностью восстановления аккаунта".into(),
-        ));
+    if !bAcceptOneway {
+        vecErrors.push("Вы не согласились с невозможностью восстановления аккаунта".to_owned());
     }
-    let ok = matches!(
-        crate::auth::verify_login(&state.pool, &user.nick, &form.password).await?,
-        crate::auth::LoginOutcome::Success(_)
-    );
-    if !ok {
-        return Err(AppError::BadRequest("Неверный пароль".into()));
+    let bPasswordMatches = cService
+        .bPasswordMatches(user.id, form.password.as_deref().unwrap_or(""))
+        .await?;
+    if !bPasswordMatches {
+        vecErrors.push("Неверный пароль".to_owned());
     }
-    sqlx::query(
-        "UPDATE users SET name='', url='', town='', userinfo='', photo=NULL, blocked=true WHERE id=$1",
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
     )
-    .bind(user.id)
-    .execute(&state.pool)
-    .await?;
-    crate::audit::log_user_action(
-        &state.pool,
-        user.id,
-        user.id,
-        "block_user",
-        &[("reason", "deregister")],
+    .to_string();
+    if let Err(sError) = crate::application::auth::sValidateCaptcha(
+        &state.config,
+        &state.http,
+        form.captcha_response.as_deref(),
+        &sRemoteIp,
     )
-    .await?;
-    Ok((
-        jar.remove(
-            Cookie::build((crate::security::remember_me::COOKIE_NAME, ""))
-                .path("/")
-                .build(),
-        )
-        .remove(Cookie::build(("lor_session", "")).path("/").build()),
-        Html("<h1>Удаление пользователя прошло успешно.</h1>".to_string()),
+    .await
+    {
+        vecErrors.push(sError);
+    }
+
+    if !vecErrors.is_empty() {
+        return Ok(render_deregister_page(
+            &state,
+            csrf_token,
+            vecErrors,
+            bAcceptBlock,
+            bAcceptOneway,
+        )?
+        .into_response());
+    }
+
+    cService.vDeregister(user.id).await?;
+    Ok(Html(
+        StDeregisterDoneTemplate {
+            message: "Удаление пользователя прошло успешно.".to_owned(),
+            big_message: None,
+            link: None,
+        }
+        .render()?,
     )
-        .into_response())
+    .into_response())
 }
 
-async fn ensure_deregister_allowed(
+fn render_deregister_page(
     state: &AppState,
-    user: &crate::models::UserSummary,
-) -> Result<()> {
-    if user.max_score.unwrap_or(0) < 100 {
-        return Err(AppError::Forbidden);
-    }
-    if user.canmod {
-        return Err(AppError::Forbidden);
-    }
-    if user.blocked.unwrap_or(false) {
-        return Err(AppError::Forbidden);
-    }
-    let frozen_until: Option<chrono::DateTime<chrono::Utc>> =
-        sqlx::query_scalar("SELECT frozen_until FROM users WHERE id=$1")
-            .bind(user.id)
-            .fetch_optional(&state.pool)
-            .await?
-            .flatten();
-    if frozen_until
-        .map(|u| u > chrono::Utc::now())
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden);
-    }
-    Ok(())
+    csrf_token: String,
+    errors: Vec<String>,
+    accept_block: bool,
+    accept_oneway: bool,
+) -> Result<Html<String>> {
+    Ok(Html(
+        StDeregisterTemplate {
+            csrf_token,
+            captcha_site_key: state.config.captcha_public_key.clone().unwrap_or_default(),
+            errors,
+            accept_block,
+            accept_oneway,
+        }
+        .render()?,
+    ))
 }
 
 async fn user_exists_or_similar(state: &AppState, nick: &str) -> Result<bool> {
@@ -2323,57 +2698,181 @@ fn bAcceptsJson(stHeaders: &HeaderMap) -> bool {
 }
 
 #[derive(Deserialize)]
-pub struct LegacyMsgIdQuery {
-    pub msgid: i32,
+pub struct StSetPostScoreQuery {
+    pub msgid: Option<String>,
 }
 
 #[derive(Deserialize)]
-pub struct ScoreForm {
-    pub msgid: i32,
-    pub score: Option<i32>,
-    pub postscore: Option<i32>,
+pub struct StSetPostScoreForm {
+    pub msgid: Option<String>,
+    pub postscore: Option<String>,
+    pub sticky: Option<String>,
+    pub notop: Option<String>,
+}
+
+#[derive(Template)]
+#[template(path = "set_post_score.html")]
+struct StSetPostScoreTemplate {
+    csrf_token: String,
+    topic_id: i32,
+    postscore: i32,
+    sticky: bool,
+    notop: bool,
+    premoderated: bool,
+}
+
+#[derive(Template)]
+#[template(path = "set_post_score_done.html")]
+struct StSetPostScoreDoneTemplate {
+    big_message: String,
+    link: String,
+}
+
+#[derive(Template)]
+#[template(path = "set_post_score_user_error.html")]
+struct StSetPostScoreUserErrorTemplate {
+    message: String,
+}
+
+fn bSpringRequestBoolean(optValue: Option<&str>, sName: &str) -> Result<bool> {
+    match optValue.map(str::to_ascii_lowercase).as_deref() {
+        None | Some("") | Some("false") | Some("off") | Some("no") | Some("0") => Ok(false),
+        Some("true") | Some("on") | Some("yes") | Some("1") => Ok(true),
+        Some(_) => Err(AppError::BadRequest(format!(
+            "Некорректное значение параметра `{sName}`"
+        ))),
+    }
+}
+
+fn iSpringRequiredInt(optValue: Option<&str>, sName: &str) -> Result<i32> {
+    optValue
+        .ok_or_else(|| AppError::BadRequest(format!("Required parameter '{sName}' is missing")))?
+        .parse::<i32>()
+        .map_err(|_| AppError::BadRequest(format!("Failed to convert parameter '{sName}'")))
+}
+
+fn stTopicOptionsService(
+    stState: &AppState,
+) -> crate::application::topic::options::CTopicOptionsService<
+    crate::infra::postgres::topic_options_repository::CTopicOptionsPgRepository,
+    crate::infra::search_queue::CSearchQueueSender,
+> {
+    crate::application::topic::options::CTopicOptionsService::new(
+        crate::infra::postgres::topic_options_repository::CTopicOptionsPgRepository::new(
+            stState.pool.clone(),
+        ),
+        crate::infra::search_queue::CSearchQueueSender::new(
+            stState.config.opensearch_url.as_deref(),
+            &stState.config.upload_dir,
+        ),
+    )
+}
+
+fn stSetPostScoreUserErrorResponse(sMessage: String) -> Response {
+    let sBody = StSetPostScoreUserErrorTemplate { message: sMessage }
+        .render()
+        .unwrap_or_else(|_| "Внутренняя ошибка сервера".to_owned());
+    (StatusCode::INTERNAL_SERVER_ERROR, Html(sBody)).into_response()
 }
 
 pub async fn set_post_score_form(
-    Query(q): Query<LegacyMsgIdQuery>,
-    CurrentUser(user): CurrentUser,
-    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+    State(stState): State<AppState>,
+    Query(stQuery): Query<StSetPostScoreQuery>,
+    CurrentUser(optUser): CurrentUser,
+    crate::csrf::CsrfToken(sCsrfToken): crate::csrf::CsrfToken,
 ) -> Result<Html<String>> {
-    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) {
-        return Err(AppError::Forbidden);
-    }
-    Ok(Html(format!(
-        r#"
-<h1>Изменить score темы #{}</h1>
-<form method="post" action="/setpostscore.jsp">
-<input type="hidden" name="csrf" value="{csrf_token}">
-<input type="hidden" name="msgid" value="{}">
-<input name="score" type="number" value="0">
-<button type="submit">Сохранить</button>
-</form>
-"#,
-        q.msgid, q.msgid
-    )))
+    let iTopicId = iSpringRequiredInt(stQuery.msgid.as_deref(), "msgid")?;
+    let stOptions = stTopicOptionsService(&stState)
+        .stForm(optUser.as_ref(), iTopicId)
+        .await?;
+    Ok(Html(
+        StSetPostScoreTemplate {
+            csrf_token: sCsrfToken,
+            topic_id: stOptions.iTopicId,
+            postscore: stOptions.iPostScore,
+            sticky: stOptions.bSticky,
+            notop: stOptions.bNoTop,
+            premoderated: stOptions.bPremoderated,
+        }
+        .render()?,
+    ))
 }
 
 pub async fn set_post_score(
-    State(state): State<AppState>,
-    CurrentUser(user): CurrentUser,
-    Form(form): Form<ScoreForm>,
-) -> Result<Redirect> {
-    if !user.as_ref().map(|u| u.canmod).unwrap_or(false) {
-        return Err(AppError::Forbidden);
+    State(stState): State<AppState>,
+    CurrentUser(optUser): CurrentUser,
+    Form(stForm): Form<StSetPostScoreForm>,
+) -> Result<Response> {
+    let iTopicId = iSpringRequiredInt(stForm.msgid.as_deref(), "msgid")?;
+    let iPostScore = iSpringRequiredInt(stForm.postscore.as_deref(), "postscore")?;
+    let bSticky = bSpringRequestBoolean(stForm.sticky.as_deref(), "sticky")?;
+    let bNoTop = bSpringRequestBoolean(stForm.notop.as_deref(), "notop")?;
+    let stOutcome = match stTopicOptionsService(&stState)
+        .stSet(
+            optUser.as_ref(),
+            crate::domain::topic::options::StSetTopicOptions {
+                iTopicId,
+                iPostScore,
+                bSticky,
+                bNoTop,
+            },
+        )
+        .await
+    {
+        Ok(stOutcome) => stOutcome,
+        // UserErrorException is deliberately rendered by Java's common error
+        // resolver with HTTP 500, while binding failures above remain the
+        // separate Spring HTTP 400 contract.
+        Err(AppError::BadRequest(sMessage)) => {
+            return Ok(stSetPostScoreUserErrorResponse(sMessage));
+        }
+        Err(stError) => return Err(stError),
+    };
+    Ok(Html(
+        StSetPostScoreDoneTemplate {
+            big_message: stOutcome.sBigMessage,
+            link: stOutcome.sCanonicalUrl,
+        }
+        .render()?,
+    )
+    .into_response())
+}
+
+#[cfg(test)]
+mod set_post_score_tests {
+    use super::*;
+
+    #[test]
+    fn spring_checkbox_values_and_empty_defaults_are_preserved() {
+        for optValue in [
+            None,
+            Some(""),
+            Some("false"),
+            Some("off"),
+            Some("no"),
+            Some("0"),
+        ] {
+            assert!(!bSpringRequestBoolean(optValue, "sticky").unwrap());
+        }
+        for optValue in [Some("true"), Some("on"), Some("yes"), Some("1"), Some("ON")] {
+            assert!(bSpringRequestBoolean(optValue, "sticky").unwrap());
+        }
+        assert!(matches!(
+            bSpringRequestBoolean(Some("invalid"), "sticky"),
+            Err(AppError::BadRequest(_))
+        ));
     }
-    let score = form.score.or(form.postscore).unwrap_or(0);
-    sqlx::query("UPDATE topics SET postscore=$2,lastmod=now() WHERE id=$1")
-        .bind(form.msgid)
-        .bind(score)
-        .execute(&state.pool)
-        .await?;
-    Ok(Redirect::to(&format!(
-        "/jump-message.jsp?msgid={}",
-        form.msgid
-    )))
+
+    #[test]
+    fn spring_integer_binding_is_a_400_validation_error() {
+        for optValue in [None, Some("x"), Some("2147483648")] {
+            assert!(matches!(
+                iSpringRequiredInt(optValue, "msgid"),
+                Err(AppError::BadRequest(_))
+            ));
+        }
+        assert_eq!(iSpringRequiredInt(Some("42"), "msgid").unwrap(), 42);
+    }
 }
 
 #[derive(Deserialize)]
@@ -2381,65 +2880,84 @@ pub struct ImageForm {
     pub id: i32,
 }
 
+#[derive(Template)]
+#[template(path = "delete_image.html")]
+struct StDeleteImageTemplate {
+    csrf_token: String,
+    image_id: i32,
+    topic_title: String,
+    medium_url: String,
+    original_url: String,
+    medium_width: i32,
+    medium_height: i32,
+    max_width: i32,
+    padding: f64,
+    srcset: String,
+    linked: bool,
+}
+
 pub async fn delete_image_form(
+    State(state): State<AppState>,
+    headers: HeaderMap,
     Query(q): Query<ImageForm>,
     CurrentUser(user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
 ) -> Result<Html<String>> {
-    if user.is_none() {
+    let Some(user) = user else {
         return Err(AppError::Forbidden);
-    }
-    Ok(Html(format!(
-        r#"
-<h1>Удалить изображение #{}</h1>
-<form method="post" action="/delete_image"><input type="hidden" name="csrf" value="{csrf_token}"><input type="hidden" name="id" value="{}"><button type="submit">Удалить</button></form>
-"#,
-        q.id, q.id
-    )))
+    };
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
+    let stForm = state.image_delete.stForm(&user, q.id, &sRemoteIp).await?;
+    let stImage = stForm.stImage;
+    Ok(Html(
+        StDeleteImageTemplate {
+            csrf_token,
+            image_id: stImage.iId,
+            topic_title: crate::domain::title::sTopicTitlePlainForDisplay(
+                &stForm.stTarget.sTopicTitle,
+            ),
+            medium_url: stImage.sMediumUrl,
+            original_url: stImage.sOriginalUrl,
+            medium_width: stImage.iMediumWidth,
+            medium_height: stImage.iMediumHeight,
+            max_width: stImage.iWidth.min(2000),
+            padding: 100.0 * f64::from(stImage.iMediumHeight) / f64::from(stImage.iMediumWidth),
+            srcset: stImage.sSrcSet,
+            linked: stForm.stTarget.bSectionImagePost
+                || stImage.iWidth >= 1920
+                || stImage.iHeight >= 1080,
+        }
+        .render()?,
+    ))
 }
 
 pub async fn delete_image(
     State(state): State<AppState>,
+    headers: HeaderMap,
     CurrentUser(user): CurrentUser,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
     Form(form): Form<ImageForm>,
-) -> Result<Redirect> {
+) -> Result<Response> {
     let Some(user) = user else {
         return Err(AppError::Forbidden);
     };
-    let Some((topic_id, author_id, is_main, group_urlname)): Option<(i32, i32, bool, String)> =
-        sqlx::query_as(
-            r#"SELECT i.topic, t.userid, i.main, g.urlname
-           FROM images i JOIN topics t ON t.id=i.topic JOIN groups g ON g.id=t.groupid
-           WHERE i.id=$1"#,
-        )
-        .bind(form.id)
-        .fetch_optional(&state.pool)
-        .await?
-    else {
-        return Err(AppError::NotFound);
-    };
-    if !user.canmod && user.id != author_id {
-        return Err(AppError::Forbidden);
-    }
-    // Matches DeleteImageController.checkDelete: a gallery section's main
-    // image can't be deleted through this endpoint at all - the previous
-    // handler had no such guard.
-    if is_main {
-        return Err(AppError::Forbidden);
-    }
-    sqlx::query("UPDATE images SET deleted=true WHERE id=$1")
-        .bind(form.id)
-        .execute(&state.pool)
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
+    let sRedirect = state
+        .image_delete
+        .sDelete(&user, form.id, &sRemoteIp)
         .await?;
-    sqlx::query("UPDATE topics SET lastmod=now() WHERE id=$1")
-        .bind(topic_id)
-        .execute(&state.pool)
-        .await?;
-    Ok(Redirect::to(&format!(
-        "/gallery/{}/{}",
-        urlencoding::encode(&group_urlname),
-        topic_id
-    )))
+    Ok(stLegacyFoundRedirect(sRedirect))
 }
 
 #[derive(Deserialize)]
