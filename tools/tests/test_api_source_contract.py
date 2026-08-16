@@ -31,10 +31,17 @@ class JavaApiSourceContractTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.routes = json.loads(JAVA_ROUTES.read_text(encoding="utf-8"))
 
-    def test_java_source_root_honors_the_workflow_checkout(self) -> None:
+    def test_ci_java_checkout_and_maven_cache_are_explicit(self) -> None:
         selected = ROOT / ".ci" / "pinned-java-contract"
         with patch.dict(os.environ, {"ORIGINAL_ROOT": str(selected)}):
             self.assertEqual(selected.resolve(), java_root_from_environment())
+
+        runtime = (ROOT / "scripts/run-java-parity-runtime.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('-u "$(id -u):$(id -g)"', runtime)
+        self.assertIn('-v "$sMavenCache:/tmp/m2:Z"', runtime)
+        self.assertIn("-Dmaven.repo.local=/tmp/m2/repository", runtime)
 
     def test_response_body_inventory_is_explicit_and_stable(self) -> None:
         actual = {

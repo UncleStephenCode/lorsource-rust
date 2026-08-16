@@ -159,6 +159,9 @@ vStart() {
   fi
 
   mkdir -p "$sMavenCache"
+  # The official Maven entrypoint unsets MAVEN_CONFIG before Maven starts.
+  # GitHub's runner UID is absent from the image passwd file, so Java otherwise
+  # resolves user.home to `/` and tries to create `/.m2/repository`.
   docker run -d \
     --name "$sJavaContainer" \
     --network "$sNetwork" \
@@ -171,7 +174,9 @@ vStart() {
     -v lorsource-rust_lor_uploads:/uploads \
     -w /workspace \
     maven:3.9.14-eclipse-temurin-25 \
-    mvn --batch-mode --no-transfer-progress -DskipTests package jetty:run-war >/dev/null
+    mvn --batch-mode --no-transfer-progress \
+      -Dmaven.repo.local=/tmp/m2/repository \
+      -DskipTests package jetty:run-war >/dev/null
 
   echo "Java comparator is building on http://127.0.0.1:8081/"
   vWaitForJava
