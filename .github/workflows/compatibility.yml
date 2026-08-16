@@ -79,6 +79,10 @@ jobs:
           SMTP_HOST: smtp.example.invalid
           SMTP_HELO_NAME: www.linux.org.ru
           ADMIN_EMAIL: operations@example.invalid
+          # This step validates only the fail-closed production Compose model.
+          # Real deployment values must come from retained Java/JDBC evidence.
+          SCHEDULER_TIMEZONE: Etc/UTC
+          LEGACY_JDBC_TIMEZONE: Etc/UTC
           ENABLE_BACKGROUND_JOBS: "false"
         run: docker compose -f deploy/compose.production.yml config --quiet
       - name: Production runtime hardening and secret staging

@@ -4,19 +4,37 @@
 from __future__ import annotations
 
 import json
+import os
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
-JAVA_ROUTES = ROOT / "docs/generated/current_java_routes.json"
-JAVA_ROOT = ROOT.parent / "lorsource-java"
+# `run-compatibility-suite.sh` regenerates this file from `ORIGINAL_ROOT`
+# immediately before the source-contract tests run.
+JAVA_ROUTES = ROOT / "docs/generated/original_routes.json"
+
+
+def java_root_from_environment() -> Path:
+    """Use the pinned Java checkout selected by CI, with the local sibling fallback."""
+    return Path(
+        os.environ.get("ORIGINAL_ROOT", str(ROOT.parent / "lorsource-java"))
+    ).resolve()
+
+
+JAVA_ROOT = java_root_from_environment()
 
 
 class JavaApiSourceContractTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.routes = json.loads(JAVA_ROUTES.read_text(encoding="utf-8"))
+
+    def test_java_source_root_honors_the_workflow_checkout(self) -> None:
+        selected = ROOT / ".ci" / "pinned-java-contract"
+        with patch.dict(os.environ, {"ORIGINAL_ROOT": str(selected)}):
+            self.assertEqual(selected.resolve(), java_root_from_environment())
 
     def test_response_body_inventory_is_explicit_and_stable(self) -> None:
         actual = {
