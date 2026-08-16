@@ -1,6 +1,6 @@
 # Private activity pages and rolling-month fixture
 
-Audit date: 2026-08-15. Runtime: Rust 1.97.1, PostgreSQL 16, port 8181.
+Audit date: 2026-08-16. Runtime: Rust 1.97.1, PostgreSQL 16, port 8181.
 
 ## Original route provenance
 
@@ -98,11 +98,15 @@ that an ordinary user cannot inspect another user's private activity.
 ## Recorded validation
 
 - Docker release and quality targets: passed, including repository-wide
-  rustfmt, all-target/all-feature check, 699 passing tests, 8 explicitly
-  ignored tests, 0 failures and Clippy with warnings denied (main 657/5;
-  integration targets 12/1, 4/0, 18/1, 6/0 and 2/1). The quality image
+  rustfmt, all-target/all-feature check, 774 passing tests, 10 explicitly
+  ignored tests, 0 failures and Clippy with warnings denied (main 721/5;
+  integration targets 4/1, 12/1, 4/0, 18/1, 6/0, 7/1 and 2/1; 784 total).
+  The quality image
   manifest-list digest is
-  `sha256:6c5249d30a591610e154ed367d93b905c93ce8b934a6787af92f6189766fdeba`.
+  `sha256:021c5e2ab962df45047f9f6eef87f4019cf78690c914aeccc0b847fad8ea4fb6`.
+- The rebuilt application manifest-list digest is
+  `sha256:2ba53e4f7b274ca227a51843248e8ad35db6d7d765ab427fbc60801ebba0323a`.
+  Compose reached healthy state and the production runtime-shape check passed.
 - The guarded automatic-score database integration test passed 1/1 against
   disposable database `lorsource_score_test_20260816_root_final`, reported
   `residue=0` and `public_tables=0`, and the database was dropped afterward
@@ -110,9 +114,14 @@ that an ordinary user cannot inspect another user's private activity.
   `9fcccb8e62b54a372c4d5f2559ef94cd33e43bf7b19aebb5ed4e2250ec984f9c`.
   The schedule, SQL and one-active-scheduler contract are recorded in
   [`SCORE_COMPATIBILITY.md`](../SCORE_COMPATIBILITY.md).
+- The guarded exact-identity database integration test passed 1/1 against
+  disposable database `lorsource_identity_test_20260816_final3`, proved
+  case-collision and normalized-email candidate ordering, left 0 UUID-schema
+  residue, and the database was dropped and verified absent afterward.
 - The rebuilt application passed `/healthz`; edit-topic, comment-deletion and
   topic-deletion and userpic/profile lifecycle scripts completed with scoped
-  cleanup.
+  cleanup. The browser commenting lifecycle also passed; artifacts:
+  `/tmp/lorsource-commenting-smoke-final-20260816`.
 - `prod_ready_test/test_port.py`: 30 groups passed, 0 failed; destructive
   lifecycle scenarios restored their owned state in `finally`.
 - Browser seed passed from a clean checkpoint and on immediate resume. The
@@ -130,11 +139,21 @@ that an ordinary user cannot inspect another user's private activity.
   The report is `/tmp/prod_ready_7d_benchmark_final.json` and records
   `registration_tested=false`.
 - Java↔Rust HTTP comparison passed all 211 declared scenarios against pinned
-  Java SHA `2ddf930005adac28077cb6ad74d1481485f44096`: core 126/126 (report
-  SHA-256 `60686eae55f94942c76695afac2101ceab48bf188409ea9099123bb4619fae8f`),
-  API/HTTP edge 71/71 (`9fc7842a861621a0b6770d08df40d17f6a1a419a9bbd66c8bf9d80bdad918008`)
-  and conditioned UI 14/14
-  (`557a557392e2479e2396f232ac48d9a9522584610031c5a75b59185f1f2beecd`).
+  Java SHA `2ddf930005adac28077cb6ad74d1481485f44096`: core 126/126, generated
+  `2026-08-16T09:14:16.772360+00:00`, report
+  `/tmp/java-rust-endpoints-final-20260816.json`, SHA-256
+  `9a186115c96f734b9b214c89ebef3f9506f091cb436bc768e9b5e29c1f52589a`;
+  API/HTTP edge 71/71, generated `2026-08-16T09:14:12.142324+00:00`, report
+  `/tmp/java-rust-api-final-20260816.json`, SHA-256
+  `6f4c7f0306373881666ce3e92c3c21103c7973feb4e13890ffb6aade3ba7d6d9`;
+  and conditioned UI 14/14, generated `2026-08-16T09:14:12.706334+00:00`,
+  report `/tmp/java-rust-ui-final-20260816.json`, SHA-256
+  `5626a978c544139165f319501a8acfb10dae32453f180e6bf8a292e40d6ec9d8`.
+- The static compatibility suite passed 113/113 tests. Its route inventory
+  contains 172 Rust declarations and 193 expanded Java mappings: 174
+  method-declared, 19 structural partials and 0 missing/mismatched paths. The
+  SQL audit classified 941 literals as 793 clean and 148 review-required, with
+  0 invalid references/findings across 23 probes.
 - Runtime database startup matched all 728 catalog-contract records; its
   fingerprint SHA-256 is
   `931930417d10d5a4d99966bfacac39a5888f088bc6d45439b796130f32d5e52e`.
@@ -142,13 +161,13 @@ that an ordinary user cannot inspect another user's private activity.
   contract file SHA-256 is
   `eaed5aacda3724e56f4508a98ebc98e45a48fec6acba3f9e35a342d72d9e84f0`.
 - Headless Chromium HTTP preflight and all 56 desktop/mobile captures across
-  28 routes passed; output: `/tmp/lorsource-visual-final-20260815`.
+  28 routes passed; output: `/tmp/lorsource-visual-final-20260816`.
   They remain useful for manual avatar/layout inspection, but are not claimed
   as a Java↔Rust perceptual diff.
 - The seven-theme browser matrix passed 42/42 page/theme checks; report:
-  `/tmp/lorsource-theme-final-20260815/report.json`.
+  `/tmp/lorsource-theme-final-20260816/report.json`.
 - Fixture result: 50 users, 1000 topics, 5000 comments, 42 images, 20 polls,
-  226 reaction-log rows.
+  227 reaction-log rows.
 - All 50 avatar URLs returned HTTP 200, `image/png`, and a valid PNG signature.
 - Both pages of `tracked`, non-empty deleted-topic table, both reaction modes,
   all notification filters, anonymous denial, owner access, moderator access,

@@ -49,13 +49,13 @@ SELECT c.id AS i_comment_id,
 const S_DELETE_PREVIEW_SQL: &str = r#"
 WITH RECURSIVE subtree AS (
   SELECT c.id,c.replyto,0::int AS depth,ARRAY[c.id]::int[] AS path
-    FROM comments c WHERE c.id=$1
+    FROM comments c WHERE c.id=$2
   UNION ALL
   SELECT c.id,c.replyto,st.depth+1,st.path||c.id
     FROM comments c JOIN subtree st ON c.replyto=st.id
-   WHERE c.topic=(SELECT topic FROM comments WHERE id=$1)
+   WHERE c.topic=(SELECT topic FROM comments WHERE id=$2)
      AND (NOT c.deleted OR EXISTS(
-       SELECT 1 FROM users viewer WHERE viewer.id=$2 AND viewer.canmod
+       SELECT 1 FROM users viewer WHERE viewer.id=$3 AND viewer.canmod
      ))
 )
 SELECT c.id AS i_comment_id,c.userid AS i_author_id,t.userid AS i_topic_author_id,
@@ -64,16 +64,16 @@ SELECT c.id AS i_comment_id,c.userid AS i_author_id,t.userid AS i_topic_author_i
        c.replyto AS opt_reply_to,
        (c.replyto IS NOT NULL AND (parent.id IS NULL OR
          (parent.deleted AND NOT EXISTS(
-           SELECT 1 FROM users viewer WHERE viewer.id=$2 AND viewer.canmod
+           SELECT 1 FROM users viewer WHERE viewer.id=$3 AND viewer.canmod
          )))) AS b_reply_deleted,
        CASE WHEN parent.id IS NOT NULL AND (NOT parent.deleted OR EXISTS(
-         SELECT 1 FROM users viewer WHERE viewer.id=$2 AND viewer.canmod
+         SELECT 1 FROM users viewer WHERE viewer.id=$3 AND viewer.canmod
        )) THEN parent.title END AS opt_reply_title,
        CASE WHEN parent.id IS NOT NULL AND (NOT parent.deleted OR EXISTS(
-         SELECT 1 FROM users viewer WHERE viewer.id=$2 AND viewer.canmod
+         SELECT 1 FROM users viewer WHERE viewer.id=$3 AND viewer.canmod
        )) THEN parent_user.nick END AS opt_reply_author,
        CASE WHEN parent.id IS NOT NULL AND (NOT parent.deleted OR EXISTS(
-         SELECT 1 FROM users viewer WHERE viewer.id=$2 AND viewer.canmod
+         SELECT 1 FROM users viewer WHERE viewer.id=$3 AND viewer.canmod
        )) THEN parent.postdate END AS opt_reply_postdate,
        st.depth AS i_depth,
        c.title AS s_title,m.message AS s_message,m.markup::text AS s_markup,
@@ -85,7 +85,7 @@ SELECT c.id AS i_comment_id,c.userid AS i_author_id,t.userid AS i_topic_author_i
        COALESCE(u.frozen_until>CURRENT_TIMESTAMP,false) AS b_author_frozen,
        u.photo AS opt_photo,u.email AS opt_email,remark.remark_text AS opt_remark,
        COALESCE(c.edit_count,0) AS i_edit_count,
-       (c.edit_date AT TIME ZONE 'UTC') AS opt_edit_date,
+       (c.edit_date AT TIME ZONE $1::text) AS opt_edit_date,
        editor.nick AS opt_editor_nick,COALESCE(host(c.postip),'') AS s_post_ip,
        COALESCE(c.ua_id,0) AS i_user_agent_id,
        user_agent.name AS opt_user_agent,COALESCE(c.reactions,'{}'::jsonb)::text AS s_reactions_json,
@@ -112,7 +112,7 @@ SELECT c.id AS i_comment_id,c.userid AS i_author_id,t.userid AS i_topic_author_i
   LEFT JOIN users deleted_by ON deleted_by.id=delete_info.delby
   LEFT JOIN users editor ON editor.id=c.editor_id
   LEFT JOIN user_agents user_agent ON user_agent.id=c.ua_id
-  LEFT JOIN user_remarks remark ON remark.user_id=$2 AND remark.ref_user_id=c.userid
+  LEFT JOIN user_remarks remark ON remark.user_id=$3 AND remark.ref_user_id=c.userid
  ORDER BY st.path
 "#;
 
@@ -132,7 +132,7 @@ SELECT c.id AS i_comment_id,c.userid AS i_author_id,t.userid AS i_topic_author_i
        COALESCE(u.frozen_until>CURRENT_TIMESTAMP,false) AS b_author_frozen,
        u.photo AS opt_photo,u.email AS opt_email,NULL::text AS opt_remark,
        COALESCE(c.edit_count,0) AS i_edit_count,
-       (c.edit_date AT TIME ZONE 'UTC') AS opt_edit_date,
+       (c.edit_date AT TIME ZONE $1::text) AS opt_edit_date,
        editor.nick AS opt_editor_nick,COALESCE(host(c.postip),'') AS s_post_ip,
        COALESCE(c.ua_id,0) AS i_user_agent_id,
        user_agent.name AS opt_user_agent,COALESCE(c.reactions,'{}'::jsonb)::text AS s_reactions_json,
@@ -143,7 +143,7 @@ SELECT c.id AS i_comment_id,c.userid AS i_author_id,t.userid AS i_topic_author_i
   LEFT JOIN users deleted_by ON deleted_by.id=delete_info.delby
   LEFT JOIN users editor ON editor.id=c.editor_id
   LEFT JOIN user_agents user_agent ON user_agent.id=c.ua_id
- WHERE c.id=$1
+ WHERE c.id=$2
 "#;
 
 #[derive(Debug, FromRow)]
@@ -279,11 +279,15 @@ struct StReplyNode {
 #[derive(Debug, Clone)]
 pub struct CCommentDeletionPgRepository {
     oPool: PgPool,
+    stLegacyJdbcTimezone: chrono_tz::Tz,
 }
 
 impl CCommentDeletionPgRepository {
-    pub fn new(oPool: PgPool) -> Self {
-        Self { oPool }
+    pub fn new(oPool: PgPool, stLegacyJdbcTimezone: chrono_tz::Tz) -> Self {
+        Self {
+            oPool,
+            stLegacyJdbcTimezone,
+        }
     }
 }
 
@@ -303,6 +307,11 @@ impl TrCommentDeletionRepository for CCommentDeletionPgRepository {
         iViewerId: i32,
     ) -> Result<Vec<StCommentDeletePreview>> {
         Ok(sqlx::query_as::<_, StPreviewRow>(S_DELETE_PREVIEW_SQL)
+            .bind(
+                crate::infra::postgres::legacy_timestamp::sLegacyJdbcTimezone(
+                    self.stLegacyJdbcTimezone,
+                ),
+            )
             .bind(iCommentId)
             .bind(iViewerId)
             .fetch_all(&self.oPool)
@@ -318,6 +327,11 @@ impl TrCommentDeletionRepository for CCommentDeletionPgRepository {
         _iViewerId: i32,
     ) -> Result<Vec<StCommentDeletePreview>> {
         Ok(sqlx::query_as::<_, StPreviewRow>(S_UNDELETE_PREVIEW_SQL)
+            .bind(
+                crate::infra::postgres::legacy_timestamp::sLegacyJdbcTimezone(
+                    self.stLegacyJdbcTimezone,
+                ),
+            )
             .bind(iCommentId)
             .fetch_all(&self.oPool)
             .await?
@@ -638,9 +652,13 @@ mod tests {
     }
 
     #[test]
-    fn java_timestamp_without_timezone_edit_date_is_decoded_as_utc() {
-        assert!(S_DELETE_PREVIEW_SQL.contains("c.edit_date AT TIME ZONE 'UTC'"));
-        assert!(S_UNDELETE_PREVIEW_SQL.contains("c.edit_date AT TIME ZONE 'UTC'"));
+    fn java_timestamp_without_timezone_edit_date_uses_the_shared_iana_parameter() {
+        for sSql in [S_DELETE_PREVIEW_SQL, S_UNDELETE_PREVIEW_SQL] {
+            assert!(sSql.contains(
+                crate::infra::postgres::legacy_timestamp::S_LEGACY_TIMESTAMP_SQL_EXPRESSION
+            ));
+            assert!(!sSql.contains("AT TIME ZONE 'UTC'"));
+        }
     }
 
     #[test]

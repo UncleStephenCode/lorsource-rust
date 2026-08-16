@@ -26,7 +26,7 @@ The Java source contains 18 `@ResponseBody` mappings:
 |---|---:|---|
 | AJAX comment | `POST /add_comment_ajax` | Fixed nullable model binding, query-first CSRF, UTF-16/text validation distinctions, anonymous/authenticated ordering, canonical success URL and exact `application/json;charset=utf-8` wire header. Stateful no-mutation checks cover missing/malformed topic and conflicting CSRF values. |
 | GeoIP | `GET /admin/geoip` | Source-reviewed; method and JSON family match. Moderator/security-chain behavior remains covered by the general authenticated matrix. |
-| Login availability | `ANY /check-login` | Fixed required `nick`, empty-vs-missing distinction, query/POST-form merge, lazy named-parameter firewall access and all seven StrictHttpFirewall methods. |
+| Login availability | `ANY /check-login` | Fixed required `nick`, empty-vs-missing distinction, exact `UserDao.isUserExists` identity plus Java's case-folded similarity rule, query/POST-form merge, lazy named-parameter firewall access and all seven StrictHttpFirewall methods. |
 | Markup preview | `POST /markup/preview` | Fixed profile-default markup, anonymous allowed formats, Java UTF-16 length, exact JSON charset, and removal of unsupported `msg`/`message` aliases. |
 | Memories | two `POST /memories.jsp` handlers | Fixed `add`/`remove` mapping predicates, required `watch`, and ambiguous add+remove fail-closed behavior. Stateful test proves the ambiguity cannot delete a row. |
 | Notification click/count/reset | three mappings | Source-reviewed. Count now sends Java's `Cache-Control: no-cache`; authentication and POST CSRF remain enforced. |
@@ -220,12 +220,38 @@ JSP gate.
   `X-XSS-Protection: 0` and epoch `Expires`, while security-excluded static
   resources retain the MVC interceptor's `SAMEORIGIN` and omit the latter two
   headers. Differential cases lock both branches.
+- Nick-bound identity now follows `UserDao.findUserId`'s exact `nick=$1`
+  semantics in the search `UserPropertyEditor`, password-reset code,
+  activation and both `/show-replies.jsp` branches. This prevents
+  case-colliding accounts from borrowing another row's private feed,
+  activation credentials/token or password-reset target. The activation path
+  authenticates, verifies and updates one resolved identity rather than
+  composing those operations from separate lookups.
+- Required `@RequestParam` values on activation (`activation`, and on the
+  `action` branch `nick`/`passwd`) and code reset (`nick`/`code`) are read from
+  the query-first Servlet parameter view and return binding 400 when absent.
+  Values are not trimmed. Registration and deregistration accept only the
+  Java bean field names; the Rust-only `passwd`, `accept_block` and
+  `accept_oneway` mutation aliases were removed.
+- Login failures are recorded before the random response delay, matching the
+  by-name evaluation in `LoginController.delayResponse`; a barrier-based
+  concurrency test proves a second request sees the CAPTCHA requirement while
+  the first response is still delayed.
+- Registration now uses one strict Jakarta-style mailbox parser and stores the
+  parsed `getAddress` value. Domain blocking checks both the full domain and a
+  public-suffix-list registrable domain, matching Guava
+  `InternetDomainName.topPrivateDomain` for suffixes such as `co.uk`.
+- The moderator `/show-replies.jsp?nick=...` branch now renders the original
+  filter, event table, paging and feed-link model using the moderator's saved
+  page size and the target's actual event types; it is no longer a placeholder
+  list.
 
 ## Search and realtime
 
 Search controllers, query defaults, output variants and the websocket mapping
-were traced through their Java services and the Rust implementations. No new
-P0/P1 HTTP-contract difference was proved in this pass. This does not turn an
+were traced through their Java services and the Rust implementations. The
+user binder's former case-insensitive lookup was corrected to the original
+exact `UserPropertyEditor`/`UserDao` identity behavior. This does not turn an
 unavailable OpenSearch, durable queue or websocket runtime into parity; the
 runtime gates still require those dependencies and are reported separately.
 
@@ -233,9 +259,10 @@ runtime gates still require those dependencies and are reported separately.
 
 - User-filter tag normalization and SQL-LIKE escaping have source-level edge
   differences that need data fixtures before changing persisted behavior.
-- `comments.edit_date` is `timestamp without time zone`. Rust explicitly
-  interprets it as UTC, but parity with historical JVM/default-timezone
-  interpretation still needs representative production-clone evidence.
+- `comments.edit_date` is `timestamp without time zone`. Rust now writes and
+  reads it through the explicit `LEGACY_JDBC_TIMEZONE` IANA setting (including
+  a guarded PostgreSQL winter/summer round-trip contract), but the correct
+  value and tzdb still need representative production-clone/JVM evidence.
 - External SMTP, Telegram and other integration side effects are outside this
   controller/API patch and remain subject to their dedicated readiness gates.
 - Runtime differential results are authoritative only when both pinned Java

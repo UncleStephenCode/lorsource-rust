@@ -191,6 +191,9 @@ mod main_boxlet_layout_tests {
     fn main_template_has_no_legacy_duplicate_boxlet_markup() {
         let sTemplate = include_str!("../../templates/main_page.html");
         assert!(sTemplate.contains("{{ boxlets_html|safe }}"));
+        assert!(sTemplate.contains("id=\"interpage\""));
+        assert!(sTemplate.contains("init_interpage_adv(ads)"));
+        assert!(sTemplate.contains("$script.ready('lorjs'"));
         for sLegacyField in ["top_topics", "gallery.len()", "tags.len()", "match poll"] {
             assert!(!sTemplate.contains(sLegacyField));
         }
@@ -2548,7 +2551,12 @@ mod author_signature_tests {
 #[derive(Template)]
 #[template(path = "topic_form.html")]
 struct TopicFormTemplate {
+    page_title: String,
     title: String,
+    group_title: String,
+    group_urlname: String,
+    section_name: String,
+    section_prefix: String,
     form_error: Option<String>,
     topic_limit_error: Option<String>,
     topic_limit_info: Option<String>,
@@ -2578,7 +2586,17 @@ struct TopicFormTemplate {
     form_url: String,
     form_linktext: String,
     form_tags: String,
+    preview_tags: Vec<String>,
     preview_html: Option<String>,
+    preview_author: String,
+    preview_author_url: String,
+    preview_author_blocked: bool,
+    preview_author_anonymous: bool,
+    preview_author_stars_html: String,
+    preview_author_score: i32,
+    preview_author_max_score: i32,
+    preview_show_author_score: bool,
+    preview_postdate: chrono::DateTime<chrono::Utc>,
     noinfo: bool,
     add_info_html: Option<String>,
     format_mode: String,
@@ -2936,6 +2954,18 @@ mod topic_form_contract_tests {
         assert!(iRenderGate < iTransaction);
         assert!(sHandler[iRenderGate..iTransaction].contains("renderSubmittedAddTopicForm"));
     }
+
+    #[test]
+    fn add_preview_keeps_topic_tag_title_link_and_full_author_signature() {
+        // topic.tag always links the h1 to Topic.getLink; the add preview is
+        // a Topic with id=0.  Its footer also renders stars for every
+        // registered author and Score/MaxScore for a moderator viewer.
+        let sTemplate = include_str!("../../templates/topic_form.html");
+        assert!(sTemplate.contains("href=\"/{{ section_prefix }}/{{ group_urlname }}/0\""));
+        assert!(sTemplate.contains("preview_author_stars_html|safe"));
+        assert!(sTemplate.contains("Score:&nbsp;{{ preview_author_score }}"));
+        assert!(sTemplate.contains("MaxScore:&nbsp;{{ preview_author_max_score }}"));
+    }
 }
 
 pub async fn index(
@@ -3104,6 +3134,14 @@ impl EnForumFeedFilter {
     fn bTech(self) -> bool {
         self == Self::Tech
     }
+
+    fn enActiveTagsFilter(self) -> crate::search_index::EnActiveTagsForumFilter {
+        match self {
+            Self::All => crate::search_index::EnActiveTagsForumFilter::All,
+            Self::NoTalks => crate::search_index::EnActiveTagsForumFilter::NoTalks,
+            Self::Tech => crate::search_index::EnActiveTagsForumFilter::Tech,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -3169,6 +3207,62 @@ mod topic_listing_contract_tests {
     }
 
     #[test]
+    fn forum_filter_is_forwarded_to_the_active_tag_foreground_query() {
+        use crate::search_index::EnActiveTagsForumFilter;
+
+        assert_eq!(
+            EnForumFeedFilter::All.enActiveTagsFilter(),
+            EnActiveTagsForumFilter::All
+        );
+        assert_eq!(
+            EnForumFeedFilter::NoTalks.enActiveTagsFilter(),
+            EnActiveTagsForumFilter::NoTalks
+        );
+        assert_eq!(
+            EnForumFeedFilter::Tech.enActiveTagsFilter(),
+            EnActiveTagsForumFilter::Tech
+        );
+
+        let sSource = include_str!("topics.rs");
+        let sNavigation = sSource
+            .split(concat!(
+                "pub(crate) async fn ",
+                "build_topic_list_navigation("
+            ))
+            .nth(1)
+            .expect("topic-list navigation helper")
+            .split("pub async fn view_all")
+            .next()
+            .expect("navigation helper range");
+        assert!(sNavigation.contains("[8404, 4068, 9326, 19405]"));
+        assert!(sNavigation.contains("hSpawnActiveTopTagsFiltered("));
+        assert!(sNavigation.contains("enJoinActiveTagsTask("));
+        assert!(sNavigation.contains("enActiveTagsFilter"));
+        assert!(sNavigation.contains("vecNonTechGroupNames"));
+        assert!(!sNavigation.contains("tokio::time::timeout("));
+
+        let sLenta = sSource
+            .split(concat!("pub async fn ", "lenta("))
+            .nth(1)
+            .expect("forum feed handler")
+            .split(concat!("pub async fn ", "section_topics("))
+            .next()
+            .expect("end of forum feed handler");
+        let iDeadline = sLenta
+            .find("dtActiveTagsDeadline()")
+            .expect("absolute deadline");
+        let iNavigation = sLenta
+            .find("build_topic_list_navigation_before_deadline(")
+            .expect("early navigation future");
+        let iTopics = sLenta
+            .find("list_topics_filtered(")
+            .expect("main topic query");
+        assert!(iDeadline < iNavigation && iNavigation < iTopics);
+        assert!(sLenta.contains("enFilter.enActiveTagsFilter()"));
+        assert!(sLenta.contains("biased;"));
+    }
+
+    #[test]
     fn forum_pager_preserves_filter_in_both_directions() {
         let stPager = crate::pagination::topic_feed_pager(20);
         let (optPrev, optNext) = stTopicFeedLinks("/forum/lenta", Some("notalks"), &stPager, 20);
@@ -3199,29 +3293,39 @@ pub async fn lenta(
 ) -> Result<Html<String>> {
     let enFilter = EnForumFeedFilter::parse(q.filter.as_deref())?;
     let pager = crate::pagination::topic_feed_pager(q.offset.unwrap_or(0));
-    let topics = list_topics_filtered(
-        &state,
-        Some("forum"),
-        None,
-        pager.offset,
-        pager.limit,
-        enFilter.bNoTalks(),
-        enFilter.bTech(),
-    )
-    .await?;
-    let (prev_link, next_link) =
-        stTopicFeedLinks("/forum/lenta", enFilter.optId(), &pager, topics.len());
-    let news =
-        prepare_news_topics_for_viewer(&state, topics.clone(), true, &current_user, &csrf_token)
-            .await?;
+    let dtActiveTagsDeadline = crate::search_index::dtActiveTagsDeadline();
     let sRemoteIp = crate::security::stClientIp(
         stPeerAddress.ip(),
         &headers,
         &state.config.trusted_proxy_cidrs,
     )
     .to_string();
-    let mut navigation =
-        build_topic_list_navigation(&state, "forum", None, &current_user, &sRemoteIp).await?;
+    let (mut navigation, topics) = tokio::try_join!(
+        biased;
+        build_topic_list_navigation_before_deadline(
+            &state,
+            "forum",
+            None,
+            &current_user,
+            &sRemoteIp,
+            enFilter.enActiveTagsFilter(),
+            dtActiveTagsDeadline,
+        ),
+        list_topics_filtered(
+            &state,
+            Some("forum"),
+            None,
+            pager.offset,
+            pager.limit,
+            enFilter.bNoTalks(),
+            enFilter.bTech(),
+        ),
+    )?;
+    let (prev_link, next_link) =
+        stTopicFeedLinks("/forum/lenta", enFilter.optId(), &pager, topics.len());
+    let news =
+        prepare_news_topics_for_viewer(&state, topics.clone(), true, &current_user, &csrf_token)
+            .await?;
     navigation.section_url = None;
     navigation.quick_groups.clear();
     navigation.rss_url = Some(match enFilter.optId() {
@@ -3275,20 +3379,31 @@ pub async fn section_topics(
 ) -> Result<Html<String>> {
     let section = section_from_uri(&uri).unwrap_or("news");
     let pager = crate::pagination::topic_feed_pager(q.offset.unwrap_or(0));
-    let topics = list_topics(&state, Some(section), None, pager.offset, pager.limit).await?;
-    let (prev_link, next_link) =
-        stTopicFeedLinks(&format!("/{section}/"), None, &pager, topics.len());
-    let news =
-        prepare_news_topics_for_viewer(&state, topics.clone(), true, &current_user, &csrf_token)
-            .await?;
+    let dtActiveTagsDeadline = crate::search_index::dtActiveTagsDeadline();
     let sRemoteIp = crate::security::stClientIp(
         stPeerAddress.ip(),
         &headers,
         &state.config.trusted_proxy_cidrs,
     )
     .to_string();
-    let navigation =
-        build_topic_list_navigation(&state, section, None, &current_user, &sRemoteIp).await?;
+    let (navigation, topics) = tokio::try_join!(
+        biased;
+        build_topic_list_navigation_before_deadline(
+            &state,
+            section,
+            None,
+            &current_user,
+            &sRemoteIp,
+            crate::search_index::EnActiveTagsForumFilter::All,
+            dtActiveTagsDeadline,
+        ),
+        list_topics(&state, Some(section), None, pager.offset, pager.limit),
+    )?;
+    let (prev_link, next_link) =
+        stTopicFeedLinks(&format!("/{section}/"), None, &pager, topics.len());
+    let news =
+        prepare_news_topics_for_viewer(&state, topics.clone(), true, &current_user, &csrf_token)
+            .await?;
     Ok(Html(
         IndexTemplate {
             title: section_title(section).to_string(),
@@ -3316,15 +3431,33 @@ pub async fn section_group_topics(
 ) -> Result<Html<String>> {
     let section = section_from_uri(&uri).unwrap_or("news");
     let pager = crate::pagination::topic_feed_pager(q.offset.unwrap_or(0));
-    let topics = list_topics(
-        &state,
-        Some(section),
-        Some(&group),
-        pager.offset,
-        pager.limit,
-    )
-    .await?;
     let selected = crate::routes::groups::find_group_by_section(&state, section, &group).await?;
+    let dtActiveTagsDeadline = crate::search_index::dtActiveTagsDeadline();
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
+    let (navigation, topics) = tokio::try_join!(
+        biased;
+        build_topic_list_navigation_before_deadline(
+            &state,
+            section,
+            Some(&selected),
+            &current_user,
+            &sRemoteIp,
+            crate::search_index::EnActiveTagsForumFilter::All,
+            dtActiveTagsDeadline,
+        ),
+        list_topics(
+            &state,
+            Some(section),
+            Some(&group),
+            pager.offset,
+            pager.limit,
+        ),
+    )?;
     let (prev_link, next_link) = stTopicFeedLinks(
         &format!("/{section}/{}", urlencoding::encode(&selected.urlname)),
         None,
@@ -3333,15 +3466,6 @@ pub async fn section_group_topics(
     );
     let news =
         prepare_news_topics_for_viewer(&state, topics.clone(), false, &current_user, &csrf_token)
-            .await?;
-    let sRemoteIp = crate::security::stClientIp(
-        stPeerAddress.ip(),
-        &headers,
-        &state.config.trusted_proxy_cidrs,
-    )
-    .to_string();
-    let navigation =
-        build_topic_list_navigation(&state, section, Some(&selected), &current_user, &sRemoteIp)
             .await?;
     Ok(Html(
         IndexTemplate {
@@ -3536,7 +3660,48 @@ pub(crate) async fn build_topic_list_navigation(
     selected_group: Option<&Group>,
     user: &Option<UserSummary>,
     sRemoteIp: &str,
+    enActiveTagsFilter: crate::search_index::EnActiveTagsForumFilter,
 ) -> Result<TopicListNavigation> {
+    build_topic_list_navigation_before_deadline(
+        state,
+        section_prefix,
+        selected_group,
+        user,
+        sRemoteIp,
+        enActiveTagsFilter,
+        crate::search_index::dtActiveTagsDeadline(),
+    )
+    .await
+}
+
+pub(crate) async fn build_topic_list_navigation_before_deadline(
+    state: &AppState,
+    section_prefix: &str,
+    selected_group: Option<&Group>,
+    user: &Option<UserSummary>,
+    sRemoteIp: &str,
+    enActiveTagsFilter: crate::search_index::EnActiveTagsForumFilter,
+    dtActiveTagsDeadline: tokio::time::Instant,
+) -> Result<TopicListNavigation> {
+    let bSkipActiveTags = selected_group.is_some_and(|stGroup| stGroup.id == 4068);
+    let optActiveGroup = selected_group.map(|stGroup| stGroup.urlname.clone());
+    // All/NoTalks need no DB-derived names, so schedule their underlying
+    // OpenSearch/cache operation before the first page query. Tech starts as
+    // soon as the four Java NonTech group names have been resolved below.
+    let mut optActiveTagsTask = if !bSkipActiveTags
+        && enActiveTagsFilter != crate::search_index::EnActiveTagsForumFilter::Tech
+    {
+        Some(crate::search_index::hSpawnActiveTopTagsFiltered(
+            state.clone(),
+            section_prefix.to_owned(),
+            optActiveGroup.clone(),
+            enActiveTagsFilter,
+            Vec::new(),
+            dtActiveTagsDeadline,
+        ))
+    } else {
+        None
+    };
     let (section_id, section_restriction, section_premoderated): (i32, i32, bool) = sqlx::query_as(
         r#"SELECT id, COALESCE(restrict_topics,-9999), moderate FROM sections WHERE CASE id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(name) END=$1"#,
     )
@@ -3545,6 +3710,26 @@ pub(crate) async fn build_topic_list_navigation(
     .await?
     .ok_or(AppError::NotFound)?;
     let groups = crate::routes::groups::list_groups_by_section(state, Some(section_prefix)).await?;
+    // TagService.NonTechNames is derived from the four source group IDs,
+    // while OpenSearch stores their URL names. It is used only by the forum
+    // `filter=tech` foreground query; the significant-terms background stays
+    // the complete section exactly as in Java.
+    const AI_NON_TECH_GROUP_IDS: [i32; 4] = [8404, 4068, 9326, 19405];
+    let vecNonTechGroupNames = groups
+        .iter()
+        .filter(|stGroup| AI_NON_TECH_GROUP_IDS.contains(&stGroup.id))
+        .map(|stGroup| stGroup.urlname.clone())
+        .collect::<Vec<_>>();
+    if !bSkipActiveTags && optActiveTagsTask.is_none() {
+        optActiveTagsTask = Some(crate::search_index::hSpawnActiveTopTagsFiltered(
+            state.clone(),
+            section_prefix.to_owned(),
+            optActiveGroup,
+            enActiveTagsFilter,
+            vecNonTechGroupNames,
+            dtActiveTagsDeadline,
+        ));
+    }
     let restriction = if let Some(group) = selected_group {
         let group_restriction: i32 =
             sqlx::query_scalar("SELECT COALESCE(restrict_topics, -9999) FROM groups WHERE id=$1")
@@ -3581,35 +3766,29 @@ pub(crate) async fn build_topic_list_navigation(
     } else {
         0
     };
-    let active_tags = if selected_group.is_some_and(|stGroup| stGroup.id == 4068) {
-        Vec::new()
-    } else {
-        let optGroup = selected_group.map(|stGroup| stGroup.urlname.as_str());
-        match tokio::time::timeout(
-            std::time::Duration::from_millis(500),
-            crate::search_index::vecActiveTopTags(state, section_prefix, optGroup),
-        )
-        .await
-        {
-            Ok(Ok(vecTags)) => vecTags
+    let active_tags = match optActiveTagsTask {
+        None => Vec::new(),
+        Some(hTask) => match crate::search_index::enJoinActiveTagsTask(hTask).await {
+            crate::search_index::EnActiveTagsTaskOutcome::Tags(vecTags) => vecTags
                 .into_iter()
                 .map(|sName| ActiveTagLink {
                     url: format!("/tag/{}?section={section_id}", urlencoding::encode(&sName)),
                     name: sName,
                 })
                 .collect(),
-            Ok(Err(sError)) => {
+            crate::search_index::EnActiveTagsTaskOutcome::SearchError(sError)
+            | crate::search_index::EnActiveTagsTaskOutcome::JoinError(sError) => {
                 tracing::warn!(error = %sError, section = section_prefix, "unable to find active section tags");
                 Vec::new()
             }
-            Err(_) => {
+            crate::search_index::EnActiveTagsTaskOutcome::TimedOut => {
                 tracing::warn!(
                     section = section_prefix,
                     "active section tags search timed out"
                 );
                 Vec::new()
             }
-        }
+        },
     };
     Ok(TopicListNavigation {
         section_id,
@@ -5409,7 +5588,9 @@ pub async fn choose_topic_section(
 
 struct TopicFormGroup {
     title: String,
+    urlname: String,
     section_id: i32,
+    section_name: String,
     links_allowed: bool,
     poll_allowed: bool,
     image_required: bool,
@@ -5419,11 +5600,23 @@ struct TopicFormGroup {
     comments_restriction: i32,
 }
 
-type TyTopicFormGroupRow = (String, i32, bool, bool, bool, bool, String, bool, i32);
+type TyTopicFormGroupRow = (
+    String,
+    String,
+    i32,
+    String,
+    bool,
+    bool,
+    bool,
+    bool,
+    String,
+    bool,
+    i32,
+);
 
 async fn load_topic_form_group(state: &AppState, group_id: i32) -> Result<TopicFormGroup> {
     let row: Option<TyTopicFormGroupRow> = sqlx::query_as(
-        r#"SELECT g.title, s.id, s.havelink, COALESCE(s.vote,false), s.imagepost,
+        r#"SELECT g.title, g.urlname, s.id, s.name, s.havelink, COALESCE(s.vote,false), s.imagepost,
                   s.imageallowed,
                   CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(s.name) END,
                   s.moderate, GREATEST(COALESCE(g.restrict_comments,-9999),
@@ -5432,7 +5625,9 @@ async fn load_topic_form_group(state: &AppState, group_id: i32) -> Result<TopicF
     ).bind(group_id).fetch_optional(&state.pool).await?;
     let Some((
         title,
+        urlname,
         section_id,
+        section_name,
         links_allowed,
         poll_allowed,
         image_required,
@@ -5446,7 +5641,9 @@ async fn load_topic_form_group(state: &AppState, group_id: i32) -> Result<TopicF
     };
     Ok(TopicFormGroup {
         title,
+        urlname,
         section_id,
+        section_name,
         links_allowed,
         poll_allowed,
         image_required,
@@ -5561,9 +5758,20 @@ pub async fn new_topic_form(
             .ok()
             .map(|source| markup::render_markdown(&source))
     };
+    let stPreviewSignature = stAuthorSignature(
+        stResolution.stIdentity.stUser.score.unwrap_or(0),
+        stResolution.stIdentity.stUser.max_score.unwrap_or(0),
+        stResolution.stIdentity.bAuthorized,
+        user.as_ref().is_some_and(|stUser| stUser.canmod),
+    );
     Ok(Html(
         TopicFormTemplate {
+            page_title: "Добавить сообщение".into(),
             title: format!("Добавить в «{}»", group.title),
+            group_title: group.title.clone(),
+            group_urlname: group.urlname.clone(),
+            section_name: group.section_name.clone(),
+            section_prefix: group.section_prefix.clone(),
             form_error: None,
             topic_limit_error,
             topic_limit_info,
@@ -5598,7 +5806,18 @@ pub async fn new_topic_form(
             form_url: String::new(),
             form_linktext: String::new(),
             form_tags: initial_tags.clone(),
+            preview_tags: Vec::new(),
             preview_html: None,
+            preview_author: stResolution.stIdentity.stUser.nick.clone(),
+            preview_author_url: urlencoding::encode(&stResolution.stIdentity.stUser.nick)
+                .into_owned(),
+            preview_author_blocked: stResolution.stIdentity.stUser.blocked.unwrap_or(false),
+            preview_author_anonymous: !stResolution.stIdentity.bAuthorized,
+            preview_author_stars_html: stPreviewSignature.stars_html,
+            preview_author_score: stPreviewSignature.score,
+            preview_author_max_score: stPreviewSignature.max_score,
+            preview_show_author_score: stPreviewSignature.show_score,
+            preview_postdate: chrono::Utc::now(),
             noinfo,
             add_info_html,
             format_mode,
@@ -6155,6 +6374,9 @@ async fn renderSubmittedAddTopicForm(
     bPreview: bool,
     bSessionAuthorized: bool,
     bRequireCaptcha: bool,
+    stPreviewAuthor: &crate::models::UserSummary,
+    bPreviewAuthorAnonymous: bool,
+    bViewerModerator: bool,
 ) -> Result<Response> {
     let (optTopicLimitError, optTopicLimitInfo) = topicLimitNotices(stTopicLimitInfo);
     let optPreviewHtml = if bPreview {
@@ -6173,9 +6395,20 @@ async fn renderSubmittedAddTopicForm(
     } else {
         None
     };
+    let stPreviewSignature = stAuthorSignature(
+        stPreviewAuthor.score.unwrap_or(0),
+        stPreviewAuthor.max_score.unwrap_or(0),
+        !bPreviewAuthorAnonymous,
+        bViewerModerator,
+    );
     Ok(Html(
         TopicFormTemplate {
+            page_title: "Добавить сообщение".into(),
             title: format!("Добавить в «{}»", stGroup.title),
+            group_title: stGroup.title.clone(),
+            group_urlname: stGroup.urlname.clone(),
+            section_name: stGroup.section_name.clone(),
+            section_prefix: stGroup.section_prefix.clone(),
             form_error: optFormError,
             topic_limit_error: optTopicLimitError,
             topic_limit_info: optTopicLimitInfo,
@@ -6210,7 +6443,21 @@ async fn renderSubmittedAddTopicForm(
             form_url: stForm.url.clone().unwrap_or_default(),
             form_linktext: stForm.linktext.clone().unwrap_or_default(),
             form_tags: stForm.tags.clone().unwrap_or_default(),
+            preview_tags: stForm
+                .tags
+                .as_deref()
+                .map(crate::routes::tags::parse_tags)
+                .unwrap_or_default(),
             preview_html: optPreviewHtml,
+            preview_author: stPreviewAuthor.nick.clone(),
+            preview_author_url: urlencoding::encode(&stPreviewAuthor.nick).into_owned(),
+            preview_author_blocked: stPreviewAuthor.blocked.unwrap_or(false),
+            preview_author_anonymous: bPreviewAuthorAnonymous,
+            preview_author_stars_html: stPreviewSignature.stars_html,
+            preview_author_score: stPreviewSignature.score,
+            preview_author_max_score: stPreviewSignature.max_score,
+            preview_show_author_score: stPreviewSignature.show_score,
+            preview_postdate: chrono::Utc::now(),
             noinfo: stForm
                 .noinfo
                 .as_deref()
@@ -6262,6 +6509,7 @@ pub async fn create_topic(
         vecTags,
     } = stValidateAddTopicForm(&form);
     let bSessionAuthorized = user.is_some();
+    let bViewerModerator = user.as_ref().is_some_and(|stUser| stUser.canmod);
     let bShowAllowAnonymous =
         bSessionAuthorized && !group.premoderated && group.comments_restriction < -50;
     let bAllowAnonymous = !bShowAllowAnonymous || form.allow_anonymous.is_some();
@@ -6432,6 +6680,9 @@ pub async fn create_topic(
             form.preview.is_some(),
             bSessionAuthorized,
             bRequireCaptcha,
+            &stPostingIdentity.stUser,
+            !stPostingIdentity.bAuthorized,
+            bViewerModerator,
         )
         .await;
     }
@@ -6462,6 +6713,9 @@ pub async fn create_topic(
             false,
             bSessionAuthorized,
             bRequireCaptcha,
+            &stPostingIdentity.stUser,
+            !stPostingIdentity.bAuthorized,
+            bViewerModerator,
         )
         .await;
     }
@@ -6483,6 +6737,9 @@ pub async fn create_topic(
             false,
             bSessionAuthorized,
             bRequireCaptcha,
+            &stPostingIdentity.stUser,
+            !stPostingIdentity.bAuthorized,
+            bViewerModerator,
         )
         .await;
     }
@@ -9065,7 +9322,10 @@ pub async fn get_topic(state: &AppState, id: i32) -> Result<TopicDetail> {
 }
 
 fn topic_service(state: &AppState) -> CTopicService<CTopicPgRepository> {
-    CTopicService::new(CTopicPgRepository::new(state.pool.clone()))
+    CTopicService::new(CTopicPgRepository::new(
+        state.pool.clone(),
+        state.config.stLegacyJdbcTimezone(),
+    ))
 }
 
 fn add_topic_service(state: &AppState) -> CAddTopicService<CAddTopicPgRepository> {

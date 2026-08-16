@@ -8,11 +8,11 @@ use crate::{
 };
 use askama::Template;
 use axum::{
-    extract::{ConnectInfo, Path, Query, State},
+    extract::{ConnectInfo, Path, Query, Request, State},
     http::{HeaderMap, Method},
     response::{Html, IntoResponse, Response},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use std::net::SocketAddr;
 
 #[derive(Template)]
@@ -39,7 +39,20 @@ struct GroupTopicsTemplate {
     lastmod: bool,
     prev_url: Option<String>,
     next_url: Option<String>,
+    next_offset: i64,
     is_moderator: bool,
+    old_tracker: bool,
+    show_ignored: bool,
+    show_deleted: bool,
+    show_deleted_button: bool,
+    csrf_token: String,
+    frozen_until: Option<chrono::DateTime<chrono::Utc>>,
+    active_tags: Vec<crate::routes::topics::ActiveTagLink>,
+    tag_name: Option<String>,
+    tag_title: String,
+    tag_url: String,
+    group_url: String,
+    first_page: bool,
 }
 
 #[derive(Debug)]
@@ -50,6 +63,8 @@ struct GroupTopicView {
     target_url: String,
     comments: i32,
     comments_closed: bool,
+    topic_author_blocked: bool,
+    last_author_blocked: bool,
 }
 
 impl GroupTopicView {
@@ -65,6 +80,8 @@ struct GroupTopicActivityRow {
     last_author: String,
     last_postdate: chrono::DateTime<chrono::Utc>,
     postscore: i32,
+    topic_author_blocked: bool,
+    last_author_blocked: bool,
 }
 
 // SectionController.NonTech in the original.  GroupDao returns groups by id;
@@ -91,7 +108,9 @@ async fn vecPrepareGroupTopics(
         r#"SELECT t.id AS topic_id,lc.id AS last_comment_id,
                   COALESCE(lu.nick,tu.nick) AS last_author,
                   COALESCE(lc.postdate,t.postdate) AS last_postdate,
-                  COALESCE(t.postscore,-9999) AS postscore
+                  COALESCE(t.postscore,-9999) AS postscore,
+                  COALESCE(tu.blocked,false) AS topic_author_blocked,
+                  COALESCE(lu.blocked,tu.blocked,false) AS last_author_blocked
            FROM topics t
            JOIN users tu ON tu.id=t.userid
            LEFT JOIN LATERAL (
@@ -138,6 +157,8 @@ async fn vecPrepareGroupTopics(
                     stTopic.comments
                 },
                 comments_closed: stActivity.postscore >= 10000,
+                topic_author_blocked: stActivity.topic_author_blocked,
+                last_author_blocked: stActivity.last_author_blocked,
                 last_author: stActivity.last_author.clone(),
                 last_postdate: stActivity.last_postdate,
                 target_url: sTargetUrl,
@@ -171,12 +192,22 @@ pub async fn forum_index(State(state): State<AppState>) -> Result<Html<String>> 
 /// (a bare GET with the flag is bounced back without it).
 #[derive(Deserialize)]
 pub struct ForumGroupQuery {
+    #[serde(default, deserialize_with = "optDeserializeGroupOffset")]
     pub offset: Option<i64>,
+    #[serde(default, deserialize_with = "optDeserializeGroupBoolean")]
     pub lastmod: Option<bool>,
     pub tag: Option<String>,
-    #[serde(rename = "showignored")]
+    #[serde(
+        default,
+        rename = "showignored",
+        deserialize_with = "optDeserializeGroupBoolean"
+    )]
     pub show_ignored: Option<bool>,
-    #[serde(rename = "showDeleted")]
+    #[serde(
+        default,
+        rename = "showDeleted",
+        deserialize_with = "optDeserializeGroupBoolean"
+    )]
     pub show_deleted: Option<bool>,
 }
 
@@ -186,23 +217,36 @@ pub async fn group_page(
     State(state): State<AppState>,
     method: Method,
     Path(group_urlname): Path<String>,
-    Query(q): Query<ForumGroupQuery>,
+    Query(mut q): Query<ForumGroupQuery>,
     CurrentUser(user): CurrentUser,
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
     headers: HeaderMap,
     ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
+    stRequest: Request,
 ) -> Result<Response> {
+    if method == Method::POST {
+        let vecParameters = crate::form::servlet_request_parameters(stRequest).await?;
+        if let Some(sValue) = crate::form::get(&vecParameters, "showDeleted") {
+            q.show_deleted = Some(bGroupFormBoolean(sValue, "showDeleted")?);
+        }
+        if let Some(sValue) = crate::form::get(&vecParameters, "offset") {
+            q.offset = Some(iGroupOffset(sValue)?);
+        }
+        if let Some(sValue) = crate::form::get(&vecParameters, "lastmod") {
+            q.lastmod = Some(bGroupFormBoolean(sValue, "lastmod")?);
+        }
+        if let Some(sValue) = crate::form::get(&vecParameters, "showignored") {
+            q.show_ignored = Some(bGroupFormBoolean(sValue, "showignored")?);
+        }
+        if let Some(sValue) = crate::form::get(&vecParameters, "tag") {
+            q.tag = Some(sValue.to_owned());
+        }
+    }
     let offset = q.offset.unwrap_or(0);
-    if offset < 0 {
-        return Err(AppError::BadParameter(
-            "Bad format of 'offset' offset не может быть отрицательным".into(),
-        ));
-    }
-    if offset > MAX_GROUP_OFFSET {
-        return Ok(crate::routes::stFoundRedirect(format!(
-            "/forum/{}/archive",
-            urlencoding::encode(&group_urlname)
-        )));
-    }
+    // GroupController resolves section/group before authorization, offset and
+    // tag semantics, so an unknown group remains a 404 for every valid bind.
+    let group = find_group_by_section(&state, "forum", &group_urlname).await?;
+    let group_id = group.id;
 
     // GroupController.forum: showDeleted требует авторизации +
     // canViewAllDeletedTopics (score>=50, не заморожен - без отдельной
@@ -226,31 +270,63 @@ pub async fn group_page(
     }
     let show_deleted = show_deleted_requested;
 
-    let group = find_group_by_section(&state, "forum", &group_urlname).await?;
-    let group_id = group.id;
+    // A permitted GET showDeleted request redirects before isFirstPage runs
+    // in Java. POST and ordinary GET requests validate/limit the offset here.
+    if offset < 0 {
+        return Err(AppError::BadParameter(
+            "Bad format of 'offset' offset не может быть отрицательным".into(),
+        ));
+    }
+    if offset > MAX_GROUP_OFFSET {
+        return Ok(crate::routes::stFoundRedirect(format!(
+            "/forum/{}/archive",
+            urlencoding::encode(&group_urlname)
+        )));
+    }
 
-    let tag_id: Option<i32> = if let Some(tag) = q.tag.as_deref().filter(|t| !t.is_empty()) {
-        let id: Option<i32> =
-            sqlx::query_scalar("SELECT id FROM tags_values WHERE lower(value)=lower($1)")
-                .bind(tag)
-                .fetch_optional(&state.pool)
-                .await?;
-        if id.is_none() {
-            return Err(AppError::NotFound);
+    // TagService.getTagInfo(tag, skipZero=true): the request parameter is
+    // significant even when it is empty, TagName validation happens before
+    // the lookup, and TagDao performs an exact (case-sensitive) canonical-tag
+    // lookup while hiding zero-counter rows.  Synonyms are not resolved here.
+    let (tag_id, tag_name) = match q.tag.as_deref() {
+        None => (None, None),
+        Some(tag) if crate::routes::tags::is_good_tag(tag) => {
+            let optTag = sqlx::query_as::<_, (i32, String)>(
+                "SELECT id,value FROM tags_values WHERE value=$1 AND counter>0",
+            )
+            .bind(tag)
+            .fetch_optional(&state.pool)
+            .await?;
+            let Some((iTagId, sCanonicalName)) = optTag else {
+                return Err(AppError::NotFound);
+            };
+            (Some(iTagId), Some(sCanonicalName))
         }
-        id
-    } else {
+        Some(_) => return Err(AppError::NotFound),
+    };
+    let dtActiveTagsDeadline = crate::search_index::dtActiveTagsDeadline();
+    let optActiveTagsTask = if group.id == 4068 {
         None
+    } else {
+        Some(crate::search_index::hSpawnActiveTopTags(
+            state.clone(),
+            "forum".to_owned(),
+            Some(group.urlname.clone()),
+            dtActiveTagsDeadline,
+        ))
     };
 
-    // GroupListDao.load: showIgnored=true (или анонимус) отключает
-    // фильтрацию по ignore_list текущего пользователя.
     let show_ignored = q.show_ignored.unwrap_or(false);
-    let ignore_user_id: Option<i32> = if show_ignored {
-        None
-    } else {
-        user.as_ref().map(|u| u.id)
-    };
+    let lastmod = q.lastmod.unwrap_or(false);
+    // getGroupTrackerTopics hardcodes showIgnored=false even though the
+    // controller keeps the requested value in the JSP model. Normal group
+    // mode alone honours showignored=true for its data query.
+    let ignore_user_id =
+        optGroupQueryIgnoreUserId(user.as_ref().map(|stUser| stUser.id), lastmod, show_ignored);
+    // Likewise the tracker DAO always hides deleted topics while the model
+    // still reflects the submitted showDeleted flag.
+    let bQueryShowDeleted = bGroupQueryShowDeleted(lastmod, show_deleted);
+    let bViewerAuthorized = user.is_some();
 
     // GroupListDao uses the current viewer profile, including the anonymous
     // DefaultProfile, rather than the process-wide PAGE_SIZE setting.
@@ -265,7 +341,6 @@ pub async fn group_page(
         crate::profile::ProfileSettings::default()
     };
     let limit = i64::from(stProfile.topics);
-    let lastmod = q.lastmod.unwrap_or(false);
 
     let order_by = if lastmod {
         "GREATEST(t.postdate,COALESCE(lc_visible.postdate,t.postdate)) DESC"
@@ -273,7 +348,9 @@ pub async fn group_page(
         "t.postdate DESC"
     };
     let date_filter = if lastmod {
-        "COALESCE(t.lastmod, t.postdate) > now() - interval '6 months'"
+        "t.lastmod > now() - interval '6 months' AND \
+         (t.postdate > now() - interval '6 months' OR \
+          lc_visible.postdate > now() - interval '6 months')"
     } else {
         "t.postdate > now() - interval '6 months'"
     };
@@ -302,8 +379,9 @@ pub async fn group_page(
               ORDER BY c.postdate DESC
               LIMIT 1
            ) lc_visible ON t.postscore IS DISTINCT FROM 10002
-           WHERE t.groupid=$1 AND NOT t.sticky AND (NOT t.deleted OR $5) AND NOT t.draft
+           WHERE t.groupid=$1 AND ($7 OR NOT t.sticky) AND (NOT t.deleted OR $5) AND NOT t.draft
              AND (t.moderate OR NOT s.moderate) AND {date_filter}
+             AND ($8 OR t.open_warnings <= 2)
              AND ($4::int IS NULL OR t.id IN (SELECT msgid FROM tags WHERE tagid=$4))
              AND ($6::int IS NULL OR NOT EXISTS (SELECT 1 FROM ignore_list il WHERE il.userid=$6 AND il.ignored=u.id))
              AND ($6::int IS NULL OR NOT (
@@ -330,8 +408,10 @@ pub async fn group_page(
         .bind(offset)
         .bind(limit)
         .bind(tag_id)
-        .bind(show_deleted)
+        .bind(bQueryShowDeleted)
         .bind(ignore_user_id)
+        .bind(lastmod)
+        .bind(bViewerAuthorized)
         .fetch_all(&state.pool)
         .await?;
     let main_topics_count = topics.len();
@@ -352,11 +432,13 @@ pub async fn group_page(
                WHERE t.groupid=$1 AND t.sticky AND NOT t.deleted AND NOT t.draft
                  AND (t.moderate OR NOT s.moderate)
                  AND ($2::int IS NULL OR t.id IN (SELECT msgid FROM tags WHERE tagid=$2))
+                 AND ($3 OR t.open_warnings <= 2)
                ORDER BY t.postdate DESC
                LIMIT 100"#;
         let mut sticky = sqlx::query_as::<_, TopicSummary>(sticky_sql)
             .bind(group_id)
             .bind(tag_id)
+            .bind(bViewerAuthorized)
             .fetch_all(&state.pool)
             .await?;
         sticky.extend(topics);
@@ -377,29 +459,15 @@ pub async fn group_page(
     let add_reason =
         crate::routes::topics::posting_reason_for_port(&state, restriction, &user, &sRemoteIp)
             .await?;
-    let tag_suffix = q
-        .tag
+    let tag_suffix = tag_name
         .as_deref()
-        .filter(|tag| !tag.is_empty())
         .map(|tag| format!("tag={}", urlencoding::encode(tag)));
-    let new_url = group_mode_url(
-        &group_urlname,
-        false,
-        tag_suffix.as_deref(),
-        None,
-        show_ignored,
-    );
-    let active_url = group_mode_url(
-        &group_urlname,
-        true,
-        tag_suffix.as_deref(),
-        None,
-        show_ignored,
-    );
+    let new_url = sGroupNavigationUrl(&group_urlname, false, tag_suffix.as_deref());
+    let active_url = sGroupNavigationUrl(&group_urlname, true, tag_suffix.as_deref());
     let archive_url = format!("/forum/{}/archive", urlencoding::encode(&group_urlname));
     let add_url = add_reason.is_none().then(|| {
         let mut url = format!("/add.jsp?group={group_id}");
-        if let Some(tag) = q.tag.as_deref().filter(|tag| !tag.is_empty()) {
+        if let Some(tag) = tag_name.as_deref() {
             url.push_str("&tags=");
             url.push_str(&urlencoding::encode(tag));
         }
@@ -411,18 +479,12 @@ pub async fn group_page(
         .into_iter()
         .map(|item| crate::routes::topics::QuickGroupLink {
             title: item.title,
-            url: group_mode_url(
-                &item.urlname,
-                lastmod,
-                tag_suffix.as_deref(),
-                None,
-                show_ignored,
-            ),
+            url: sGroupQuickUrl(&item.urlname, lastmod),
             selected: item.id == group_id,
         })
         .collect();
     let prev_url = (offset > 0).then(|| {
-        group_mode_url(
+        sGroupPagerUrl(
             &group_urlname,
             lastmod,
             tag_suffix.as_deref(),
@@ -431,7 +493,7 @@ pub async fn group_page(
         )
     });
     let next_url = bGroupHasNext(offset, main_topics_count, limit).then(|| {
-        group_mode_url(
+        sGroupPagerUrl(
             &group_urlname,
             lastmod,
             tag_suffix.as_deref(),
@@ -442,6 +504,52 @@ pub async fn group_page(
     let title = format!("Форум — {}", group.title);
     let longinfo_html = optPreparedGroupLongInfo(group.longinfo.as_deref());
     let is_moderator = user.as_ref().is_some_and(|current| current.canmod);
+    let show_deleted_button =
+        !lastmod && crate::routes::topics::can_view_all_deleted_topics(&state, &user).await?;
+    let frozen_until = if let Some(stUser) = user.as_ref() {
+        sqlx::query_scalar::<_, Option<chrono::DateTime<chrono::Utc>>>(
+            "SELECT frozen_until FROM users WHERE id=$1",
+        )
+        .bind(stUser.id)
+        .fetch_optional(&state.pool)
+        .await?
+        .flatten()
+        .filter(|dtFrozenUntil| *dtFrozenUntil > chrono::Utc::now())
+    } else {
+        None
+    };
+    let active_tags = match optActiveTagsTask {
+        None => Vec::new(),
+        Some(hTask) => match crate::search_index::enJoinActiveTagsTask(hTask).await {
+            crate::search_index::EnActiveTagsTaskOutcome::Tags(vecTags) => vecTags
+                .into_iter()
+                .map(|name| crate::routes::topics::ActiveTagLink {
+                    url: crate::application::tag::sTagSectionUrl(&name, group.section, 0),
+                    name,
+                })
+                .collect(),
+            crate::search_index::EnActiveTagsTaskOutcome::SearchError(error)
+            | crate::search_index::EnActiveTagsTaskOutcome::JoinError(error) => {
+                tracing::warn!(%error, group = %group.urlname, "unable to find active group tags");
+                Vec::new()
+            }
+            crate::search_index::EnActiveTagsTaskOutcome::TimedOut => {
+                tracing::warn!(group = %group.urlname, "active group tags search timed out");
+                Vec::new()
+            }
+        },
+    };
+    let tag_title = tag_name
+        .as_deref()
+        .map(capitalize_first)
+        .unwrap_or_default();
+    let tag_url = tag_name.as_deref().map_or_else(String::new, |tag| {
+        format!("/tag/{}", urlencoding::encode(tag))
+    });
+    let title = tag_name.as_ref().map_or(title, |tag| {
+        format!("Форум — {} (тег {})", group.title, capitalize_first(tag))
+    });
+    let group_url = format!("/forum/{}", urlencoding::encode(&group_urlname));
 
     Ok(Html(
         GroupTopicsTemplate {
@@ -458,15 +566,94 @@ pub async fn group_page(
             lastmod,
             prev_url,
             next_url,
+            next_offset: offset + limit,
             is_moderator,
+            old_tracker: stProfile.old_tracker,
+            show_ignored,
+            show_deleted,
+            show_deleted_button,
+            csrf_token,
+            frozen_until,
+            active_tags,
+            tag_name,
+            tag_title,
+            tag_url,
+            group_url,
+            first_page: offset == 0,
         }
         .render()?,
     )
     .into_response())
 }
 
+fn bGroupFormBoolean(sValue: &str, sName: &str) -> Result<bool> {
+    match sValue.trim().to_ascii_lowercase().as_str() {
+        "true" | "on" | "yes" | "1" => Ok(true),
+        "false" | "off" | "no" | "0" | "" => Ok(false),
+        _ => Err(AppError::BadParameter(format!("Bad format of '{sName}'"))),
+    }
+}
+
+fn optDeserializeGroupBoolean<'de, D>(
+    stDeserializer: D,
+) -> std::result::Result<Option<bool>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let optValue = Option::<String>::deserialize(stDeserializer)?;
+    optValue
+        .map(|sValue| {
+            bGroupFormBoolean(&sValue, "boolean")
+                .map_err(|_| serde::de::Error::custom("invalid boolean parameter"))
+        })
+        .transpose()
+}
+
+fn iGroupOffset(sValue: &str) -> Result<i64> {
+    let sValue = sValue.trim();
+    if sValue.is_empty() {
+        return Ok(0);
+    }
+    sValue
+        .parse::<i64>()
+        .map_err(|_| AppError::BadParameter("Bad format of 'offset'".into()))
+}
+
+fn optDeserializeGroupOffset<'de, D>(
+    stDeserializer: D,
+) -> std::result::Result<Option<i64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let optValue = Option::<String>::deserialize(stDeserializer)?;
+    optValue
+        .map(|sValue| {
+            iGroupOffset(&sValue).map_err(|_| serde::de::Error::custom("invalid offset parameter"))
+        })
+        .transpose()
+}
+
+fn capitalize_first(sValue: &str) -> String {
+    let mut chars = sValue.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().collect::<String>() + chars.as_str()
+    })
+}
+
 fn bGroupHasNext(iOffset: i64, iMainTopicCount: usize, iTopicsPerPage: i64) -> bool {
     iOffset < MAX_GROUP_OFFSET && iMainTopicCount as i64 == iTopicsPerPage
+}
+
+fn optGroupQueryIgnoreUserId(
+    optViewerId: Option<i32>,
+    bLastmod: bool,
+    bShowIgnored: bool,
+) -> Option<i32> {
+    optViewerId.filter(|_| bLastmod || !bShowIgnored)
+}
+
+fn bGroupQueryShowDeleted(bLastmod: bool, bRequestedShowDeleted: bool) -> bool {
+    bRequestedShowDeleted && !bLastmod
 }
 
 fn optPreparedGroupLongInfo(optSource: Option<&str>) -> Option<String> {
@@ -500,6 +687,28 @@ fn group_mode_url(
         url.push_str(&params.join("&"));
     }
     url
+}
+
+/// group-new.jsp New/Active navigation retains the selected tag, but never
+/// carries the ignore filter or page offset into the other ordering mode.
+fn sGroupNavigationUrl(sGroup: &str, bLastmod: bool, optTagQuery: Option<&str>) -> String {
+    group_mode_url(sGroup, bLastmod, optTagQuery, None, false)
+}
+
+/// The quick group selector preserves only the New/Active ordering mode.
+fn sGroupQuickUrl(sGroup: &str, bLastmod: bool) -> String {
+    group_mode_url(sGroup, bLastmod, None, None, false)
+}
+
+/// Previous/next links retain all three group-list filters.
+fn sGroupPagerUrl(
+    sGroup: &str,
+    bLastmod: bool,
+    optTagQuery: Option<&str>,
+    optOffset: Option<i64>,
+    bShowIgnored: bool,
+) -> String {
+    group_mode_url(sGroup, bLastmod, optTagQuery, optOffset, bShowIgnored)
 }
 
 pub async fn group_archive(
@@ -591,12 +800,44 @@ fn forum_service(state: &AppState) -> CForumService<CForumPgRepository> {
 #[cfg(test)]
 mod tests {
     use super::{
-        GroupTopicView, GroupTopicsTemplate, bGroupHasNext, bNonTechGroup, group_mode_url,
-        optPreparedGroupLongInfo,
+        ForumGroupQuery, GroupTopicView, GroupTopicsTemplate, bGroupFormBoolean, bGroupHasNext,
+        bGroupQueryShowDeleted, bNonTechGroup, optGroupQueryIgnoreUserId, optPreparedGroupLongInfo,
+        sGroupNavigationUrl, sGroupPagerUrl, sGroupQuickUrl,
     };
     use crate::models::{Group, TopicSummary};
     use askama::Template;
     use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn group_template_keeps_old_tracker_filters_and_status_controls() {
+        let sTemplate = include_str!("../../templates/group_topics.html");
+        for sFragment in [
+            "{% if old_tracker %}",
+            "class=\"message-table\"",
+            "name=\"showignored\"",
+            "name=\"showDeleted\" value=\"true\"",
+            "name=\"csrf\" value=\"{{ csrf_token }}\"",
+            "frozen_until",
+            "active_tags",
+            "topic_author_blocked",
+            "last_author_blocked",
+        ] {
+            assert!(
+                sTemplate.contains(sFragment),
+                "missing original group DOM/status hook: {sFragment}"
+            );
+        }
+
+        assert!(sTemplate.contains(
+            "<form action=\"{{ group_url }}\" method=\"POST\">\n  <input type=\"hidden\" name=\"csrf\""
+        ));
+        assert!(
+            sTemplate
+                .contains("<input type=\"hidden\" name=\"offset\" value=\"{{ next_offset }}\">")
+        );
+        assert!(!sTemplate.contains("<form action=\"{{ url }}\" method=\"POST\">"));
+        assert!(!sTemplate.contains("<input type=\"hidden\" name=\"tag\""));
+    }
 
     #[test]
     fn group_longinfo_is_rendered_as_sanitized_markdown() {
@@ -629,11 +870,136 @@ mod tests {
     }
 
     #[test]
-    fn group_pager_keeps_activity_tag_and_ignore_parameters() {
+    fn group_links_preserve_only_the_parameters_used_by_group_new_jsp() {
         assert_eq!(
-            group_mode_url("linux-hardware", true, Some("tag=usb%20c"), Some(100), true,),
+            sGroupNavigationUrl("linux-hardware", true, Some("tag=usb%20c")),
+            "/forum/linux-hardware?lastmod=true&tag=usb%20c"
+        );
+        assert_eq!(
+            sGroupQuickUrl("linux-hardware", true),
+            "/forum/linux-hardware?lastmod=true"
+        );
+        assert_eq!(
+            sGroupPagerUrl("linux-hardware", true, Some("tag=usb%20c"), Some(100), true,),
             "/forum/linux-hardware?lastmod=true&tag=usb%20c&showignored=true&offset=100"
         );
+    }
+
+    #[test]
+    fn group_boolean_binding_matches_spring_custom_boolean_editor() {
+        for sValue in ["true", "TRUE", " on ", "Yes", "1"] {
+            assert!(bGroupFormBoolean(sValue, "lastmod").unwrap());
+        }
+        for sValue in ["false", "FALSE", " off ", "No", "0", ""] {
+            assert!(!bGroupFormBoolean(sValue, "lastmod").unwrap());
+        }
+        for sValue in ["t", "f", "maybe"] {
+            assert!(bGroupFormBoolean(sValue, "lastmod").is_err());
+        }
+
+        let stAliases: ForumGroupQuery =
+            serde_urlencoded::from_str("lastmod=YES&showignored=on&showDeleted=0").unwrap();
+        assert_eq!(stAliases.lastmod, Some(true));
+        assert_eq!(stAliases.show_ignored, Some(true));
+        assert_eq!(stAliases.show_deleted, Some(false));
+
+        let stDefaults: ForumGroupQuery =
+            serde_urlencoded::from_str("offset=&lastmod=&showignored=&showDeleted=").unwrap();
+        assert_eq!(stDefaults.offset, Some(0));
+        assert_eq!(stDefaults.lastmod, Some(false));
+        assert_eq!(stDefaults.show_ignored, Some(false));
+        assert_eq!(stDefaults.show_deleted, Some(false));
+        let stTrimmedOffset: ForumGroupQuery =
+            serde_urlencoded::from_str("offset=%207%20").unwrap();
+        assert_eq!(stTrimmedOffset.offset, Some(7));
+        assert!(serde_urlencoded::from_str::<ForumGroupQuery>("offset=nope").is_err());
+        assert!(serde_urlencoded::from_str::<ForumGroupQuery>("lastmod=t").is_err());
+    }
+
+    #[test]
+    fn group_tag_filter_is_exact_nonzero_and_rejects_an_empty_parameter() {
+        assert!(!crate::routes::tags::is_good_tag(""));
+        let sSource = include_str!("groups.rs");
+        let sHandler = sSource
+            .split(concat!("pub async fn ", "group_page("))
+            .nth(1)
+            .unwrap()
+            .split("fn bGroupFormBoolean")
+            .next()
+            .unwrap();
+        assert!(sHandler.contains("SELECT id,value FROM tags_values WHERE value=$1 AND counter>0"));
+        assert!(!sHandler.contains(concat!("lower(value)", "=lower($1)")));
+        assert!(!sHandler.contains("tags_synonyms"));
+        assert!(sHandler.contains("Some(_) => return Err(AppError::NotFound)"));
+        assert!(sHandler.contains("Some(sCanonicalName)"));
+    }
+
+    #[test]
+    fn active_tags_start_before_group_page_work_and_keep_the_java_deadline() {
+        let sSource = include_str!("groups.rs");
+        let sHandler = sSource
+            .split(concat!("pub async fn ", "group_page("))
+            .nth(1)
+            .expect("group handler")
+            .split("fn bGroupFormBoolean")
+            .next()
+            .expect("end of group handler");
+
+        let iDeadline = sHandler
+            .find("dtActiveTagsDeadline()")
+            .expect("absolute active-tags deadline");
+        let iSpawn = sHandler
+            .find("hSpawnActiveTopTags(")
+            .expect("underlying cache-warming task");
+        let iProfile = sHandler
+            .find("SELECT settings::text FROM user_settings")
+            .expect("viewer profile query");
+        let iTopics = sHandler
+            .find("let mut topics = sqlx::query_as")
+            .expect("main topic query");
+        let iAwait = sHandler
+            .find("enJoinActiveTagsTask(")
+            .expect("deadline await");
+        assert!(iDeadline < iSpawn && iSpawn < iProfile && iProfile < iTopics && iTopics < iAwait);
+        assert!(!sHandler.contains("group.id == 4068 || offset != 0"));
+        assert!(!sHandler.contains("tokio::time::timeout("));
+    }
+
+    #[test]
+    fn lastmod_data_query_ignores_requested_deleted_and_ignore_overrides() {
+        assert_eq!(optGroupQueryIgnoreUserId(Some(42), true, true), Some(42));
+        assert_eq!(optGroupQueryIgnoreUserId(Some(42), false, true), None);
+        assert_eq!(optGroupQueryIgnoreUserId(None, true, false), None);
+        assert!(!bGroupQueryShowDeleted(true, true));
+        assert!(bGroupQueryShowDeleted(false, true));
+
+        let sSource = include_str!("groups.rs");
+        let sHandler = sSource
+            .split(concat!("pub async fn ", "group_page("))
+            .nth(1)
+            .unwrap()
+            .split("fn bGroupFormBoolean")
+            .next()
+            .unwrap();
+        assert!(sHandler.contains("AND ($7 OR NOT t.sticky)"));
+        assert!(sHandler.contains("AND ($8 OR t.open_warnings <= 2)"));
+        assert!(sHandler.contains("AND ($3 OR t.open_warnings <= 2)"));
+        assert!(sHandler.contains(".bind(bQueryShowDeleted)"));
+        assert!(sHandler.contains(".bind(bViewerAuthorized)"));
+        assert!(sHandler.contains("t.lastmod > now() - interval '6 months'"));
+        assert!(sHandler.contains("lc_visible.postdate > now() - interval '6 months'"));
+        assert!(
+            !sHandler.contains("COALESCE(t.lastmod, t.postdate) > now() - interval '6 months'")
+        );
+        let iGroupLookup = sHandler
+            .find("let group = find_group_by_section")
+            .expect("group lookup");
+        let iDeletedCheck = sHandler
+            .find("let show_deleted_requested")
+            .expect("deleted flag check");
+        let iOffsetValidation = sHandler.find("if offset < 0").expect("offset validation");
+        assert!(iGroupLookup < iDeletedCheck);
+        assert!(iDeletedCheck < iOffsetValidation);
     }
 
     #[test]
@@ -682,6 +1048,8 @@ mod tests {
                 target_url: "/forum/general/42".to_owned(),
                 comments: 3,
                 comments_closed: false,
+                topic_author_blocked: false,
+                last_author_blocked: false,
             }],
             quick_groups: Vec::new(),
             new_url: "/forum/general".to_owned(),
@@ -692,7 +1060,20 @@ mod tests {
             lastmod: false,
             prev_url: None,
             next_url: None,
+            next_offset: 50,
             is_moderator: false,
+            old_tracker: false,
+            show_ignored: false,
+            show_deleted: false,
+            show_deleted_button: false,
+            csrf_token: "token".to_owned(),
+            frozen_until: None,
+            active_tags: Vec::new(),
+            tag_name: None,
+            tag_title: String::new(),
+            tag_url: String::new(),
+            group_url: "/forum/general".to_owned(),
+            first_page: true,
         }
         .render()
         .expect("group template renders");

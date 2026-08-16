@@ -34,6 +34,8 @@ services:
       STATIC_DIR: /app/static
       SKIP_UPLOAD_CHOWN: "true"
       TZ: ${SCHEDULER_TIMEZONE:?Set the IANA timezone used by the original Java scheduler}
+      SCHEDULER_TIMEZONE: ${SCHEDULER_TIMEZONE:?Set the IANA timezone used by the original Java scheduler}
+      LEGACY_JDBC_TIMEZONE: ${LEGACY_JDBC_TIMEZONE:?Set the verified IANA timezone used by the original Java JDBC runtime}
       ENABLE_HSTS: ${ENABLE_HSTS:-true}
       ENABLE_DEV_BYPASSES: "false"
       ENABLE_BACKGROUND_JOBS: ${ENABLE_BACKGROUND_JOBS:?Explicitly select true on one scheduler replica or false on passive replicas}

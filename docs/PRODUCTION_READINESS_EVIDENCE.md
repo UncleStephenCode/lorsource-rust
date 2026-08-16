@@ -13,7 +13,7 @@ Status meanings:
 - **release blocker** — cutover must not proceed while any required operator
   evidence is absent or failed.
 
-## Current milestone rerun (2026-08-15)
+## Current milestone rerun (2026-08-16)
 
 This section is the authoritative status for the current interface,
 profile/userpic, theme, legacy HTTP/API and database-compatibility audit. A
@@ -22,22 +22,23 @@ this worktree.
 
 | Gate | Current result |
 |---|---|
-| Static compatibility suite | **passed**: canonical Java vendor validation, production-only Rust route inventory (172 declarations), CSRF audit and Rust SQL identifier/schema audit completed; the 193 expanded Java mappings classify as 174 method-declared, 19 structural partials and 0 path-only/missing; [`ROUTE_COVERAGE.md`](ROUTE_COVERAGE.md) and the generated artifacts are the source of truth |
+| Static compatibility suite | **passed**, 113/113 tests: canonical Java vendor validation, production-only Rust route inventory (172 declarations), CSRF audit and Rust SQL identifier/schema audit completed; the 193 expanded Java mappings classify as 174 method-declared, 19 structural partials and 0 path-only/missing; the SQL audit classified 941 literals as 793 clean and 148 review-required, with 0 invalid references/findings across 23 probes; [`ROUTE_COVERAGE.md`](ROUTE_COVERAGE.md) and the generated artifacts are the source of truth |
 | Support-tool checks | **passed**: Python compilation and tool tests, JavaScript tests, shell syntax checks and `git diff --check` completed on the current worktree |
-| Docker `quality` aggregate | **passed** in a clean image: locked release build, repository-wide formatting, all-target/all-feature check, 699 passing tests, 8 explicitly ignored tests, 0 failures, and `clippy -D warnings` (main 657/5; integration targets 12/1, 4/0, 18/1, 6/0 and 2/1); quality image manifest-list digest: `sha256:6c5249d30a591610e154ed367d93b905c93ce8b934a6787af92f6189766fdeba` |
-| Rebuilt application | **passed**: the application image was rebuilt, the Compose service started, and `/healthz` returned healthy before the stateful checks |
-| Targeted content lifecycles | **passed**: `edit_topic_lifecycle.py`, `comment_deletion_lifecycle.py`, `topic_deletion_lifecycle.py` and `userpic_profile_lifecycle.py` completed against the rebuilt application and performed their scoped cleanup |
+| Docker `quality` aggregate | **passed** in a clean image: locked release build, repository-wide formatting, all-target/all-feature check, 774 passing tests, 10 explicitly ignored tests, 0 failures, and `clippy -D warnings` (main 721/5; integration targets 4/1, 12/1, 4/0, 18/1, 6/0, 7/1 and 2/1; 784 total); quality image manifest-list digest: `sha256:021c5e2ab962df45047f9f6eef87f4019cf78690c914aeccc0b847fad8ea4fb6` |
+| Rebuilt application and runtime shape | **passed**: application manifest-list digest `sha256:2ba53e4f7b274ca227a51843248e8ad35db6d7d765ab427fbc60801ebba0323a`; Compose reached healthy state and the production-shape check passed for UID/GID 8181, read-only root filesystem, secrets and mounts before the stateful checks |
+| Targeted content lifecycles | **passed**: `edit_topic_lifecycle.py`, `comment_deletion_lifecycle.py`, `topic_deletion_lifecycle.py` and `userpic_profile_lifecycle.py` completed against the rebuilt application and performed their scoped cleanup; the browser commenting lifecycle also passed with artifacts in `/tmp/lorsource-commenting-smoke-final-20260816` |
 | Automatic-score compatibility | **passed**: the guarded database integration test completed 1/1 against disposable database `lorsource_score_test_20260816_root_final`, reported `residue=0` and `public_tables=0`, and the database was dropped afterward with only `lor` remaining; `src/bootstrap/background.rs` SHA-256 is `9fcccb8e62b54a372c4d5f2559ef94cd33e43bf7b19aebb5ed4e2250ec984f9c`; source contracts, schedules and the one-active-scheduler production rule are documented in [`SCORE_COMPATIBILITY.md`](SCORE_COMPATIBILITY.md) |
+| Exact user/email identity compatibility | **passed**: the guarded database integration test completed 1/1 against disposable database `lorsource_identity_test_20260816_final3`, proved case-collision and normalized-email candidate ordering, found 0 residual UUID schemas, and the database was dropped and verified absent afterward |
 | Full disposable fixture suite | **passed**, 30/30 groups in `prod_ready_test/test_port.py` |
 | Browser-created content and resume | **passed** from a clean checkpoint and again on immediate resume; the database tuple remained exactly `10 topics | 5 comments | 2 reactions | 9 votes`, with at most 2 authenticated browser contexts; result: `/tmp/prod_ready_browser_seed_result.json` |
 | Seven-day local diagnostic | **passed**; persistence, poll percentages, browser-operation timings and a small concurrent public-read sample are recorded below and in `/tmp/prod_ready_7d_benchmark_final.json`; registration was explicitly excluded |
-| Core Java↔Rust differential runtime | **passed**, 126/126 declared cases against pinned Java SHA `2ddf930005adac28077cb6ad74d1481485f44096`; `/tmp/java-rust-endpoints-final.json`, generated `2026-08-15T16:56:58.001548Z`, SHA-256 `60686eae55f94942c76695afac2101ceab48bf188409ea9099123bb4619fae8f` |
-| API/HTTP edge differential runtime | **passed**, 71/71 cases covering controller dispatch, binding, CSRF/firewall, response headers, content types and unsafe methods; `/tmp/java-rust-api-final.json`, generated `2026-08-15T16:57:01.730353Z`, SHA-256 `9fc7842a861621a0b6770d08df40d17f6a1a419a9bbd66c8bf9d80bdad918008` |
-| Conditioned UI differential runtime | **passed**, 14/14 cases covering tag-section views/binders, add-section dispatch and legacy view-news binding; `/tmp/java-rust-ui-final.json`, generated `2026-08-15T16:57:05.079555Z`, SHA-256 `557a557392e2479e2396f232ac48d9a9522584610031c5a75b59185f1f2beecd` |
+| Core Java↔Rust differential runtime | **passed**, 126/126 declared cases against pinned Java SHA `2ddf930005adac28077cb6ad74d1481485f44096`; `/tmp/java-rust-endpoints-final-20260816.json`, generated `2026-08-16T09:14:16.772360+00:00`, SHA-256 `9a186115c96f734b9b214c89ebef3f9506f091cb436bc768e9b5e29c1f52589a` |
+| API/HTTP edge differential runtime | **passed**, 71/71 cases covering controller dispatch, binding, CSRF/firewall, response headers, content types and unsafe methods; `/tmp/java-rust-api-final-20260816.json`, generated `2026-08-16T09:14:12.142324+00:00`, SHA-256 `6f4c7f0306373881666ce3e92c3c21103c7973feb4e13890ffb6aade3ba7d6d9` |
+| Conditioned UI differential runtime | **passed**, 14/14 cases covering tag-section views/binders, add-section dispatch and legacy view-news binding; `/tmp/java-rust-ui-final-20260816.json`, generated `2026-08-16T09:14:12.706334+00:00`, SHA-256 `5626a978c544139165f319501a8acfb10dae32453f180e6bf8a292e40d6ec9d8` |
 | Java database compatibility | **passed locally**: 728/728 runtime catalog records matched (fingerprint SHA-256 `931930417d10d5a4d99966bfacac39a5888f088bc6d45439b796130f32d5e52e`), all 187 canonical Liquibase identities validated and sequence-headroom checks passed; the 728-record contract SHA-256 is `eaed5aacda3724e56f4508a98ebc98e45a48fec6acba3f9e35a342d72d9e84f0` |
 | Public production trailing-slash contract | **recorded by read-only exact probes**: `/forum` and `/forum/` return 200, while `/news`, `/articles`, `/gallery` and `/polls` return 404 without their canonical trailing slash; these cases are locked into the differential matrix |
-| Visual browser smoke | **passed**: HTTP preflight and 56 Chromium captures (28 routes at desktop and mobile widths) completed in `/tmp/lorsource-visual-final-20260815`; this is structural smoke evidence, not a Java↔Rust perceptual-equivalence claim |
-| Seven-theme browser matrix | **passed**, 42/42 page/theme checks; report: `/tmp/lorsource-theme-final-20260815/report.json` |
+| Visual browser smoke | **passed**: HTTP preflight and 56 Chromium captures (28 routes at desktop and mobile widths) completed in `/tmp/lorsource-visual-final-20260816`; this is structural smoke evidence, not a Java↔Rust perceptual-equivalence claim |
+| Seven-theme browser matrix | **passed**, 42/42 page/theme checks; report: `/tmp/lorsource-theme-final-20260816/report.json` |
 
 The rows below summarize retained repository-wide evidence. All milestone
 results above remain local/disposable evidence and do not satisfy the external
@@ -96,13 +97,13 @@ below remain open.
 | Java database compatibility | startup schema classifier, canonical 187-identity Liquibase set/headroom validator, terminal changeset check and exact 728-record PK/FK/UNIQUE/CHECK/default/index/sequence/owner/ACL/RLS/function-EXECUTE/schema-enum-USAGE catalog contract | **proved locally** on the demo schema through the runtime role; restore/validate against a named production snapshot/WAL is a **release blocker** |
 | Mixed title representation | canonical Java write codec, one-layer display/read contracts, stateful exact DB-byte assertions and `tools/audit_title_representation.py` | future writes and covered reads are **proved locally**; a read-only report from a named production clone and operator classification of ambiguous historical rows are **release blockers** before any normalization |
 | Production runtime hardening | `deploy/compose.production.yml`, `scripts/check-production-runtime.sh`, `scripts/test-production-runtime-shape.sh` | **proved locally** for UID/GID 8181, read-only rootfs, secret staging and media mount shape; immutable registry digest/operator host evidence required |
-| Cutover/rollback | `scripts/run-cutover-gate.sh`, strict JSON evidence validator and `docs/PRODUCTION_CUTOVER.md` | read-only rehearsal passed; full go/no-go remains fail-closed without image, snapshot/WAL, media, external-adapter and rollback evidence |
+| Cutover/rollback | `scripts/run-cutover-gate.sh`, strict JSON evidence validator and `docs/PRODUCTION_CUTOVER.md` | read-only rehearsal passed; full go/no-go remains fail-closed without image, snapshot/WAL, media, external-adapter, verified timezone/single-scheduler, ActiveMQ-zero or full-reindex reconciliation, SIGTERM and rollback evidence |
 
 One schema interpretation still needs production-clone evidence:
-`comments.edit_date` is a PostgreSQL `timestamp without time zone`. Rust
-currently decodes it explicitly as UTC, but the effective timezone used by
-historical JVM writers/readers has not been established from representative
-production rows and the original deployment's default-timezone configuration.
+`comments.edit_date` is a PostgreSQL `timestamp without time zone`. Rust now
+decodes it through the explicit `LEGACY_JDBC_TIMEZONE` IANA setting instead of
+assuming UTC, but the correct value must still be established from
+representative production rows and the original deployment's JVM configuration.
 
 ## External completion conditions
 

@@ -31,6 +31,21 @@ unambiguous `INSERT`/`UPDATE` column and enum-literal references against
 Java dump/Liquibase updates. Dynamic composition and bind values still require
 runtime tests; a zero-finding static report is not database-behavior parity.
 
+The frozen-snapshot rerun on 2026-08-16 passed all 113 compatibility tests.
+The route inventory contains 172 Rust declarations and 193 expanded Java
+mappings: 174 are method-declared, 19 are structural partials and none are
+missing or mismatched. The SQL audit examined 941 literals: 793 clean, 148
+review-required, 0 invalid references/findings and 23 runtime probes.
+
+The clean Docker `quality` target also passed repository-wide formatting,
+all-target/all-feature checking, 774 passing tests plus 10 explicitly ignored
+(784 total), no failures, and Clippy with warnings denied. Its manifest-list
+digest is
+`sha256:021c5e2ab962df45047f9f6eef87f4019cf78690c914aeccc0b847fad8ea4fb6`.
+The rebuilt application manifest-list digest is
+`sha256:2ba53e4f7b274ca227a51843248e8ad35db6d7d765ab427fbc60801ebba0323a`;
+Compose reached healthy state and the production runtime-shape check passed.
+
 ## HTTP smoke checks against the Rust port
 
 Start the Rust port:
@@ -96,10 +111,23 @@ resulting credential-free
 Updating the baseline SHA is therefore an explicit reviewed compatibility
 change rather than an unobserved move of the upstream default branch.
 
-The 2026-08-15 milestone run passed all 126 declared cases against pinned Java
-SHA `2ddf930005adac28077cb6ad74d1481485f44096`. Its credential-free report was
-generated at `2026-08-15T16:56:58.001548Z`; SHA-256:
-`60686eae55f94942c76695afac2101ceab48bf188409ea9099123bb4619fae8f`.
+The 2026-08-16 milestone run passed all 211 declared cases against pinned Java
+SHA `2ddf930005adac28077cb6ad74d1481485f44096`:
+
+- core 126/126: `/tmp/java-rust-endpoints-final-20260816.json`, generated
+  `2026-08-16T09:14:16.772360+00:00`, SHA-256
+  `9a186115c96f734b9b214c89ebef3f9506f091cb436bc768e9b5e29c1f52589a`;
+- API/HTTP edge 71/71: `/tmp/java-rust-api-final-20260816.json`, generated
+  `2026-08-16T09:14:12.142324+00:00`, SHA-256
+  `6f4c7f0306373881666ce3e92c3c21103c7973feb4e13890ffb6aade3ba7d6d9`;
+- conditioned UI 14/14: `/tmp/java-rust-ui-final-20260816.json`, generated
+  `2026-08-16T09:14:12.706334+00:00`, SHA-256
+  `5626a978c544139165f319501a8acfb10dae32453f180e6bf8a292e40d6ec9d8`.
+
+The same rebuilt runtime passed all 30 disposable fixture groups, the 56-view
+visual smoke, the 42-case seven-theme matrix, and the browser commenting
+lifecycle. These remain local/disposable evidence and do not satisfy the
+production cutover requirements described below.
 
 The comparator keeps an independent cookie jar for each application and adds
 the double-submit `CSRF_TOKEN` value to POST form data by default. A case can
@@ -147,8 +175,11 @@ flows. It requires explicit Java/Rust URLs, the original source tree,
 explicit disposable moderation accounts; use only an operator-created clone.
 A full pass additionally requires an immutable image digest, snapshot/WAL
 identifiers, a redacted configuration manifest and media/external-adapter
-evidence files. Skipping either stateful flow or release evidence produces a
-dry-run result, never a cutover go/no-go pass.
+evidence files, plus operational evidence for the production clone, verified
+JVM/JDBC timezone, exactly one scheduler, ActiveMQ drain or full search reindex,
+SIGTERM and rollback. The retained search probe/reconciliation artifact is
+SHA-256-bound to that evidence. Skipping either stateful flow or release
+evidence produces a dry-run result, never a cutover go/no-go pass.
 
 The moderation verifier normally reads assertion rows through the local
 Compose PostgreSQL service. When the Rust runtime is pointed at an external

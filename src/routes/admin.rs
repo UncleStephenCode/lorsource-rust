@@ -770,6 +770,7 @@ struct StSameIpPostRow {
     iTopicId: i32,
     optCommentId: Option<i32>,
     sNick: String,
+    bAuthorBlocked: bool,
     sGroupTitle: String,
     sTitle: String,
     dtPostDate: DateTime<Utc>,
@@ -999,6 +1000,7 @@ async fn same_ip(
     // Matched comments/topics, IP/UA filtered.
     let posts = sqlx::query_as::<_, StSameIpPostRow>(
         r#"SELECT t.id AS "iTopicId",c.id AS "optCommentId",u.nick AS "sNick",
+                  u.blocked AS "bAuthorBlocked",
                   g.title AS "sGroupTitle",t.title AS "sTitle",c.postdate AS "dtPostDate",
                   c.deleted AS "bDeleted",di.reason AS "optDeleteReason",mb.message AS "sMessage"
              FROM groups g JOIN topics t ON g.id=t.groupid
@@ -1010,6 +1012,7 @@ async fn same_ip(
               AND ($3::int IS NULL OR c.userid IN (SELECT id FROM users WHERE score<$3 OR id=2))
            UNION ALL
            SELECT t.id AS "iTopicId",NULL::int AS "optCommentId",u.nick AS "sNick",
+                  u.blocked AS "bAuthorBlocked",
                   g.title AS "sGroupTitle",t.title AS "sTitle",t.postdate AS "dtPostDate",
                   t.deleted AS "bDeleted",di.reason AS "optDeleteReason",mb.message AS "sMessage"
              FROM groups g JOIN topics t ON g.id=t.groupid JOIN users u ON u.id=t.userid
@@ -1053,10 +1056,11 @@ async fn same_ip(
             sPlain
         };
         html.push_str(&format!(
-            "<a href=\"{sUrl}\" class=\"comments-item\"><div class=\"comments-group\"><p><span class=\"group-label\">{}</span><br class=\"hideon-phone hideon-tablet\"><a href=\"/people/{}/profile\">{}</a></p></div><div class=\"comments-title\"><div class=\"text-preview-box\"><div class=\"text-preview\">{}{}</div></div></div><div class=\"comments-text\"><div class=\"text-preview-box\"><div class=\"text-preview\">{}{}</div></div>{}</div><div class=\"comments-date\"><p>{sDate}</p></div></a>",
+            "<a href=\"{sUrl}\" class=\"comments-item\"><div class=\"comments-group\"><p><span class=\"group-label\">{}</span><br class=\"hideon-phone hideon-tablet\">{}{}{}</p></div><div class=\"comments-title\"><div class=\"text-preview-box\"><div class=\"text-preview\">{}{}</div></div></div><div class=\"comments-text\"><div class=\"text-preview-box\"><div class=\"text-preview\">{}{}</div></div>{}</div><div class=\"comments-date\"><p>{sDate}</p></div></a>",
             html_escape::encode_text(&stPost.sGroupTitle),
-            urlencoding::encode(&stPost.sNick),
+            if stPost.bAuthorBlocked { "<s>" } else { "" },
             html_escape::encode_text(&stPost.sNick),
+            if stPost.bAuthorBlocked { "</s>" } else { "" },
             if stPost.optCommentId.is_some() { "<i class=\"icon-comment\"></i>" } else { "" },
             html_escape::encode_text(&crate::domain::title::sPlainForDisplay(&stPost.sTitle)),
             if stPost.bDeleted { "<s>" } else { "" },
@@ -1217,6 +1221,14 @@ fn render_groupmod_form(
     );
     format!(
         r#"
+<script type="text/javascript">
+$script('/js/add-form.js', function() {{
+  setupFormWithSpinner({{
+    formSelector: '#groupModForm',
+    textareaSelector: '#form_longinfo'
+  }});
+}});
+</script>
 {sGroupInfo}{error_html}
 <form id="groupModForm" action="groupmod.jsp" method="POST">
 <input type="hidden" name="csrf" value="{csrf_token}">
@@ -1544,8 +1556,10 @@ async fn usermod(
     }
     let form = stBindUserModForm(&vecParameters, enAction)?;
     let stModerator = require_moderator(&user)?;
-    let cService =
-        CUserModerationService::new(CUserModerationPgRepository::new(state.pool.clone()));
+    let cService = CUserModerationService::new(
+        CUserModerationPgRepository::new(state.pool.clone()),
+        state.config.scheduler_timezone,
+    );
     let enOutcome = match cService
         .enExecute(
             stModerator,
@@ -1646,6 +1660,9 @@ mod usermod_tests {
         assert!(sHtml.contains("name=\"urlName\" size=\"70\" value=\"forum\" readonly"));
         assert!(!sHtml.contains(" disabled"));
         assert!(sHtml.contains("name=\"longinfo\" id=\"form_longinfo\""));
+        assert!(sHtml.contains("$script('/js/add-form.js'"));
+        assert!(sHtml.contains("formSelector: '#groupModForm'"));
+        assert!(sHtml.contains("textareaSelector: '#form_longinfo'"));
         assert!(sHtml.contains("name=\"preview\" class=\"btn btn-default\""));
         assert!(sHtml.contains("<strong>details</strong>"));
     }
@@ -1956,15 +1973,17 @@ fn sWarningForm(
         let sEscaped = html_escape::encode_double_quoted_attribute(sRule);
         sRuleOptions.push_str(&format!("<option value=\"{sEscaped}\">{sEscaped}</option>"));
     }
-    let sError = stPresentation
-        .optError
-        .map(|sValue| {
-            format!(
-                "<div class=\"error\">{}</div>",
-                html_escape::encode_text(sValue)
-            )
-        })
-        .unwrap_or_default();
+    let sErrors = stPresentation
+        .vecErrors
+        .iter()
+        .map(|sValue| html_escape::encode_text(sValue))
+        .collect::<Vec<_>>()
+        .join("<br>");
+    let sError = if sErrors.is_empty() {
+        String::new()
+    } else {
+        format!("<div class=\"error\">{sErrors}</div>")
+    };
     format!(
         r#"<h1>Уведомить модераторов</h1>
 <form method="post" action="/post-warning" class="form-horizontal">
@@ -2007,7 +2026,6 @@ async fn post_warning_form(
 pub struct WarningForm {
     pub topic: Option<i32>,
     pub comment: Option<i32>,
-    pub reason: Option<String>,
     pub text: Option<String>,
     #[serde(alias = "warningType")]
     pub warning_type: Option<String>,
@@ -2031,7 +2049,6 @@ async fn post_warning(
             StCreateWarningCommand {
                 iTopicId,
                 optCommentId,
-                optReason: form.reason,
                 optText: form.text,
                 optWarningType: form.warning_type,
                 optRuleType: form.rule_type,
@@ -2088,10 +2105,10 @@ mod warning_tests {
             stContext: StWarningContext {
                 bPremoderated,
                 sTopicUrl: "/forum/general/42".to_owned(),
-                optEligibilityError: None,
+                vecEligibilityErrors: Vec::new(),
             },
             vecTypes: vecWarningTypes(bPremoderated, None),
-            optError: None,
+            vecErrors: Vec::new(),
         }
     }
 
@@ -2120,7 +2137,7 @@ mod warning_tests {
     #[test]
     fn warning_form_uses_original_java_bean_names_and_zero_comment_shape() {
         let mut stPresentation = stPresentation(false);
-        stPresentation.optError = Some("ошибка");
+        stPresentation.vecErrors = vec!["ошибка", "вторая ошибка"];
         let sHtml = sWarningForm(&stPresentation, 42, None, "csrf-value");
         assert!(sHtml.contains("name=\"warningType\""));
         assert!(sHtml.contains("name=\"ruleType\""));
@@ -2128,5 +2145,6 @@ mod warning_tests {
         assert!(sHtml.contains("name=\"comment\" value=\"\""));
         assert!(sHtml.contains("maxlength=\"256\""));
         assert!(sHtml.contains("ошибка"));
+        assert!(sHtml.contains("ошибка<br>вторая ошибка"));
     }
 }

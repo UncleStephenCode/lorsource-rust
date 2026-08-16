@@ -4,7 +4,7 @@ use axum::{
     extract::{Request, State},
     http::{StatusCode, Uri, header},
     response::{Html, IntoResponse, Response},
-    routing::{MethodRouter, post},
+    routing::{MethodRouter, get, post},
 };
 
 use crate::{
@@ -26,8 +26,10 @@ use crate::{
 };
 
 const I_PARAMETER_BODY_LIMIT: usize = 1024 * 1024;
-const S_ALLOW: &str = "POST,GET,HEAD,OPTIONS";
-const S_ALLOWED_METHODS: &str = "POST, GET";
+const S_ALLOW_DELETE_OPTIONS: &str = "GET,HEAD,POST,OPTIONS";
+const S_ALLOW_DELETE_405: &str = "GET, POST";
+const S_ALLOW_UNDELETE_OPTIONS: &str = "POST,GET,HEAD,OPTIONS";
+const S_ALLOW_UNDELETE_405: &str = "POST, GET";
 
 type TyTopicDeletionService = CTopicDeletionService<CTopicDeletionPgRepository, CSearchQueueSender>;
 type TyRouteResult = std::result::Result<Response, EnTopicDeletionRouteError>;
@@ -132,17 +134,17 @@ impl IntoResponse for EnTopicDeletionRouteError {
 }
 
 pub fn stDeleteRoute() -> MethodRouter<AppState> {
-    post(delete_submit)
-        .get(delete_form)
-        .options(options)
-        .fallback(method_not_allowed)
+    get(delete_form)
+        .post(delete_submit)
+        .options(options_delete)
+        .fallback(method_not_allowed_delete)
 }
 
 pub fn stUndeleteRoute() -> MethodRouter<AppState> {
     post(undelete_submit)
         .get(undelete_form)
-        .options(options)
-        .fallback(method_not_allowed)
+        .options(options_undelete)
+        .fallback(method_not_allowed_undelete)
 }
 
 fn stMethodResponse(stStatus: StatusCode, sAllow: &'static str) -> Response {
@@ -153,12 +155,20 @@ fn stMethodResponse(stStatus: StatusCode, sAllow: &'static str) -> Response {
         .into_response()
 }
 
-async fn options() -> Response {
-    stMethodResponse(StatusCode::OK, S_ALLOW)
+async fn options_delete() -> Response {
+    stMethodResponse(StatusCode::OK, S_ALLOW_DELETE_OPTIONS)
 }
 
-async fn method_not_allowed() -> Response {
-    stMethodResponse(StatusCode::METHOD_NOT_ALLOWED, S_ALLOWED_METHODS)
+async fn method_not_allowed_delete() -> Response {
+    stMethodResponse(StatusCode::METHOD_NOT_ALLOWED, S_ALLOW_DELETE_405)
+}
+
+async fn options_undelete() -> Response {
+    stMethodResponse(StatusCode::OK, S_ALLOW_UNDELETE_OPTIONS)
+}
+
+async fn method_not_allowed_undelete() -> Response {
+    stMethodResponse(StatusCode::METHOD_NOT_ALLOWED, S_ALLOW_UNDELETE_405)
 }
 
 fn stVisibleLegacyErrorResponse(sExceptionClass: &'static str, sMessage: &str) -> Response {
@@ -363,9 +373,23 @@ mod tests {
     #[tokio::test]
     async fn options_and_unsupported_methods_keep_the_exact_spring_allow_contract() {
         for (stResponse, stExpectedStatus, sExpectedAllow) in [
-            (options().await, StatusCode::OK, "POST,GET,HEAD,OPTIONS"),
             (
-                method_not_allowed().await,
+                options_delete().await,
+                StatusCode::OK,
+                "GET,HEAD,POST,OPTIONS",
+            ),
+            (
+                method_not_allowed_delete().await,
+                StatusCode::METHOD_NOT_ALLOWED,
+                "GET, POST",
+            ),
+            (
+                options_undelete().await,
+                StatusCode::OK,
+                "POST,GET,HEAD,OPTIONS",
+            ),
+            (
+                method_not_allowed_undelete().await,
                 StatusCode::METHOD_NOT_ALLOWED,
                 "POST, GET",
             ),
@@ -380,6 +404,20 @@ mod tests {
                     .is_empty()
             );
         }
+    }
+
+    #[test]
+    fn method_routers_keep_the_live_spring_method_order() {
+        let sSource = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/routes/topic_deletion.rs"
+        ));
+        assert!(sSource.contains(
+            "get(delete_form)\n        .post(delete_submit)\n        .options(options_delete)"
+        ));
+        assert!(sSource.contains(
+            "post(undelete_submit)\n        .get(undelete_form)\n        .options(options_undelete)"
+        ));
     }
 
     #[tokio::test]

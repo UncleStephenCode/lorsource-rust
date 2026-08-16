@@ -54,6 +54,7 @@ pub(crate) struct NotificationEvent {
     pub group_urlname: String,
     pub origin_nick: Option<String>,
     pub author_nick: String,
+    pub author_blocked: bool,
     pub event_message: Option<String>,
     pub closed_warning: bool,
     pub bonus: Option<i32>,
@@ -101,6 +102,7 @@ pub(crate) async fn fetch_events(
                   CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(s.name) END AS section_prefix,
                   s.name AS section_name, g.urlname AS group_urlname, ou.nick AS origin_nick,
                   COALESCE(ou.nick,cu.nick,tu.nick) AS author_nick,
+                  COALESCE(ou.blocked,cu.blocked,tu.blocked,false) AS author_blocked,
                   e.message AS event_message,
                   mw.closed_by IS NOT NULL AS closed_warning,
                   CASE WHEN e.type='DEL'::event_type THEN di.bonus ELSE NULL END AS bonus,
@@ -138,7 +140,7 @@ struct StPreparedNotification {
     stEvent: NotificationEvent,
     iLastId: i32,
     iCount: usize,
-    vecReactions: Vec<(String, String)>,
+    vecReactions: Vec<(String, String, bool)>,
     vecAuthors: Vec<String>,
 }
 
@@ -146,7 +148,7 @@ impl StPreparedNotification {
     fn stFromEvent(stEvent: NotificationEvent) -> Self {
         let vecReactions = match (&stEvent.reaction, &stEvent.origin_nick) {
             (Some(sReaction), Some(sNick)) if stEvent.event_type == "REACTION" => {
-                vec![(sReaction.clone(), sNick.clone())]
+                vec![(sReaction.clone(), sNick.clone(), stEvent.author_blocked)]
             }
             _ => Vec::new(),
         };
@@ -212,9 +214,11 @@ fn vecPrepareNotifications(
                 if let (Some(sReaction), Some(sNick)) =
                     (stEvent.reaction.as_ref(), stEvent.origin_nick.as_ref())
                 {
-                    stExisting
-                        .vecReactions
-                        .push((sReaction.clone(), sNick.clone()));
+                    stExisting.vecReactions.push((
+                        sReaction.clone(),
+                        sNick.clone(),
+                        stEvent.author_blocked,
+                    ));
                 }
                 stExisting.iLastId = stEvent.id;
                 continue;
@@ -268,12 +272,21 @@ fn sNotificationDetails(stEvent: &NotificationEvent) -> String {
     }
 }
 
-fn sNotificationAuthor(sNick: &str) -> String {
-    format!(
-        "<a href=\"/people/{}/profile\">{}</a>",
-        urlencoding::encode(sNick),
-        html_escape::encode_text(sNick)
-    )
+pub(crate) fn sNotificationAuthor(sNick: &str, bBlocked: bool) -> String {
+    let sNick = html_escape::encode_text(sNick);
+    if bBlocked {
+        format!("<s>{sNick}</s>")
+    } else {
+        sNick.into_owned()
+    }
+}
+
+fn sNotificationAuthorsText(vecAuthors: &[String]) -> String {
+    if vecAuthors.len() > 1 {
+        format!("Комментарии {}", vecAuthors.join(", "))
+    } else {
+        String::new()
+    }
 }
 
 fn sUnreadDescription(iUnreadCount: i32) -> String {
@@ -413,7 +426,7 @@ pub async fn notifications(
             let sReaction = stPrepared
                 .vecReactions
                 .first()
-                .map(|(sReaction, _)| sReaction.as_str())
+                .map(|(sReaction, _, _)| sReaction.as_str())
                 .unwrap_or_default();
             let sIcon = if stEvent.event_type == "REACTION" {
                 html_escape::encode_text(sReaction).into_owned()
@@ -431,7 +444,7 @@ pub async fn notifications(
             let sAuthorOrCount = if stPrepared.iCount > 1 {
                 format!("<i class=\"icon-comment\"></i> {}", stPrepared.iCount)
             } else {
-                sNotificationAuthor(&stEvent.author_nick)
+                sNotificationAuthor(&stEvent.author_nick, stEvent.author_blocked)
             };
             let sDate = crate::request_timezone::sTimeTag("interval", stEvent.event_date);
             html.push_str(&format!(
@@ -444,7 +457,7 @@ pub async fn notifications(
                 section = html_escape::encode_text(&stEvent.section_name),
                 details = sDetails,
                 unread_mark = sUnreadMark,
-                authors = html_escape::encode_double_quoted_attribute(&stPrepared.vecAuthors.join(", ")),
+                authors = html_escape::encode_double_quoted_attribute(&sNotificationAuthorsText(&stPrepared.vecAuthors)),
                 date = sDate,
                 author_or_count = sAuthorOrCount,
             ));
@@ -478,18 +491,18 @@ pub async fn notifications(
                 html.push_str(
                     "<div class=\"notifications-reactions\"><p><span class=\"reactions\">",
                 );
-                for (sReaction, sNick) in &stPrepared.vecReactions {
+                for (sReaction, sNick, bBlocked) in &stPrepared.vecReactions {
                     html.push_str(&format!(
                         "<span class=\"reaction\">{} {}</span>",
                         html_escape::encode_text(sReaction),
-                        html_escape::encode_text(sNick),
+                        sNotificationAuthor(sNick, *bBlocked),
                     ));
                 }
                 html.push_str("</span></p></div>");
             } else if stPrepared.iCount > 1 {
                 html.push_str(&format!(
                     "<div title=\"{}\" class=\"notifications-number\"><p><i class=\"icon-comment\"></i> {}</p></div>",
-                    html_escape::encode_double_quoted_attribute(&stPrepared.vecAuthors.join(", ")),
+                    html_escape::encode_double_quoted_attribute(&sNotificationAuthorsText(&stPrepared.vecAuthors)),
                     stPrepared.iCount,
                 ));
             } else {
@@ -500,7 +513,7 @@ pub async fn notifications(
                 };
                 html.push_str(&format!(
                     "<div class=\"notifications-details\"><p>{sDetails}</p></div><div class=\"notifications-who-when\"><p>{}, {}</p></div>",
-                    sNotificationAuthor(&stEvent.author_nick),
+                    sNotificationAuthor(&stEvent.author_nick, stEvent.author_blocked),
                     sDate,
                 ));
             }
@@ -556,15 +569,20 @@ pub struct NotificationsResetForm {
 }
 
 async fn reset_unread_events(state: &AppState, user_id: i32, top_id: i32) -> Result<()> {
+    // UserEventService.resetUnreadEvents wraps the event reset and cached
+    // users.unread_events recalculation in one Spring transaction.  Keep the
+    // cache indistinguishable from the rows it summarizes on every failure.
+    let mut tx = state.pool.begin().await?;
     sqlx::query("UPDATE user_events SET unread=false WHERE userid=$1 AND unread AND id<=$2")
         .bind(user_id)
         .bind(top_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
     sqlx::query("UPDATE users SET unread_events=(SELECT count(*) FROM user_events e WHERE e.unread AND e.userid=users.id) WHERE id=$1")
         .bind(user_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -669,6 +687,30 @@ mod user_event_api_contract_tests {
             assert!(sHandler.contains("crate::routes::stFoundRedirect"));
             assert!(!sHandler.contains("Redirect::to"));
         }
+    }
+
+    #[test]
+    fn bulk_notification_reset_rolls_back_rows_and_cached_count_together() {
+        let sSource = include_str!("api.rs");
+        let sHelper = sSource
+            .split(concat!("async fn ", "reset_unread_events("))
+            .nth(1)
+            .expect("bulk notification reset helper")
+            .split(concat!("/// POST ", "/notifications"))
+            .next()
+            .expect("end of bulk notification reset helper");
+
+        let iBegin = sHelper.find("state.pool.begin().await?").expect("begin");
+        let iEvents = sHelper
+            .find("UPDATE user_events SET unread=false")
+            .expect("event reset");
+        let iCounter = sHelper
+            .find("UPDATE users SET unread_events=")
+            .expect("cached counter recalculation");
+        let iCommit = sHelper.find("tx.commit().await?").expect("commit");
+        assert!(iBegin < iEvents && iEvents < iCounter && iCounter < iCommit);
+        assert_eq!(sHelper.matches(".execute(&mut *tx)").count(), 2);
+        assert!(!sHelper.contains(".execute(&state.pool)"));
     }
 }
 
@@ -2951,9 +2993,9 @@ pub async fn vote(
 mod moderation_semantics_tests {
     use super::{
         NotificationEvent, TRACKER_PUBLIC_TOPICS_CLAUSE, UNCOMMITTED_COUNTS_SQL, VOTE_TOPIC_SQL,
-        bNotificationIsCurrent, sNotificationDetails, sTrackerOldLocation, sUnreadDescription,
-        stPollNotFoundError, tracker_commit_visibility_clause, vValidateVoteRequest,
-        vecPrepareNotifications,
+        bNotificationIsCurrent, sNotificationAuthor, sNotificationAuthorsText,
+        sNotificationDetails, sTrackerOldLocation, sUnreadDescription, stPollNotFoundError,
+        tracker_commit_visibility_clause, vValidateVoteRequest, vecPrepareNotifications,
     };
     use crate::error::AppError;
 
@@ -2980,6 +3022,7 @@ mod moderation_semantics_tests {
             group_urlname: "test".into(),
             origin_nick: optNick.map(str::to_owned),
             author_nick: optNick.unwrap_or("author").to_owned(),
+            author_blocked: false,
             event_message: None,
             closed_warning: false,
             bonus: None,
@@ -3048,7 +3091,10 @@ mod moderation_semantics_tests {
         assert_eq!(stGrouped.iLastId, 2);
         assert_eq!(
             stGrouped.vecReactions,
-            vec![("👍".into(), "alice".into()), ("🎉".into(), "bob".into())]
+            vec![
+                ("👍".into(), "alice".into(), false),
+                ("🎉".into(), "bob".into(), false),
+            ]
         );
     }
 
@@ -3060,6 +3106,18 @@ mod moderation_semantics_tests {
         ];
 
         assert_eq!(vecPrepareNotifications(vecEvents, false).len(), 2);
+    }
+
+    #[test]
+    fn notification_users_match_the_unlinked_lor_user_tag_contract() {
+        assert_eq!(sNotificationAuthor("alice", false), "alice");
+        assert_eq!(sNotificationAuthor("blocked", true), "<s>blocked</s>");
+        assert_eq!(sNotificationAuthor("<nick>", false), "&lt;nick&gt;");
+        assert_eq!(sNotificationAuthorsText(&["alice".into()]), "");
+        assert_eq!(
+            sNotificationAuthorsText(&["alice".into(), "bob".into()]),
+            "Комментарии alice, bob"
+        );
     }
 
     #[test]

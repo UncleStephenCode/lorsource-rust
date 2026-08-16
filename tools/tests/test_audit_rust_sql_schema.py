@@ -16,6 +16,7 @@ import audit_rust_sql_schema as audit  # noqa: E402
 CONTRACT = """\
 comments\tid\tint4\tNO
 comments\ttopic\tint4\tNO
+comments\tedit_date\ttimestamp\tYES
 msgbase\tid\tint4\tNO
 msgbase\tmessage\ttext\tNO
 msgbase\tmarkup\tmarkup_type\tNO
@@ -26,6 +27,7 @@ user_events\tid\tint4\tNO
 user_events\ttype\tevent_type\tNO
 users\tid\tint4\tNO
 users\tnick\tvarchar\tNO
+users\tblocked\tbool\tNO
 """
 
 
@@ -116,6 +118,79 @@ fn valid_postgresql_grammar() {
         report = self.report()
         self.assertEqual([], report["findings"])
         self.assertEqual(2, report["summary"]["clean_queries"])
+
+    def test_at_time_zone_is_contextual_syntax_not_a_global_word_suppression(self) -> None:
+        self.write_rust(
+            r'''
+fn timestamp_queries() {
+    sqlx::query("SELECT edit_date AT TIME ZONE $1::text FROM comments");
+    sqlx::query("UPDATE comments SET edit_date=CURRENT_TIMESTAMP AT TIME ZONE $1::text WHERE id=$2");
+    sqlx::query("SELECT at FROM comments");
+}
+'''
+        )
+        report = self.report()
+        self.assertEqual(
+            [("missing_unqualified_column", "at")],
+            [(row["kind"], row["identifier"]) for row in report["findings"]],
+        )
+
+    def test_create_trigger_update_of_is_not_parsed_as_relation_of(self) -> None:
+        self.write_rust(
+            r'''
+fn trigger_fixture() {
+    sqlx::query("CREATE TRIGGER count_block_update BEFORE UPDATE OF blocked ON users FOR EACH ROW EXECUTE FUNCTION count_block_update()");
+    sqlx::query("CREATE TRIGGER bad_column BEFORE UPDATE OF blockd ON users FOR EACH ROW EXECUTE FUNCTION count_block_update()");
+    sqlx::query("CREATE TRIGGER bad_table BEFORE UPDATE OF blocked ON userz FOR EACH ROW EXECUTE FUNCTION count_block_update()");
+    sqlx::query("UPDATE of SET id=1");
+    sqlx::query("SELECT id FROM vanished_table");
+}
+'''
+        )
+        report = self.report()
+        self.assertEqual(
+            {
+                ("missing_column", "users.blockd"),
+                ("missing_table", "of"),
+                ("missing_table", "userz"),
+                ("missing_table", "vanished_table"),
+            },
+            {(row["kind"], row["identifier"]) for row in report["findings"]},
+        )
+
+    def test_local_create_table_columns_apply_only_to_test_scope(self) -> None:
+        self.write_rust(
+            r'''
+fn create_fixture() {
+    sqlx::query("CREATE TABLE users(id integer PRIMARY KEY, blocked boolean NOT NULL, block_updates integer NOT NULL)");
+}
+
+#[test]
+fn isolated_fixture_contract() {
+    sqlx::query("SELECT id,blocked,block_updates FROM users");
+}
+
+fn production_query() {
+    sqlx::query("SELECT id,blocked,block_updates FROM users");
+}
+'''
+        )
+        report = self.report()
+        self.assertEqual(
+            [("missing_unqualified_column", "block_updates")],
+            [(row["kind"], row["identifier"]) for row in report["findings"]],
+        )
+        fixture_query = next(
+            query for query in report["queries"] if query["symbol"] == "isolated_fixture_contract"
+        )
+        production_query = next(
+            query for query in report["queries"] if query["symbol"] == "production_query"
+        )
+        self.assertTrue(fixture_query["test_scope"])
+        self.assertEqual(["users"], fixture_query["fixture_schema_relations"])
+        self.assertEqual("clean", fixture_query["status"])
+        self.assertFalse(production_query["test_scope"])
+        self.assertEqual("invalid", production_query["status"])
 
     def test_template_expression_with_known_sql_alias_is_not_sql(self) -> None:
         self.write_rust(

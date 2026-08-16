@@ -28,8 +28,9 @@ comments still grant only one point in a run.
 Java `@Scheduled` declarations do not specify a zone, so Spring uses the
 JVM/system timezone. Rust uses the process system timezone as well. Compose
 maps the operator-facing `SCHEDULER_TIMEZONE` setting to the container's `TZ`:
-local Compose defaults it to `UTC`, while the production manifest requires an
-explicit IANA zone matching the original Java scheduler. Record the Java JVM
+local Compose defaults it to the comparator-exact `Etc/UTC`, while the
+production manifest requires an explicit IANA zone matching the original Java
+scheduler. Record the Java JVM
 timezone before cutover; do not assume Moscow without deployment evidence.
 
 ## Production activation

@@ -47,7 +47,13 @@ services:
       # is deliberately confined to this disposable local Compose setup.
       CAPTCHA_PUBLIC_KEY: "10000000-ffff-ffff-ffff-000000000001"
       CAPTCHA_PRIVATE_KEY: "0x0000000000000000000000000000000000000000"
-      TZ: ${SCHEDULER_TIMEZONE:-UTC}
+      # The pinned Java comparator image reports ZoneId.systemDefault() as
+      # Etc/UTC. Keep that exact IANA identifier (rather than its UTC alias)
+      # so the no-cookie fixTimezone bootstrap is byte-compatible locally.
+      # Production still requires independently verified explicit values.
+      TZ: ${SCHEDULER_TIMEZONE:-Etc/UTC}
+      SCHEDULER_TIMEZONE: ${SCHEDULER_TIMEZONE:-Etc/UTC}
+      LEGACY_JDBC_TIMEZONE: ${LEGACY_JDBC_TIMEZONE:-Etc/UTC}
       RUST_LOG: lorsource_rust=debug,tower_http=info,sqlx=warn
       OPENSEARCH_URL: http://opensearch:9200
       SMTP_HOST: ${SMTP_HOST:-localhost}

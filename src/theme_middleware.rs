@@ -385,6 +385,11 @@ pub async fn apply_theme(
         &format!("{}\" data-lor-theme-stylesheet", view.stylesheet),
         1,
     );
+    text = text.replacen(
+        "<!-- LOR_MANIFEST_URL -->",
+        sThemeManifestUrl(&stProfile.sStyle),
+        1,
+    );
     let sBaseUrl = format!("{}/", state.config.public_url.trim_end_matches('/'));
     text = text.replacen(
         "<!-- LOR_BASE_URL -->",
@@ -431,6 +436,14 @@ pub async fn apply_theme(
     Response::from_parts(parts, Body::from(text))
 }
 
+fn sThemeManifestUrl(sStyle: &str) -> &'static str {
+    if sStyle == "zomg_ponies" {
+        "/tango/manifest.json"
+    } else {
+        "/manifest.json"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,6 +459,13 @@ mod tests {
             assert_eq!(view.color_mode, None);
             assert_eq!(view.stylesheet, format!("/{style}/combined.css"));
         }
+    }
+
+    #[test]
+    fn pony_theme_keeps_its_original_tableau_manifest_alias() {
+        assert_eq!(sThemeManifestUrl("zomg_ponies"), "/tango/manifest.json");
+        assert_eq!(sThemeManifestUrl("tango"), "/manifest.json");
+        assert_eq!(sThemeManifestUrl("black"), "/manifest.json");
     }
 
     #[test]
@@ -485,6 +505,7 @@ mod tests {
         let base = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/templates/base.html"));
         assert_eq!(base.matches("LOR_THEME_HEADER").count(), 1);
         assert_eq!(base.matches("LOR_THEME_FOOTER").count(), 1);
+        assert_eq!(base.matches("LOR_MANIFEST_URL").count(), 1);
         assert!(!base.contains("theme-shell.css"));
         assert_eq!(
             black_header(None, 0, false, false)

@@ -42,5 +42,5 @@ pub trait TrTagTopicListRepository: Send + Sync {
 
 #[async_trait]
 pub trait TrTagTopicCountRepository: Send + Sync {
-    async fn iCountTagTopics(&self, sTag: &str, sSectionUrlName: &str) -> Result<i64>;
+    async fn iCountTagTopics(&self, sTag: &str, optSectionUrlName: Option<&str>) -> Result<i64>;
 }

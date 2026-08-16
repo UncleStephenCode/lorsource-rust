@@ -7,11 +7,18 @@ sCompose="$sRoot/deploy/compose.production.yml"
 : "${LORSOURCE_IMAGE:?Set the immutable release image reference}"
 : "${UPLOAD_HOST_PATH:?Set the restored media root}"
 : "${SCHEDULER_TIMEZONE:?Set the IANA timezone used by the original Java scheduler}"
+: "${LEGACY_JDBC_TIMEZONE:?Set the verified IANA timezone used by the original Java JDBC runtime}"
 : "${ENABLE_BACKGROUND_JOBS:?Explicitly select true on one scheduler replica or false on passive replicas}"
 
 if [[ "$SCHEDULER_TIMEZONE" == /* || "$SCHEDULER_TIMEZONE" == *..* || \
       ! "$SCHEDULER_TIMEZONE" =~ ^[A-Za-z0-9._+-]+(/[A-Za-z0-9._+-]+)*$ ]]; then
   echo "SCHEDULER_TIMEZONE must be a safe relative IANA timezone name" >&2
+  exit 1
+fi
+
+if [[ "$LEGACY_JDBC_TIMEZONE" == /* || "$LEGACY_JDBC_TIMEZONE" == *..* || \
+      ! "$LEGACY_JDBC_TIMEZONE" =~ ^[A-Za-z0-9._+-]+(/[A-Za-z0-9._+-]+)*$ ]]; then
+  echo "LEGACY_JDBC_TIMEZONE must be a safe relative IANA timezone name" >&2
   exit 1
 fi
 
@@ -88,11 +95,15 @@ docker run --rm \
   --cap-drop ALL \
   --security-opt no-new-privileges:true \
   --env "TZ=$SCHEDULER_TIMEZONE" \
+  --env "SCHEDULER_TIMEZONE=$SCHEDULER_TIMEZONE" \
+  --env "LEGACY_JDBC_TIMEZONE=$LEGACY_JDBC_TIMEZONE" \
   --volume "$UPLOAD_HOST_PATH:/app/uploads:rw,Z" \
   --entrypoint /bin/sh \
   "$sProbeImage" \
   -c 'set -eu
       test -f "/usr/share/zoneinfo/$TZ"
+      test "$SCHEDULER_TIMEZONE" = "$TZ"
+      test -f "/usr/share/zoneinfo/$LEGACY_JDBC_TIMEZONE"
       sProbe=/app/uploads/.lorsource-preflight-$$
       trap '\''rm -f "$sProbe" "$sProbe.renamed"'\'' EXIT
       printf probe > "$sProbe"

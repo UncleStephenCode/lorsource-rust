@@ -6,7 +6,7 @@ use crate::{
         StCommentDeleteTarget, StDeleteCommentCommand, TrCommentDeletionRepository,
         TrCommentReindexQueue,
     },
-    error::AppError,
+    error::{AppError, Result},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +79,30 @@ where
             oRepository,
             oReindexQueue,
         }
+    }
+
+    /// Read-only `CommentPrepareService.prepareCommentOnly` source model.
+    ///
+    /// The existing preview repository already owns the complete comment
+    /// projection (delete/edit metadata, profile-dependent remark source,
+    /// moderator IP/UA and userpic inputs).  Exposing one root comment here
+    /// lets browser routes render that model without duplicating its SQL or
+    /// coupling HTTP handlers directly to a PostgreSQL implementation.
+    pub async fn optPrepareCommentOnly(
+        &self,
+        iCommentId: i32,
+        iViewerId: i32,
+    ) -> Result<Option<(StCommentDeleteTarget, StCommentDeletePreview)>> {
+        let Some(stTarget) = self.oRepository.optFindTarget(iCommentId).await? else {
+            return Ok(None);
+        };
+        let optComment = self
+            .oRepository
+            .vecDeletePreview(iCommentId, iViewerId)
+            .await?
+            .into_iter()
+            .find(|stComment| stComment.iCommentId == iCommentId);
+        Ok(optComment.map(|stComment| (stTarget, stComment)))
     }
 
     pub async fn stDeleteForm(
@@ -330,6 +354,21 @@ mod tests {
             vecCommands,
             bReplyRace: false,
         }
+    }
+
+    #[test]
+    fn prepare_comment_only_keeps_the_complete_repository_projection_layered() {
+        let sSource = include_str!("deletion.rs");
+        let sMethod = sSource
+            .split_once("pub async fn optPrepareCommentOnly(")
+            .expect("prepare-comment method")
+            .1
+            .split_once("pub async fn stDeleteForm(")
+            .expect("end of prepare-comment method")
+            .0;
+        assert!(sMethod.contains("self.oRepository.optFindTarget(iCommentId)"));
+        assert!(sMethod.contains(".vecDeletePreview(iCommentId, iViewerId)"));
+        assert!(sMethod.contains("stComment.iCommentId == iCommentId"));
     }
 
     #[tokio::test]

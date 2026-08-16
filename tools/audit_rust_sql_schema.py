@@ -92,6 +92,7 @@ class RustString:
     value: str
     raw: bool
     symbol: str | None = None
+    test_scope: bool = False
 
 
 @dataclass(frozen=True)
@@ -203,6 +204,17 @@ def _decode_rust_string(value: str) -> str:
 
 def extract_rust_strings(path: Path, root: Path) -> list[RustString]:
     text = path.read_text(encoding="utf-8", errors="replace")
+    test_symbols: set[str] = set()
+    for match in re.finditer(
+        r"(?m)(?P<attrs>(?:^[ \t]*#\s*\[[^\n]*\][ \t]*\n)+)"
+        r"^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(?P<name>[A-Za-z_][\w]*)",
+        text,
+    ):
+        if re.search(
+            r"#\s*\[\s*(?:[A-Za-z_][\w]*::)*test(?:\s*\([^]]*\))?\s*\]",
+            match.group("attrs"),
+        ):
+            test_symbols.add(match.group("name"))
     declarations: list[tuple[int, str]] = []
     for match in re.finditer(
         r"(?m)^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_][\w]*)|"
@@ -267,6 +279,7 @@ def extract_rust_strings(path: Path, root: Path) -> list[RustString]:
                     value,
                     True,
                     symbol_at(i),
+                    symbol_at(i) in test_symbols,
                 )
             )
             i = end + len(terminator)
@@ -297,6 +310,7 @@ def extract_rust_strings(path: Path, root: Path) -> list[RustString]:
                     value,
                     False,
                     symbol_at(i),
+                    symbol_at(i) in test_symbols,
                 )
             )
             i = j + 1
@@ -573,9 +587,35 @@ def _enclosing_function(tokens: Sequence[Token], index: int) -> str | None:
     return None
 
 
+def _is_create_trigger(tokens: Sequence[Token]) -> bool:
+    header = [token.lower for token in tokens[:5]]
+    return (
+        header[:2] == ["create", "trigger"]
+        or header[:3] == ["create", "constraint", "trigger"]
+        or header[:4] == ["create", "or", "replace", "trigger"]
+        or header[:5] == ["create", "or", "replace", "constraint", "trigger"]
+    )
+
+
 def find_relations(tokens: Sequence[Token], ctes: set[str]) -> tuple[list[Relation], set[int]]:
     relations: list[Relation] = []
     relation_indexes: set[int] = set()
+    create_trigger = _is_create_trigger(tokens)
+    if create_trigger:
+        trigger_on = next(
+            (
+                i
+                for i, token in enumerate(tokens)
+                if token.depth == 0 and token.lower == "on"
+            ),
+            None,
+        )
+        if trigger_on is not None:
+            relation = _relation_after(tokens, trigger_on + 1, "trigger_on", ctes)
+            if relation is not None:
+                relation_indexes.add(trigger_on)
+                relation_indexes.update(relation.indexes)
+                relations.append(relation)
     for i, token in enumerate(tokens):
         if token.kind != "ident":
             continue
@@ -583,6 +623,16 @@ def find_relations(tokens: Sequence[Token], ctes: set[str]) -> tuple[list[Relati
         if context == "into" and (i == 0 or tokens[i - 1].lower != "insert"):
             continue
         if context == "update" and i and tokens[i - 1].lower in {"for", "do"}:
+            continue
+        # In CREATE TRIGGER grammar, UPDATE OF introduces the list of watched
+        # columns; ``OF`` is not the target relation.  Keep this contextual so
+        # a genuine table/column named ``of`` is not globally suppressed.
+        if (
+            context == "update"
+            and i + 1 < len(tokens)
+            and tokens[i + 1].lower == "of"
+            and create_trigger
+        ):
             continue
         if context == "from":
             if i and tokens[i - 1].lower == "distinct":
@@ -685,6 +735,55 @@ def _top_level_segments(tokens: Sequence[Token], start: int, end: int, separator
     return [segment for segment in segments if segment]
 
 
+def _created_table_columns(tokens: Sequence[Token]) -> tuple[str, set[str]] | None:
+    """Return columns declared by a simple CREATE TABLE fixture literal.
+
+    This deliberately recognizes only explicit parenthesized definitions.  It
+    does not guess columns for CREATE TABLE AS, LIKE, dynamic identifiers or
+    table constraints.
+    """
+    if not tokens or tokens[0].lower != "create":
+        return None
+    i = 1
+    if i < len(tokens) and tokens[i].lower in {"global", "local"}:
+        i += 1
+    if i < len(tokens) and tokens[i].lower in {"temp", "temporary", "unlogged"}:
+        i += 1
+    if i >= len(tokens) or tokens[i].lower != "table":
+        return None
+    i += 1
+    if i + 2 < len(tokens) and [token.lower for token in tokens[i:i + 3]] == ["if", "not", "exists"]:
+        i += 3
+    if i >= len(tokens) or tokens[i].kind != "ident":
+        return None
+    table = tokens[i].lower
+    i += 1
+    while i + 1 < len(tokens) and tokens[i].value == "." and tokens[i + 1].kind == "ident":
+        table = tokens[i + 1].lower
+        i += 2
+    if i >= len(tokens) or tokens[i].value != "(":
+        return None
+    end = _matching_paren(tokens, i)
+    constraint_starters = {
+        "check", "constraint", "exclude", "foreign", "like", "primary", "unique",
+    }
+    columns: set[str] = set()
+    for segment in _top_level_segments(tokens, i + 1, end):
+        first = next((token.lower for _, token in segment if token.kind == "ident"), None)
+        if first is not None and first not in constraint_starters:
+            columns.add(first)
+    return (table, columns) if columns else None
+
+
+def _postgres_syntax_indexes(tokens: Sequence[Token]) -> set[int]:
+    """Token positions which are grammar, not unqualified column names."""
+    indexes: set[int] = set()
+    for i in range(len(tokens) - 2):
+        if [token.lower for token in tokens[i:i + 3]] == ["at", "time", "zone"]:
+            indexes.update((i, i + 1, i + 2))
+    return indexes
+
+
 def _insert_columns(tokens: Sequence[Token], relation: Relation) -> list[tuple[int, str]]:
     if relation.context != "into" or relation.table is None:
         return []
@@ -723,6 +822,31 @@ def _update_columns(tokens: Sequence[Token], relation: Relation) -> list[tuple[i
         idents = [(index, token.lower) for index, token in lhs if token.kind == "ident"]
         if idents:
             columns.append(idents[-1])
+    return columns
+
+
+def _trigger_update_columns(tokens: Sequence[Token], relation: Relation) -> list[tuple[int, str]]:
+    if relation.context != "trigger_on" or relation.table is None:
+        return []
+    update = next(
+        (
+            i
+            for i, token in enumerate(tokens[:-1])
+            if token.depth == 0
+            and token.lower == "update"
+            and tokens[i + 1].lower == "of"
+        ),
+        None,
+    )
+    if update is None:
+        return []
+    columns: list[tuple[int, str]] = []
+    for i in range(update + 2, len(tokens)):
+        token = tokens[i]
+        if token.depth == 0 and token.lower in {"on", "or"}:
+            break
+        if token.kind == "ident":
+            columns.append((i, token.lower))
     return columns
 
 
@@ -853,10 +977,21 @@ def audit_sql(
     column_types: dict[tuple[str, str], str],
     enums: dict[str, set[str]],
     alias_hints: dict[str, set[str]] | None = None,
+    test_fixture_tables: dict[str, set[str]] | None = None,
 ) -> dict[str, object]:
+    canonical_tables = tables
+    if item.test_scope and test_fixture_tables:
+        # Test-only queries can run against a private schema whose local table
+        # intentionally extends a canonical relation.  Merge only columns
+        # explicitly declared by CREATE TABLE literals in the same Rust file;
+        # production queries continue to use the canonical Java contract.
+        tables = {table: set(columns) for table, columns in tables.items()}
+        for table, columns in test_fixture_tables.items():
+            tables.setdefault(table, set()).update(columns)
     tokens = tokenize_sql(item.value)
     ctes = find_ctes(tokens)
     relations, relation_indexes = find_relations(tokens, ctes)
+    syntax_indexes = _postgres_syntax_indexes(tokens)
     criticality, surface = _criticality(item.source, item.symbol)
     findings: list[dict[str, object]] = []
     seen_findings: set[tuple[str, str]] = set()
@@ -929,7 +1064,11 @@ def audit_sql(
     for relation in relations:
         if relation.table not in tables:
             continue
-        explicit = _insert_columns(tokens, relation) + _update_columns(tokens, relation)
+        explicit = (
+            _insert_columns(tokens, relation)
+            + _update_columns(tokens, relation)
+            + _trigger_update_columns(tokens, relation)
+        )
         for index, column in explicit:
             explicit_column_indexes.add(index)
             if column not in tables[relation.table]:
@@ -948,12 +1087,18 @@ def audit_sql(
     for i, token in enumerate(tokens[:-1]):
         if token.lower == "as" and tokens[i + 1].kind == "ident":
             output_aliases.add(tokens[i + 1].lower)
-    if canonical_relations and not opaque_sources and not ctes:
+    if canonical_relations and not opaque_sources and not ctes and not _is_create_trigger(tokens):
         available = set().union(*(tables[table] for table in canonical_relations if table is not None))
         relation_names = set(aliases) | canonical_relations
         skip_after = {"collate", "as"}
         for i, token in enumerate(tokens):
-            if token.kind != "ident" or i in relation_indexes or i in qualified_indexes or i in explicit_column_indexes:
+            if (
+                token.kind != "ident"
+                or i in relation_indexes
+                or i in qualified_indexes
+                or i in explicit_column_indexes
+                or i in syntax_indexes
+            ):
                 continue
             word = token.lower
             previous = tokens[i - 1] if i else None
@@ -995,7 +1140,7 @@ def audit_sql(
         probe_sql = probe_block.group(1) if probe_block else ""
         for pair in re.finditer(r"\(\s*'([a-z_][\w$]*)'\s*,\s*'([a-z_][\w$]*)'\s*\)", probe_sql):
             table, column = pair.groups()
-            if column not in tables.get(table, set()):
+            if column not in canonical_tables.get(table, set()):
                 sql_offset = (probe_block.start(1) if probe_block else 0) + pair.start()
                 intentional_probes.append({
                     "table": table,
@@ -1014,6 +1159,14 @@ def audit_sql(
         "source": item.source,
         "line": item.line,
         "symbol": item.symbol,
+        "test_scope": item.test_scope,
+        "fixture_schema_relations": sorted({
+            relation.table
+            for relation in relations
+            if item.test_scope
+            and test_fixture_tables
+            and relation.table in test_fixture_tables
+        }),
         "criticality": criticality,
         "runtime_surface": surface,
         "dynamic": dynamic,
@@ -1042,7 +1195,24 @@ def run_audit(root: Path, schema_contract: Path, java_sql_root: Path) -> dict[st
     tables, column_types = read_schema_contract(schema_contract)
     enums = read_java_enums(java_sql_root)
     strings = extract_sql_strings(root)
-    preliminary = [audit_sql(item, tables, column_types, enums) for item in strings]
+    test_fixture_tables_by_source: dict[str, dict[str, set[str]]] = defaultdict(
+        lambda: defaultdict(set)
+    )
+    for item in strings:
+        definition = _created_table_columns(tokenize_sql(item.value))
+        if definition is not None:
+            table, columns = definition
+            test_fixture_tables_by_source[item.source][table].update(columns)
+    preliminary = [
+        audit_sql(
+            item,
+            tables,
+            column_types,
+            enums,
+            test_fixture_tables=dict(test_fixture_tables_by_source.get(item.source, {})),
+        )
+        for item in strings
+    ]
     aliases_by_file: dict[tuple[str, str], set[str]] = defaultdict(set)
     aliases_by_symbol: dict[tuple[str, str | None, str], set[str]] = defaultdict(set)
     for query in preliminary:
@@ -1066,7 +1236,16 @@ def run_audit(root: Path, schema_contract: Path, java_sql_root: Path) -> dict[st
                 # ambiguous file-wide mapping when it resolves uniquely.
                 if len(owners) == 1:
                     hints[alias] = set(owners)
-        queries.append(audit_sql(item, tables, column_types, enums, dict(hints)))
+        queries.append(
+            audit_sql(
+                item,
+                tables,
+                column_types,
+                enums,
+                dict(hints),
+                dict(test_fixture_tables_by_source.get(item.source, {})),
+            )
+        )
     findings: list[dict[str, object]] = []
     probes: list[dict[str, object]] = []
     for query in queries:
@@ -1140,6 +1319,7 @@ def run_audit(root: Path, schema_contract: Path, java_sql_root: Path) -> dict[st
             "intentional_absence_probes": len(probes),
             "dynamic_queries": sum(bool(query["dynamic"]) for query in queries),
             "sql_fragments": sum(bool(query["fragment"]) for query in queries),
+            "test_scope_queries": sum(bool(query["test_scope"]) for query in queries),
             "queries_with_unresolved_qualifiers": sum(bool(query["unresolved_qualifiers"]) for query in queries),
         },
         "findings": findings,
@@ -1150,6 +1330,7 @@ def run_audit(root: Path, schema_contract: Path, java_sql_root: Path) -> dict[st
             "Bind values and SQL assembled outside Rust string literals cannot be type-checked statically.",
             "Columns produced by CTEs, subqueries, table-valued functions and system catalogs are not guessed.",
             "Dynamic format fragments are inventoried and their statically visible identifiers are checked; runtime branches still require integration tests.",
+            "SQL in Rust test functions is inventoried against explicitly declared local CREATE TABLE fixture columns as well as the canonical schema; production literals never receive that fixture overlay.",
             "A clean static result does not establish query behavior, transaction, authorization or migration parity.",
         ],
     }
@@ -1193,6 +1374,7 @@ def write_markdown(path: Path, report: dict[str, object]) -> None:
         "",
         f"- Canonical schema: **{report['schema']['tables']} tables / {report['schema']['columns']} columns**.",
         f"- Rust SQL-bearing literals inspected: **{summary['sql_literals']}** ({summary['dynamic_queries']} dynamic templates; {summary['sql_fragments']} continuation fragments).",
+        f"- SQL literals in Rust test scope: **{summary['test_scope_queries']}** (local CREATE TABLE fixture columns apply only there).",
         f"- Queries with confirmed identifier/type violations: **{summary['invalid_queries']}**.",
         f"- Confirmed findings: **{summary['findings']}**.",
         f"- Queries requiring static-review caution: **{summary['review_queries']}**.",

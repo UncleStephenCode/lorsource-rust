@@ -20,6 +20,10 @@ schema at startup.
 - the exact reverse-proxy CIDRs in `TRUSTED_PROXY_CIDRS`;
 - the original Java scheduler/JVM system timezone, supplied as an explicit
   IANA `SCHEDULER_TIMEZONE` value and retained as cutover evidence;
+- the timezone used by the original JVM/PgJDBC runtime for PostgreSQL
+  `timestamp without time zone`, supplied independently as the verified IANA
+  `LEGACY_JDBC_TIMEZONE`; do not infer it from current Rust or database-host
+  defaults;
 - `LOR_ENV=production` and `ENABLE_DEV_BYPASSES=false`;
 - dashboards/alerts for HTTP 5xx, latency, PostgreSQL errors, OpenSearch
   failures, SMTP failures and container restarts.
@@ -72,6 +76,7 @@ SMTP_HOST=<mta-host> \
 SMTP_HELO_NAME=www.linux.org.ru \
 ADMIN_EMAIL=<operations-mailbox> \
 SCHEDULER_TIMEZONE=<original-Java-IANA-zone> \
+LEGACY_JDBC_TIMEZONE=<verified-original-Java-JDBC-IANA-zone> \
 ENABLE_BACKGROUND_JOBS=false \
 scripts/check-production-runtime.sh
 ```
@@ -131,6 +136,8 @@ an instance is not considered ready while either required dependency is down.
    CUTOVER_CONFIG_MANIFEST=/path/to/redacted-config.json \
    CUTOVER_MEDIA_EVIDENCE=/path/to/media-rehearsal.json \
    CUTOVER_EXTERNAL_EVIDENCE=/path/to/external-adapters.json \
+   CUTOVER_OPERATIONS_EVIDENCE=/path/to/operations.json \
+   CUTOVER_SEARCH_EVIDENCE_ARTIFACT=/path/to/search-cutover-artifact.json \
    EVIDENCE_DIR=/path/to/rehearsal-evidence \
    ./scripts/run-cutover-gate.sh
    ```
@@ -144,14 +151,29 @@ an instance is not considered ready while either required dependency is down.
    variables only for the repository's disposable Compose stack.
 
    The full gate fails closed unless the immutable image digest, database
-   snapshot/WAL identity, redacted configuration, media rehearsal and external
-   adapter evidence are supplied. These three files use the strict JSON
-   contract documented in `docs/CUTOVER_EVIDENCE.md`: they must share a fresh
-   rehearsal ID and match the supplied digest, snapshot and PostgreSQL LSN.
-   Empty files, stale reports and placeholder identifiers are rejected. For a
-   deliberately read-only local dry run,
-   `CUTOVER_REQUIRE_RELEASE_EVIDENCE=0` is allowed, but the script will not emit
-   a cutover go/no-go pass.
+   snapshot/WAL identity, redacted configuration, media rehearsal, external
+   adapter and operational evidence are supplied. These four files use the
+   strict JSON contract documented in `docs/CUTOVER_EVIDENCE.md`: they must
+   share a fresh rehearsal ID and match the supplied digest, snapshot and
+   PostgreSQL LSN.
+   Empty files, stale reports, contradictory structured search artifacts and
+   placeholder identifiers are rejected. Toggle values are strict
+   `true`/`false` or `1`/`0`; a typo is an error, never a skipped check. For a
+   deliberately read-only developer run, explicitly select developer mode and
+   every omitted check:
+
+   ```bash
+   CUTOVER_DEVELOPER_DRY_RUN=true \
+   CUTOVER_REQUIRE_RELEASE_EVIDENCE=false \
+   CUTOVER_WRITE_FLOW=false \
+   CUTOVER_MODERATION_FLOW=false \
+   ./scripts/run-cutover-gate.sh
+   # Expected final status: NO-GO, exit 3.
+   ```
+
+   Developer mode always ends with `NO-GO` and exit status `3`, even when its
+   selected checks pass, so automation cannot confuse it with a production
+   cutover decision.
 6. Compare Java and Rust responses for login, profile/settings, topic and
    comment writes, moderation, tracker, search, reactions, gallery uploads and
    password recovery. Compare database rows and external side effects, not
@@ -179,13 +201,31 @@ All Spring-style maintenance callbacks inside one Rust process share a FIFO
 single-execution gate, matching Java's single-thread scheduler. The locks do
 not suppress a later sequential run in another replica, so exactly one active
 scheduler remains mandatory. The production manifest maps the required
-`SCHEDULER_TIMEZONE` value to container `TZ`; verify the startup log against
-the recorded Java JVM timezone before enabling jobs.
+`SCHEDULER_TIMEZONE` value to container `TZ` and also passes the named value to
+the application. Startup parses both once, rejects invalid IANA names or a
+mismatch, and injects the validated zone into Java-compatible calendar-period
+moderation operations; verify the startup log against the recorded Java JVM
+timezone before enabling jobs. `LEGACY_JDBC_TIMEZONE`
+must independently carry the evidenced PgJDBC/JVM timezone used to decode
+`comments.edit_date`; the full evidence gate requires both values to match the
+recorded original JVM timezone.
 
 ## Cutover
 
-1. Announce a write freeze and drain/stop Java writers. Never run Java and Rust
-   as concurrent writers during the first migration.
+1. Announce a write freeze and stop Java writers. Never run Java and Rust as
+   concurrent writers during the first migration. Then satisfy exactly one
+   search cutover path:
+   - stop the Java search consumers and retain an executable broker probe that
+     reports zero ready and zero inflight messages for `lor.searchQueue`; or
+   - stop Java writers/consumers, record the legacy queue disposition, take an
+     OpenSearch snapshot, force a full Rust reindex and retain exact positive
+     expected/indexed counts, matching canonical ID-set/content digests, plus
+     representative-query reconciliation.
+   In either case Rust `search-queue/pending` and `processing` must both be
+   empty. `tools/validate_cutover_evidence.py` parses the strict JSON artifact,
+   hash-binds it to the operational evidence, cross-checks its release,
+   snapshot, queue/spool and reconciliation fields, and rejects a
+   nonzero/contradictory/unreconciled result.
 2. Record the Java image/version, database WAL position, OpenSearch index
    aliases and upload-storage snapshot. Take a final database snapshot.
 3. Re-run `compat/java-db/manage.sh validate`; it is validate-only for an
@@ -228,5 +268,9 @@ the recorded Java JVM timezone before enabling jobs.
 - canonical `users`, `ban_info` and `user_log` assertions from the moderation
   regression;
 - old/new endpoint comparison report;
+- the hash-bound ActiveMQ zero-depth probe or full-reindex reconciliation
+  artifact and OpenSearch snapshot identifier;
+- recorded original JVM, Rust scheduler and legacy JDBC timezones, plus the
+  exactly-one-scheduler observation;
 - cutover and rollback timestamps;
 - observed errors and the final go/no-go decision.

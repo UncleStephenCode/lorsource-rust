@@ -225,7 +225,7 @@ class JavaApiSourceContractTest(unittest.TestCase):
             "pub async fn delete_comment_form", 1
         )[0]
         self.assertLess(
-            edit.index("tx.commit().await?"), edit.index(".vUpdateComments(&[form.msgid])")
+            edit.index("tx.commit().await?"), edit.index(".vUpdateComments(&[form.original])")
         )
         self.assertNotIn("state.realtime", edit)
         self.assertNotIn("INSERT INTO user_events", edit)
@@ -298,6 +298,108 @@ class JavaApiSourceContractTest(unittest.TestCase):
             edit.index("msgbaseDao.updateMessage(oldComment.id, commentBody)"),
             edit.index("val messageText = msgbaseDao.getMessageText(oldComment.id)"),
         )
+
+    def test_user_identity_binders_keep_java_exact_nick_semantics(self) -> None:
+        java_dao = (
+            JAVA_ROOT / "src/main/scala/ru/org/linux/user/UserDao.scala"
+        ).read_text(encoding="utf-8")
+        java_events = (
+            JAVA_ROOT / "src/main/scala/ru/org/linux/user/UserEventController.scala"
+        ).read_text(encoding="utf-8")
+        java_search = (
+            JAVA_ROOT / "src/main/scala/ru/org/linux/search/SearchController.scala"
+        ).read_text(encoding="utf-8")
+        rust_repository = (
+            ROOT / "src/infra/postgres/user_identity_repository.rs"
+        ).read_text(encoding="utf-8")
+        rust_legacy = (ROOT / "src/routes/legacy.rs").read_text(encoding="utf-8")
+        rust_search = (ROOT / "src/routes/search.rs").read_text(encoding="utf-8")
+        rust_auth = (ROOT / "src/routes/auth.rs").read_text(encoding="utf-8")
+
+        self.assertIn("SELECT id FROM users WHERE nick=${nick}", java_dao)
+        self.assertIn("currentUser.user.nick == nick", java_events)
+        self.assertIn("userService.getUser(nick)", java_events)
+        self.assertIn(
+            "binder.registerCustomEditor(classOf[User], new UserPropertyEditor(userService))",
+            java_search,
+        )
+        for sql_name in (
+            "S_EXACT_IDENTITY",
+            "S_ACTIVATION_IDENTITY",
+            "S_PASSWORD_RESET_IDENTITY",
+        ):
+            sql = rust_repository.split(f"const {sql_name}", 1)[1].split(";", 1)[0]
+            self.assertIn("WHERE nick=$1", sql)
+            self.assertNotIn("lower(nick)", sql.lower())
+        show_replies = rust_legacy.split("pub async fn show_replies_jsp(", 1)[1].split(
+            "fn sCanonicalUserEventFilter(", 1
+        )[0]
+        self.assertEqual(2, show_replies.count("optExactIdentity(&nick)"))
+        self.assertIn("optActivationIdentity(nick)", rust_legacy)
+        self.assertIn("optExactIdentity(&sRequestedUser)", rust_search)
+        self.assertIn("optPasswordResetIdentity(nick)", rust_auth)
+
+    def test_activation_and_reset_bind_required_servlet_parameters_before_db_work(self) -> None:
+        rust_legacy = (ROOT / "src/routes/legacy.rs").read_text(encoding="utf-8")
+        activation = rust_legacy.split("pub async fn activate_post(", 1)[1].split(
+            "fn render_activation_form(", 1
+        )[0]
+        rust_auth = (ROOT / "src/routes/auth.rs").read_text(encoding="utf-8")
+        reset = rust_auth.split("pub async fn reset_password_with_code(", 1)[1].split(
+            "fn generate_java_like_password(", 1
+        )[0]
+
+        self.assertIn("servlet_request_parameters(stRequest)", activation)
+        for parameter in ("activation", "nick", "passwd"):
+            self.assertIn(
+                f"Required request parameter '{parameter}' is missing", activation
+            )
+        self.assertLess(
+            activation.index("optActivationIdentity(nick)"),
+            activation.index("verify_login(&state.pool, &stActivationUser.sNick"),
+        )
+        self.assertIn("servlet_request_parameters(stRequest)", reset)
+        for parameter in ("nick", "code"):
+            self.assertIn(f"Required request parameter '{parameter}' is missing", reset)
+        self.assertNotIn(".trim()", activation)
+        self.assertNotIn(".trim()", reset)
+
+    def test_login_failure_is_recorded_before_the_delayed_response(self) -> None:
+        rust = (ROOT / "src/routes/auth.rs").read_text(encoding="utf-8")
+        helper = rust.split("async fn vRecordLoginFailureBeforeDelay", 1)[1].split(
+            "pub async fn login(", 1
+        )[0]
+        self.assertLess(helper.index("vRecordFailedAttempt"), helper.index("futDelay.await"))
+        self.assertIn(
+            "failed_login_is_visible_to_concurrent_requests_before_delay_finishes", rust
+        )
+
+    def test_registration_mailbox_and_deregister_fields_match_java_contracts(self) -> None:
+        java_validator = (
+            JAVA_ROOT
+            / "src/main/scala/ru/org/linux/user/RegisterRequestValidator.scala"
+        ).read_text(encoding="utf-8")
+        java_deregister = (
+            JAVA_ROOT / "src/main/scala/ru/org/linux/user/DeregisterController.scala"
+        ).read_text(encoding="utf-8")
+        rust_address = (ROOT / "src/domain/email/address.rs").read_text(
+            encoding="utf-8"
+        )
+        rust_legacy = (ROOT / "src/routes/legacy.rs").read_text(encoding="utf-8")
+
+        self.assertIn("new InternetAddress(form.getEmail, true)", java_validator)
+        self.assertIn("topPrivateDomain.toString", java_validator)
+        self.assertIn("var acceptBlock: Boolean", java_deregister)
+        self.assertIn("var acceptOneway: Boolean", java_deregister)
+        self.assertIn("psl::domain", rust_address)
+        self.assertIn("bSingleAddressPhrase", rust_address)
+        deregister = rust_legacy.split("pub struct DeregisterForm", 1)[1].split(
+            "pub async fn deregister_form", 1
+        )[0]
+        self.assertIn('#[serde(rename = "acceptBlock")]', deregister)
+        self.assertIn('#[serde(rename = "acceptOneway")]', deregister)
+        self.assertNotIn('alias = "accept_block"', deregister)
+        self.assertNotIn('alias = "accept_oneway"', deregister)
 
     def test_tag_and_moderation_queue_sends_are_fallible_and_source_ordered(self) -> None:
         tags = (ROOT / "src/routes/tags.rs").read_text(encoding="utf-8")

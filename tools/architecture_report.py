@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +19,8 @@ def count_sql(path: Path) -> int:
 
 
 def main() -> None:
+    toolchain = tomllib.loads((ROOT / "rust-toolchain.toml").read_text())
+    rust_version = toolchain["toolchain"]["channel"]
     files = sorted(SRC.rglob("*.rs"))
     sql_by_area: dict[str, int] = {}
     direct_route_sql: list[dict[str, object]] = []
@@ -37,7 +40,7 @@ def main() -> None:
 
     report = {
         "rust_edition": "2024",
-        "rust_version": "1.97.0",
+        "rust_version": rust_version,
         "architecture_layers": ["bootstrap", "config", "domain", "application", "infra", "routes"],
         "sql_calls_by_area": sql_by_area,
         "direct_sql_in_routes": direct_route_sql,

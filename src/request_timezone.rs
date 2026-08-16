@@ -26,8 +26,9 @@ pub fn stRequestTimezone(stJar: &CookieJar) -> chrono_tz::Tz {
                 .filter(|sTimezone| !matches!(sTimezone.as_str(), "Factory" | "Etc/Unknown"))
                 .and_then(|sTimezone| sTimezone.parse().ok())
         })
-        // The Java fallback is ZoneId.systemDefault().  The runtime image is
-        // UTC unless an operator explicitly provides TZ.
+        // The Java fallback is ZoneId.systemDefault(). The pinned local Java
+        // comparator reports `Etc/UTC`; Compose supplies that exact identifier
+        // via TZ. Production must supply its independently verified JVM zone.
         .unwrap_or(chrono_tz::Etc::UTC)
 }
 

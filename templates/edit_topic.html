@@ -30,7 +30,7 @@
 
   {% if content_editable %}
   <div class="control-group">
-    <label for="title">Заглавие</label>
+    <label for="form_title">Заглавие</label>
     <input id="form_title" name="title" required="required" value="{{ form_title }}">
   </div>
 
@@ -53,8 +53,8 @@
   </div>
 
   {% if links_allowed %}
-  <div class="control-group"><label for="linktext">Текст ссылки</label><input id="form_linktext" name="linktext" value="{{ form_linktext }}"></div>
-  <div class="control-group"><label for="url">Ссылка (не забудьте <b>https://</b>)</label><input id="form_url" name="url" placeholder="https://" type="url" value="{{ form_url }}"></div>
+  <div class="control-group"><label for="form_linktext">Текст ссылки</label><input id="form_linktext" name="linktext" value="{{ form_linktext }}"></div>
+  <div class="control-group"><label for="form_url">Ссылка (не забудьте <b>https://</b>)</label><input id="form_url" name="url" placeholder="https://" type="url" value="{{ form_url }}"></div>
   {% endif %}
   {% endif %}
 

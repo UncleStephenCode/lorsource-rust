@@ -1,19 +1,24 @@
 use crate::{
+    application::user::identity::CUserIdentityService,
     auth,
     auth::CurrentUser,
+    domain::email::address::{
+        optCanonicalInternetAddress, optParseStrictInternetAddress, optTopPrivateDomain,
+    },
     error::{AppError, Result},
+    infra::postgres::user_identity_repository::CUserIdentityPgRepository,
     state::AppState,
 };
 use askama::Template;
 use axum::{
     Form,
-    extract::{ConnectInfo, Query, State},
+    extract::{ConnectInfo, Query, Request, State},
     http::{StatusCode, header},
     response::{Html, IntoResponse, Response},
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar};
 use serde::Deserialize;
-use std::net::SocketAddr;
+use std::{future::Future, net::SocketAddr};
 use time::Duration;
 
 pub(crate) fn cEmailService(
@@ -199,6 +204,27 @@ async fn delay_response() {
     tokio::time::sleep(std::time::Duration::from_millis(millis)).await;
 }
 
+/// `LoginController.delayResponse` evaluates its by-name response before the
+/// scheduled delay.  Record failures before awaiting so a concurrent request
+/// observes the CAPTCHA requirement immediately, exactly as the JVM does.
+async fn vRecordLoginFailureBeforeDelay<F>(
+    cAttempts: &crate::application::auth::CLoginAttemptCache,
+    sRemoteIp: &str,
+    sNick: &str,
+    enOutcome: &auth::LoginOutcome,
+    futDelay: F,
+) where
+    F: Future<Output = ()>,
+{
+    if matches!(
+        enOutcome,
+        auth::LoginOutcome::NotActivated | auth::LoginOutcome::Failed
+    ) {
+        cAttempts.vRecordFailedAttempt(sRemoteIp, sNick);
+    }
+    futDelay.await;
+}
+
 pub async fn login(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -242,7 +268,14 @@ pub async fn login(
     }
 
     let outcome = auth::verify_login(&state.pool, &form.nick, &form.passwd).await?;
-    delay_response().await;
+    vRecordLoginFailureBeforeDelay(
+        &state.login_attempts,
+        &sRemoteIp,
+        &form.nick,
+        &outcome,
+        delay_response(),
+    )
+    .await;
     let identity = match outcome {
         auth::LoginOutcome::Success(identity) => identity,
         // LockedException (blocked account): silently back to their own
@@ -252,9 +285,6 @@ pub async fn login(
             return Ok((jar, found(&sLocation)).into_response());
         }
         auth::LoginOutcome::NotActivated => {
-            state
-                .login_attempts
-                .vRecordFailedAttempt(&sRemoteIp, &form.nick);
             return render_login_page(
                 &state,
                 Some("Регистрация не завершена! Инструкция по активации отправлена на указанный при регистрации email.".to_owned()),
@@ -265,9 +295,6 @@ pub async fn login(
             );
         }
         auth::LoginOutcome::Failed => {
-            state
-                .login_attempts
-                .vRecordFailedAttempt(&sRemoteIp, &form.nick);
             return render_login_page(
                 &state,
                 Some(
@@ -370,10 +397,10 @@ pub async fn register_form(
 
 #[derive(Deserialize)]
 pub struct RegisterForm {
+    #[serde(default)]
     pub nick: String,
     pub email: Option<String>,
     pub password: Option<String>,
-    pub passwd: Option<String>,
     pub password2: Option<String>,
     pub rules: Option<String>,
     pub permit: Option<String>,
@@ -399,15 +426,15 @@ pub async fn register(
     )
     .to_string();
 
-    let nick = form.nick.trim().to_string();
-    let email = form.email.unwrap_or_default().trim().to_lowercase();
-    let password = form.password.or(form.passwd).unwrap_or_default();
+    let nick = form.nick;
+    let sSubmittedEmail = form.email.unwrap_or_default();
+    let password = form.password.unwrap_or_default();
     let password2 = form.password2.unwrap_or_default();
     let bRulesChecked = form.rules.as_deref() == Some("okay");
     if let Some(sError) = registration_error(
         &state,
         &nick,
-        &email,
+        &sSubmittedEmail,
         &password,
         &password2,
         bRulesChecked,
@@ -422,10 +449,16 @@ pub async fn register(
             form.permit.unwrap_or_default(),
             csrf_token,
             nick,
-            email,
+            sSubmittedEmail,
             bRulesChecked,
         );
     }
+
+    // The validator above has already established a single strict Jakarta
+    // mailbox.  Store InternetAddress.getAddress (not an optional display
+    // phrase), lower-cased exactly like RegisterController.
+    let email = optCanonicalInternetAddress(&sSubmittedEmail)
+        .expect("registration email was validated as a strict InternetAddress");
 
     let hash =
         crate::security::password::hash(&password).map_err(|e| AppError::Anyhow(e.into()))?;
@@ -503,7 +536,7 @@ async fn registration_error(
         Some("пароль не может совпадать с логином")
     } else if password != password2 {
         Some("введенные пароли не совпадают")
-    } else if password.len() < 10 {
+    } else if !crate::security::password::bHasJavaMinimumLength(password, 10) {
         Some("слишком короткий пароль, минимальная длина: 10")
     } else if email.is_empty() {
         Some("Не указан e-mail")
@@ -603,19 +636,13 @@ fn check_register_permit(state: &AppState, permit: Option<&str>) -> bool {
 }
 
 pub(crate) async fn validate_registration_email(state: &AppState, email: &str) -> Result<()> {
-    let Some(domain) = optRegistrationEmailDomain(email) else {
+    let Some(stAddress) = optParseStrictInternetAddress(email) else {
         return Err(AppError::BadRequest("Некорректный e-mail".into()));
     };
-    let domain = domain.to_lowercase();
-    let top_private = domain
-        .split('.')
-        .rev()
-        .take(2)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect::<Vec<_>>()
-        .join(".");
+    let domain = stAddress.sDomain;
+    let Some(top_private) = optTopPrivateDomain(&domain) else {
+        return Err(AppError::BadRequest("некорректный email домен".into()));
+    };
     let cService = crate::application::email_domain_block::CEmailDomainBlockService::new(
         crate::infra::postgres::email_domain_block_repository::CEmailDomainBlockPgRepository::new(
             state.pool.clone(),
@@ -627,48 +654,10 @@ pub(crate) async fn validate_registration_email(state: &AppState, email: &str) -
     Ok(())
 }
 
-fn optRegistrationEmailDomain(sEmail: &str) -> Option<&str> {
-    if sEmail.len() > 254
-        || sEmail
-            .chars()
-            .any(|cCharacter| cCharacter.is_control() || cCharacter.is_whitespace())
-        || sEmail.contains(['<', '>'])
-    {
-        return None;
-    }
-    let (sLocal, sDomain) = sEmail.rsplit_once('@')?;
-    if sLocal.is_empty() || sLocal.contains('@') || !sDomain.contains('.') {
-        return None;
-    }
-    let bValidDomain = sDomain.split('.').all(|sLabel| {
-        !sLabel.is_empty()
-            && !sLabel.starts_with('-')
-            && !sLabel.ends_with('-')
-            && sLabel
-                .chars()
-                .all(|cCharacter| cCharacter.is_ascii_alphanumeric() || cCharacter == '-')
-    });
-    bValidDomain.then_some(sDomain)
-}
-
-async fn user_exists_or_similar(state: &AppState, nick: &str) -> Result<bool> {
-    let exact: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE lower(nick)=lower($1)")
-        .bind(nick)
-        .fetch_one(&state.pool)
-        .await?;
-    if exact > 0 {
-        return Ok(true);
-    }
-    let similar: Option<i32> = sqlx::query_scalar(
-        r#"SELECT id FROM users
-           WHERE score>=200 AND lastlogin>CURRENT_TIMESTAMP - interval '3 years'
-             AND levenshtein_less_equal(lower(nick), lower($1), 1)<=1
-           LIMIT 1"#,
-    )
-    .bind(nick)
-    .fetch_optional(&state.pool)
-    .await?;
-    Ok(similar.is_some())
+pub(crate) async fn user_exists_or_similar(state: &AppState, nick: &str) -> Result<bool> {
+    CUserIdentityService::new(CUserIdentityPgRepository::new(state.pool.clone()))
+        .bExistsOrSimilar(nick)
+        .await
 }
 
 async fn email_in_use_for_active_or_recently_blocked_user(
@@ -763,6 +752,7 @@ pub async fn lost_password_form(
 
 #[derive(Deserialize)]
 pub struct LostPasswordForm {
+    #[serde(default)]
     pub email: String,
     #[serde(rename = "h-captcha-response")]
     pub captcha_response: Option<String>,
@@ -776,7 +766,10 @@ pub async fn lost_password(
     ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
     Form(form): Form<LostPasswordForm>,
 ) -> Result<Response> {
-    let email = form.email.trim().to_lowercase();
+    // Spring binds this bean property verbatim. `UserDao.getByEmail` performs
+    // strict InternetAddress parsing later; in particular whitespace-only is
+    // invalid-but-present rather than the empty-field validation branch.
+    let sSubmittedEmail = form.email;
     let sRemoteIp = crate::security::stClientIp(
         stPeerAddress.ip(),
         &headers,
@@ -784,12 +777,12 @@ pub async fn lost_password(
     )
     .to_string();
     let bRequireCaptcha = current_user.is_none() || bIpCaptchaRequired(&state, &sRemoteIp).await?;
-    if email.is_empty() {
+    if sSubmittedEmail.is_empty() {
         delay_response().await;
         return render_lost_password_page(
             &state,
             csrf_token,
-            email,
+            sSubmittedEmail,
             Some("email не задан".into()),
             bRequireCaptcha,
         );
@@ -804,35 +797,30 @@ pub async fn lost_password(
         .await
     {
         delay_response().await;
-        return render_lost_password_page(&state, csrf_token, email, Some(sError), true);
+        return render_lost_password_page(&state, csrf_token, sSubmittedEmail, Some(sError), true);
     }
 
-    let Some((id, nick, stored_email, blocked, activated, canmod, candel, anonymous)) =
-        sqlx::query_as::<_, (i32, String, String, Option<bool>, bool, bool, bool, bool)>(
-            r#"SELECT id,nick,email,blocked,activated,canmod,candel,
-                      (passwd IS NULL OR passwd='') AS anonymous
-           FROM users WHERE lower(email)=lower($1) LIMIT 1"#,
-        )
-        .bind(&email)
-        .fetch_optional(&state.pool)
+    let cIdentity = CUserIdentityService::new(CUserIdentityPgRepository::new(state.pool.clone()));
+    let Some(stUser) = cIdentity
+        .optPasswordResetRequestIdentity(&sSubmittedEmail)
         .await?
     else {
         delay_response().await;
         return render_lost_password_page(
             &state,
             csrf_token,
-            email,
+            sSubmittedEmail,
             Some("Этот email не зарегистрирован!".into()),
             bRequireCaptcha,
         );
     };
 
-    if blocked.unwrap_or(false) || !activated || anonymous || candel {
+    if stUser.bBlocked || !stUser.bActivated || stUser.bAnonymous || stUser.bAdministrator {
         delay_response().await;
         return Err(AppError::Forbidden);
     }
     let requester_is_moderator = current_user.as_ref().map(|u| u.canmod).unwrap_or(false);
-    if canmod && !requester_is_moderator {
+    if stUser.bModerator && !requester_is_moderator {
         delay_response().await;
         return Err(AppError::Forbidden);
     }
@@ -846,7 +834,7 @@ pub async fn lost_password(
                     AND userid=action_userid
                )"#,
         )
-        .bind(id)
+        .bind(stUser.iId)
         .fetch_one(&state.pool)
         .await?;
         if bRecentSelfRequest {
@@ -858,12 +846,12 @@ pub async fn lost_password(
     let now = chrono::Utc::now();
     let reset_code = crate::security::secret_tokens::reset_code(
         &state.config.site_secret,
-        &nick,
-        &stored_email,
+        &stUser.sNick,
+        &stUser.sEmail,
         now.timestamp_millis(),
     );
     if let Err(stError) = cEmailService(&state)
-        .vSendPasswordReset(&nick, &stored_email, &reset_code)
+        .vSendPasswordReset(&stUser.sNick, &stUser.sEmail, &reset_code)
         .await
     {
         delay_response().await;
@@ -871,7 +859,7 @@ pub async fn lost_password(
             AppError::BadRequest(sMessage) => render_lost_password_page(
                 &state,
                 csrf_token,
-                email,
+                sSubmittedEmail,
                 Some(sMessage),
                 bRequireCaptcha,
             ),
@@ -880,17 +868,17 @@ pub async fn lost_password(
     }
     let mut tx = state.pool.begin().await?;
     sqlx::query("UPDATE users SET lostpwd=$2 WHERE id=$1")
-        .bind(id)
+        .bind(stUser.iId)
         .bind(now)
         .execute(&mut *tx)
         .await?;
-    let action_user = current_user.as_ref().map(|u| u.id).unwrap_or(id);
+    let action_user = current_user.as_ref().map(|u| u.id).unwrap_or(stUser.iId);
     crate::audit::log_user_action_tx(
         &mut tx,
-        id,
+        stUser.iId,
         action_user,
         "sent_password_reset",
-        &[("email", stored_email.as_str())],
+        &[("email", stUser.sEmail.as_str())],
     )
     .await?;
     tx.commit().await?;
@@ -905,12 +893,6 @@ pub async fn lost_password(
         .render()?,
     )
     .into_response())
-}
-
-#[derive(Deserialize)]
-pub struct ResetPasswordCodeForm {
-    pub nick: String,
-    pub code: String,
 }
 
 #[derive(Template)]
@@ -929,40 +911,38 @@ pub(crate) fn render_reset_password_form(
     ))
 }
 
+fn sResetTokenEmailAfterPermission(
+    stUser: &crate::domain::user::identity::StPasswordResetIdentity,
+) -> Result<&str> {
+    if stUser.bBlocked || !stUser.bActivated || stUser.bAnonymous || stUser.bAdministrator {
+        return Err(AppError::Forbidden);
+    }
+    // Scala interpolation in SecretTokenService renders a nullable String as
+    // the literal `null`: s"$nick:$email:$timestamp:reset". Preserve that
+    // legacy token input after (and only after) the Java permission gate.
+    Ok(stUser.optEmail.as_deref().unwrap_or("null"))
+}
+
 pub async fn reset_password_with_code(
     State(state): State<AppState>,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
-    Form(form): Form<ResetPasswordCodeForm>,
+    stRequest: Request,
 ) -> Result<Html<String>> {
-    let Some((id, nick, email, lostpwd, blocked, activated, candel, anonymous)) = sqlx::query_as::<
-        _,
-        (
-            i32,
-            String,
-            String,
-            chrono::DateTime<chrono::Utc>,
-            Option<bool>,
-            bool,
-            bool,
-            bool,
-        ),
-    >(
-        r#"SELECT id,nick,email,lostpwd,blocked,activated,candel,
-                  (passwd IS NULL OR passwd='') AS anonymous
-           FROM users WHERE lower(nick)=lower($1) LIMIT 1"#,
-    )
-    .bind(form.nick.trim())
-    .fetch_optional(&state.pool)
-    .await?
-    else {
+    let vecParameters = crate::form::servlet_request_parameters(stRequest).await?;
+    let nick = crate::form::get(&vecParameters, "nick").ok_or_else(|| {
+        AppError::BadRequest("Required request parameter 'nick' is missing".to_owned())
+    })?;
+    let code = crate::form::get(&vecParameters, "code").ok_or_else(|| {
+        AppError::BadRequest("Required request parameter 'code' is missing".to_owned())
+    })?;
+    let cIdentity = CUserIdentityService::new(CUserIdentityPgRepository::new(state.pool.clone()));
+    let Some(stUser) = cIdentity.optPasswordResetIdentity(nick).await? else {
         return render_reset_password_form(csrf_token, Some("Пользователь не найден".into()));
     };
 
-    if blocked.unwrap_or(false) || !activated || anonymous || candel {
-        return Err(AppError::Forbidden);
-    }
-    if lostpwd <= chrono::DateTime::<chrono::Utc>::from(std::time::UNIX_EPOCH)
-        || lostpwd + chrono::Duration::days(1) < chrono::Utc::now()
+    let sTokenEmail = sResetTokenEmailAfterPermission(&stUser)?;
+    if stUser.dtReset <= chrono::DateTime::<chrono::Utc>::from(std::time::UNIX_EPOCH)
+        || stUser.dtReset + chrono::Duration::days(1) < chrono::Utc::now()
     {
         return render_reset_password_form(
             csrf_token,
@@ -971,12 +951,12 @@ pub async fn reset_password_with_code(
     }
     if !crate::security::secret_tokens::verify_reset_code(
         &state.config.site_secret,
-        &nick,
-        &email,
-        lostpwd.timestamp_millis(),
-        form.code.trim(),
+        &stUser.sNick,
+        sTokenEmail,
+        stUser.dtReset.timestamp_millis(),
+        code,
     ) {
-        tracing::warn!(nick = %nick, "password reset verification code does not match");
+        tracing::warn!(nick = %stUser.sNick, "password reset verification code does not match");
         return render_reset_password_form(csrf_token, Some("Код не совпадает".into()));
     }
 
@@ -985,11 +965,12 @@ pub async fn reset_password_with_code(
         crate::security::password::hash(&new_password).map_err(|e| AppError::Anyhow(e.into()))?;
     let mut tx = state.pool.begin().await?;
     sqlx::query("UPDATE users SET passwd=$2,lostpwd='epoch' WHERE id=$1")
-        .bind(id)
+        .bind(stUser.iId)
         .bind(hash)
         .execute(&mut *tx)
         .await?;
-    crate::audit::log_user_action_tx(&mut tx, id, id, "reset_password", &[]).await?;
+    crate::audit::log_user_action_tx(&mut tx, stUser.iId, stUser.iId, "reset_password", &[])
+        .await?;
     tx.commit().await?;
 
     Ok(Html(
@@ -1010,7 +991,15 @@ fn generate_java_like_password() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{EMAIL_IN_USE_SQL, LoginForm, optRegistrationEmailDomain, safe_redirect_url};
+    use std::sync::Arc;
+
+    use tokio::sync::Notify;
+
+    use super::{
+        EMAIL_IN_USE_SQL, LoginForm, LostPasswordForm, RegisterForm,
+        sResetTokenEmailAfterPermission, safe_redirect_url, vRecordLoginFailureBeforeDelay,
+    };
+    use crate::{domain::user::identity::StPasswordResetIdentity, error::AppError};
 
     #[test]
     fn login_redirect_accepts_only_java_local_targets() {
@@ -1053,6 +1042,136 @@ mod tests {
         assert!(!sTemplate.contains("name=\"passwd\" type=\"password\" value="));
     }
 
+    #[tokio::test]
+    async fn failed_login_is_visible_to_concurrent_requests_before_delay_finishes() {
+        let cAttempts = Arc::new(crate::application::auth::CLoginAttemptCache::default());
+        let cDelayStarted = Arc::new(Notify::new());
+        let cReleaseDelay = Arc::new(Notify::new());
+        let cTaskAttempts = Arc::clone(&cAttempts);
+        let cTaskStarted = Arc::clone(&cDelayStarted);
+        let cTaskRelease = Arc::clone(&cReleaseDelay);
+
+        let hFailure = tokio::spawn(async move {
+            let futDelay = async move {
+                cTaskStarted.notify_one();
+                cTaskRelease.notified().await;
+            };
+            vRecordLoginFailureBeforeDelay(
+                &cTaskAttempts,
+                "192.0.2.10",
+                "Alice",
+                &crate::auth::LoginOutcome::Failed,
+                futDelay,
+            )
+            .await;
+        });
+
+        cDelayStarted.notified().await;
+        assert!(cAttempts.bRequireForIp("192.0.2.10"));
+        assert!(cAttempts.bRequireForUser("alice"));
+        cReleaseDelay.notify_one();
+        hFailure.await.unwrap();
+    }
+
+    #[test]
+    fn registration_binding_uses_only_the_java_bean_fields() {
+        let stMissingNick: RegisterForm = serde_urlencoded::from_str(
+            "email=user%40example.org&password=correct-horse&password2=correct-horse&rules=okay",
+        )
+        .unwrap();
+        assert_eq!(stMissingNick.nick, "");
+
+        let stUnsupportedAlias: RegisterForm = serde_urlencoded::from_str(
+            "nick=alice&email=user%40example.org&passwd=correct-horse&password2=correct-horse&rules=okay",
+        )
+        .unwrap();
+        assert!(stUnsupportedAlias.password.is_none());
+    }
+
+    #[test]
+    fn registration_minimum_password_length_uses_java_utf16_units() {
+        let bLongEnough = crate::security::password::bHasJavaMinimumLength;
+        assert!(!bLongEnough("😀😀😀", 10));
+        assert!(!bLongEnough("парол", 10));
+        assert!(bLongEnough("😀😀😀😀😀", 10));
+        assert!(bLongEnough("1234567890", 10));
+    }
+
+    #[test]
+    fn lost_password_binding_preserves_the_java_bean_value_verbatim() {
+        let stForm: LostPasswordForm =
+            serde_urlencoded::from_str("email=%20Example%20User%20%3CUser.Name%40GMAIL.COM%3E%20")
+                .unwrap();
+        assert_eq!(
+            stForm.email, " Example User <User.Name@GMAIL.COM> ",
+            "UserDao, not Spring binding, parses and lower-cases the mailbox"
+        );
+    }
+
+    #[test]
+    fn lost_password_lookup_is_layered_and_keeps_java_candidate_selection() {
+        let sSource = include_str!("auth.rs");
+        let sHandler = sSource
+            .split(concat!("pub async fn ", "lost_password("))
+            .nth(1)
+            .unwrap()
+            .split("#[derive(Template)]\n#[template(path = \"reset_password.html\")]")
+            .next()
+            .unwrap();
+        assert!(sHandler.contains("optPasswordResetRequestIdentity(&sSubmittedEmail)"));
+        assert!(!sHandler.contains("lower(email)"));
+        assert!(!sHandler.contains("form.email.trim()"));
+    }
+
+    #[test]
+    fn reset_code_nullable_email_keeps_permission_first_and_scala_null_token_input() {
+        let mut stUser = StPasswordResetIdentity {
+            iId: 42,
+            sNick: "legacy-user".to_owned(),
+            optEmail: None,
+            dtReset: chrono::Utc::now(),
+            bBlocked: true,
+            bActivated: true,
+            bAdministrator: false,
+            bAnonymous: false,
+        };
+        assert!(matches!(
+            sResetTokenEmailAfterPermission(&stUser),
+            Err(AppError::Forbidden)
+        ));
+
+        stUser.bBlocked = false;
+        assert_eq!(sResetTokenEmailAfterPermission(&stUser).unwrap(), "null");
+
+        stUser.optEmail = Some("user@example.org".to_owned());
+        assert_eq!(
+            sResetTokenEmailAfterPermission(&stUser).unwrap(),
+            "user@example.org"
+        );
+    }
+
+    #[test]
+    fn reset_code_binding_and_identity_are_exact_and_query_first() {
+        let sSource = include_str!("auth.rs");
+        let sHandler = sSource
+            .split(concat!("pub async fn ", "reset_password_with_code("))
+            .nth(1)
+            .unwrap()
+            .split(concat!("fn ", "generate_java_like_password("))
+            .next()
+            .unwrap();
+        assert!(sHandler.contains("servlet_request_parameters(stRequest)"));
+        assert!(sHandler.contains("optPasswordResetIdentity(nick)"));
+        assert!(sHandler.contains("Required request parameter 'nick' is missing"));
+        assert!(sHandler.contains("Required request parameter 'code' is missing"));
+        assert!(sHandler.contains("stUser.sNick"));
+        assert!(sHandler.contains("sResetTokenEmailAfterPermission(&stUser)"));
+        assert!(sHandler.contains("sTokenEmail"));
+        assert!(sHandler.contains(".bind(stUser.iId)"));
+        assert!(!sHandler.contains("lower(nick)"));
+        assert!(!sHandler.contains(".trim()"));
+    }
+
     #[test]
     fn registration_email_reuse_matches_java_block_audit_window() {
         assert!(EMAIL_IN_USE_SQL.contains("normalize_email(email)=normalize_email($1)"));
@@ -1079,20 +1198,10 @@ mod tests {
     }
 
     #[test]
-    fn registration_email_parser_rejects_envelope_and_header_injection() {
-        assert_eq!(
-            optRegistrationEmailDomain("user+tag@example.org"),
-            Some("example.org")
-        );
-        for sEmail in [
-            "@example.org",
-            "one@two@example.org",
-            "user@example.org> SIZE=1",
-            "user@example.org\r\nBcc:evil@example.org",
-            "user@-example.org",
-            "user@example..org",
-        ] {
-            assert!(optRegistrationEmailDomain(sEmail).is_none(), "{sEmail:?}");
-        }
+    fn registration_uses_the_shared_strict_mailbox_parser() {
+        let sSource = include_str!("auth.rs");
+        assert!(sSource.contains("optParseStrictInternetAddress(email)"));
+        assert!(sSource.contains("optTopPrivateDomain(&domain)"));
+        assert!(!sSource.contains(".split('.')\n        .rev()\n        .take(2)"));
     }
 }

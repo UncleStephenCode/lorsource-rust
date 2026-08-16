@@ -18,21 +18,20 @@ const I_HIDE_COMMENTS_POST_SCORE: i32 = 10002;
 pub struct StWarningContext {
     pub bPremoderated: bool,
     pub sTopicUrl: String,
-    pub optEligibilityError: Option<&'static str>,
+    pub vecEligibilityErrors: Vec<&'static str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StWarningPresentation {
     pub stContext: StWarningContext,
     pub vecTypes: Vec<EnWarningType>,
-    pub optError: Option<&'static str>,
+    pub vecErrors: Vec<&'static str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StCreateWarningCommand {
     pub iTopicId: i32,
     pub optCommentId: Option<i32>,
-    pub optReason: Option<String>,
     pub optText: Option<String>,
     pub optWarningType: Option<String>,
     pub optRuleType: Option<String>,
@@ -68,17 +67,17 @@ where
     ) -> Result<StWarningPresentation> {
         let stContext = self.stContext(stUser, iTopicId, optCommentId).await?;
         let vecTypes = vecWarningTypes(stContext.bPremoderated, optCommentId);
-        let optError = if stContext.optEligibilityError.is_some() {
-            stContext.optEligibilityError
-        } else {
+        let mut vecErrors = stContext.vecEligibilityErrors.clone();
+        if vecErrors.is_empty() {
             let iRecentWarnings = self.oRepository.iRecentWarnings(stUser.id).await?;
-            (iRecentWarnings >= I_MAX_WARNINGS_PER_HOUR)
-                .then_some("Вы не можете отправить более 5 уведомлений в час")
-        };
+            if iRecentWarnings >= I_MAX_WARNINGS_PER_HOUR {
+                vecErrors.push("Вы не можете отправить более 5 уведомлений в час");
+            }
+        }
         Ok(StWarningPresentation {
             stContext,
             vecTypes,
-            optError,
+            vecErrors,
         })
     }
 
@@ -92,10 +91,7 @@ where
             .stContext(stUser, stCommand.iTopicId, optCommentId)
             .await?;
         let vecTypes = vecWarningTypes(stContext.bPremoderated, optCommentId);
-        let sText = stCommand
-            .optText
-            .or(stCommand.optReason.clone())
-            .unwrap_or_default();
+        let sText = stCommand.optText.unwrap_or_default();
         let sRuleType = stCommand.optRuleType.unwrap_or_default();
         let bHasText = !sText.trim().is_empty();
         let bHasRuleType = !sRuleType.trim().is_empty();
@@ -103,29 +99,35 @@ where
             .optWarningType
             .as_deref()
             .and_then(EnWarningType::optFromId)
-            .or_else(|| stCommand.optReason.as_ref().map(|_| EnWarningType::Rule))
             .or_else(|| (vecTypes.len() == 1).then(|| vecTypes[0]));
 
-        let optError = if let Some(sError) = stContext.optEligibilityError {
-            Some(sError)
-        } else if optWarningType != Some(EnWarningType::Rule) && bHasRuleType {
-            Some("Пункт правил можно выбрать только при уведомлении о нарушении")
-        } else if !optWarningType.is_some_and(|enType| vecTypes.contains(&enType)) {
-            Some("Не выбран тип уведомления")
-        } else if !bHasText && !bHasRuleType {
-            Some("Заполните комментарий")
-        } else if bHasText && sText.encode_utf16().count() > 256 {
-            Some("Сообщение не может быть более 256 символов")
-        } else {
+        // WarningController.checkRequest runs the hourly limit only when the
+        // topic/comment eligibility checks produced no errors.  Spring then
+        // appends every field error instead of stopping at the first one.
+        let mut vecErrors = stContext.vecEligibilityErrors.clone();
+        if vecErrors.is_empty() {
             let iRecentWarnings = self.oRepository.iRecentWarnings(stUser.id).await?;
-            (iRecentWarnings >= I_MAX_WARNINGS_PER_HOUR)
-                .then_some("Вы не можете отправить более 5 уведомлений в час")
-        };
-        if let Some(sError) = optError {
+            if iRecentWarnings >= I_MAX_WARNINGS_PER_HOUR {
+                vecErrors.push("Вы не можете отправить более 5 уведомлений в час");
+            }
+        }
+        if optWarningType != Some(EnWarningType::Rule) && bHasRuleType {
+            vecErrors.push("Пункт правил можно выбрать только при уведомлении о нарушении");
+        }
+        if !optWarningType.is_some_and(|enType| vecTypes.contains(&enType)) {
+            vecErrors.push("Не выбран тип уведомления");
+        }
+        if !bHasText && !bHasRuleType {
+            vecErrors.push("Заполните комментарий");
+        }
+        if bHasText && sText.encode_utf16().count() > 256 {
+            vecErrors.push("Сообщение не может быть более 256 символов");
+        }
+        if !vecErrors.is_empty() {
             return Ok(EnCreateWarningOutcome::Validation(StWarningPresentation {
                 stContext,
                 vecTypes,
-                optError: Some(sError),
+                vecErrors,
             }));
         }
 
@@ -208,17 +210,29 @@ where
                 None => return Err(AppError::NotFound),
             }
         }
-        let optEligibilityError = (stTopic.bDeleted
+        let bCanPostWarning = !(stTopic.bDeleted
             || stTopic.bDraft
             || stTopic.bExpired
             || bCommentDeleted
             || stUser.score.unwrap_or(0) < 50
-            || bFrozen)
-            .then_some("Вы не можете отправить уведомление");
+            || bFrozen);
+        let mut vecEligibilityErrors = Vec::new();
+        if !bCanPostWarning {
+            vecEligibilityErrors.push("Вы не можете отправить уведомление");
+        }
+        if stTopic.bDeleted {
+            vecEligibilityErrors.push("Топик удален");
+        }
+        if stTopic.bExpired {
+            vecEligibilityErrors.push("Топик перемещен в архив");
+        }
+        if bCommentDeleted {
+            vecEligibilityErrors.push("Комментарий удален");
+        }
         Ok(StWarningContext {
             bPremoderated: stTopic.bPremoderated,
             sTopicUrl: stTopic.sTopicUrl(),
-            optEligibilityError,
+            vecEligibilityErrors,
         })
     }
 }
@@ -392,7 +406,6 @@ mod tests {
         StCreateWarningCommand {
             iTopicId: 42,
             optCommentId,
-            optReason: None,
             optText: Some("пояснение".to_owned()),
             optWarningType: Some("rule".to_owned()),
             optRuleType: None,
@@ -425,8 +438,8 @@ mod tests {
             panic!("expected validation outcome");
         };
         assert_eq!(
-            stPresentation.optError,
-            Some("Вы не можете отправить уведомление")
+            stPresentation.vecErrors,
+            ["Вы не можете отправить уведомление"]
         );
         assert!(
             oRepository
@@ -480,6 +493,55 @@ mod tests {
                 .expect("fake state")
                 .vecCreated
                 .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn deleted_topic_reports_generic_and_specific_errors_in_spring_order() {
+        let oRepository = CFakeWarningRepository::new();
+        oRepository
+            .stState
+            .lock()
+            .expect("fake state")
+            .optTopic
+            .as_mut()
+            .expect("topic")
+            .bDeleted = true;
+        let cService = CWarningService::new(oRepository);
+        let EnCreateWarningOutcome::Validation(stPresentation) = cService
+            .enCreate(&stUser(100), stCommand(None))
+            .await
+            .expect("validation outcome")
+        else {
+            panic!("expected validation outcome");
+        };
+        assert_eq!(
+            stPresentation.vecErrors,
+            ["Вы не можете отправить уведомление", "Топик удален",]
+        );
+    }
+
+    #[tokio::test]
+    async fn post_validation_accumulates_all_matching_field_errors() {
+        let oRepository = CFakeWarningRepository::new();
+        let cService = CWarningService::new(oRepository);
+        let mut stCommand = stCommand(None);
+        stCommand.optWarningType = Some("tag".to_owned());
+        stCommand.optRuleType = Some("4.1 Офтопик".to_owned());
+        stCommand.optText = Some("🙂".repeat(129));
+        let EnCreateWarningOutcome::Validation(stPresentation) = cService
+            .enCreate(&stUser(100), stCommand)
+            .await
+            .expect("validation outcome")
+        else {
+            panic!("expected validation outcome");
+        };
+        assert_eq!(
+            stPresentation.vecErrors,
+            [
+                "Пункт правил можно выбрать только при уведомлении о нарушении",
+                "Сообщение не может быть более 256 символов",
+            ]
         );
     }
 

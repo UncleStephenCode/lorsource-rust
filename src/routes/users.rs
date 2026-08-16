@@ -1,5 +1,6 @@
 use crate::{
     auth::CurrentUser,
+    domain::email::address::optCanonicalInternetAddress,
     error::{AppError, Result},
     markup,
     models::{PagerQuery, TopicSummary, UserSummary},
@@ -1979,13 +1980,17 @@ fn sMarkupIdFromForm(value: &str) -> &'static str {
     }
 }
 
+fn bEscapedTownTooLongForJava(sEscapedTown: &str) -> bool {
+    sEscapedTown.encode_utf16().count() > 100
+}
+
 #[derive(Clone, Deserialize)]
 pub struct ProfileForm {
     pub name: Option<String>,
     pub town: Option<String>,
     pub url: Option<String>,
     pub email: Option<String>,
-    #[serde(rename = "info", alias = "userinfo")]
+    #[serde(rename = "info")]
     pub info: Option<String>,
     #[serde(rename = "infoMarkup")]
     pub info_markup: Option<String>,
@@ -2215,7 +2220,7 @@ pub async fn edit_profile(
             )
             .await;
         }
-        if password.chars().count() < 10 {
+        if !security::password::bHasJavaMinimumLength(password, 10) {
             return stRenderEditProfileValidation(
                 &state,
                 user,
@@ -2243,12 +2248,7 @@ pub async fn edit_profile(
     // previous handler wrote straight to `email` with no confirmation at all.
     let profile = get_user_profile(&state, &nick).await?;
     let regdate = profile.regdate;
-    let requested_email = form
-        .email
-        .as_deref()
-        .map(|e| e.trim().to_lowercase())
-        .filter(|e| !e.is_empty());
-    let Some(requested_email) = requested_email else {
+    let Some(sSubmittedEmail) = form.email.as_deref().filter(|sEmail| !sEmail.is_empty()) else {
         return stRenderEditProfileValidation(
             &state,
             user,
@@ -2262,23 +2262,8 @@ pub async fn edit_profile(
         )
         .await;
     };
-    if requested_email.matches('@').count() != 1 || requested_email.chars().any(char::is_whitespace)
-    {
-        return stRenderEditProfileValidation(
-            &state,
-            user,
-            &nick,
-            &form,
-            csrf_token,
-            StEditProfileErrors {
-                optEmail: Some("Некорректный e-mail".to_owned()),
-                ..Default::default()
-            },
-        )
-        .await;
-    }
     if let Err(stError) =
-        crate::routes::auth::validate_registration_email(&state, &requested_email).await
+        crate::routes::auth::validate_registration_email(&state, sSubmittedEmail).await
     {
         return match stError {
             AppError::BadRequest(sMessage) => {
@@ -2298,6 +2283,11 @@ pub async fn edit_profile(
             stError => Err(stError),
         };
     }
+    // The strict validator above established one Jakarta mailbox. Java stages
+    // `new InternetAddress(form.email).getAddress.toLowerCase`, never the raw
+    // display-name form, and signs/sends that same canonical addr-spec.
+    let requested_email = optCanonicalInternetAddress(sSubmittedEmail)
+        .expect("profile email was validated as a strict InternetAddress");
     let pending_email =
         (Some(requested_email.as_str()) != profile.email.as_deref()).then_some(requested_email);
 
@@ -2385,10 +2375,7 @@ pub async fn edit_profile(
         .as_deref()
         .filter(|value| !value.is_empty())
         .map(|value| html_escape::encode_text(value).into_owned());
-    if town
-        .as_deref()
-        .is_some_and(|value| value.chars().count() > 100)
-    {
+    if town.as_deref().is_some_and(bEscapedTownTooLongForJava) {
         return stRenderEditProfileValidation(
             &state,
             user,
@@ -2821,10 +2808,11 @@ fn ensure_self(current: &Option<UserSummary>, target: &UserSummary) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::{
-        EnProfileParameterMapping, S_USER_PROFILE_BY_NICK_SQL, S_USER_SUMMARY_BY_NICK_SQL,
-        StUserBannedTemplate, StUserTopicAuthorLinkState, StUserTopicsGoneTemplate,
-        bHasRequestParameter, bIsSmtpAddressRejected, drafts, edit_profile_form,
-        enProfileParameterMapping, ensure_self_service_actor, optEditProfileInfoRestriction,
+        EnProfileParameterMapping, ProfileForm, S_USER_PROFILE_BY_NICK_SQL,
+        S_USER_SUMMARY_BY_NICK_SQL, StUserBannedTemplate, StUserTopicAuthorLinkState,
+        StUserTopicsGoneTemplate, bEscapedTownTooLongForJava, bHasRequestParameter,
+        bIsSmtpAddressRejected, drafts, edit_profile_form, enProfileParameterMapping,
+        ensure_self_service_actor, optCanonicalInternetAddress, optEditProfileInfoRestriction,
         optFixedProfileUrl, remark_form, sMarkupIdFromForm, sUserTopicCollectionPageUrl,
         sUserTopicFeedPageUrl, sUserTopicPrevLabel, save_remark, settings,
         stFinalizeEditProfileResponse, vValidateRemarksQuery,
@@ -2864,6 +2852,47 @@ mod tests {
             ensure_self_service_actor(&optCurrent, "other"),
             Err(AppError::Forbidden)
         ));
+    }
+
+    #[test]
+    fn edit_profile_binds_only_the_java_info_property() {
+        let stJava: ProfileForm =
+            serde_urlencoded::from_str("info=java-value").expect("Java EditProfileRequest field");
+        assert_eq!(stJava.info.as_deref(), Some("java-value"));
+
+        let stUnknownAlias: ProfileForm = serde_urlencoded::from_str("userinfo=rust-alias")
+            .expect("Spring ignores an unknown bean property in this request shape");
+        assert_eq!(stUnknownAlias.info, None);
+    }
+
+    #[test]
+    fn edit_profile_stages_only_the_canonical_java_addr_spec() {
+        assert_eq!(
+            optCanonicalInternetAddress("Example User <User@Example.ORG>").as_deref(),
+            Some("user@example.org")
+        );
+        assert!(optCanonicalInternetAddress("one@example.org, two@example.org").is_none());
+
+        let sSource = include_str!("users.rs");
+        let sHandler = sSource
+            .split(concat!("pub async fn ", "edit_profile("))
+            .nth(1)
+            .unwrap()
+            .split("fn bIsSmtpAddressRejected(")
+            .next()
+            .unwrap();
+        assert!(sHandler.contains("optCanonicalInternetAddress(sSubmittedEmail)"));
+        assert!(!sHandler.contains(".map(|e| e.trim().to_lowercase())"));
+    }
+
+    #[test]
+    fn edit_profile_password_and_escaped_town_use_java_utf16_lengths() {
+        let bLongEnough = crate::security::password::bHasJavaMinimumLength;
+        assert!(!bLongEnough("😀😀😀😀", 10));
+        assert!(bLongEnough("😀😀😀😀😀", 10));
+
+        assert!(!bEscapedTownTooLongForJava(&"😀".repeat(50)));
+        assert!(bEscapedTownTooLongForJava(&"😀".repeat(51)));
     }
 
     #[test]
@@ -3216,6 +3245,9 @@ mod tests {
                 host: "127.0.0.1".to_owned(),
                 port: 0,
                 database_url: "postgres://unused:unused@127.0.0.1:1/unused".to_owned(),
+                scheduler_timezone: chrono_tz::Etc::UTC,
+                scheduler_timezone_configured: false,
+                legacy_jdbc_timezone: None,
                 public_url: "http://127.0.0.1".to_owned(),
                 ws_url: "ws://127.0.0.1/".to_owned(),
                 static_dir: "static".to_owned(),

@@ -17,6 +17,7 @@ use crate::error::{AppError, Result};
 #[derive(Debug, Clone)]
 pub struct CTopicPgRepository {
     oPool: PgPool,
+    stLegacyJdbcTimezone: chrono_tz::Tz,
 }
 
 #[derive(sqlx::FromRow)]
@@ -149,8 +150,11 @@ struct StRssPollVariantRow {
 }
 
 impl CTopicPgRepository {
-    pub fn new(oPool: PgPool) -> Self {
-        Self { oPool }
+    pub fn new(oPool: PgPool, stLegacyJdbcTimezone: chrono_tz::Tz) -> Self {
+        Self {
+            oPool,
+            stLegacyJdbcTimezone,
+        }
     }
 }
 
@@ -548,6 +552,11 @@ impl TrTopicRepository for CTopicPgRepository {
             return Ok(Vec::new());
         }
         let vecRows = sqlx::query_as::<_, StCommentPageMetaRow>(S_COMMENT_PAGE_META_SQL)
+            .bind(
+                crate::infra::postgres::legacy_timestamp::sLegacyJdbcTimezone(
+                    self.stLegacyJdbcTimezone,
+                ),
+            )
             .bind(vecCommentIds)
             .bind(optViewerId)
             .bind(bModeratorSession)
@@ -840,12 +849,12 @@ const S_COMMENT_PAGE_META_SQL: &str = r#"
 SELECT c.id AS i_comment_id,
        remark.remark_text AS opt_remark,
        COALESCE(c.edit_count,0) AS i_edit_count,
-       (c.edit_date AT TIME ZONE 'UTC') AS opt_edit_date,
+       (c.edit_date AT TIME ZONE $1::text) AS opt_edit_date,
        editor.nick AS opt_editor_nick,
-       CASE WHEN $3 THEN host(c.postip) END AS opt_post_ip,
-       CASE WHEN $3 THEN COALESCE(c.ua_id,0) ELSE 0 END AS i_user_agent_id,
-       CASE WHEN $3 THEN user_agent.name END AS opt_user_agent,
-       CASE WHEN $4 THEN COALESCE((
+       CASE WHEN $4 THEN host(c.postip) END AS opt_post_ip,
+       CASE WHEN $4 THEN COALESCE(c.ua_id,0) ELSE 0 END AS i_user_agent_id,
+       CASE WHEN $4 THEN user_agent.name END AS opt_user_agent,
+       CASE WHEN $5 THEN COALESCE((
          SELECT jsonb_agg(jsonb_build_object(
            'id',warning.id,'postdate',warning.postdate,'message',warning.message,
            'warning_type',warning.warning_type::text,
@@ -862,8 +871,8 @@ SELECT c.id AS i_comment_id,
   FROM comments c
   LEFT JOIN users editor ON editor.id=c.editor_id
   LEFT JOIN user_agents user_agent ON user_agent.id=c.ua_id
-  LEFT JOIN user_remarks remark ON remark.user_id=$2 AND remark.ref_user_id=c.userid
- WHERE c.id=ANY($1)
+  LEFT JOIN user_remarks remark ON remark.user_id=$3 AND remark.ref_user_id=c.userid
+ WHERE c.id=ANY($2)
 "#;
 
 #[cfg(test)]
@@ -879,8 +888,13 @@ mod listing_contract_tests {
     }
 
     #[test]
-    fn java_timestamp_without_timezone_edit_date_is_decoded_as_utc() {
-        assert!(S_COMMENT_PAGE_META_SQL.contains("c.edit_date AT TIME ZONE 'UTC'"));
+    fn java_timestamp_without_timezone_edit_date_uses_the_shared_iana_parameter() {
+        assert!(
+            S_COMMENT_PAGE_META_SQL.contains(
+                crate::infra::postgres::legacy_timestamp::S_LEGACY_TIMESTAMP_SQL_EXPRESSION
+            )
+        );
+        assert!(!S_COMMENT_PAGE_META_SQL.contains("AT TIME ZONE 'UTC'"));
     }
 
     #[test]
@@ -898,8 +912,8 @@ mod listing_contract_tests {
         ] {
             assert!(S_COMMENT_PAGE_META_SQL.contains(sToken), "missing {sToken}");
         }
-        assert!(S_COMMENT_PAGE_META_SQL.contains("CASE WHEN $3"));
         assert!(S_COMMENT_PAGE_META_SQL.contains("CASE WHEN $4"));
+        assert!(S_COMMENT_PAGE_META_SQL.contains("CASE WHEN $5"));
     }
 
     #[test]

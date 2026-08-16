@@ -1,5 +1,8 @@
 use crate::{
+    application::user::identity::CUserIdentityService,
+    auth::CurrentUser,
     error::{AppError, Result},
+    infra::postgres::user_identity_repository::CUserIdentityPgRepository,
     request_timezone::stRequestTimezone,
     search_index::{
         self, FacetItem, MAX_OFFSET, SEARCH_ROWS, SearchInterval, SearchItem, SearchParams,
@@ -30,7 +33,7 @@ struct SearchTemplate {
     interval: String,
     range: String,
     error: Option<String>,
-    items: Vec<SearchItem>,
+    items: Vec<StSearchItemView>,
     total: i64,
     shown_count: i64,
     took_ms: i64,
@@ -41,6 +44,92 @@ struct SearchTemplate {
     next_link: Option<String>,
     searched: bool,
     debug: bool,
+    session_authorized: bool,
+}
+
+struct StSearchItemView {
+    stItem: SearchItem,
+    sAuthorUrl: String,
+    bAuthorBlocked: bool,
+    bAuthorAnonymous: bool,
+    sAuthorStarsHtml: String,
+    iAuthorScore: i32,
+    iAuthorMaxScore: i32,
+    bShowAuthorScore: bool,
+}
+
+#[derive(sqlx::FromRow)]
+struct StSearchAuthorRow {
+    sNick: String,
+    iScore: i32,
+    iMaxScore: i32,
+    bBlocked: bool,
+    bAnonymous: bool,
+}
+
+fn sSearchAuthorStarsHtml(iScore: i32, iMaxScore: i32, bAnonymous: bool) -> String {
+    if bAnonymous {
+        return String::new();
+    }
+    let iNormalizedScore = iScore.clamp(0, 599);
+    let iNormalizedMaxScore = iMaxScore.max(iScore).clamp(0, 599);
+    let iGreenStars = iNormalizedScore / 100;
+    let iGreyStars = iNormalizedMaxScore / 100 - iGreenStars;
+    format!(
+        "<span class=\"stars\">{}{}</span>",
+        "★".repeat(iGreenStars as usize),
+        "☆".repeat(iGreyStars as usize),
+    )
+}
+
+async fn vecPrepareSearchItems(
+    stState: &AppState,
+    vecItems: Vec<SearchItem>,
+    bModeratorSession: bool,
+) -> Result<Vec<StSearchItemView>> {
+    if vecItems.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut vecAuthorNicks = vecItems
+        .iter()
+        .map(|stItem| stItem.author.clone())
+        .collect::<Vec<_>>();
+    vecAuthorNicks.sort_unstable();
+    vecAuthorNicks.dedup();
+    let mapAuthors = sqlx::query_as::<_, StSearchAuthorRow>(
+        r#"SELECT nick AS "sNick",COALESCE(score,0) AS "iScore",
+                  COALESCE(max_score,0) AS "iMaxScore",
+                  COALESCE(blocked,false) AS "bBlocked",
+                  COALESCE(passwd,'')='' AS "bAnonymous"
+             FROM users WHERE nick=ANY($1)"#,
+    )
+    .bind(&vecAuthorNicks)
+    .fetch_all(&stState.pool)
+    .await?
+    .into_iter()
+    .map(|stAuthor| (stAuthor.sNick.clone(), stAuthor))
+    .collect::<std::collections::HashMap<_, _>>();
+
+    vecItems
+        .into_iter()
+        .map(|stItem| {
+            let stAuthor = mapAuthors.get(&stItem.author).ok_or(AppError::NotFound)?;
+            Ok(StSearchItemView {
+                sAuthorUrl: urlencoding::encode(&stAuthor.sNick).into_owned(),
+                bAuthorBlocked: stAuthor.bBlocked,
+                bAuthorAnonymous: stAuthor.bAnonymous,
+                sAuthorStarsHtml: sSearchAuthorStarsHtml(
+                    stAuthor.iScore,
+                    stAuthor.iMaxScore,
+                    stAuthor.bAnonymous,
+                ),
+                iAuthorScore: stAuthor.iScore,
+                iAuthorMaxScore: stAuthor.iMaxScore,
+                bShowAuthorScore: !stAuthor.bAnonymous && bModeratorSession,
+                stItem,
+            })
+        })
+        .collect()
 }
 
 #[derive(Deserialize)]
@@ -229,6 +318,7 @@ fn sQueryLink(
 pub async fn search(
     State(stState): State<AppState>,
     stJar: CookieJar,
+    CurrentUser(optUser): CurrentUser,
     Query(stQuery): Query<SearchQuery>,
 ) -> Result<Html<String>> {
     let sQueryText = stQuery.q.unwrap_or_default();
@@ -275,11 +365,11 @@ pub async fn search(
     let optCanonicalUser: Option<String> = if sRequestedUser.is_empty() {
         None
     } else {
-        let optNick: Option<String> =
-            sqlx::query_scalar("SELECT nick FROM users WHERE lower(nick)=lower($1)")
-                .bind(&sRequestedUser)
-                .fetch_optional(&stState.pool)
-                .await?;
+        let optNick =
+            CUserIdentityService::new(CUserIdentityPgRepository::new(stState.pool.clone()))
+                .optExactIdentity(&sRequestedUser)
+                .await?
+                .map(|stIdentity| stIdentity.sNick);
         if optNick.is_none() {
             optError
                 .get_or_insert_with(|| format!("Пользователь \"{sRequestedUser}\" не существует"));
@@ -362,6 +452,14 @@ pub async fn search(
         }
     }
 
+    let bSessionAuthorized = optUser.is_some();
+    let vecItems = vecPrepareSearchItems(
+        &stState,
+        vecItems,
+        optUser.as_ref().is_some_and(|stUser| stUser.canmod),
+    )
+    .await?;
+
     Ok(Html(
         SearchTemplate {
             title_has_query: !bInitial,
@@ -386,6 +484,7 @@ pub async fn search(
             next_link: optNextLink,
             searched: bSearched,
             debug: stQuery.debug.is_some(),
+            session_authorized: bSessionAuthorized,
         }
         .render()?,
     ))
@@ -440,5 +539,56 @@ mod tests {
         assert!(sTemplate.contains("{% if title_has_query %} - {{ q }}{% endif %}"));
         assert!(!sTemplate.contains("{% if searched %} - {{ q }}{% endif %}"));
         assert!(sController.contains("title_has_query: !bInitial"));
+    }
+
+    #[test]
+    fn user_filter_uses_the_exact_identity_repository() {
+        let sSource = include_str!("search.rs");
+        let sController = sSource
+            .split(concat!("pub async fn ", "search("))
+            .nth(1)
+            .unwrap()
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        assert!(sController.contains(".optExactIdentity(&sRequestedUser)"));
+        assert!(!sController.contains(concat!("lower(nick)", "=lower($1)")));
+    }
+
+    #[test]
+    fn search_results_use_the_full_java_sign_contract() {
+        assert_eq!(
+            sSearchAuthorStarsHtml(201, 350, false),
+            "<span class=\"stars\">★★☆</span>"
+        );
+        assert_eq!(sSearchAuthorStarsHtml(201, 350, true), "");
+
+        let sTemplate = include_str!("../../templates/search.html");
+        for sFragment in [
+            "{% if item.bAuthorBlocked %}<s>{% endif %}",
+            "{% if !item.bAuthorAnonymous || session_authorized %}",
+            "<a itemprop=\"creator\" href=\"/people/{{ item.sAuthorUrl }}/profile\">",
+            "{{ item.sAuthorStarsHtml|safe }}",
+            "(Score:&nbsp;{{ item.iAuthorScore }} MaxScore:&nbsp;{{ item.iAuthorMaxScore }})",
+            "<br class=\"visible-phone\">",
+            "<span class=\"hideon-phone\">(</span>",
+        ] {
+            assert!(
+                sTemplate.contains(sFragment),
+                "missing Java sign.tag fragment: {sFragment}"
+            );
+        }
+
+        let sSource = include_str!("search.rs");
+        let sPreparation = sSource
+            .split(concat!("async fn ", "vecPrepareSearchItems("))
+            .nth(1)
+            .unwrap()
+            .split("#[derive(Deserialize)]")
+            .next()
+            .unwrap();
+        assert!(sPreparation.contains("FROM users WHERE nick=ANY($1)"));
+        assert!(!sPreparation.contains(concat!("lower(nick)", "=lower")));
+        assert!(sPreparation.contains("COALESCE(passwd,'')='' AS \"bAnonymous\""));
     }
 }

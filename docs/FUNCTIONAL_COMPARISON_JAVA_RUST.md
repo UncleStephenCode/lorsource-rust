@@ -76,7 +76,12 @@ the resolved server ZoneId to `fixTimezone`; this also removed four divergent
 route-local timezone parsers. All currently identified browser-facing raw date
 surfaces now use this contract, including profiles/statistics, edit and user
 logs, deleted content, reactions, notifications, same-IP moderation results and
-OpenSearch results.
+OpenSearch results. For the isolated differential runtime, local Compose uses
+the exact `Etc/UTC` identifier returned by the pinned Java comparator's
+`ZoneId.systemDefault()`, so the no-cookie bootstrap emits
+`fixTimezone('Etc/UTC')` on both sides. This local comparator default is not
+production timezone evidence; production remains fail-closed until the
+original JVM/JDBC zone is independently established and configured.
 
 Profile statistics also retain the original split data source instead of
 substituting live PostgreSQL aggregates for the Java search-index contract.

@@ -9,7 +9,11 @@ use tokio::{
 };
 
 use crate::{
-    domain::{email::model::StEmailMessage, email::repository::TrEmailSender},
+    domain::{
+        email::address::{StStrictInternetAddress, optParseStrictInternetAddress},
+        email::model::StEmailMessage,
+        email::repository::TrEmailSender,
+    },
     error::{AppError, Result},
 };
 
@@ -47,8 +51,8 @@ impl CSmtpEmailSender {
 #[async_trait]
 impl TrEmailSender for CSmtpEmailSender {
     async fn vSend(&self, stMessage: &StEmailMessage) -> Result<()> {
-        vValidateMailbox(&stMessage.sFrom)?;
-        vValidateMailbox(&stMessage.sTo)?;
+        let stFrom = stValidateMailbox(&stMessage.sFrom)?;
+        let stTo = stValidateMailbox(&stMessage.sTo)?;
         vValidateHeader(&stMessage.sSubject)?;
         vValidateSmtpAtom(&self.sHeloName, "SMTP_HELO_NAME")?;
 
@@ -64,9 +68,9 @@ impl TrEmailSender for CSmtpEmailSender {
         vExpectResponse(&mut oReader, &[220]).await?;
         Self::vSendCommand(&mut oWriteHalf, &format!("HELO {}", self.sHeloName)).await?;
         vExpectResponse(&mut oReader, &[250]).await?;
-        Self::vSendCommand(&mut oWriteHalf, &format!("MAIL FROM:<{}>", stMessage.sFrom)).await?;
+        Self::vSendCommand(&mut oWriteHalf, &format!("MAIL FROM:<{}>", stFrom.sAddress)).await?;
         vExpectResponse(&mut oReader, &[250]).await?;
-        Self::vSendCommand(&mut oWriteHalf, &format!("RCPT TO:<{}>", stMessage.sTo)).await?;
+        Self::vSendCommand(&mut oWriteHalf, &format!("RCPT TO:<{}>", stTo.sAddress)).await?;
         vExpectRecipientResponse(&mut oReader).await?;
         Self::vSendCommand(&mut oWriteHalf, "DATA").await?;
         vExpectResponse(&mut oReader, &[354]).await?;
@@ -86,20 +90,9 @@ impl TrEmailSender for CSmtpEmailSender {
     }
 }
 
-fn vValidateMailbox(sMailbox: &str) -> Result<()> {
-    let optParts = sMailbox.split_once('@').filter(|(sLocal, sDomain)| {
-        !sLocal.is_empty() && !sDomain.is_empty() && !sDomain.contains('@')
-    });
-    if sMailbox.len() > 254
-        || optParts.is_none()
-        || sMailbox
-            .chars()
-            .any(|cCharacter| cCharacter.is_control() || cCharacter.is_whitespace())
-        || sMailbox.contains(['<', '>'])
-    {
-        return Err(AppError::BadRequest("Incorrect email address".to_string()));
-    }
-    Ok(())
+fn stValidateMailbox(sMailbox: &str) -> Result<StStrictInternetAddress> {
+    optParseStrictInternetAddress(sMailbox)
+        .ok_or_else(|| AppError::BadRequest("Incorrect email address".to_string()))
 }
 
 fn vValidateHeader(sValue: &str) -> Result<()> {
@@ -129,13 +122,13 @@ fn sEncodedHeader(sValue: &str) -> String {
 }
 
 fn sWireMessage(stMessage: &StEmailMessage) -> Result<String> {
-    vValidateMailbox(&stMessage.sFrom)?;
-    vValidateMailbox(&stMessage.sTo)?;
+    let stFrom = stValidateMailbox(&stMessage.sFrom)?;
+    let stTo = stValidateMailbox(&stMessage.sTo)?;
     vValidateHeader(&stMessage.sSubject)?;
     let mut sResult = format!(
         "From: {}\r\nTo: {}\r\nSubject: {}\r\nDate: {}\r\nMessage-ID: <{}@linux.org.ru>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n",
-        stMessage.sFrom,
-        stMessage.sTo,
+        stFrom.sAddress,
+        stTo.sAddress,
         sEncodedHeader(&stMessage.sSubject),
         chrono::Utc::now().to_rfc2822(),
         uuid::Uuid::new_v4(),
@@ -296,11 +289,13 @@ mod tests {
             "user@example.org> SIZE=1",
             "user@example.org<evil@example.org",
             "user@@example.org",
-            " user@example.org",
         ] {
-            assert!(vValidateMailbox(sMailbox).is_err(), "{sMailbox}");
+            assert!(stValidateMailbox(sMailbox).is_err(), "{sMailbox}");
         }
-        assert!(vValidateMailbox("user@example.org").is_ok());
+        assert_eq!(
+            stValidateMailbox(" user@example.org").unwrap().sAddress,
+            "user@example.org"
+        );
     }
 
     #[tokio::test]

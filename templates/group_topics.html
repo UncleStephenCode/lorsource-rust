@@ -2,39 +2,84 @@
 {% block title %}{{ title }}{% endblock %}
 {% block head_extra %}<link rel="alternate" href="/section-rss.jsp?section={{ group.section }}&amp;group={{ group.id }}" type="application/rss+xml">{% endblock %}
 {% block content %}
-<h1>{{ group.section_name }} «{{ group.title }}»</h1>
+<h1>{% match tag_name %}{% when Some with (_) %}{{ group.section_name }} <a href="{{ group_url }}">«{{ group.title }}»</a> (тег <a href="{{ tag_url }}">{{ tag_title }}</a>){% when None %}{{ group.section_name }} «{{ group.title }}»{% endmatch %}</h1>
 
 <nav>
   <a class="btn {% if !lastmod %}btn-selected{% else %}btn-default{% endif %}" href="{{ new_url }}">Новые</a>
   <a class="btn {% if lastmod %}btn-selected{% else %}btn-default{% endif %}" href="{{ active_url }}">Активные</a>
   <a href="{{ archive_url }}" class="btn btn-default">Архив</a>
-  {% if is_moderator %}<a class="btn btn-default" href="/groupmod.jsp?group={{ group.id }}">Править группу</a>{% endif %}
+  {% if is_moderator %}<a class="btn btn-default" href="/groupmod.jsp?group={{ group.id }}">Править</a>{% endif %}
   {% match add_url %}{% when Some with (url) %}<a href="{{ url }}" class="btn btn-primary">Добавить</a>{% when None %}<a class="btn btn-primary disabled" title="{{ add_reason }}"><i class="icon-lock"></i> Добавить</a>{% endmatch %}
   <div class="nav-buttons"><form><select name="group" onchange="window.location.href=this.options[this.selectedIndex].value" title="Быстрый переход" class="btn btn-default">
     {% for item in quick_groups %}<option value="{{ item.url }}"{% if item.selected %} selected{% endif %}>{{ item.title }}</option>{% endfor %}
   </select></form></div>
 </nav>
 
-{% if group.info.is_some() || longinfo_html.is_some() %}
+{% if first_page && (group.info.is_some() || longinfo_html.is_some() || active_tags.len() > 0) %}
 <div class="infoblock">
   {% match group.info %}{% when Some with (info) %}<p style="margin-top: 0"><em>{{ info }}</em></p>{% when None %}{% endmatch %}
   {% match longinfo_html %}{% when Some with (longinfo) %}<div class="infoblock-small">{{ longinfo|safe }}</div>{% when None %}{% endmatch %}
   {% if is_moderator %}<p>[<a href="/groupmod.jsp?group={{ group.id }}">править</a>]</p>{% endif %}
+  {% if active_tags.len() > 0 %}Активные теги: <p class="tags"><i class="icon-tag"></i>&nbsp;{% for tag in active_tags %}<a class="tag" rel="tag" href="{{ tag.url }}">{{ tag.name }}</a>{% if !loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
 </div>
 {% endif %}
 
+{% if old_tracker %}
+<div class="forum"><table class="message-table">
+  <thead><tr><th>Тема</th><th>Последнее сообщение<br>{% if lastmod %}<span style="font-weight: normal">[<a href="{{ new_url }}" style="text-decoration: underline">отменить</a>]</span>{% else %}<span style="font-weight: normal">[<a href="{{ active_url }}" style="text-decoration: underline">упорядочить</a>]</span>{% endif %}</th><th><i class="icon-comment"></i></th></tr></thead>
+  <tbody>{% for t in topics %}<tr>
+    <td>
+      {% if t.topic.deleted %}<img src="/img/del.png" alt="[X]" width="15" height="15">{% endif %}
+      {% if t.topic.sticky && !t.topic.deleted %}<i class="icon-pin icon-pin-color" title="Прикрепленная тема"></i>{% endif %}
+      {% if t.topic.resolved.unwrap_or(false) %}<img src="/img/solved.png" width="15" height="15" alt="Решено" title="Решено">{% endif %}
+      <a href="{{ t.target_url }}">{% for tag in t.vecTags() %}<span class="tag">{{ tag }}</span> {% endfor %}{{ t.topic.sTitlePlain() }}</a>
+      ({% if t.topic_author_blocked %}<s>{% endif %}{{ t.topic.author }}{% if t.topic_author_blocked %}</s>{% endif %})
+    </td>
+    <td class="dateinterval"><time data-format="interval" datetime="{{ t.last_postdate.to_rfc3339() }}">{{ t.last_postdate }}</time>, {% if t.last_author_blocked %}<s>{% endif %}{{ t.last_author }}{% if t.last_author_blocked %}</s>{% endif %}</td>
+    <td class="numbers">{% if t.comments == 0 %}-{% else %}{{ t.comments }}{% endif %}</td>
+  </tr>{% endfor %}</tbody>
+</table></div>
+{% else %}
 <div class="tracker">
 {% for t in topics %}
   <a href="{{ t.target_url }}" class="group-item">
     <div class="tracker-count"><p>{% if t.comments == 0 %}-{% else %}<i class="icon-comment"></i> {{ t.comments }}{% endif %}</p></div>
-    <div class="tracker-title"><p>{% if t.comments_closed && !t.topic.deleted %}<i class="icon-lock"></i>{% endif %}{% if t.topic.resolved.unwrap_or(false) %}<i class="icon-check" title="решено"></i>{% endif %}{{ t.topic.sTitlePlain() }} <span class="group-author">({{ t.topic.author }})</span></p></div>
+    <div class="tracker-title"><p>{% if t.topic.deleted %}<img src="/img/del.png" alt="[X]" width="15" height="15">{% endif %}{% if t.topic.sticky && !t.topic.deleted %}<i class="icon-pin icon-pin-color" title="Прикрепленная тема"></i>{% endif %}{% if t.comments_closed && !t.topic.deleted %}<i class="icon-lock"></i>{% endif %}{% if t.topic.resolved.unwrap_or(false) %}<i class="icon-check" title="решено"></i>{% endif %}{{ t.topic.sTitlePlain() }} <span class="group-author">({% if t.topic_author_blocked %}<s>{% endif %}{{ t.topic.author }}{% if t.topic_author_blocked %}</s>{% endif %})</span></p></div>
     <div class="tracker-tags"><p>{% for tag in t.vecTags() %}<span class="tag">{{ tag }}</span> {% endfor %}</p></div>
-    <div class="tracker-last"><p>{{ t.last_author }}, <time data-format="compact-interval" datetime="{{ t.last_postdate.to_rfc3339() }}">{{ t.last_postdate }}</time></p></div>
+    <div class="tracker-last"><p>{% if t.last_author_blocked %}<s>{% endif %}{{ t.last_author }}{% if t.last_author_blocked %}</s>{% endif %}, <time data-format="compact-interval" datetime="{{ t.last_postdate.to_rfc3339() }}">{{ t.last_postdate }}</time></p></div>
   </a>
 {% endfor %}
 </div>
+{% endif %}
 {% if topics.len() == 0 %}<p>Тем пока нет.</p>{% endif %}
 
-<div class="nav"><div style="float: left">{% match prev_url %}{% when Some with (url) %}<a rel="prev" href="{{ url }}">← предыдущие</a>{% when None %}{% endmatch %}</div><div style="float: right">{% match next_url %}{% when Some with (url) %}<a rel="next" href="{{ url }}">следующие →</a>{% when None %}<a href="{{ archive_url }}">архив</a>{% endmatch %}</div></div>
-<p><i class="icon-rss"></i> <a href="/section-rss.jsp?section={{ group.section }}&amp;group={{ group.id }}">RSS подписка на новые темы</a></p>
+{% if !show_deleted %}<div class="nav"><div style="float: left">{% match prev_url %}{% when Some with (url) %}<a rel="prev" href="{{ url }}">← предыдущие</a>{% when None %}{% endmatch %}</div><div style="float: right">{% match next_url %}{% when Some with (url) %}<a rel="next" href="{{ url }}">следующие →</a>{% when None %}<a href="{{ archive_url }}">архив</a>{% endmatch %}</div></div>{% endif %}
+
+<hr>
+<form action="{{ group_url }}" method="GET" style="font-weight: normal; display: inline;">
+  {% if lastmod %}<input type="hidden" name="lastmod" value="true">{% endif %}
+  <label>фильтр:
+    <select name="showignored" onchange="submit();">
+      <option value="true"{% if show_ignored %} selected{% endif %}>все темы</option>
+      <option value="false"{% if !show_ignored %} selected{% endif %}>без игнорируемых</option>
+    </select> [<a style="text-decoration: underline" href="/user-filter">настроить</a>]
+  </label>
+</form>
+<hr>
+
+{% if show_deleted_button && !show_deleted %}<form action="{{ group_url }}" method="POST">
+  <input type="hidden" name="csrf" value="{{ csrf_token }}">
+  <input type="hidden" name="showDeleted" value="true">
+  <input type="submit" class="btn btn-default" value="Показать удаленные сообщения">
+</form><hr>{% endif %}
+{% if show_deleted && show_deleted_button && next_url.is_some() %}<form action="{{ group_url }}" method="POST">
+  <input type="hidden" name="csrf" value="{{ csrf_token }}">
+  <input type="hidden" name="showDeleted" value="true">
+  <input type="hidden" name="offset" value="{{ next_offset }}">
+  <input type="submit" class="btn btn-default" value="Показать еще удаленные">
+</form><hr>{% endif %}
+
+{% match frozen_until %}{% when Some with (until) %}<div class="infoblock">⚠️ Для вашей учетной записи установлен режим только для чтения до <time data-format="default" datetime="{{ until.to_rfc3339() }}">{{ until }}</time>.</div>{% when None %}{% endmatch %}
+
+<p><i class="icon-rss"></i> <a href="/section-rss.jsp?section={{ group.section }}&amp;group={{ group.id }}">RSS-подписка на новые темы</a></p>
 {% endblock %}

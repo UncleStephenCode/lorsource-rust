@@ -98,6 +98,10 @@ async fn main() -> anyhow::Result<()> {
             ServeFile::new(format!("{}/manifest.json", config.static_dir)),
         )
         .route_service(
+            "/tango/manifest.json",
+            ServeFile::new(format!("{}/manifest.json", config.static_dir)),
+        )
+        .route_service(
             "/robots.txt",
             ServeFile::new(format!("{}/robots.txt", config.static_dir)),
         )

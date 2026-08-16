@@ -27,7 +27,7 @@ use axum::{
     extract::{ConnectInfo, Path, Query, Request, State},
     http::{HeaderMap, Method, StatusCode, Uri, header},
     response::{Html, IntoResponse, Response},
-    routing::{MethodRouter, get, post},
+    routing::{MethodRouter, get},
 };
 use serde::Deserialize;
 use std::net::SocketAddr;
@@ -36,8 +36,8 @@ const I_COMMENT_MESSAGE_PARAMETER_LIMIT: usize = 1024 * 1024;
 const S_ALLOW_COMMENT_MESSAGE: &str = "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS";
 const S_ALLOW_COMMENT_ACTION_OPTIONS: &str = "GET,HEAD,POST,OPTIONS";
 const S_ALLOW_COMMENT_ACTION_405: &str = "GET, POST";
-const S_ALLOW_COMMENT_UNDELETE_OPTIONS: &str = "POST,GET,HEAD,OPTIONS";
-const S_ALLOW_COMMENT_UNDELETE_405: &str = "POST, GET";
+const S_ALLOW_COMMENT_UNDELETE_OPTIONS: &str = "GET,HEAD,POST,OPTIONS";
+const S_ALLOW_COMMENT_UNDELETE_405: &str = "GET, POST";
 
 #[derive(Deserialize)]
 pub struct JumpQuery {
@@ -88,7 +88,6 @@ pub struct CommentForm {
 #[template(path = "comment_form.html")]
 struct CommentFormTemplate {
     topic_id: i32,
-    topic_title: String,
     topic_url: String,
     replyto: Option<i32>,
     csrf_token: String,
@@ -123,83 +122,52 @@ struct StCommentMessageTemplate {
     captcha_site_key: String,
 }
 
-#[derive(sqlx::FromRow)]
-struct StCommentFormReplySource {
-    iTopicId: i32,
-    bDeleted: bool,
-    sTitle: String,
-    sMessage: String,
-    sMarkup: String,
-    dtPostdate: chrono::DateTime<chrono::Utc>,
-    sAuthor: String,
-    iAuthorScore: i32,
-    bAuthorBlocked: bool,
-    bAuthorAnonymous: bool,
-    bAuthorFrozen: bool,
-}
-
 async fn optCommentFormContextHtml(
     state: &AppState,
     stTopic: &crate::models::TopicDetail,
     optReplyTo: Option<i32>,
     bShowTopic: bool,
+    optSessionViewer: Option<&crate::models::UserSummary>,
+    sCsrfToken: &str,
 ) -> Result<Option<String>> {
     if let Some(iReplyTo) = optReplyTo.filter(|iValue| *iValue > 0) {
-        let optRow: Option<StCommentFormReplySource> = sqlx::query_as(
-            r#"SELECT c.topic AS "iTopicId",c.deleted AS "bDeleted",c.title AS "sTitle",
-                      m.message AS "sMessage",m.markup::text AS "sMarkup",
-                      c.postdate AS "dtPostdate",u.nick AS "sAuthor",
-                      COALESCE(u.score,0) AS "iAuthorScore",
-                      COALESCE(u.blocked,false) AS "bAuthorBlocked",
-                      COALESCE(u.passwd,'')='' AS "bAuthorAnonymous",
-                      COALESCE(u.frozen_until > CURRENT_TIMESTAMP,false) AS "bAuthorFrozen"
-               FROM comments c JOIN msgbase m ON m.id=c.id JOIN users u ON u.id=c.userid
-               WHERE c.id=$1"#,
-        )
-        .bind(iReplyTo)
-        .fetch_optional(&state.pool)
-        .await?;
-        let Some(stRow) = optRow else {
-            return Err(AppError::NotFound);
+        let stViewer = if let Some(stViewer) = optSessionViewer {
+            stViewer.clone()
+        } else {
+            // CommentCreateService.prepareReplyto uses the HTTP session, not
+            // a nick/password posting identity. Resolve the site's anonymous
+            // principal so default profile/avatar/ignore behavior stays the
+            // same when a public form supplies credentials.
+            crate::application::auth::stResolvePostingIdentity(state, None, None, None)
+                .await?
+                .stIdentity
+                .stUser
         };
-        if stRow.bDeleted || stRow.iTopicId != stTopic.id {
-            // The validator keeps the submitted reply id and re-renders the
-            // form. Avoid exposing a deleted/cross-topic body as context.
+        let (stTarget, stReply) = stCommentDeletionService(state)
+            .optPrepareCommentOnly(iReplyTo, stViewer.id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        if stTarget.iTopicId != stTopic.id {
             return Ok(None);
         }
-        let sTitleHtml = crate::domain::title::optCommentTitlePlainForDisplay(&stRow.sTitle)
-            .map(|sTitlePlain| {
-                format!(
-                    "<div class=title>{}</div>",
-                    html_escape::encode_text(&sTitlePlain)
-                )
-            })
-            .unwrap_or_default();
-        let bNofollow = !crate::domain::topic::link_policy::StAuthorLinkState {
-            iScore: stRow.iAuthorScore,
-            bBlocked: stRow.bAuthorBlocked,
-            bAnonymous: stRow.bAuthorAnonymous,
-            bFrozen: stRow.bAuthorFrozen,
-        }
-        .bFollowAuthorLinks();
-        let stMarkupUsers = state
-            .markup
-            .stResolveBatch([(&*stRow.sMessage, &*stRow.sMarkup)])
-            .await?;
+        let sCommentHtml = sCommentDeletionPreviewHtml(
+            state,
+            &stViewer,
+            optSessionViewer.is_some(),
+            stTopic.id,
+            stTarget.bTopicExpired,
+            stTarget.bTopicDraft,
+            stTarget.bCommentsHidden,
+            &stTopic.topic_url(),
+            sCsrfToken,
+            false,
+            false,
+            std::slice::from_ref(&stReply),
+        )
+        .await?;
         return Ok(Some(format!(
-            r#"<div class="comment"><div class="messages"><article class="msg" id="comment-{iReplyTo}"><div class="msg-container"><div class="msg_body">{sTitleHtml}<div class="msg-text">{}</div><div class="sign"><a href="/people/{}/profile">{}</a> (<time data-format="default" datetime="{}">{}</time>)</div></div></div></article></div></div>"#,
-            markup::render_message_with_markup_policy_and_users(
-                &stRow.sMessage,
-                Some(&stRow.sMarkup),
-                None,
-                bNofollow,
-                Some(&state.config.public_url),
-                Some(&stMarkupUsers),
-            ),
-            urlencoding::encode(&stRow.sAuthor),
-            html_escape::encode_text(&stRow.sAuthor),
-            stRow.dtPostdate.to_rfc3339(),
-            stRow.dtPostdate,
+            "<div class=\"comment\"><div class=\"messages\">{}</div></div>",
+            sCommentHtml,
         )));
     }
     if bShowTopic {
@@ -241,15 +209,41 @@ async fn render_comment_form(
     anonymous_form: bool,
     require_captcha: bool,
     bShowTopicContext: bool,
+    stPreviewAuthor: &crate::models::UserSummary,
+    bPreviewAuthorAnonymous: bool,
+    optSessionViewer: Option<&crate::models::UserSummary>,
 ) -> Result<Html<String>> {
     let topic = crate::routes::topics::get_topic(state, form.topic).await?;
     let topic_url = topic.topic_url();
-    let context_html =
-        optCommentFormContextHtml(state, &topic, form.replyto, bShowTopicContext).await?;
+    let context_html = optCommentFormContextHtml(
+        state,
+        &topic,
+        form.replyto,
+        bShowTopicContext,
+        optSessionViewer,
+        &csrf_token,
+    )
+    .await?;
+    let preview_html = preview_html.map(|sMessageHtml| {
+        sPreparedFormCommentHtml(
+            0,
+            form.title.as_deref().unwrap_or_default(),
+            &sMessageHtml,
+            &stPreviewAuthor.nick,
+            stPreviewAuthor.id,
+            stPreviewAuthor.score.unwrap_or(0),
+            stPreviewAuthor.max_score.unwrap_or(0),
+            stPreviewAuthor.blocked.unwrap_or(false),
+            bPreviewAuthorAnonymous,
+            chrono::Utc::now(),
+            topic.author_id,
+            optSessionViewer.is_some(),
+            optSessionViewer.is_some_and(|stUser| stUser.canmod),
+        )
+    });
     Ok(Html(
         CommentFormTemplate {
             topic_id: topic.id,
-            topic_title: topic.sTitlePlain(),
             topic_url,
             replyto: form.replyto.filter(|id| *id > 0),
             csrf_token,
@@ -357,6 +351,9 @@ pub async fn add_comment_form(
         user.is_none(),
         bRequireCaptcha,
         false,
+        &stResolution.stIdentity.stUser,
+        !stResolution.stIdentity.bAuthorized,
+        user.as_ref(),
     )
     .await
 }
@@ -497,6 +494,9 @@ pub async fn add_comment(
             !bSessionAuthorized,
             bRequireCaptcha,
             false,
+            &stIdentity.stUser,
+            !stIdentity.bAuthorized,
+            user.as_ref(),
         )
         .await?
         .into_response());
@@ -1232,8 +1232,8 @@ pub fn stDeleteCommentRoute() -> MethodRouter<AppState> {
 }
 
 pub fn stUndeleteCommentRoute() -> MethodRouter<AppState> {
-    post(undelete_comment)
-        .get(undelete_comment_form)
+    get(undelete_comment_form)
+        .post(undelete_comment)
         .options(options_comment_undelete)
         .fallback(method_not_allowed_comment_undelete)
 }
@@ -1458,7 +1458,6 @@ pub async fn comment_message(
 pub struct EditCommentQuery {
     pub topic: Option<i32>,
     pub original: Option<i32>,
-    pub msgid: Option<i32>,
 }
 
 #[derive(Template)]
@@ -1474,7 +1473,7 @@ struct EditCommentTemplate {
     format_title: String,
     csrf_token: String,
     form_error: Option<String>,
-    preview_html: Option<String>,
+    comment_html: String,
     require_captcha: bool,
     captcha_site_key: String,
 }
@@ -1570,7 +1569,6 @@ pub async fn edit_comment_form(
     };
     let comment_id = query
         .original
-        .or(query.msgid)
         .ok_or_else(|| AppError::BadParameter("Комментарий не задан".into()))?;
     let requested_topic_id = query
         .topic
@@ -1596,6 +1594,31 @@ pub async fn edit_comment_form(
     }
     let (format_mode, format_title) = crate::routes::topics::markup_form_view(&row.sMarkup);
     let require_captcha = crate::routes::auth::bIpCaptchaRequired(&state, &sRemoteIp).await?;
+    // GET uses prepareCommentOnly in Java (profile userpic, delete/edit
+    // metadata, moderator IP/UA and reactions). POST preview below deliberately
+    // uses the smaller prepareCommentForEdit projection instead.
+    let (stTarget, stPreparedComment) = stCommentDeletionService(&state)
+        .optPrepareCommentOnly(comment_id, user.id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if stTarget.iTopicId != topic.id {
+        return Err(AppError::NotFound);
+    }
+    let sCommentHtml = sCommentDeletionPreviewHtml(
+        &state,
+        &user,
+        true,
+        topic.id,
+        stTarget.bTopicExpired,
+        stTarget.bTopicDraft,
+        stTarget.bCommentsHidden,
+        &topic.topic_url(),
+        &csrf_token,
+        false,
+        false,
+        std::slice::from_ref(&stPreparedComment),
+    )
+    .await?;
     Ok(Html(
         EditCommentTemplate {
             comment_id,
@@ -1608,7 +1631,7 @@ pub async fn edit_comment_form(
             format_title,
             csrf_token,
             form_error: None,
-            preview_html: None,
+            comment_html: sCommentHtml,
             require_captcha,
             captcha_site_key: state.config.captcha_public_key.clone().unwrap_or_default(),
         }
@@ -1619,8 +1642,7 @@ pub async fn edit_comment_form(
 
 #[derive(Deserialize)]
 pub struct EditCommentForm {
-    #[serde(alias = "original")]
-    pub msgid: i32,
+    pub original: i32,
     pub topic: Option<i32>,
     pub msg: String,
     pub preview: Option<String>,
@@ -1706,6 +1728,72 @@ mod comment_edit_title_contract_tests {
     }
 
     #[test]
+    fn edit_binding_accepts_only_the_original_comment_parameter_name() {
+        let stOriginal: EditCommentForm =
+            serde_urlencoded::from_str("original=77&topic=42&msg=body")
+                .expect("Java edit-comment form");
+        assert_eq!(stOriginal.original, 77);
+        assert!(
+            serde_urlencoded::from_str::<EditCommentForm>("msgid=77&topic=42&msg=body").is_err()
+        );
+    }
+
+    #[test]
+    fn edit_date_is_written_as_the_legacy_jdbc_wall_clock() {
+        let sSource = include_str!("comments.rs");
+        let sHandler = sSource
+            .split(concat!("pub async fn ", "edit_comment("))
+            .nth(1)
+            .unwrap()
+            .split(concat!("pub async fn ", "delete_comment_form("))
+            .next()
+            .unwrap();
+        assert!(sHandler.contains("edit_date=(CURRENT_TIMESTAMP AT TIME ZONE $4::text)"));
+        assert!(sHandler.contains("legacy_timestamp::sLegacyJdbcTimezone("));
+        assert!(sHandler.contains("state.config.stLegacyJdbcTimezone()"));
+        assert!(!sHandler.contains(concat!("edit_date=", "now()")));
+    }
+
+    #[test]
+    fn anonymous_preview_author_link_depends_on_the_http_session() {
+        let dtNow = chrono::Utc::now();
+        let sPublic = sPreparedFormCommentHtml(
+            0,
+            "",
+            "body",
+            "anonymous",
+            2,
+            0,
+            0,
+            false,
+            true,
+            dtNow,
+            1,
+            false,
+            false,
+        );
+        assert!(sPublic.contains(">anonymous "));
+        assert!(!sPublic.contains("/people/anonymous/profile"));
+
+        let sAuthorized = sPreparedFormCommentHtml(
+            0,
+            "",
+            "body",
+            "anonymous",
+            2,
+            0,
+            0,
+            false,
+            true,
+            dtNow,
+            1,
+            true,
+            false,
+        );
+        assert!(sAuthorized.contains("/people/anonymous/profile"));
+    }
+
+    #[test]
     fn edit_eligibility_is_a_form_outcome_not_an_http_bad_request() {
         let dtNow = chrono::Utc::now();
         let mut stRow = stEditableFixture(dtNow - chrono::Duration::minutes(5));
@@ -1771,7 +1859,7 @@ pub async fn edit_comment(
     let Some(user) = user else {
         return Err(AppError::Forbidden);
     };
-    let row = stEditableComment(&state, form.msgid).await?;
+    let row = stEditableComment(&state, form.original).await?;
     let topic_id = row.iTopicId;
     if form.topic.is_some_and(|iTopicId| iTopicId != topic_id) {
         return Err(AppError::BadRequest("тема не совпадает".into()));
@@ -1819,25 +1907,41 @@ pub async fn edit_comment(
     let (format_mode, format_title) = crate::routes::topics::markup_form_view(&row.sMarkup);
     let topic = crate::routes::topics::get_topic(&state, topic_id).await?;
     if form.preview.is_some() || optError.is_some() {
-        let optPreviewHtml = if form.preview.is_some() {
-            let stMarkupUsers = state
-                .markup
-                .stResolveBatch([(&*form.msg, &*row.sMarkup)])
-                .await?;
-            Some(markup::render_message_with_markup_policy_and_users(
-                &form.msg,
-                Some(&row.sMarkup),
-                None,
-                false,
-                Some(&state.config.public_url),
-                Some(&stMarkupUsers),
-            ))
+        let (sPreviewMessage, sPreviewTitle) = if form.preview.is_some() {
+            (form.msg.as_str(), sCommentTitleAfterEdit())
         } else {
-            None
+            (row.sMessage.as_str(), row.sTitle.as_str())
         };
+        let stMarkupUsers = state
+            .markup
+            .stResolveBatch([(sPreviewMessage, &*row.sMarkup)])
+            .await?;
+        let sMessageHtml = markup::render_message_with_markup_policy_and_users(
+            sPreviewMessage,
+            Some(&row.sMarkup),
+            None,
+            false,
+            Some(&state.config.public_url),
+            Some(&stMarkupUsers),
+        );
+        let sCommentHtml = sPreparedFormCommentHtml(
+            form.original,
+            sPreviewTitle,
+            &sMessageHtml,
+            &user.nick,
+            user.id,
+            user.score.unwrap_or(0),
+            user.max_score.unwrap_or(0),
+            user.blocked.unwrap_or(false),
+            false,
+            row.dtPostdate,
+            topic.author_id,
+            true,
+            user.canmod,
+        );
         return Ok(Html(
             EditCommentTemplate {
-                comment_id: form.msgid,
+                comment_id: form.original,
                 topic_id,
                 topic_url: topic.topic_url(),
                 postdate: row.dtPostdate,
@@ -1847,7 +1951,7 @@ pub async fn edit_comment(
                 format_title,
                 csrf_token,
                 form_error: optError,
-                preview_html: optPreviewHtml,
+                comment_html: sCommentHtml,
                 require_captcha: bRequireCaptcha,
                 captcha_site_key: state.config.captcha_public_key.clone().unwrap_or_default(),
             }
@@ -1861,12 +1965,12 @@ pub async fn edit_comment(
     let optOldTitle = optCommentOldTitleForHistory(&row.sTitle);
     let mut tx = state.pool.begin().await?;
     sqlx::query("UPDATE msgbase SET message=$2 WHERE id=$1")
-        .bind(form.msgid)
+        .bind(form.original)
         .bind(&form.msg)
         .execute(&mut *tx)
         .await?;
     sqlx::query("UPDATE comments SET title=$2 WHERE id=$1")
-        .bind(form.msgid)
+        .bind(form.original)
         .bind(sNewTitle)
         .execute(&mut *tx)
         .await?;
@@ -1875,7 +1979,7 @@ pub async fn edit_comment(
             r#"INSERT INTO edit_info(msgid,editor,oldmessage,oldtitle,object_type)
                VALUES($1,$2,$3,$4,'COMMENT'::edit_event_type)"#,
         )
-        .bind(form.msgid)
+        .bind(form.original)
         .bind(user.id)
         .bind(optOldMessage)
         .bind(optOldTitle)
@@ -1884,15 +1988,24 @@ pub async fn edit_comment(
         let iEditCount: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM edit_info WHERE msgid=$1 AND object_type='COMMENT'::edit_event_type",
         )
-        .bind(form.msgid)
+        .bind(form.original)
         .fetch_one(&mut *tx)
         .await?;
-        sqlx::query("UPDATE comments SET editor_id=$2,edit_date=now(),edit_count=$3 WHERE id=$1")
-            .bind(form.msgid)
-            .bind(user.id)
-            .bind(iEditCount.min(i64::from(i32::MAX)) as i32)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "UPDATE comments SET editor_id=$2,\
+             edit_date=(CURRENT_TIMESTAMP AT TIME ZONE $4::text),\
+             edit_count=$3 WHERE id=$1",
+        )
+        .bind(form.original)
+        .bind(user.id)
+        .bind(iEditCount.min(i64::from(i32::MAX)) as i32)
+        .bind(
+            crate::infra::postgres::legacy_timestamp::sLegacyJdbcTimezone(
+                state.config.stLegacyJdbcTimezone(),
+            ),
+        )
+        .execute(&mut *tx)
+        .await?;
         sqlx::query("UPDATE topics SET lastmod=now() WHERE id=$1")
             .bind(topic_id)
             .execute(&mut *tx)
@@ -1910,11 +2023,11 @@ pub async fn edit_comment(
         state.config.opensearch_url.as_deref(),
         &state.config.upload_dir,
     )
-    .vUpdateComments(&[form.msgid])
+    .vUpdateComments(&[form.original])
     .await?;
     Ok((
         StatusCode::FOUND,
-        [(header::LOCATION, comment_link(&state, form.msgid).await?)],
+        [(header::LOCATION, comment_link(&state, form.original).await?)],
     )
         .into_response())
 }
@@ -1942,6 +2055,7 @@ pub async fn delete_comment_form(
     let sPreviewHtml = sCommentDeletionPreviewHtml(
         &stState,
         &stUser,
+        true,
         stData.stTarget.iTopicId,
         stData.stTarget.bTopicExpired,
         stData.stTarget.bTopicDraft,
@@ -1990,6 +2104,7 @@ pub async fn undelete_comment_form(
     let sPreviewHtml = sCommentDeletionPreviewHtml(
         &stState,
         &stUser,
+        true,
         stData.stTarget.iTopicId,
         stData.stTarget.bTopicExpired,
         stData.stTarget.bTopicDraft,
@@ -2091,7 +2206,10 @@ fn stCommentDeletionService(
     stState: &AppState,
 ) -> CCommentDeletionService<CCommentDeletionPgRepository, CSearchQueueSender> {
     CCommentDeletionService::new(
-        CCommentDeletionPgRepository::new(stState.pool.clone()),
+        CCommentDeletionPgRepository::new(
+            stState.pool.clone(),
+            stState.config.stLegacyJdbcTimezone(),
+        ),
         CSearchQueueSender::new(
             stState.config.opensearch_url.as_deref(),
             &stState.config.upload_dir,
@@ -2331,8 +2449,9 @@ struct StPreparedCommentDom<'a> {
     sTitle: &'a str,
     sMessage: &'a str,
     sAuthorOpen: &'a str,
-    sAuthorUrl: &'a str,
+    sAuthorLinkOpen: &'a str,
     sAuthorNick: &'a str,
+    sAuthorLinkClose: &'a str,
     sAuthorClose: &'a str,
     sStars: &'a str,
     sScore: &'a str,
@@ -2353,7 +2472,7 @@ impl StPreparedCommentDom<'_> {
     /// title, container/userpic, body/text, sign, menu, warnings, reactions.
     fn sHtml(&self) -> String {
         format!(
-            "<article class=\"msg\" id=\"comment-{}\">{}<div class=\"msg-container\">{}<div class=\"msg_body{}\"><div class=\"msg-text\">{}{}</div><div class=\"sign\">{}<a itemprop=\"creator\" href=\"/people/{}/profile\">{}</a>{} {}{}<br class=\"visible-phone\"> <span class=\"hideon-phone\">(</span><time data-format=\"default\" datetime=\"{}\">{}</time><span class=\"hideon-phone\">)</span>{}{}{}{}{}</div>{}{}{}</div></div></article>",
+            "<article class=\"msg\" id=\"comment-{}\">{}<div class=\"msg-container\">{}<div class=\"msg_body{}\"><div class=\"msg-text\">{}{}</div><div class=\"sign\">{}{}{}{}{} {}{}<br class=\"visible-phone\"> <span class=\"hideon-phone\">(</span><time data-format=\"default\" datetime=\"{}\">{}</time><span class=\"hideon-phone\">)</span>{}{}{}{}{}</div>{}{}{}</div></div></article>",
             self.iCommentId,
             self.sHeader,
             self.sUserpic,
@@ -2361,8 +2480,9 @@ impl StPreparedCommentDom<'_> {
             self.sTitle,
             self.sMessage,
             self.sAuthorOpen,
-            self.sAuthorUrl,
+            self.sAuthorLinkOpen,
             self.sAuthorNick,
+            self.sAuthorLinkClose,
             self.sAuthorClose,
             self.sStars,
             self.sScore,
@@ -2380,9 +2500,78 @@ impl StPreparedCommentDom<'_> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn sPreparedFormCommentHtml(
+    iCommentId: i32,
+    sStoredTitle: &str,
+    sMessageHtml: &str,
+    sAuthor: &str,
+    iAuthorId: i32,
+    iAuthorScore: i32,
+    iAuthorMaxScore: i32,
+    bAuthorBlocked: bool,
+    bAuthorAnonymous: bool,
+    dtPostdate: chrono::DateTime<chrono::Utc>,
+    iTopicAuthorId: i32,
+    bSessionAuthorized: bool,
+    bViewerModerator: bool,
+) -> String {
+    let sTitle = crate::domain::title::optCommentTitlePlainForDisplay(sStoredTitle)
+        .map(|sTitle| format!("<h1>{}</h1>", html_escape::encode_text(&sTitle)))
+        .unwrap_or_default();
+    let sAuthorUrl = urlencoding::encode(sAuthor).into_owned();
+    let sAuthorNick = html_escape::encode_text(sAuthor).into_owned();
+    let bLinkAuthor = !bAuthorAnonymous || bSessionAuthorized;
+    let sAuthorLinkOpen = if bLinkAuthor {
+        format!("<a itemprop=\"creator\" href=\"/people/{sAuthorUrl}/profile\">")
+    } else {
+        String::new()
+    };
+    let sStars = sCommentStarsHtml(iAuthorScore, iAuthorMaxScore, !bAuthorAnonymous);
+    let sScore = if bViewerModerator && !bAuthorAnonymous {
+        format!(" (Score:&nbsp;{iAuthorScore} MaxScore:&nbsp;{iAuthorMaxScore})")
+    } else {
+        String::new()
+    };
+    let sTopicAuthor = if iAuthorId == iTopicAuthorId && !bAuthorAnonymous {
+        " <span class=\"user-tag\">автор топика</span>"
+    } else {
+        ""
+    };
+    let sPostdateRfc3339 = dtPostdate.to_rfc3339();
+    let sPostdate = dtPostdate.to_string();
+    StPreparedCommentDom {
+        iCommentId,
+        sHeader: "",
+        sUserpic: "",
+        sBodyClass: "",
+        sTitle: &sTitle,
+        sMessage: sMessageHtml,
+        sAuthorOpen: if bAuthorBlocked { "<s>" } else { "" },
+        sAuthorLinkOpen: &sAuthorLinkOpen,
+        sAuthorNick: &sAuthorNick,
+        sAuthorLinkClose: if bLinkAuthor { "</a>" } else { "" },
+        sAuthorClose: if bAuthorBlocked { "</s>" } else { "" },
+        sStars: &sStars,
+        sScore: &sScore,
+        sPostdateRfc3339: &sPostdateRfc3339,
+        sPostdate: &sPostdate,
+        sTopicAuthor,
+        sRemark: "",
+        sModeratorIp: "",
+        sEditSummary: "",
+        sModeratorUserAgent: "",
+        sMenu: "",
+        sWarnings: "",
+        sReactions: "",
+    }
+    .sHtml()
+}
+
 async fn sCommentDeletionPreviewHtml(
     stState: &AppState,
     stViewer: &crate::models::UserSummary,
+    bViewerAuthorized: bool,
     iTopicId: i32,
     bTopicExpired: bool,
     bTopicDraft: bool,
@@ -2652,7 +2841,8 @@ async fn sCommentDeletionPreviewHtml(
                 Some((sEmoji.clone(), iUserId, sNick.clone(), *iScore))
             })
             .collect::<Vec<_>>();
-        let bReactionAllowed = stViewer.id != stComment.iAuthorId
+        let bReactionAllowed = bViewerAuthorized
+            && stViewer.id != stComment.iAuthorId
             && !bViewerFrozen
             && !bTopicExpired
             && !bCommentsHidden
@@ -2728,6 +2918,12 @@ async fn sCommentDeletionPreviewHtml(
         };
         let sAuthorUrl = urlencoding::encode(&stComment.sAuthorNick).into_owned();
         let sAuthorNick = html_escape::encode_text(&stComment.sAuthorNick).into_owned();
+        let bLinkAuthor = !stComment.bAuthorAnonymous || bViewerAuthorized;
+        let sAuthorLinkOpen = if bLinkAuthor {
+            format!("<a itemprop=\"creator\" href=\"/people/{sAuthorUrl}/profile\">")
+        } else {
+            String::new()
+        };
         let sPostdateRfc3339 = stComment.dtPostdate.to_rfc3339();
         let sPostdate = stComment.dtPostdate.to_string();
         sHtml.push_str(
@@ -2739,8 +2935,9 @@ async fn sCommentDeletionPreviewHtml(
                 sTitle: &sTitleHtml,
                 sMessage: &sMessageHtml,
                 sAuthorOpen,
-                sAuthorUrl: &sAuthorUrl,
+                sAuthorLinkOpen: &sAuthorLinkOpen,
                 sAuthorNick: &sAuthorNick,
+                sAuthorLinkClose: if bLinkAuthor { "</a>" } else { "" },
                 sAuthorClose,
                 sStars: &sStars,
                 sScore: &sScore,
@@ -3326,8 +3523,9 @@ mod deletion_semantics_tests {
             sTitle: "<h1>TITLE</h1>",
             sMessage: "MESSAGE",
             sAuthorOpen: "",
-            sAuthorUrl: "author",
+            sAuthorLinkOpen: "<a itemprop=\"creator\" href=\"/people/author/profile\">",
             sAuthorNick: "AUTHOR",
+            sAuthorLinkClose: "</a>",
             sAuthorClose: "",
             sStars: "STARS",
             sScore: "SCORE",
@@ -3378,8 +3576,9 @@ mod deletion_semantics_tests {
                 sTitle: "",
                 sMessage: "MESSAGE",
                 sAuthorOpen: "",
-                sAuthorUrl: "author",
+                sAuthorLinkOpen: "<a itemprop=\"creator\" href=\"/people/author/profile\">",
                 sAuthorNick: "AUTHOR",
+                sAuthorLinkClose: "</a>",
                 sAuthorClose: "",
                 sStars: "",
                 sScore: "",
@@ -3414,6 +3613,47 @@ mod deletion_semantics_tests {
                 "ordinary and deletion previews must share DOM hook {sHook}"
             );
         }
+    }
+
+    #[test]
+    fn reply_form_context_uses_the_full_prepared_comment_pipeline() {
+        let sSource = include_str!("comments.rs");
+        let sContext = sSource
+            .split_once("async fn optCommentFormContextHtml(")
+            .expect("reply context helper")
+            .1
+            .split_once("async fn render_comment_form(")
+            .expect("end of reply context helper")
+            .0;
+        assert!(sContext.contains(".optPrepareCommentOnly(iReplyTo, stViewer.id)"));
+        assert!(sContext.contains("sCommentDeletionPreviewHtml("));
+        assert!(sContext.contains("std::slice::from_ref(&stReply)"));
+        assert!(sSource.contains("let bReactionAllowed = bViewerAuthorized"));
+        assert!(!sSource.contains(concat!("struct StCommentForm", "ReplySource")));
+    }
+
+    #[test]
+    fn edit_get_and_post_preview_use_their_distinct_java_projections() {
+        let sSource = include_str!("comments.rs");
+        let sGet = sSource
+            .split(concat!("pub async fn ", "edit_comment_form("))
+            .nth(1)
+            .unwrap()
+            .split("pub struct EditCommentForm")
+            .next()
+            .unwrap();
+        assert!(sGet.contains(".optPrepareCommentOnly(comment_id, user.id)"));
+        assert!(sGet.contains("sCommentDeletionPreviewHtml("));
+
+        let sPost = sSource
+            .split(concat!("pub async fn ", "edit_comment("))
+            .nth(1)
+            .unwrap()
+            .split(concat!("pub async fn ", "delete_comment_form("))
+            .next()
+            .unwrap();
+        assert!(sPost.contains("sPreparedFormCommentHtml("));
+        assert!(!sPost.contains(".optPrepareCommentOnly("));
     }
 
     #[test]
@@ -3767,6 +4007,8 @@ mod comment_message_method_tests {
         );
 
         let stUndeleteOptions = options_comment_undelete().await;
+        assert_eq!(S_ALLOW_COMMENT_UNDELETE_OPTIONS, "GET,HEAD,POST,OPTIONS");
+        assert_eq!(S_ALLOW_COMMENT_UNDELETE_405, "GET, POST");
         assert_eq!(stUndeleteOptions.status(), StatusCode::OK);
         assert_eq!(
             stUndeleteOptions.headers()[header::ALLOW],
@@ -3835,6 +4077,9 @@ mod comment_message_method_tests {
             assert!(sRouter.contains(sMethod), "missing method {sMethod}");
         }
         assert!(!sRouter.contains(".trace"));
+        assert!(sSource.contains(
+            "get(undelete_comment_form)\n        .post(undelete_comment)\n        .options(options_comment_undelete)"
+        ));
     }
 
     #[test]

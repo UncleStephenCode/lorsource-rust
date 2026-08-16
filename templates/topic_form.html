@@ -1,7 +1,41 @@
 {% extends "base.html" %}
-{% block title %}{{ title }}{% endblock %}
+{% block title %}{{ page_title }}{% endblock %}
+{% block head_extra %}
+<script type="text/javascript">
+  $script('/js/add-form.js', function() {
+    setupFormWithSpinner({
+      formSelector: '#messageForm',
+      textareaSelector: '#form_msg',
+      validateOptions: { messages: { title: "Введите заголовок" } }
+    });
+  });
+  $script.ready("plugins", function() {
+    $script("/js/tagsAutocomplete.js");
+  });
+</script>
+{% endblock %}
 {% block content %}
-{% match preview_html %}{% when Some with (html) %}<h1>Предпросмотр</h1><div class="messages"><article class="msg"><div class="msg-container"><div class="msg_body">{% for image in uploaded_images %}<img class="topic-upload-preview" src="/gallery/preview/{{ image }}" alt="Предпросмотр изображения">{% endfor %}<div class="msg-text">{{ html|safe }}</div></div></div></article></div>{% when None %}{% endmatch %}
+{% match preview_html %}{% when Some with (html) %}
+<h1>Предпросмотр</h1>
+<div class="messages">
+  <article class="msg" id="topic-0">
+    <header>
+      <div class="msg-top-header"><span><a href="/{{ section_prefix }}/">{{ section_name }}</a> — <a href="/{{ section_prefix }}/{{ group_urlname }}">{{ group_title }}</a>{% if premoderated %} <span>(не подтверждено)</span>{% endif %}</span></div>
+      <h1><a href="/{{ section_prefix }}/{{ group_urlname }}/0">{{ form_title }}</a></h1>
+      {% if preview_tags.len() > 0 %}<p class="tags"><i class="icon-tag"></i>&nbsp;{% for tag in preview_tags %}<a class="tag" href="/tag/{{ tag }}">{{ tag }}</a>{% if !loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
+    </header>
+    <div class="msg-container"><div class="msg_body">
+      {% for image in uploaded_images %}<img class="topic-upload-preview" src="/gallery/preview/{{ image }}" alt="Предпросмотр изображения">{% endfor %}
+      <div class="msg-text">
+        {{ html|safe }}
+        {% if poll_allowed %}<div class="poll-uncommited">{% for (_, label) in poll_variants %}{% if !label.is_empty() %}<div class="{% if poll_multiselect %}checkbox{% else %}radio{% endif %}"><label><input type="{% if poll_multiselect %}checkbox{% else %}radio{% endif %}" disabled> {{ label }}</label></div>{% endif %}{% endfor %}{% for label in poll_new_rows %}{% if !label.is_empty() %}<div class="{% if poll_multiselect %}checkbox{% else %}radio{% endif %}"><label><input type="{% if poll_multiselect %}checkbox{% else %}radio{% endif %}" disabled> {{ label }}</label></div>{% endif %}{% endfor %}</div>{% endif %}
+        {% if links_allowed && !form_url.is_empty() %}<p>&gt;&gt;&gt; <a href="{{ form_url }}">{% if form_linktext.is_empty() %}Подробности{% else %}{{ form_linktext }}{% endif %}</a></p>{% endif %}
+      </div>
+      <footer><div class="sign" style="margin-left: 0">{% if preview_author_blocked %}<s>{% endif %}{% if preview_author_anonymous %}{{ preview_author }}{% else %}<a rel="author" itemprop="creator" href="/people/{{ preview_author_url }}/profile">{{ preview_author }}</a>{% endif %}{% if preview_author_blocked %}</s>{% endif %}{% if !preview_author_anonymous %} {{ preview_author_stars_html|safe }}{% if preview_show_author_score %} (Score:&nbsp;{{ preview_author_score }} MaxScore:&nbsp;{{ preview_author_max_score }}){% endif %}{% endif %}<br><time data-format="default" datetime="{{ preview_postdate.to_rfc3339() }}">{{ preview_postdate }}</time></div></footer>
+    </div></div>
+  </article>
+</div>
+{% when None %}{% endmatch %}
 <h1>{{ title }}</h1>
 {% match add_info_html %}{% when Some with (html) %}{{ html|safe }}{% when None %}{% endmatch %}
 <form method="post" action="{{ action }}" id="messageForm"{% if image_allowed %} enctype="multipart/form-data"{% endif %}>
@@ -26,10 +60,6 @@
     <label for="title">Заглавие</label>
     <input id="title" name="title" type="text" required{% if !is_edit %} autofocus{% endif %} value="{{ form_title }}">
   </div>
-  {% if require_captcha %}
-  <script src="https://js.hcaptcha.com/1/api.js" async defer></script>
-  <div class="h-captcha" data-sitekey="{{ captcha_site_key }}"></div>
-  {% endif %}
   {% if poll_allowed %}
     <br>
     {% if is_edit %}
@@ -73,6 +103,10 @@
     <label for="tags"><a href="/tags" target="_blank">Метки</a> (разделенные запятой, не более 5{% if !premoderated %}; в заголовке будет показано не более 3{% endif %})</label>
     <input id="tags" name="tags" type="text" required autocapitalize="off" data-tags-autocomplete="data-tags-autocomplete" value="{{ form_tags }}">
   </div>
+  {% if require_captcha %}
+  <script src="https://js.hcaptcha.com/1/api.js" async defer></script>
+  <div class="h-captcha" data-sitekey="{{ captcha_site_key }}"></div>
+  {% endif %}
   {% if image_allowed %}
   {% for image in existing_images %}
   <div style="display: flex; align-items: center; gap: 1em">
@@ -83,8 +117,8 @@
   </div>
   {% endfor %}
   {% for image in uploaded_images %}<input type="hidden" name="uploadedImages[{{ loop.index0 }}]" value="{{ image }}">{% endfor %}
-  <div class="control-group"><label for="image">{% if is_edit %}Добавить изображение:{% else %}Изображение:{% endif %} <input id="image" type="file" name="images" accept=".jpg,.jpeg,.png,.gif,image/jpeg,image/png,image/gif"{% if image_required && !is_edit && uploaded_images.is_empty() %} required{% endif %}></label></div>
-  {% if additional_image_rows.len() > 0 %}<div class="control-group">{% for _ in additional_image_rows %}<label>Дополнительное изображение #{{ loop.index0 }}: <input type="file" name="images" accept=".jpg,.jpeg,.png,.gif,image/jpeg,image/png,image/gif"></label>{% endfor %}</div>{% endif %}
+  <div class="control-group"><label for="image">{% if is_edit %}Добавить изображение:{% else %}Изображение #0:{% endif %} <input id="image" type="file" name="images" accept=".jpg,.jpeg,.png,.gif,image/jpeg,image/png,image/gif"{% if image_required && !is_edit && uploaded_images.is_empty() %} required{% endif %}></label></div>
+  {% if additional_image_rows.len() > 0 %}<div class="control-group">{% for _ in additional_image_rows %}<label>Изображение #{{ loop.index }}: <input type="file" name="images" accept=".jpg,.jpeg,.png,.gif,image/jpeg,image/png,image/gif"></label>{% endfor %}</div>{% endif %}
   {% endif %}
   <div class="form-actions">
     {% if !is_edit && !topic_posting_allowed %}<a class="btn btn-primary disabled" title="{{ topic_posting_reason }}">Поместить</a>{% else %}<button type="submit" class="btn btn-primary">{% if is_edit %}Отредактировать{% else %}Поместить{% endif %}</button>{% endif %}
@@ -92,5 +126,5 @@
     {% if !is_edit && !anonymous_form %}<button type="submit" name="draft" class="btn btn-default">Сохранить в черновики</button>{% endif %}
   </div>
 </form>
-{% if image_allowed %}<p>Технические требования к изображению:</p><ul><li>Ширина x Высота: от 400x400 до 5120x5120 пикселей</li><li>Тип: jpeg, gif, png</li><li>Размер не более 8142 Kb</li></ul>{% endif %}
+{% if image_allowed %}<p>Технические требования к изображению:</p><ul><li>Ширина x Высота: от 400x400 до 5120x5120 пикселей</li><li>Тип: jpeg, gif, png</li><li>Размер не более 8142 Kb</li><li>Изображения, содержащие EXIF-информацию, не всегда могут быть загружены. Если ваше изображение соответствует требованиям выше, но не принимается к загрузке, удалите из него EXIF-информацию.</li></ul>{% endif %}
 {% endblock %}

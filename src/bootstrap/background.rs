@@ -30,6 +30,7 @@ const LOCK_EMAIL_DOMAINS: i64 = 0x4c4f_520a;
 const LOCK_TELEGRAM: i64 = 0x4c4f_520b;
 const LOCK_USERPICS: i64 = 0x4c4f_520c;
 const LOCK_GALLERY_PREVIEWS: i64 = 0x4c4f_520d;
+const LOCK_UNUSED_TAGS: i64 = 0x4c4f_520e;
 
 type TySpringSchedulerGate = Arc<Mutex<()>>;
 
@@ -106,13 +107,22 @@ pub fn vecSpawn(stState: AppState, oShutdown: watch::Receiver<bool>) -> Vec<Join
             |stState| async move { vUpdateGroupStatistics(&stState.pool).await },
         ),
         stSpawnFixed(
-            "tag counters",
+            "tag counter recalculation",
             FIVE_MINUTES,
             HOUR,
             oSchedulerGate.clone(),
             stState.clone(),
             oShutdown.clone(),
-            |stState| async move { vUpdateTagCounters(&stState.pool).await },
+            |stState| async move { vRecalculateTagCounters(&stState.pool).await },
+        ),
+        stSpawnFixed(
+            "unused favorite tags",
+            FIVE_MINUTES,
+            HOUR,
+            oSchedulerGate.clone(),
+            stState.clone(),
+            oShutdown.clone(),
+            |stState| async move { vDeleteUnusedTags(&stState.pool).await },
         ),
         stSpawnFixed(
             "old events",
@@ -406,12 +416,34 @@ fn stScheduledFailureReport(
         sError = sError.replace(sToken, "[REDACTED]");
     }
     StExceptionReport {
-        // `anyhow` deliberately erases the concrete exception class which the
-        // Java scheduler used for rate grouping. Keep jobs distinct so one
-        // failing task cannot suppress the first report from another task.
-        sType: format!("Periodic task: {sName}"),
+        // Java groups periodic reports by `ex.getClass`, not by callback name.
+        // Recover the concrete adapter/database class from anyhow's source
+        // chain where possible; unknown application errors share the anyhow
+        // class instead of being split into one rate-limit bucket per job.
+        sType: sScheduledErrorClass(stError).to_owned(),
         sBody: format!("Periodic task failed\n\nJob: {sName}\n{sError}"),
     }
+}
+
+fn sScheduledErrorClass(stError: &anyhow::Error) -> &'static str {
+    for stCause in stError.chain() {
+        if stCause.is::<sqlx::Error>() {
+            return "sqlx::Error";
+        }
+        if stCause.is::<reqwest::Error>() {
+            return "reqwest::Error";
+        }
+        if stCause.is::<std::io::Error>() {
+            return "std::io::Error";
+        }
+        if stCause.is::<serde_json::Error>() {
+            return "serde_json::Error";
+        }
+        if stCause.is::<image::ImageError>() {
+            return "image::ImageError";
+        }
+    }
+    "anyhow::Error"
 }
 
 async fn bWaitOrShutdown(stDelay: Duration, oShutdown: &mut watch::Receiver<bool>) -> bool {
@@ -567,7 +599,7 @@ async fn vUpdateGroupStatistics(oPool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn vUpdateTagCounters(oPool: &PgPool) -> anyhow::Result<()> {
+async fn vRecalculateTagCounters(oPool: &PgPool) -> anyhow::Result<()> {
     let mut stTransaction = oPool.begin().await?;
     if !bLock(&mut stTransaction, LOCK_TAG_COUNTERS).await? {
         return Ok(());
@@ -581,6 +613,15 @@ async fn vUpdateTagCounters(oPool: &PgPool) -> anyhow::Result<()> {
     )
     .execute(&mut *stTransaction)
     .await?;
+    stTransaction.commit().await?;
+    Ok(())
+}
+
+async fn vDeleteUnusedTags(oPool: &PgPool) -> anyhow::Result<()> {
+    let mut stTransaction = oPool.begin().await?;
+    if !bLock(&mut stTransaction, LOCK_UNUSED_TAGS).await? {
+        return Ok(());
+    }
     let stDeleted = sqlx::query(
         "DELETE FROM user_tags WHERE NOT EXISTS (SELECT 1 FROM tags JOIN topics ON topics.id=tags.msgid WHERE tagid=user_tags.tag_id AND NOT deleted)",
     )
@@ -666,75 +707,62 @@ async fn vDeleteInactiveAccounts(oPool: &PgPool) -> anyhow::Result<()> {
     if !bLock(&mut stTransaction, LOCK_INACTIVE_USERS).await? {
         return Ok(());
     }
-    let vecRegular = vecDeletableInactiveUsers(&mut stTransaction, true).await?;
-    let iRegular = vecRegular.len();
-    vDeleteInactiveUserBatch(&mut stTransaction, &vecRegular).await?;
-    let vecBlocked = vecDeletableInactiveUsers(&mut stTransaction, false).await?;
-    let iBlocked = vecBlocked.len();
-    vDeleteInactiveUserBatch(&mut stTransaction, &vecBlocked).await?;
+    sqlx::query(
+        r#"DELETE FROM user_events WHERE userid IN (
+             SELECT id FROM users WHERE NOT activated AND NOT blocked
+               AND regdate<CURRENT_TIMESTAMP-'12 hours'::interval)"#,
+    )
+    .execute(&mut *stTransaction)
+    .await?;
+    sqlx::query(
+        r#"DELETE FROM topic_users_notified WHERE userid IN (
+             SELECT id FROM users WHERE NOT activated AND NOT blocked
+               AND regdate<CURRENT_TIMESTAMP-'12 hours'::interval)"#,
+    )
+    .execute(&mut *stTransaction)
+    .await?;
+    let iRegular = sqlx::query(
+        r#"DELETE FROM users WHERE NOT activated AND NOT blocked
+           AND regdate<CURRENT_TIMESTAMP-'12 hours'::interval"#,
+    )
+    .execute(&mut *stTransaction)
+    .await?
+    .rows_affected();
+
+    sqlx::query(
+        r#"DELETE FROM ban_info WHERE userid IN (
+             SELECT id FROM users WHERE NOT activated
+               AND regdate<CURRENT_TIMESTAMP-'30 days'::interval)"#,
+    )
+    .execute(&mut *stTransaction)
+    .await?;
+    sqlx::query(
+        r#"DELETE FROM user_events WHERE userid IN (
+             SELECT id FROM users WHERE NOT activated
+               AND regdate<CURRENT_TIMESTAMP-'30 days'::interval)"#,
+    )
+    .execute(&mut *stTransaction)
+    .await?;
+    sqlx::query(
+        r#"DELETE FROM topic_users_notified WHERE userid IN (
+             SELECT id FROM users WHERE NOT activated
+               AND regdate<CURRENT_TIMESTAMP-'30 days'::interval)"#,
+    )
+    .execute(&mut *stTransaction)
+    .await?;
+    let iBlocked = sqlx::query(
+        r#"DELETE FROM users WHERE NOT activated
+           AND regdate<CURRENT_TIMESTAMP-'30 days'::interval"#,
+    )
+    .execute(&mut *stTransaction)
+    .await?
+    .rows_affected();
     stTransaction.commit().await?;
     tracing::info!(
         regular = iRegular,
         blocked = iBlocked,
         "deleted inactive accounts"
     );
-    Ok(())
-}
-
-async fn vecDeletableInactiveUsers(
-    stTransaction: &mut Transaction<'_, Postgres>,
-    bRegularWindow: bool,
-) -> anyhow::Result<Vec<i32>> {
-    // Registration creates user_settings before activation, while the Java
-    // cleanup SQL deletes users directly even though that FK has no cascade.
-    // Historic databases also contain a few unactivated accounts referenced
-    // by content. Select only accounts whose owned rows can be removed without
-    // deleting forum content or making the entire hourly transaction fail.
-    Ok(sqlx::query_scalar(
-        r#"SELECT u.id FROM users u
-           WHERE NOT u.activated
-             AND (($1 AND NOT u.blocked AND u.regdate<CURRENT_TIMESTAMP-'12 hours'::interval)
-               OR (NOT $1 AND u.regdate<CURRENT_TIMESTAMP-'30 days'::interval))
-             AND NOT EXISTS (SELECT 1 FROM topics t WHERE t.userid=u.id OR t.commitby=u.id)
-             AND NOT EXISTS (SELECT 1 FROM comments c WHERE c.userid=u.id OR c.editor_id=u.id)
-             AND NOT EXISTS (SELECT 1 FROM ban_info b WHERE b.ban_by=u.id)
-             AND NOT EXISTS (SELECT 1 FROM del_info d WHERE d.delby=u.id)
-             AND NOT EXISTS (SELECT 1 FROM edit_info e WHERE e.editor=u.id)
-             AND NOT EXISTS (SELECT 1 FROM ignore_list i WHERE i.userid=u.id OR i.ignored=u.id)
-             AND NOT EXISTS (SELECT 1 FROM memories m WHERE m.userid=u.id)
-             AND NOT EXISTS (SELECT 1 FROM vote_users v WHERE v.userid=u.id)
-             AND NOT EXISTS (SELECT 1 FROM user_tags t WHERE t.user_id=u.id)
-             AND NOT EXISTS (SELECT 1 FROM user_remarks r WHERE r.user_id=u.id)
-             AND NOT EXISTS (SELECT 1 FROM user_invites i WHERE i.owner=u.id OR i.invited_user=u.id)
-             AND NOT EXISTS (SELECT 1 FROM reactions_log r WHERE r.origin_user=u.id)
-             AND NOT EXISTS (SELECT 1 FROM message_warnings w WHERE w.author=u.id OR w.closed_by=u.id)
-             AND NOT EXISTS (SELECT 1 FROM user_events e WHERE e.origin_user=u.id AND e.userid<>u.id)
-             AND NOT EXISTS (SELECT 1 FROM users x WHERE x.frozen_by=u.id)"#,
-    )
-    .bind(bRegularWindow)
-    .fetch_all(&mut **stTransaction)
-    .await?)
-}
-
-async fn vDeleteInactiveUserBatch(
-    stTransaction: &mut Transaction<'_, Postgres>,
-    vecUserIds: &[i32],
-) -> anyhow::Result<()> {
-    if vecUserIds.is_empty() {
-        return Ok(());
-    }
-    for sSql in [
-        "DELETE FROM user_events WHERE userid=ANY($1)",
-        "DELETE FROM topic_users_notified WHERE userid=ANY($1)",
-        "DELETE FROM ban_info WHERE userid=ANY($1)",
-        "DELETE FROM user_settings WHERE id=ANY($1)",
-        "DELETE FROM users WHERE id=ANY($1)",
-    ] {
-        sqlx::query(sqlx::AssertSqlSafe(sSql))
-            .bind(vecUserIds)
-            .execute(&mut **stTransaction)
-            .await?;
-    }
     Ok(())
 }
 
@@ -1749,11 +1777,18 @@ mod tests {
                 .context("publisher adapter");
         let stReport =
             stScheduledFailureReport("Telegram publisher", &stError, Some("SUPER_SECRET"));
-        assert_eq!(stReport.sType, "Periodic task: Telegram publisher");
+        assert_eq!(stReport.sType, "anyhow::Error");
         assert!(stReport.sBody.contains("publisher adapter"));
         assert!(stReport.sBody.contains("Periodic task failed"));
         assert!(!stReport.sBody.contains("SUPER_SECRET"));
         assert!(stReport.sBody.contains("[REDACTED]"));
+
+        let stIoError = anyhow::Error::new(std::io::Error::other("disk unavailable"))
+            .context("preview cleanup");
+        assert_eq!(
+            stScheduledFailureReport("old gallery previews", &stIoError, None).sType,
+            "std::io::Error"
+        );
 
         let sProduction = include_str!("background.rs")
             .split("#[cfg(test)]\nmod tests")
@@ -1796,6 +1831,55 @@ mod tests {
                 .unwrap_or_default()
                 .contains("vReportScheduledFailure")
         );
+    }
+
+    #[test]
+    fn tag_callbacks_keep_java_independent_transaction_boundaries() {
+        let sProduction = include_str!("background.rs")
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .expect("production source");
+        assert!(sProduction.contains("\"tag counter recalculation\""));
+        assert!(sProduction.contains("\"unused favorite tags\""));
+        assert!(sProduction.contains("vRecalculateTagCounters(&stState.pool)"));
+        assert!(sProduction.contains("vDeleteUnusedTags(&stState.pool)"));
+
+        let sRecalculate = sProduction
+            .split("async fn vRecalculateTagCounters")
+            .nth(1)
+            .and_then(|sSource| sSource.split("async fn vDeleteUnusedTags").next())
+            .expect("recalculation callback");
+        let sDelete = sProduction
+            .split("async fn vDeleteUnusedTags")
+            .nth(1)
+            .and_then(|sSource| sSource.split("async fn vCleanupOldEvents").next())
+            .expect("unused-tag callback");
+        for sCallback in [sRecalculate, sDelete] {
+            assert!(sCallback.contains("oPool.begin().await?"));
+            assert!(sCallback.contains("stTransaction.commit().await?"));
+        }
+        assert!(!sRecalculate.contains("DELETE FROM user_tags"));
+        assert!(!sDelete.contains("UPDATE tags_values"));
+    }
+
+    #[test]
+    fn inactive_cleanup_keeps_java_all_or_nothing_batch_sql() {
+        let sProduction = include_str!("background.rs")
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .expect("production source");
+        let sCleanup = sProduction
+            .split("async fn vDeleteInactiveAccounts")
+            .nth(1)
+            .and_then(|sSource| sSource.split("async fn vExecuteLocked").next())
+            .expect("inactive cleanup callback");
+        assert!(sCleanup.contains("NOT activated AND NOT blocked"));
+        assert!(sCleanup.contains("'12 hours'::interval"));
+        assert!(sCleanup.contains("'30 days'::interval"));
+        assert_eq!(sCleanup.matches("DELETE FROM users WHERE").count(), 2);
+        assert!(!sCleanup.contains("NOT EXISTS"));
+        assert!(!sCleanup.contains("user_settings"));
+        assert_eq!(sCleanup.matches("stTransaction.commit().await?").count(), 1);
     }
 
     #[test]

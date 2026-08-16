@@ -1,10 +1,26 @@
 {% extends "base.html" %}
 {% block title %}LINUX.ORG.RU — Русская информация об ОС Linux{% endblock %}
-{% block head_extra %}<link rel="alternate" title="L.O.R RSS" href="/section-rss.jsp?section=1" type="application/rss+xml">{% endblock %}
+{% block head_extra %}
+<meta name="Keywords" content="linux, линукс, unix, новости, статьи, документация, форум, галерея">
+<meta name="Description" content="Русская информация об операционной системе Linux">
+<link rel="alternate" title="L.O.R RSS" href="/section-rss.jsp?section=1" type="application/rss+xml">
+{% endblock %}
 {% block content %}
 <div id="mainpage">
 <div id="news">
   <div style="text-align: center; margin-top: 0.5em; height: 125px" id="interpage"></div>
+  <script type="text/javascript">
+    $script.ready('lorjs', function () {
+      var ads = [{
+        type: 'rimg',
+        img320: '/adv/bare-metal-new-h2-320x100.png',
+        img728: '/adv/bare-metal-new-h2-728x90.png',
+        img1000: '/adv/bare-metal-new-h2-1000x120.png',
+        href: 'https://selectel.ru/services/dedicated/auction/?utm_source=linuxorg&utm_medium=banner&utm_campaign=auction'
+      }];
+      init_interpage_adv(ads);
+    });
+  </script>
   <nav>
     {% for item in uncommitted %}<a class="btn btn-default" href="/view-all.jsp?section={{ item.0 }}">{{ item.1 }}: {{ item.2 }}</a>{% endfor %}
     {% match add_url %}{% when Some with (url) %}<a href="{{ url }}" class="btn btn-primary">Добавить</a>{% when None %}<a class="btn btn-primary disabled" title="{{ add_reason }}"><i class="icon-lock"></i> Добавить</a>{% endmatch %}

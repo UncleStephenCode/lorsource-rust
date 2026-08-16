@@ -1,6 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Фильтрация сообщений{% endblock %}
-{% block head_extra %}<script src="/js/tagsAutocomplete.js" defer></script>{% endblock %}
+{% block head_extra %}
+<script type="text/javascript">
+  $script.ready("plugins", function() {
+    $script("/js/tagsAutocomplete.js");
+  });
+</script>
+{% endblock %}
 {% block content %}
 <h1>Фильтрация сообщений</h1>
 

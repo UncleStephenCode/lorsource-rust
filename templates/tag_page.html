@@ -15,7 +15,7 @@
   </div>
   <p>Всего сообщений: {{ counter }}</p>
   {% if related_tags.len() > 0 %}См. также: <span class="tags">{% for related in related_tags %}<a class="tag" href="{{ related.url }}">{{ related.name }}</a>{% if !loop.last %}, {% endif %}{% endfor %}</span>{% endif %}
-  {% if synonyms.len() > 0 %}Синонимы: <span class="tags">{% for s in synonyms %}<a class="tag" href="/tag/{{ s }}">{{ s }}</a>{% if !loop.last %}, {% endif %}{% endfor %}</span>{% endif %}
+  {% if synonyms.len() > 0 %}Синонимы: <span class="tags">{% for s in synonyms %}<a class="tag" rel="tag" href="{{ s.url }}">{{ s.name }}</a>{% if show_delete %} [<a href="{{ s.delete_url }}">X</a>]{% endif %}{% if !loop.last %}, {% endif %}{% endfor %}</span>{% endif %}
   {% if show_delete %}[<a href="/tags/change?tagName={{ tag }}">Переименовать тег</a>] [<a href="/tags/delete?tagName={{ tag }}">Удалить тег</a>]{% endif %}
 </div>
 
@@ -24,7 +24,7 @@
   {% for t in group.full_news %}
   <article class="news" id="topic-{{ t.topic.id }}"><header><div class="group"><a href="/{{ t.topic.section_prefix }}/">{{ t.topic.section_name }}</a> — <a href="/{{ t.topic.section_prefix }}/{{ t.topic.group_urlname }}">{{ t.topic.group_title }}</a></div><h1>{% if t.topic.resolved.unwrap_or(false) %}<i class="icon-check" title="решено"></i>{% endif %}<a href="{{ t.topic.topic_url() }}">{{ t.topic.sTitlePlain() }}</a></h1>{% if t.topic.tags_vec().len() > 0 %}<p class="tags"><i class="icon-tag"></i>&nbsp;{% for tag in t.topic.tags_vec() %}<a class="tag" href="/tag/{{ tag }}">{{ tag }}</a>{% if !loop.last %}, {% endif %}{% endfor %}</p>{% endif %}</header>{{ t.images_html|safe }}{% match t.group_image_url %}{% when Some with (image) %}<div class="entry-userpic"><a href="/{{ t.topic.section_prefix }}/{{ t.topic.group_urlname }}"><img class="groupimg" src="{{ image }}" alt="Группа {{ t.topic.group_title }}"></a></div>{% when None %}{% endmatch %}<div class="entry-body"><div class="msg">{{ t.topic_html|safe }}{% match t.poll %}{% when Some with (p) %}{% include "poll_view.html" %}{% when None %}{% endmatch %}{% match t.topic.url %}{% when Some with (url) %}<p>&gt;&gt;&gt; <a href="{{ url }}">{{ t.linktext }}</a></p>{% when None %}{% endmatch %}</div><div class="sign"><a href="/people/{{ t.topic.author }}/profile">{{ t.topic.author }}</a> (<time data-format="default" datetime="{{ t.topic.postdate.to_rfc3339() }}">{{ t.topic.postdate }}</time>)</div><div class="nav">{% if t.topic.comments == 0 %}{% if t.can_comment %}<a href="comment-message.jsp?topic={{ t.topic.id }}">Добавить&nbsp;комментарий</a>{% endif %}{% else %}<a href="{{ t.topic.topic_url() }}#comments">{{ t.topic.comments }} комментариев</a>{% endif %}</div></div></article>
   {% endfor %}
-  <h2><a href="/{{ group.section_prefix }}/">{% if group.full_news.len() > 0 %}Еще новости{% else %}{{ group.section_name }}{% endif %}</a></h2>
+  <h2>{% if group.full_news.len() > 0 %}Еще новости{% else %}{{ group.section_name }}{% endif %}</h2>
   {% if group.gallery.len() > 0 %}
   <div id="tag-page-gallery">
     {% for item in group.gallery %}<article><a href="{{ item.topic.topic_url() }}"><img src="{{ item.medium_url }}" srcset="{{ item.srcset }}" sizes="(min-width: 40em) 32vw, 100vw" alt="Скриншот: {{ item.topic.sTitlePlain() }}"></a><br><a href="{{ item.topic.topic_url() }}">{{ item.topic.sTitlePlain() }}</a><br>{{ item.topic.author }}, <time data-format="default" datetime="{{ item.topic.postdate.to_rfc3339() }}">{{ item.topic.postdate }}</time><br>({{ item.topic.comments }} комментариев)</article>{% endfor %}
@@ -38,7 +38,13 @@
   {% endif %}
   <div class="tag-page-buttons"><div>
     {% match group.add_url %}{% when Some with (url) %}<a href="{{ url }}" class="btn btn-primary">{{ group.add_label }}</a>{% when None %}<a class="btn btn-primary disabled" title="{{ group.add_reason }}"><i class="icon-lock"></i> {{ group.add_label }}</a>{% endmatch %}
+    {% match group.more_url %}{% when Some with (url) %}<a href="{{ url }}" class="btn btn-default">{{ group.more_label }}</a>{% when None %}{% endmatch %}
   </div></div>
 </section>
 {% endfor %}
+<script type="text/javascript">
+  $script.ready('lorjs', function() {
+    tag_memories_form_setup("{{ tag }}", "{{ csrf_token }}");
+  });
+</script>
 {% endblock %}

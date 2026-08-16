@@ -1,11 +1,19 @@
 {% extends "base.html" %}
 {% block title %}Добавить комментарий{% endblock %}
+{% block head_extra %}
+<script type="text/javascript">
+  $script('/js/add-form.js');
+</script>
+{% endblock %}
 {% block content %}
-{% match preview_html %}{% when Some with (html) %}<h1>Предпросмотр</h1><div class="messages"><article class="msg"><div class="msg-container"><div class="msg_body"><div class="msg-text">{{ html|safe }}</div></div></div></article></div>{% when None %}{% endmatch %}
-<h1>Добавить комментарий</h1>
-<p><a href="{{ topic_url }}">{{ topic_title }}</a></p>
-<p class="help-block">Комментарий должен соответствовать <a href="/help/rules.md">правилам</a> сайта.</p>
+<div class="nav">
+  <div id="navPath">Добавить комментарий</div>
+  <div class="nav-buttons"><ul><li><a href="/view-message.jsp?msgid={{ topic_id }}">Читать комментарии</a></li></ul></div>
+</div>
+<font size=2><strong>Внимание!</strong> Перед написанием комментария ознакомьтесь с
+  <a href="/help/rules.md">правилами</a> сайта.</font>
 {% match context_html %}{% when Some with (html) %}{{ html|safe }}{% when None %}{% endmatch %}
+{% match preview_html %}{% when Some with (html) %}<p><b>Ваше сообщение</b></p><div class="comment"><div class="messages">{{ html|safe }}</div></div>{% when None %}{% endmatch %}
 <div id="comment-form-container">
 <form method="post" action="/add_comment.jsp" class="form wide" id="commentForm">
   <input type="hidden" name="csrf" value="{{ csrf_token }}">

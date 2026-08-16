@@ -43,6 +43,12 @@ pub mod password {
     use md5::{Digest, Md5};
     use unicode_normalization::UnicodeNormalization;
 
+    /// Java registration/profile validators use `String.length()`, whose unit
+    /// is a UTF-16 code unit. Keep password boundaries migration-compatible.
+    pub fn bHasJavaMinimumLength(sRaw: &str, iMinimum: usize) -> bool {
+        sRaw.encode_utf16().count() >= iMinimum
+    }
+
     /// BCrypt uses the first 72 bytes. Match the Scala PasswordEncoderImpl
     /// behaviour: truncate on a UTF-8 boundary before hashing/verifying.
     pub fn truncate_for_bcrypt(raw: &str) -> String {

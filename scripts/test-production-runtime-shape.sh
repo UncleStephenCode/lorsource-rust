@@ -30,6 +30,7 @@ if sInvalidTimezoneOutput="$(
   LORSOURCE_IMAGE="registry.example.invalid/lorsource@sha256:$(printf '0%.0s' {1..64})" \
   UPLOAD_HOST_PATH="$sFixtureRoot/uploads" \
   SCHEDULER_TIMEZONE=../UTC \
+  LEGACY_JDBC_TIMEZONE=UTC \
   ENABLE_BACKGROUND_JOBS=false \
   "$sRoot/scripts/check-production-runtime.sh" 2>&1
 )"; then
@@ -41,6 +42,7 @@ if sInvalidSchedulerFlagOutput="$(
   LORSOURCE_IMAGE="registry.example.invalid/lorsource@sha256:$(printf '0%.0s' {1..64})" \
   UPLOAD_HOST_PATH="$sFixtureRoot/uploads" \
   SCHEDULER_TIMEZONE=UTC \
+  LEGACY_JDBC_TIMEZONE=UTC \
   ENABLE_BACKGROUND_JOBS=treu \
   "$sRoot/scripts/check-production-runtime.sh" 2>&1
 )"; then
@@ -53,6 +55,22 @@ if [[ "$sInvalidSchedulerFlagOutput" != *"literal true or false"* ]]; then
 fi
 if [[ "$sInvalidTimezoneOutput" != *"safe relative IANA timezone name"* ]]; then
   echo "production preflight failed before validating the scheduler timezone" >&2
+  exit 1
+fi
+
+if sInvalidLegacyTimezoneOutput="$(
+  LORSOURCE_IMAGE="registry.example.invalid/lorsource@sha256:$(printf '0%.0s' {1..64})" \
+  UPLOAD_HOST_PATH="$sFixtureRoot/uploads" \
+  SCHEDULER_TIMEZONE=UTC \
+  LEGACY_JDBC_TIMEZONE=../UTC \
+  ENABLE_BACKGROUND_JOBS=false \
+  "$sRoot/scripts/check-production-runtime.sh" 2>&1
+)"; then
+  echo "production preflight accepted an unsafe legacy JDBC timezone" >&2
+  exit 1
+fi
+if [[ "$sInvalidLegacyTimezoneOutput" != *"LEGACY_JDBC_TIMEZONE must be a safe relative IANA timezone name"* ]]; then
+  echo "production preflight failed before validating the legacy JDBC timezone" >&2
   exit 1
 fi
 
@@ -70,11 +88,14 @@ SMTP_HOST=smtp.example.invalid \
 SMTP_HELO_NAME=www.linux.org.ru \
 ADMIN_EMAIL=operations@example.invalid \
 SCHEDULER_TIMEZONE=Europe/Moscow \
+LEGACY_JDBC_TIMEZONE=Europe/Moscow \
 ENABLE_BACKGROUND_JOBS=false \
 docker compose --project-name "$sProject" -f "$sCompose" run --rm --no-deps app \
   /bin/sh -c '
     set -eu
     test "${TZ:-}" = Europe/Moscow
+    test "${SCHEDULER_TIMEZONE:-}" = Europe/Moscow
+    test "${LEGACY_JDBC_TIMEZONE:-}" = Europe/Moscow
     test -e /usr/share/zoneinfo/Europe/Moscow
     test "$(date +%z)" = +0300
     test "$(id -u)" = 8181

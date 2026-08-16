@@ -4,7 +4,7 @@ use axum::{
     extract::{Request, State},
     http::{Method, StatusCode, Uri, header},
     response::{Html, IntoResponse, Response},
-    routing::{MethodRouter, get},
+    routing::{MethodRouter, get, post},
 };
 
 use crate::{
@@ -26,12 +26,12 @@ use crate::{
 };
 
 const I_PARAMETER_BODY_LIMIT: usize = 1024 * 1024;
-const S_ALLOW_MOVE: &str = "GET,HEAD,POST,OPTIONS";
-const S_ALLOW_UNCOMMIT: &str = "GET,HEAD,POST,OPTIONS";
+const S_ALLOW_MOVE: &str = "POST,GET,HEAD,OPTIONS";
+const S_ALLOW_UNCOMMIT: &str = "POST,GET,HEAD,OPTIONS";
 const S_ALLOW_GET: &str = "GET,HEAD,OPTIONS";
 const S_ALLOW_RESOLVE: &str = "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS";
-const S_METHODS_MOVE: &str = "GET, POST";
-const S_METHODS_UNCOMMIT: &str = "GET, POST";
+const S_METHODS_MOVE: &str = "POST, GET";
+const S_METHODS_UNCOMMIT: &str = "POST, GET";
 const S_METHODS_GET: &str = "GET";
 
 type TyModerationService =
@@ -126,8 +126,8 @@ pub fn stResolveRoute() -> MethodRouter<AppState> {
 }
 
 pub fn stMoveRoute() -> MethodRouter<AppState> {
-    get(move_form)
-        .post(move_submit)
+    post(move_submit)
+        .get(move_form)
         .options(options_move)
         .fallback(method_not_allowed_move)
 }
@@ -139,8 +139,8 @@ pub fn stPremoderatedMoveRoute() -> MethodRouter<AppState> {
 }
 
 pub fn stUncommitRoute() -> MethodRouter<AppState> {
-    get(uncommit_form)
-        .post(uncommit_submit)
+    post(uncommit_submit)
+        .get(uncommit_form)
         .options(options_uncommit)
         .fallback(method_not_allowed_uncommit)
 }
@@ -465,14 +465,20 @@ mod tests {
         assert!(sSource.contains(".delete(resolve)"));
         assert!(sSource.contains(".fallback(method_not_allowed_resolve)"));
         assert!(sSource.contains("stRequest.method() == Method::OPTIONS"));
+        assert!(sSource.contains(
+            "post(move_submit)\n        .get(move_form)\n        .options(options_move)"
+        ));
+        assert!(sSource.contains(
+            "post(uncommit_submit)\n        .get(uncommit_form)\n        .options(options_uncommit)"
+        ));
     }
 
     #[tokio::test]
     async fn explicit_options_and_405_responses_keep_spring_allow_values() {
-        assert_eq!(S_ALLOW_MOVE, "GET,HEAD,POST,OPTIONS");
-        assert_eq!(S_ALLOW_UNCOMMIT, "GET,HEAD,POST,OPTIONS");
-        assert_eq!(S_METHODS_MOVE, "GET, POST");
-        assert_eq!(S_METHODS_UNCOMMIT, "GET, POST");
+        assert_eq!(S_ALLOW_MOVE, "POST,GET,HEAD,OPTIONS");
+        assert_eq!(S_ALLOW_UNCOMMIT, "POST,GET,HEAD,OPTIONS");
+        assert_eq!(S_METHODS_MOVE, "POST, GET");
+        assert_eq!(S_METHODS_UNCOMMIT, "POST, GET");
 
         for (stResponse, sAllow) in [
             (options_move().await, S_ALLOW_MOVE),

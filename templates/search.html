@@ -62,12 +62,12 @@
   <div class="messages">
   {% for item in items %}
     <article class="msg">
-      <h1>{% if item.is_comment %}<i class="icon-comment"></i>{% endif %}<a href="{{ item.url }}">{{ item.title_html|safe }}</a></h1>
+      <h1>{% if item.stItem.is_comment %}<i class="icon-comment"></i>{% endif %}<a href="{{ item.stItem.url }}">{{ item.stItem.title_html|safe }}</a></h1>
       <div class="msg_body">
-        <p>{{ item.message_html|safe }}</p>
-        {% if item.tags.len() > 0 %}<div class="tags">{% for tag in item.tags %}<a class="tag" href="{{ tag.url }}">{{ tag.name }}</a>{% endfor %}</div>{% endif %}
-        <div class="sign"><a href="/people/{{ item.author }}/profile">{{ item.author }}</a> <time data-format="default" datetime="{{ item.postdate_iso }}">{{ item.postdate }}</time></div>
-        {% if debug %}<div>Rank: {{ item.score }}</div>{% endif %}
+        <p>{{ item.stItem.message_html|safe }}</p>
+        {% if item.stItem.tags.len() > 0 %}<div class="tags">{% for tag in item.stItem.tags %}<a class="tag" href="{{ tag.url }}">{{ tag.name }}</a>{% endfor %}</div>{% endif %}
+        <div class="sign">{% if item.bAuthorBlocked %}<s>{% endif %}{% if !item.bAuthorAnonymous || session_authorized %}<a itemprop="creator" href="/people/{{ item.sAuthorUrl }}/profile">{{ item.stItem.author }}</a>{% else %}{{ item.stItem.author }}{% endif %}{% if item.bAuthorBlocked %}</s>{% endif %}{% if !item.bAuthorAnonymous %} {{ item.sAuthorStarsHtml|safe }}{% if item.bShowAuthorScore %} (Score:&nbsp;{{ item.iAuthorScore }} MaxScore:&nbsp;{{ item.iAuthorMaxScore }}){% endif %}{% endif %}<br class="visible-phone"> <span class="hideon-phone">(</span><time data-format="default" datetime="{{ item.stItem.postdate_iso }}">{{ item.stItem.postdate }}</time><span class="hideon-phone">)</span></div>
+        {% if debug %}<div>Rank: {{ item.stItem.score }}</div>{% endif %}
       </div>
     </article>
   {% endfor %}

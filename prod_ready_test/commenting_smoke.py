@@ -40,13 +40,21 @@ def run() -> dict[str, object]:
             guest = seed.browser.new_context(viewport={"width": 1440, "height": 1000})
             guest_page = guest.new_page()
             seed.goto(guest_page, str(TOPIC["url"]))
-            require(
-                guest_page.get_by_role("link", name="Ответить", exact=True).count() == 0,
-                "anonymous viewer sees a forbidden Reply action",
+            guest_reply = guest_page.locator(
+                f'#topic-{TOPIC["id"]} .reply '
+                f'a[href="comment-message.jsp?topic={TOPIC["id"]}"]'
             )
             require(
-                guest_page.locator("#commentForm").count() == 0,
-                "anonymous viewer receives the inline comment form",
+                guest_reply.count() == 1,
+                "anonymous viewer does not see Reply on an unrestricted topic",
+            )
+            require(
+                guest_page.locator(
+                    '#commentForm input[name="nick"], '
+                    '#commentForm input[name="password"]'
+                ).count()
+                == 2,
+                "anonymous viewer does not receive the inline identity form",
             )
             guest.close()
 
@@ -115,7 +123,7 @@ def run() -> dict[str, object]:
             child_scope = robin.locator(f'#comment-{child["id"]}')
             child_scope.locator('a[href^="/delete_comment.jsp?"]').click()
             robin.wait_for_load_state("domcontentloaded")
-            delete_form = robin.locator('form[action="/delete_comment.jsp"]')
+            delete_form = robin.locator('form[action="delete_comment.jsp"]')
             require(delete_form.count() == 1, "Delete form is absent")
             delete_reason = f"browser lifecycle {marker}"
             delete_form.locator('input[name="reason"]').fill(delete_reason)
@@ -147,7 +155,7 @@ def run() -> dict[str, object]:
             victim_scope = moderator.locator(f'#comment-{victim["id"]}')
             victim_scope.locator('a[href^="/delete_comment.jsp?"]').click()
             moderator.wait_for_load_state("domcontentloaded")
-            moderator_delete_form = moderator.locator('form[action="/delete_comment.jsp"]')
+            moderator_delete_form = moderator.locator('form[action="delete_comment.jsp"]')
             moderator_reason = f"browser moderator lifecycle {marker}"
             moderator_delete_form.locator('input[name="reason"]').fill(moderator_reason)
             moderator_delete_form.locator('button[type="submit"]').click()
@@ -161,7 +169,7 @@ def run() -> dict[str, object]:
             require(moderator_reason in victim_deleted_scope.inner_text(), "moderator delete reason is absent")
             victim_deleted_scope.locator('a[href^="/undelete_comment?"]').click()
             senior.wait_for_load_state("domcontentloaded")
-            undelete_form = senior.locator('form[action="/undelete_comment"]')
+            undelete_form = senior.locator('form[action="undelete_comment"]')
             require(undelete_form.count() == 1, "Restore form is absent")
             undelete_form.locator('button[type="submit"]').click()
             senior.wait_for_load_state("domcontentloaded")

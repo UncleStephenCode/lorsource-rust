@@ -2,13 +2,16 @@ use crate::{
     application::{
         edit_history::{CEditHistoryService, StPreparedEditHistory},
         topic::CTopicService,
-        user::{account::CUserAccountService, userpic::CUserpicService},
+        user::{
+            account::CUserAccountService, identity::CUserIdentityService, userpic::CUserpicService,
+        },
     },
     auth::CurrentUser,
     error::{AppError, Result},
     infra::postgres::{
         edit_history_repository::CEditHistoryPgRepository, topic_repository::CTopicPgRepository,
         user_account_repository::CUserAccountPgRepository,
+        user_identity_repository::CUserIdentityPgRepository,
         userpic_repository::CUserpicPgRepository,
     },
     markup,
@@ -456,7 +459,10 @@ pub async fn legacy_view_message(
 ) -> Result<Response> {
     let vecParameters = crate::form::servlet_request_parameters(stRequest).await?;
     let stParameters = stLegacyViewMessageParameters(&vecParameters)?;
-    let cService = CTopicService::new(CTopicPgRepository::new(stState.pool.clone()));
+    let cService = CTopicService::new(CTopicPgRepository::new(
+        stState.pool.clone(),
+        stState.config.stLegacyJdbcTimezone(),
+    ));
     let stTopic = cService
         .stLegacyTopicRedirect(stParameters.iMessageId)
         .await?;
@@ -719,7 +725,7 @@ pub async fn check_login(
         "Некорректное имя пользователя.".to_string()
     } else if nick.len() > 19 {
         "Слишком длинное имя пользователя.".to_string()
-    } else if user_exists_or_similar(&state, nick).await? {
+    } else if crate::routes::auth::user_exists_or_similar(&state, nick).await? {
         "Это имя пользователя уже используется. Пожалуйста выберите другое имя.".to_string()
     } else {
         "true".to_string()
@@ -884,6 +890,7 @@ pub async fn archive_section(
         None,
         &current_user,
         &sRemoteIp,
+        crate::search_index::EnActiveTagsForumFilter::All,
     )
     .await?;
     let months = rows
@@ -1266,25 +1273,26 @@ pub async fn show_replies_jsp(
     if let Some(output) = optOutput {
         // Only the feed mapping binds output/filter/nick. Parameters belonging
         // solely to the moderator HTML branch (such as offset) are ignored.
-        let nick = optNick.unwrap_or_default().to_owned();
+        let nick = optNick
+            .ok_or_else(|| {
+                AppError::BadRequest("Required request parameter 'nick' is missing".to_owned())
+            })?
+            .to_owned();
         if !valid_login_name_for_java(&nick) {
             return Err(AppError::stBadInput("некорректное имя пользователя"));
         }
-        let target: Option<(i32, String)> =
-            sqlx::query_as("SELECT id, nick FROM users WHERE lower(nick)=lower($1)")
-                .bind(&nick)
-                .fetch_optional(&state.pool)
-                .await?;
-        let Some((target_id, target_nick)) = target else {
+        let cIdentity =
+            CUserIdentityService::new(CUserIdentityPgRepository::new(state.pool.clone()));
+        let Some(stTarget) = cIdentity.optExactIdentity(&nick).await? else {
             return Err(AppError::NotFound);
         };
         let view_by_owner = user
             .as_ref()
-            .map(|u| u.nick.eq_ignore_ascii_case(&target_nick))
+            .map(|u| u.nick == stTarget.sNick)
             .unwrap_or(false);
         let db_type = optFilter.and_then(crate::routes::api::filter_db_type);
         let events =
-            crate::routes::api::fetch_events(&state, target_id, db_type, view_by_owner, 200, 0)
+            crate::routes::api::fetch_events(&state, stTarget.iId, db_type, view_by_owner, 200, 0)
                 .await?;
 
         let is_atom = output == "atom";
@@ -1296,7 +1304,7 @@ pub async fn show_replies_jsp(
                     .map(|stEvent| (&*stEvent.message_text, &*stEvent.message_markup)),
             )
             .await?;
-        let body = render_replies_feed(&state, &target_nick, &events, is_atom, &stMarkupUsers);
+        let body = render_replies_feed(&state, &stTarget.sNick, &events, is_atom, &stMarkupUsers);
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(
             axum::http::header::CONTENT_TYPE,
@@ -1326,51 +1334,260 @@ pub async fn show_replies_jsp(
     let Some(current) = user else {
         return Err(AppError::Forbidden);
     };
-    if current.nick.eq_ignore_ascii_case(&nick) {
+    if current.nick == nick {
         return Ok(crate::routes::stFoundRedirect("/notifications"));
     }
     if !current.canmod {
         return Err(AppError::Forbidden);
     }
 
-    let target_id: Option<i32> =
-        sqlx::query_scalar("SELECT id FROM users WHERE lower(nick)=lower($1)")
-            .bind(&nick)
-            .fetch_optional(&state.pool)
-            .await?;
-    let Some(target_id) = target_id else {
+    let cIdentity = CUserIdentityService::new(CUserIdentityPgRepository::new(state.pool.clone()));
+    let Some(stTarget) = cIdentity.optExactIdentity(&nick).await? else {
         return Err(AppError::NotFound);
     };
-    let db_type = optFilter.and_then(crate::routes::api::filter_db_type);
+    let sFilter = sCanonicalUserEventFilter(optFilter.unwrap_or("all"));
+    let db_type = crate::routes::api::filter_db_type(sFilter);
     let offset = optServletNumber::<i64>(&vecParameters, "offset")?
         .unwrap_or(0)
         .max(0);
-    let events =
-        crate::routes::api::fetch_events(&state, target_id, db_type, true, 20, offset).await?;
-
-    let sTitle = format!("Уведомления пользователя {nick}");
-    let mut html = format!(
-        "<h1>{}</h1><p class=\"muted\">Просмотр от имени модератора {}.</p><ul class=\"notifications-list\">",
-        html_escape::encode_text(&sTitle),
-        html_escape::encode_text(&current.nick)
+    let stSettings = crate::profile::ProfileSettings::from_hstore_text(
+        cIdentity.optProfileSettings(current.id).await?,
     );
-    for e in &events {
-        let sDate = crate::request_timezone::sTimeTag("interval", e.event_date);
-        let sSubjectPlain = e.sSubjectPlain();
-        html.push_str(&format!(
-            "<li{}><a href=\"{}\">{}</a> <small>{} · {}</small></li>",
-            if e.unread { " class=\"unread\"" } else { "" },
-            e.link(),
-            html_escape::encode_text(&sSubjectPlain),
-            sDate,
-            html_escape::encode_text(&e.event_type),
+    let iPageSize = i64::from(stSettings.topics.max(1));
+    let events =
+        crate::routes::api::fetch_events(&state, stTarget.iId, db_type, true, iPageSize, offset)
+            .await?;
+    let vecEventTypes = cIdentity.vecEventTypes(stTarget.iId).await?;
+    let html =
+        sRenderModeratorNotifications(&nick, sFilter, offset, iPageSize, &vecEventTypes, &events);
+    let sTitle = format!("Уведомления пользователя {nick}");
+    Ok(Html(crate::routes::sRenderLegacyContent(&sTitle, html)?).into_response())
+}
+
+fn sCanonicalUserEventFilter(sFilter: &str) -> &'static str {
+    match sFilter {
+        "answers" => "answers",
+        "favorites" => "favorites",
+        "deleted" => "deleted",
+        "reference" => "reference",
+        "tag" => "tag",
+        "reaction" => "reaction",
+        "warning" => "warning",
+        _ => "all",
+    }
+}
+
+fn sLegacyNotificationIcon(sEventType: &str, optReaction: Option<&str>) -> String {
+    match sEventType {
+        "DEL" => "<img src=\"/img/del.png\" alt=\"[X]\" title=\"Сообщение удалено\" width=\"15\" height=\"15\">".to_owned(),
+        "REPLY" => "<i class=\"icon-reply icon-reply-color\" title=\"Ответ\"></i>".to_owned(),
+        "REF" => "<i class=\"icon-user icon-user-color\" title=\"Упоминание\"></i>".to_owned(),
+        "TAG" => "<i class=\"icon-tag icon-tag-color\" title=\"Избранный тег\"></i>".to_owned(),
+        "REACTION" => html_escape::encode_text(optReaction.unwrap_or("X")).into_owned(),
+        "WARNING" => "<span title=\"Уведомление модератора\">⚠️</span>".to_owned(),
+        _ => String::new(),
+    }
+}
+
+fn sRenderModeratorNotifications(
+    sNick: &str,
+    sFilter: &str,
+    iOffset: i64,
+    iPageSize: i64,
+    vecEventTypes: &[String],
+    vecEvents: &[crate::routes::api::NotificationEvent],
+) -> String {
+    let sTitle = format!("Уведомления пользователя {sNick}");
+    let mut sHtml = format!("<h1>{}</h1>", html_escape::encode_text(&sTitle));
+
+    // UserEventService.getEventTypes returns no filter bar for zero/one
+    // distinct event type; otherwise it preserves enum order and prepends ALL.
+    if vecEventTypes.len() > 1 {
+        sHtml.push_str("<nav>");
+        for (sName, sLabel, sDbType) in [
+            ("all", "все", ""),
+            ("answers", "ответы", "REPLY"),
+            ("favorites", "отслеживаемое", "WATCH"),
+            ("deleted", "удаленное", "DEL"),
+            ("reference", "упоминания", "REF"),
+            ("tag", "теги", "TAG"),
+            ("reaction", "реакции", "REACTION"),
+            ("warning", "предупреждения", "WARNING"),
+        ] {
+            if !sDbType.is_empty() && !vecEventTypes.iter().any(|sType| sType == sDbType) {
+                continue;
+            }
+            let sClass = if sName == sFilter {
+                "btn btn-selected"
+            } else {
+                "btn btn-default"
+            };
+            sHtml.push_str(&format!(
+                "<a href=\"/show-replies.jsp?nick={}&amp;filter={sName}\" class=\"{sClass}\">{sLabel}</a> ",
+                urlencoding::encode(sNick),
+            ));
+        }
+        sHtml.push_str("</nav>");
+    }
+
+    sHtml.push_str("<div class=\"forum\"><table width=\"100%\" class=\"message-table\">");
+    for stEvent in vecEvents {
+        let sSubject = stEvent.sSubjectPlain();
+        let sTags = stEvent
+            .tags
+            .iter()
+            .map(|sTag| {
+                format!(
+                    "<span class=\"tag\">{}</span>",
+                    html_escape::encode_text(sTag)
+                )
+            })
+            .collect::<String>();
+        let sDetails = match stEvent.event_type.as_str() {
+            "DEL" => format!(
+                "<br>{} ({})",
+                html_escape::encode_text(stEvent.event_message.as_deref().unwrap_or("")),
+                stEvent.bonus.unwrap_or(0),
+            ),
+            "WARNING" if stEvent.closed_warning => format!(
+                "<br><s>{}</s>",
+                html_escape::encode_text(stEvent.event_message.as_deref().unwrap_or("")),
+            ),
+            "WARNING" => format!(
+                "<br>{}",
+                html_escape::encode_text(stEvent.event_message.as_deref().unwrap_or("")),
+            ),
+            _ => String::new(),
+        };
+        let sDate = crate::request_timezone::sTimeTag("interval", stEvent.event_date);
+        sHtml.push_str(&format!(
+            "<tr><td align=\"center\">{icon}</td><td><a href=\"{link}\" class=\"event-unread-{unread}\">{tags}{subject}</a> ({section}){details}{unread_mark}</td><td title=\"\">{date}, {author}</td></tr>",
+            icon = sLegacyNotificationIcon(&stEvent.event_type, stEvent.reaction.as_deref()),
+            link = html_escape::encode_double_quoted_attribute(&stEvent.link()),
+            unread = stEvent.unread,
+            tags = sTags,
+            subject = html_escape::encode_text(&sSubject),
+            section = html_escape::encode_text(&stEvent.section_name),
+            details = sDetails,
+            unread_mark = if stEvent.unread { " •" } else { "" },
+            date = sDate,
+            author = crate::routes::api::sNotificationAuthor(
+                &stEvent.author_nick,
+                stEvent.author_blocked,
+            ),
         ));
     }
-    if events.is_empty() {
-        html.push_str("<li class=\"muted\">Нет уведомлений</li>");
+    sHtml.push_str("</table></div>");
+
+    let sFilterSuffix = if sFilter == "all" {
+        String::new()
+    } else {
+        format!("&amp;filter={sFilter}")
+    };
+    sHtml.push_str(
+        "<div class=\"container\" style=\"margin-bottom:1em\"><div style=\"float:left\">",
+    );
+    if iOffset > 0 {
+        sHtml.push_str(&format!(
+            "<a rel=\"prev\" href=\"/show-replies.jsp?nick={}&amp;offset={}{}\">← назад</a>",
+            urlencoding::encode(sNick),
+            (iOffset - iPageSize).max(0),
+            sFilterSuffix,
+        ));
     }
-    html.push_str("</ul>");
-    Ok(Html(crate::routes::sRenderLegacyContent(&sTitle, html)?).into_response())
+    sHtml.push_str("</div><div style=\"float:right\">");
+    if vecEvents.len() as i64 == iPageSize {
+        sHtml.push_str(&format!(
+            "<a rel=\"next\" href=\"/show-replies.jsp?nick={}&amp;offset={}{}\">вперед →</a>",
+            urlencoding::encode(sNick),
+            iOffset + iPageSize,
+            sFilterSuffix,
+        ));
+    }
+    sHtml.push_str("</div></div>");
+    sHtml.push_str(&format!(
+        "<p><i class=\"icon-rss\"></i> <a href=\"/show-replies.jsp?output=rss&amp;nick={}\">RSS подписка на новые уведомления</a></p>",
+        urlencoding::encode(sNick),
+    ));
+    sHtml
+}
+
+#[cfg(test)]
+mod show_replies_compatibility_tests {
+    use chrono::TimeZone;
+
+    use super::sRenderModeratorNotifications;
+
+    fn stEvent() -> crate::routes::api::NotificationEvent {
+        crate::routes::api::NotificationEvent {
+            id: 101,
+            event_date: chrono::Utc.with_ymd_and_hms(2026, 8, 16, 10, 0, 0).unwrap(),
+            subj: "Subject".to_owned(),
+            msgid: 42,
+            cid: Some(43),
+            unread: true,
+            event_type: "WARNING".to_owned(),
+            section_prefix: "forum".to_owned(),
+            section_name: "Форум".to_owned(),
+            group_urlname: "linux-org-ru".to_owned(),
+            origin_nick: Some("moderator".to_owned()),
+            author_nick: "moderator".to_owned(),
+            author_blocked: false,
+            event_message: Some("rule".to_owned()),
+            closed_warning: false,
+            bonus: None,
+            tags: vec!["rust".to_owned()],
+            message_text: "body".to_owned(),
+            message_markup: "MARKDOWN".to_owned(),
+            reaction: None,
+        }
+    }
+
+    #[test]
+    fn moderator_page_contains_the_java_filter_table_details_and_pager_model() {
+        let sHtml = sRenderModeratorNotifications(
+            "Target",
+            "warning",
+            20,
+            20,
+            &["REPLY".to_owned(), "WARNING".to_owned()],
+            &[stEvent()],
+        );
+        assert!(sHtml.contains("class=\"btn btn-selected\">предупреждения</a>"));
+        assert!(sHtml.contains("class=\"message-table\""));
+        assert!(sHtml.contains("<span class=\"tag\">rust</span>Subject"));
+        assert!(sHtml.contains("<br>rule"));
+        assert!(sHtml.contains("<td title=\"\">"));
+        assert!(!sHtml.contains("/people/moderator/profile"));
+        assert!(sHtml.contains("offset=0&amp;filter=warning"));
+        assert!(sHtml.contains("output=rss&amp;nick=Target"));
+    }
+
+    #[test]
+    fn moderator_page_uses_the_plain_blocked_lor_user_contract() {
+        let mut stEvent = stEvent();
+        stEvent.author_blocked = true;
+        let sHtml = sRenderModeratorNotifications("Target", "all", 0, 20, &[], &[stEvent]);
+        assert!(sHtml.contains("<s>moderator</s>"));
+        assert!(!sHtml.contains("/people/moderator/profile"));
+    }
+
+    #[test]
+    fn exact_identity_is_enforced_across_both_show_replies_branches() {
+        let sSource = include_str!("legacy.rs");
+        let sHandler = sSource
+            .split(concat!("pub async fn ", "show_replies_jsp("))
+            .nth(1)
+            .unwrap()
+            .split(concat!("fn ", "sCanonicalUserEventFilter("))
+            .next()
+            .unwrap();
+        assert_eq!(sHandler.matches("optExactIdentity(&nick)").count(), 2);
+        assert!(sHandler.contains("Required request parameter 'nick' is missing"));
+        assert!(!sHandler.contains("optNick.unwrap_or_default()"));
+        assert!(!sHandler.contains("lower(nick)"));
+        assert!(!sHandler.contains("eq_ignore_ascii_case"));
+    }
 }
 
 fn render_replies_feed(
@@ -2030,7 +2247,6 @@ pub async fn notifications_click_ajax(
 pub struct ActivationQuery {
     pub nick: Option<String>,
     pub activation: Option<String>,
-    pub error: Option<String>,
 }
 
 pub async fn activate_form(
@@ -2048,21 +2264,7 @@ pub async fn activate_form(
         .as_deref()
         .filter(|sValue| sValue.chars().all(char::is_alphanumeric))
         .unwrap_or("");
-    render_activation_form(
-        sNick,
-        sActivation,
-        q.error.as_deref(),
-        &csrf_token,
-        optUser.is_some(),
-    )
-}
-
-#[derive(Deserialize)]
-pub struct ActivationForm {
-    pub nick: Option<String>,
-    pub activation: String,
-    pub passwd: Option<String>,
-    pub action: Option<String>,
+    render_activation_form(sNick, sActivation, None, &csrf_token, optUser.is_some())
 }
 
 pub async fn activate_post(
@@ -2072,39 +2274,28 @@ pub async fn activate_post(
     CurrentUser(current_user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
     ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
-    Form(form): Form<ActivationForm>,
+    stRequest: Request,
 ) -> Result<impl IntoResponse> {
-    if form.action.is_some() {
+    let vecParameters = crate::form::servlet_request_parameters(stRequest).await?;
+    let activation = crate::form::get(&vecParameters, "activation").ok_or_else(|| {
+        AppError::BadRequest("Required request parameter 'activation' is missing".to_owned())
+    })?;
+    if crate::form::get(&vecParameters, "action").is_some() {
         // The `params = "action"` mapping binds nick/passwd as required
         // strings. Empty values are legal strings, but absent fields are a
         // Spring argument-binding 400 after CSRF.
-        let nick = form
-            .nick
-            .as_deref()
-            .ok_or_else(|| AppError::BadRequest("Required request parameter 'nick'".to_owned()))?
-            .trim();
-        let password = form.passwd.as_deref().ok_or_else(|| {
-            AppError::BadRequest("Required request parameter 'passwd'".to_owned())
+        let nick = crate::form::get(&vecParameters, "nick").ok_or_else(|| {
+            AppError::BadRequest("Required request parameter 'nick' is missing".to_owned())
         })?;
-        let Some((id, db_nick, email, regdate, activated)) = sqlx::query_as::<
-            _,
-            (
-                i32,
-                String,
-                Option<String>,
-                Option<chrono::DateTime<chrono::Utc>>,
-                bool,
-            ),
-        >(
-            "SELECT id,nick,email,regdate,activated FROM users WHERE lower(nick)=lower($1)",
-        )
-        .bind(nick)
-        .fetch_optional(&state.pool)
-        .await?
-        else {
+        let password = crate::form::get(&vecParameters, "passwd").ok_or_else(|| {
+            AppError::BadRequest("Required request parameter 'passwd' is missing".to_owned())
+        })?;
+        let cIdentity =
+            CUserIdentityService::new(CUserIdentityPgRepository::new(state.pool.clone()));
+        let Some(stActivationUser) = cIdentity.optActivationIdentity(nick).await? else {
             return Ok(render_activation_form(
                 nick,
-                &form.activation,
+                activation,
                 Some("Пользователь не найден"),
                 &csrf_token,
                 false,
@@ -2112,16 +2303,19 @@ pub async fn activate_post(
             .into_response());
         };
 
-        if activated {
+        if stActivationUser.bActivated {
             return Ok(crate::routes::stFoundRedirect("/"));
         }
 
-        match crate::auth::verify_login(&state.pool, nick, password).await? {
+        // Resolve and authenticate one exact identity.  Never combine the
+        // password of one case-colliding row with another row's activation
+        // token/update target.
+        match crate::auth::verify_login(&state.pool, &stActivationUser.sNick, password).await? {
             crate::auth::LoginOutcome::NotActivated => {}
             crate::auth::LoginOutcome::Failed => {
                 return Ok(render_activation_form(
                     nick,
-                    &form.activation,
+                    activation,
                     Some("Неправильный логин или пароль"),
                     &csrf_token,
                     false,
@@ -2142,14 +2336,14 @@ pub async fn activate_post(
 
         if !verify_activation_code(
             &state,
-            &db_nick,
-            email.as_deref().unwrap_or(""),
-            regdate,
-            &form.activation,
+            &stActivationUser.sNick,
+            stActivationUser.optEmail.as_deref().unwrap_or(""),
+            stActivationUser.optRegistrationDate,
+            activation,
         ) {
             return Ok(render_activation_form(
                 nick,
-                &form.activation,
+                activation,
                 Some("Неправильный код активации"),
                 &csrf_token,
                 false,
@@ -2158,11 +2352,20 @@ pub async fn activate_post(
         }
 
         sqlx::query("UPDATE users SET activated=true,lastlogin=now() WHERE id=$1")
-            .bind(id)
+            .bind(stActivationUser.iId)
             .execute(&state.pool)
             .await?;
-        crate::audit::log_user_action(&state.pool, id, id, "register", &[]).await?;
-        let Some(stIdentity) = crate::auth::optLoadLoginIdentity(&state.pool, id).await? else {
+        crate::audit::log_user_action(
+            &state.pool,
+            stActivationUser.iId,
+            stActivationUser.iId,
+            "register",
+            &[],
+        )
+        .await?;
+        let Some(stIdentity) =
+            crate::auth::optLoadLoginIdentity(&state.pool, stActivationUser.iId).await?
+        else {
             return Err(AppError::Anyhow(anyhow::anyhow!(
                 "activated user cannot be loaded for remember-me cookie"
             )));
@@ -2188,37 +2391,59 @@ pub async fn activate_post(
     let Some(user) = current_user else {
         return Err(AppError::Forbidden);
     };
-    let Some((email, regdate)) = sqlx::query_as::<
-        _,
-        (Option<String>, Option<chrono::DateTime<chrono::Utc>>),
-    >("SELECT new_email,regdate FROM users WHERE id=$1")
-    .bind(user.id)
-    .fetch_optional(&state.pool)
-    .await?
+    let Some((old_email, pending_email, regdate)) =
+        sqlx::query_as::<
+            _,
+            (
+                Option<String>,
+                Option<String>,
+                Option<chrono::DateTime<chrono::Utc>>,
+            ),
+        >("SELECT email,new_email,regdate FROM users WHERE id=$1")
+        .bind(user.id)
+        .fetch_optional(&state.pool)
+        .await?
     else {
         return Err(AppError::NotFound);
     };
-    let Some(new_email) = email else {
+    let Some(new_email) = pending_email else {
         // RegisterController throws AccessViolationException here; it is
         // mapped to the dedicated 403 page before the common exception view.
         return Err(AppError::Forbidden);
     };
 
-    if !verify_activation_code(&state, &user.nick, &new_email, regdate, &form.activation) {
+    if !verify_activation_code(&state, &user.nick, &new_email, regdate, activation) {
         return Ok(render_activation_form(
             &user.nick,
-            &form.activation,
+            activation,
             Some("Неправильный код активации"),
             &csrf_token,
             true,
         )?
         .into_response());
     }
-    sqlx::query("UPDATE users SET email=new_email,new_email=NULL WHERE id=$1")
-        .bind(user.id)
-        .execute(&state.pool)
+
+    let mut tx = state.pool.begin().await?;
+    let stUpdate = sqlx::query(
+        r#"UPDATE users SET email=$2,new_email=NULL
+           WHERE id=$1 AND new_email IS NOT DISTINCT FROM $2"#,
+    )
+    .bind(user.id)
+    .bind(&new_email)
+    .execute(&mut *tx)
+    .await?;
+    if stUpdate.rows_affected() != 1 {
+        return Err(AppError::Anyhow(anyhow::anyhow!(
+            "pending email changed during activation"
+        )));
+    }
+    let mut vecInfo = vec![("new_email", new_email.as_str())];
+    if let Some(ref old_email) = old_email {
+        vecInfo.push(("old_email", old_email.as_str()));
+    }
+    crate::audit::log_user_action_tx(&mut tx, user.id, user.id, "accept_new_email", &vecInfo)
         .await?;
-    crate::audit::log_user_action(&state.pool, user.id, user.id, "accept_new_email", &[]).await?;
+    tx.commit().await?;
     Ok(crate::routes::stFoundRedirect(format!(
         "/people/{}/profile",
         urlencoding::encode(&user.nick)
@@ -2284,6 +2509,69 @@ mod activation_template_tests {
         assert!(!sHtml.contains("name=\"nick\""));
         assert!(!sHtml.contains("name=\"passwd\""));
         assert!(!sHtml.contains("name=\"action\""));
+    }
+
+    #[test]
+    fn activation_binds_required_servlet_parameters_to_one_exact_identity() {
+        let sSource = include_str!("legacy.rs");
+        let sHandler = sSource
+            .split(concat!("pub async fn ", "activate_post("))
+            .nth(1)
+            .unwrap()
+            .split(concat!("fn ", "render_activation_form("))
+            .next()
+            .unwrap();
+        assert!(sHandler.contains("servlet_request_parameters(stRequest)"));
+        for sParameter in ["activation", "nick", "passwd"] {
+            assert!(sHandler.contains(&format!(
+                "Required request parameter '{sParameter}' is missing"
+            )));
+        }
+        assert!(sHandler.contains("optActivationIdentity(nick)"));
+        assert!(sHandler.contains("&stActivationUser.sNick, password"));
+        assert!(sHandler.contains("&stActivationUser.sNick,"));
+        assert!(sHandler.contains(".bind(stActivationUser.iId)"));
+        assert!(!sHandler.contains("lower(nick)"));
+        assert!(!sHandler.contains("nick.trim()"));
+    }
+
+    #[test]
+    fn new_email_activation_cas_and_audit_share_one_transaction() {
+        let sSource = include_str!("legacy.rs");
+        let sHandler = sSource
+            .split(concat!("pub async fn ", "activate_post("))
+            .nth(1)
+            .unwrap()
+            .split(concat!("fn ", "render_activation_form("))
+            .next()
+            .unwrap();
+        let sBranch = sHandler
+            .split("let Some(user) = current_user else")
+            .nth(1)
+            .unwrap();
+
+        assert!(sBranch.contains("SELECT email,new_email,regdate FROM users WHERE id=$1"));
+        assert!(sBranch.contains("SET email=$2,new_email=NULL"));
+        assert!(sBranch.contains("WHERE id=$1 AND new_email IS NOT DISTINCT FROM $2"));
+        assert!(sBranch.contains(".bind(&new_email)"));
+        assert!(sBranch.contains(".execute(&mut *tx)"));
+        assert!(sBranch.contains("stUpdate.rows_affected() != 1"));
+        assert!(sBranch.contains("(\"new_email\", new_email.as_str())"));
+        assert!(sBranch.contains("(\"old_email\", old_email.as_str())"));
+        assert!(sBranch.contains("log_user_action_tx(&mut tx,"));
+        assert!(!sBranch.contains("SET email=new_email"));
+        assert!(!sBranch.contains(".execute(&state.pool)"));
+        assert!(!sBranch.contains("log_user_action(&state.pool"));
+
+        let iVerify = sBranch.find("if !verify_activation_code").unwrap();
+        let iBegin = sBranch.find("state.pool.begin().await?").unwrap();
+        let iUpdate = sBranch.find("SET email=$2,new_email=NULL").unwrap();
+        let iAudit = sBranch.find("log_user_action_tx(").unwrap();
+        let iCommit = sBranch.find("tx.commit().await?").unwrap();
+        assert!(iVerify < iBegin);
+        assert!(iBegin < iUpdate);
+        assert!(iUpdate < iAudit);
+        assert!(iAudit < iCommit);
     }
 }
 
@@ -2497,14 +2785,30 @@ struct StDeregisterDoneTemplate {
 #[derive(Debug, Deserialize)]
 pub struct DeregisterForm {
     pub password: Option<String>,
-    #[serde(alias = "accept_block")]
     #[serde(rename = "acceptBlock")]
     pub accept_block: Option<String>,
-    #[serde(alias = "accept_oneway")]
     #[serde(rename = "acceptOneway")]
     pub accept_oneway: Option<String>,
     #[serde(rename = "h-captcha-response")]
     pub captcha_response: Option<String>,
+}
+
+#[cfg(test)]
+mod deregister_binding_tests {
+    use super::DeregisterForm;
+
+    #[test]
+    fn accepts_only_the_java_bean_checkbox_names() {
+        let stJava: DeregisterForm =
+            serde_urlencoded::from_str("password=secret&acceptBlock=on&acceptOneway=on").unwrap();
+        assert!(stJava.accept_block.is_some());
+        assert!(stJava.accept_oneway.is_some());
+
+        let stSnakeCase: DeregisterForm =
+            serde_urlencoded::from_str("password=secret&accept_block=on&accept_oneway=on").unwrap();
+        assert!(stSnakeCase.accept_block.is_none());
+        assert!(stSnakeCase.accept_oneway.is_none());
+    }
 }
 
 pub async fn deregister_form(
@@ -2606,27 +2910,6 @@ fn render_deregister_page(
         }
         .render()?,
     ))
-}
-
-async fn user_exists_or_similar(state: &AppState, nick: &str) -> Result<bool> {
-    let exists: Option<i32> =
-        sqlx::query_scalar("SELECT id FROM users WHERE lower(nick)=lower($1)")
-            .bind(nick)
-            .fetch_optional(&state.pool)
-            .await?;
-    if exists.is_some() {
-        return Ok(true);
-    }
-    let similar: Option<i32> = sqlx::query_scalar(
-        r#"SELECT id FROM users
-           WHERE score>=200 AND lastlogin>CURRENT_TIMESTAMP - interval '3 years'
-             AND levenshtein_less_equal(lower(nick), lower($1), 1)<=1
-           LIMIT 1"#,
-    )
-    .bind(nick)
-    .fetch_optional(&state.pool)
-    .await?;
-    Ok(similar.is_some())
 }
 
 pub fn valid_login_name_for_java(nick: &str) -> bool {
@@ -3832,6 +4115,7 @@ pub async fn remove_userpic(
         crate::infra::postgres::user_moderation_repository::CUserModerationPgRepository::new(
             state.pool.clone(),
         ),
+        state.config.scheduler_timezone,
     );
     let sTargetNick = cService.sResetUserpic(&user, iTargetUserId).await?;
     Ok(crate::routes::admin::stProfileRedirect(&sTargetNick))
@@ -3886,7 +4170,7 @@ mod explicit_error_parity_tests {
             .next()
             .unwrap();
         let sNewEmailBranch = sActivation
-            .split("let Some(new_email) = email else")
+            .split("let Some(new_email) = pending_email else")
             .nth(1)
             .unwrap()
             .split("if !verify_activation_code")

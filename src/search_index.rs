@@ -1048,7 +1048,97 @@ static ST_SIMILAR_CACHE: Lazy<tokio::sync::RwLock<TySimilarCache>> =
 const SIMILAR_CACHE_SIZE: usize = 10_000;
 const SIMILAR_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
-type TyActiveTagsCache = HashMap<(String, Option<String>), (std::time::Instant, Vec<String>)>;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EnActiveTagsForumFilter {
+    All,
+    NoTalks,
+    Tech,
+}
+
+pub const DT_ACTIVE_TAGS_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+
+pub fn dtActiveTagsDeadline() -> tokio::time::Instant {
+    tokio::time::Instant::now() + DT_ACTIVE_TAGS_TIMEOUT
+}
+
+type TyActiveTagsSearchTask = tokio::task::JoinHandle<Result<Vec<String>, String>>;
+pub type TyActiveTagsTask = tokio::task::JoinHandle<EnActiveTagsTaskOutcome>;
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum EnActiveTagsTaskOutcome {
+    Tags(Vec<String>),
+    SearchError(String),
+    JoinError(String),
+    TimedOut,
+}
+
+/// Start the underlying OpenSearch/cache operation independently of the page
+/// future. Java applies `withTimeout` after `andThen(cache.put)`, so a page
+/// timeout must not cancel a late successful cache warm.
+pub fn hSpawnActiveTopTagsFiltered(
+    stState: AppState,
+    sSection: String,
+    optGroup: Option<String>,
+    enFilter: EnActiveTagsForumFilter,
+    vecNonTechGroupNames: Vec<String>,
+    dtDeadline: tokio::time::Instant,
+) -> TyActiveTagsTask {
+    let hSearchTask = tokio::spawn(async move {
+        vecActiveTopTagsFiltered(
+            &stState,
+            &sSection,
+            optGroup.as_deref(),
+            enFilter,
+            &vecNonTechGroupNames,
+        )
+        .await
+    });
+    hObserveActiveTagsTaskBeforeDeadline(hSearchTask, dtDeadline)
+}
+
+pub fn hSpawnActiveTopTags(
+    stState: AppState,
+    sSection: String,
+    optGroup: Option<String>,
+    dtDeadline: tokio::time::Instant,
+) -> TyActiveTagsTask {
+    let hSearchTask =
+        tokio::spawn(
+            async move { vecActiveTopTags(&stState, &sSection, optGroup.as_deref()).await },
+        );
+    hObserveActiveTagsTaskBeforeDeadline(hSearchTask, dtDeadline)
+}
+
+/// Install the deadline observer when the search starts, not when the page
+/// eventually consumes its result. This preserves whether the search won the
+/// race even when the rest of page assembly itself crosses the deadline.
+fn hObserveActiveTagsTaskBeforeDeadline(
+    hSearchTask: TyActiveTagsSearchTask,
+    dtDeadline: tokio::time::Instant,
+) -> TyActiveTagsTask {
+    let futBeforeDeadline = tokio::time::timeout_at(dtDeadline, hSearchTask);
+    tokio::spawn(async move {
+        match futBeforeDeadline.await {
+            Ok(Ok(Ok(vecTags))) => EnActiveTagsTaskOutcome::Tags(vecTags),
+            Ok(Ok(Err(sError))) => EnActiveTagsTaskOutcome::SearchError(sError),
+            Ok(Err(stError)) => EnActiveTagsTaskOutcome::JoinError(stError.to_string()),
+            Err(_) => EnActiveTagsTaskOutcome::TimedOut,
+        }
+    })
+}
+
+/// The observer has already resolved at the absolute deadline. Awaiting it at
+/// the end of page assembly cannot accidentally grant a fresh timeout or turn
+/// an on-time result into a timeout merely because other page work was slow.
+pub async fn enJoinActiveTagsTask(hTask: TyActiveTagsTask) -> EnActiveTagsTaskOutcome {
+    match hTask.await {
+        Ok(enOutcome) => enOutcome,
+        Err(stError) => EnActiveTagsTaskOutcome::JoinError(stError.to_string()),
+    }
+}
+
+type TyActiveTagsCache =
+    HashMap<(String, Option<String>, EnActiveTagsForumFilter), (std::time::Instant, Vec<String>)>;
 static ST_ACTIVE_TAGS_CACHE: Lazy<tokio::sync::RwLock<TyActiveTagsCache>> =
     Lazy::new(|| tokio::sync::RwLock::new(HashMap::new()));
 const ACTIVE_TAGS_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
@@ -1224,8 +1314,31 @@ fn stRelatedTagsRequestBody(sTag: &str) -> Value {
     })
 }
 
-fn stActiveTagsRequestBody(sSection: &str, optGroup: Option<&str>) -> Value {
-    let dtToday = chrono::Utc::now().date_naive();
+fn stActiveTagsRequestBody(
+    sSection: &str,
+    optGroup: Option<&str>,
+    enFilter: EnActiveTagsForumFilter,
+    vecNonTechGroupNames: &[String],
+) -> Value {
+    // Java uses `LocalDate.now()` here, so the rolling one/two-year windows
+    // follow the JVM/system timezone (the container `TZ` contract) rather
+    // than changing date at UTC midnight.
+    stActiveTagsRequestBodyAt(
+        chrono::Local::now().date_naive(),
+        sSection,
+        optGroup,
+        enFilter,
+        vecNonTechGroupNames,
+    )
+}
+
+fn stActiveTagsRequestBodyAt(
+    dtToday: chrono::NaiveDate,
+    sSection: &str,
+    optGroup: Option<&str>,
+    enFilter: EnActiveTagsForumFilter,
+    vecNonTechGroupNames: &[String],
+) -> Value {
     let dtOneYearAgo = dtToday
         .checked_sub_months(chrono::Months::new(12))
         .unwrap_or(dtToday);
@@ -1239,6 +1352,23 @@ fn stActiveTagsRequestBody(sSection: &str, optGroup: Option<&str>) -> Value {
     ];
     if let Some(sGroup) = optGroup {
         vecFilters.push(json!({"term": {"group": sGroup}}));
+    }
+    match enFilter {
+        EnActiveTagsForumFilter::All => {}
+        EnActiveTagsForumFilter::NoTalks => {
+            vecFilters.push(json!({"bool": {
+                "must_not": [{"term": {"group": "talks"}}]
+            }}));
+        }
+        EnActiveTagsForumFilter::Tech => {
+            vecFilters.push(json!({"bool": {
+                "filter": [{"term": {"section": "forum"}}],
+                "must_not": vecNonTechGroupNames
+                    .iter()
+                    .map(|sGroup| json!({"term": {"group": sGroup}}))
+                    .collect::<Vec<_>>()
+            }}));
+        }
     }
     json!({
         "size": 0,
@@ -1268,7 +1398,27 @@ pub async fn vecActiveTopTags(
     sSection: &str,
     optGroup: Option<&str>,
 ) -> Result<Vec<String>, String> {
-    let stKey = (sSection.to_owned(), optGroup.map(str::to_owned));
+    vecActiveTopTagsFiltered(
+        stState,
+        sSection,
+        optGroup,
+        EnActiveTagsForumFilter::All,
+        &[],
+    )
+    .await
+}
+
+/// Forum-list variant of `TagService.getActiveTopTags`. Java includes the
+/// selected `notalks`/`tech` filter in the foreground significant-terms query,
+/// while deliberately keeping the background scope at the complete section.
+pub async fn vecActiveTopTagsFiltered(
+    stState: &AppState,
+    sSection: &str,
+    optGroup: Option<&str>,
+    enFilter: EnActiveTagsForumFilter,
+    vecNonTechGroupNames: &[String],
+) -> Result<Vec<String>, String> {
+    let stKey = (sSection.to_owned(), optGroup.map(str::to_owned), enFilter);
     if let Some((stCreated, vecCached)) = ST_ACTIVE_TAGS_CACHE.read().await.get(&stKey)
         && stCreated.elapsed() < ACTIVE_TAGS_CACHE_TTL
     {
@@ -1280,7 +1430,12 @@ pub async fn vecActiveTopTags(
     let stResponse = stState
         .http
         .post(format!("{sBase}/{INDEX}/_search"))
-        .json(&stActiveTagsRequestBody(sSection, optGroup))
+        .json(&stActiveTagsRequestBody(
+            sSection,
+            optGroup,
+            enFilter,
+            vecNonTechGroupNames,
+        ))
         .send()
         .await
         .map_err(|stError| stError.to_string())?;
@@ -1852,11 +2007,13 @@ mod moderation_semantics_tests {
     use chrono::{TimeZone, Utc};
 
     use super::{
-        CommentRow, EnSearchQueueJob, SearchInterval, SearchParams, SearchRange, SearchSort,
-        StReindexMonth, TopicRow, iQueueFilePriority, sTopicTitleForSearchIndex,
-        stActiveTagsRequestBody, stCommentIndexDocument, stIndexDefinition,
-        stRelatedTagsRequestBody, stSearchRequestBody, stSimilarRequestBody, topic_awaits_commit,
-        vFinishQueueJob, vecAllReindexMonths, vecIndexContractProblems, vecRecentReindexMonths,
+        CommentRow, EnActiveTagsForumFilter, EnActiveTagsTaskOutcome, EnSearchQueueJob,
+        SearchInterval, SearchParams, SearchRange, SearchSort, StReindexMonth, TopicRow,
+        enJoinActiveTagsTask, hObserveActiveTagsTaskBeforeDeadline, iQueueFilePriority,
+        sTopicTitleForSearchIndex, stActiveTagsRequestBody, stActiveTagsRequestBodyAt,
+        stCommentIndexDocument, stIndexDefinition, stRelatedTagsRequestBody, stSearchRequestBody,
+        stSimilarRequestBody, topic_awaits_commit, vFinishQueueJob, vecAllReindexMonths,
+        vecIndexContractProblems, vecRecentReindexMonths,
     };
 
     #[test]
@@ -2202,7 +2359,13 @@ mod moderation_semantics_tests {
 
     #[test]
     fn active_tags_query_matches_java_section_group_and_background_scope() {
-        let stBody = stActiveTagsRequestBody("gallery", Some("screenshots"));
+        let stBody = stActiveTagsRequestBodyAt(
+            chrono::NaiveDate::from_ymd_opt(2026, 8, 16).unwrap(),
+            "gallery",
+            Some("screenshots"),
+            EnActiveTagsForumFilter::All,
+            &[],
+        );
 
         assert_eq!(
             stBody.pointer("/query/bool/filter/0/term/is_comment"),
@@ -2215,6 +2378,10 @@ mod moderation_semantics_tests {
         assert_eq!(
             stBody.pointer("/query/bool/filter/3/term/group"),
             Some(&serde_json::json!("screenshots"))
+        );
+        assert_eq!(
+            stBody.pointer("/query/bool/filter/2/range/postdate/gte"),
+            Some(&serde_json::json!("2025-08-16"))
         );
         assert_eq!(
             stBody.pointer("/aggregations/active/significant_terms/field"),
@@ -2234,11 +2401,111 @@ mod moderation_semantics_tests {
             ),
             Some(&serde_json::json!("gallery"))
         );
+        assert_eq!(
+            stBody.pointer(
+                "/aggregations/active/significant_terms/background_filter/bool/filter/2/range/postdate/gte"
+            ),
+            Some(&serde_json::json!("2024-08-16"))
+        );
         assert!(
             stBody
                 .pointer("/aggregations/active/significant_terms/background_filter/bool/filter/3")
                 .is_none(),
             "the Java background scope is the whole section, not the selected group"
+        );
+    }
+
+    #[test]
+    fn active_tags_query_applies_java_forum_filter_only_to_foreground_scope() {
+        let vecNonTech = vec![
+            "talks".to_owned(),
+            "linux-org-ru".to_owned(),
+            "job".to_owned(),
+            "club".to_owned(),
+        ];
+        let stTech =
+            stActiveTagsRequestBody("forum", None, EnActiveTagsForumFilter::Tech, &vecNonTech);
+        assert_eq!(
+            stTech.pointer("/query/bool/filter/3/bool/filter/0/term/section"),
+            Some(&serde_json::json!("forum"))
+        );
+        assert_eq!(
+            stTech.pointer("/query/bool/filter/3/bool/must_not/1/term/group"),
+            Some(&serde_json::json!("linux-org-ru"))
+        );
+        assert!(
+            stTech
+                .pointer("/aggregations/active/significant_terms/background_filter/bool/filter/3")
+                .is_none(),
+            "Java does not apply forum feed filters to the significance background"
+        );
+
+        let stNoTalks =
+            stActiveTagsRequestBody("forum", None, EnActiveTagsForumFilter::NoTalks, &vecNonTech);
+        assert_eq!(
+            stNoTalks.pointer("/query/bool/filter/3/bool/must_not/0/term/group"),
+            Some(&serde_json::json!("talks"))
+        );
+    }
+
+    #[tokio::test]
+    async fn active_tags_deadline_records_on_time_and_late_results_before_a_late_join() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        let dtDeadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+        let hOnTimeTask = tokio::spawn(async { Ok(vec!["on-time".to_owned()]) });
+        let hOnTimeObserver = hObserveActiveTagsTaskBeforeDeadline(hOnTimeTask, dtDeadline);
+
+        let cRelease = Arc::new(tokio::sync::Notify::new());
+        let bCompleted = Arc::new(AtomicBool::new(false));
+        let cTaskRelease = Arc::clone(&cRelease);
+        let bTaskCompleted = Arc::clone(&bCompleted);
+        let hLateTask = tokio::spawn(async move {
+            cTaskRelease.notified().await;
+            bTaskCompleted.store(true, Ordering::SeqCst);
+            Ok(vec!["late".to_owned()])
+        });
+        let hLateObserver = hObserveActiveTagsTaskBeforeDeadline(hLateTask, dtDeadline);
+
+        tokio::time::timeout_at(dtDeadline, async {
+            while !hOnTimeObserver.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the on-time result must be recorded before the absolute deadline");
+
+        tokio::time::sleep_until(dtDeadline + std::time::Duration::from_millis(1)).await;
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while !hLateObserver.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the deadline observer must resolve without joining it from the page");
+
+        // Both page-level joins deliberately begin after the original absolute
+        // deadline. The on-time value must survive, while the late task remains
+        // detached so it can still perform the Java-compatible cache warm.
+        cRelease.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while !bCompleted.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("detached active-tags task must still complete");
+
+        assert_eq!(
+            enJoinActiveTagsTask(hOnTimeObserver).await,
+            EnActiveTagsTaskOutcome::Tags(vec!["on-time".to_owned()])
+        );
+        assert_eq!(
+            enJoinActiveTagsTask(hLateObserver).await,
+            EnActiveTagsTaskOutcome::TimedOut
         );
     }
 

@@ -386,7 +386,7 @@ mod tests {
         let sCommentsRoute = include_str!("../routes/comments.rs");
         assert!(
             sCommentsRoute
-                .contains("crate::domain::title::optCommentTitlePlainForDisplay(&stRow.sTitle)")
+                .contains("crate::domain::title::optCommentTitlePlainForDisplay(sStoredTitle)")
         );
         assert!(
             sCommentsRoute.contains(
@@ -406,7 +406,7 @@ mod tests {
         assert!(sUsers.contains("html_escape::encode_text(&sTitlePlain)"));
 
         let sComments = include_str!("../routes/comments.rs");
-        assert!(sComments.contains("topic_title: topic.sTitlePlain()"));
+        assert!(sComments.contains("let sTopicTitlePlain = stTopic.sTitlePlain();"));
         assert!(sComments.contains("html_escape::encode_text(&sTopicTitlePlain)"));
     }
 

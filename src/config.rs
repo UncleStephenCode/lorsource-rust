@@ -6,6 +6,17 @@ pub struct StConfig {
     pub host: String,
     pub port: u16,
     pub database_url: String,
+    /// Java `ZonedDateTime.now()` and Spring cron both use the JVM default
+    /// timezone. The deployment maps the operator-facing
+    /// `SCHEDULER_TIMEZONE` to process `TZ`; parse both once and reject a
+    /// mismatch instead of letting moderation periods silently fall back.
+    pub scheduler_timezone: chrono_tz::Tz,
+    pub scheduler_timezone_configured: bool,
+    /// JVM/JDBC default timezone used by the Java deployment when decoding
+    /// PostgreSQL `timestamp without time zone` values such as
+    /// `comments.edit_date`. Production must set this explicitly from retained
+    /// deployment evidence; development falls back to UTC at the call site.
+    pub legacy_jdbc_timezone: Option<chrono_tz::Tz>,
     pub public_url: String,
     /// Java SiteConfig.WSUrl. It includes the trailing slash because the
     /// original browser client appends the literal `ws` endpoint name.
@@ -59,6 +70,7 @@ impl StConfig {
         let sWsUrl = std::env::var("WS_URL").unwrap_or_else(|_| sWsUrlFromPublic(&sPublicUrl));
         let sSiteSecret = optEnvOrFile("SITE_SECRET")?
             .unwrap_or_else(|| "dev-only-change-me-change-me-change-me".to_owned());
+        let (stSchedulerTimezone, bSchedulerTimezoneConfigured) = stSchedulerTimezoneFromEnv()?;
         Ok(Self {
             host: std::env::var("LOR_HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
             port: std::env::var("LOR_PORT")
@@ -67,6 +79,9 @@ impl StConfig {
                 .unwrap_or(8181),
             database_url: optEnvOrFile("DATABASE_URL")?
                 .unwrap_or_else(|| "postgres://linuxweb:linuxweb@localhost:5432/lor".to_string()),
+            scheduler_timezone: stSchedulerTimezone,
+            scheduler_timezone_configured: bSchedulerTimezoneConfigured,
+            legacy_jdbc_timezone: optIanaTimezone("LEGACY_JDBC_TIMEZONE")?,
             public_url: sPublicUrl,
             ws_url: sWsUrl,
             static_dir: std::env::var("STATIC_DIR").unwrap_or_else(|_| "static".to_string()),
@@ -113,6 +128,10 @@ impl StConfig {
 
     pub fn from_env() -> anyhow::Result<Self> {
         Self::stFromEnv()
+    }
+
+    pub fn stLegacyJdbcTimezone(&self) -> chrono_tz::Tz {
+        self.legacy_jdbc_timezone.unwrap_or(chrono_tz::Etc::UTC)
     }
 
     /// Production must never silently inherit the development fallbacks used
@@ -296,6 +315,17 @@ impl StConfig {
             }
             Err(_) => vecProblems.push("DATABASE_URL must be a valid PostgreSQL URL".to_owned()),
         }
+        if self.legacy_jdbc_timezone.is_none() {
+            vecProblems.push(
+                "LEGACY_JDBC_TIMEZONE must be the verified IANA timezone of the Java/JDBC deployment"
+                    .to_owned(),
+            );
+        }
+        if !self.scheduler_timezone_configured {
+            vecProblems.push(
+                "SCHEDULER_TIMEZONE must be explicitly set and must match process TZ".to_owned(),
+            );
+        }
         let stUploadDir = Path::new(&self.upload_dir);
         let bUnsafeUploadDir = !stUploadDir.is_absolute()
             || matches!(self.upload_dir.as_str(), "/" | "/app" | "/tmp" | "/var")
@@ -316,6 +346,57 @@ impl StConfig {
                 vecProblems.join("\n- ")
             )
         }
+    }
+}
+
+fn optIanaTimezone(sName: &str) -> anyhow::Result<Option<chrono_tz::Tz>> {
+    optEnvironmentUtf8(sName)?
+        .map(|sValue| stIanaTimezone(sName, &sValue))
+        .transpose()
+}
+
+fn stIanaTimezone(sName: &str, sValue: &str) -> anyhow::Result<chrono_tz::Tz> {
+    sValue
+        .parse::<chrono_tz::Tz>()
+        .with_context(|| format!("{sName} must be a valid IANA timezone name"))
+}
+
+fn stSchedulerTimezoneFromEnv() -> anyhow::Result<(chrono_tz::Tz, bool)> {
+    let optScheduler = optEnvironmentUtf8("SCHEDULER_TIMEZONE")?;
+    let optProcess = optEnvironmentUtf8("TZ")?;
+    stSchedulerTimezoneFromValues(optScheduler.as_deref(), optProcess.as_deref())
+}
+
+fn stSchedulerTimezoneFromValues(
+    optScheduler: Option<&str>,
+    optProcess: Option<&str>,
+) -> anyhow::Result<(chrono_tz::Tz, bool)> {
+    let optScheduler = optScheduler
+        .map(|sValue| stIanaTimezone("SCHEDULER_TIMEZONE", sValue))
+        .transpose()?;
+    let optProcess = optProcess
+        .map(|sValue| stIanaTimezone("TZ", sValue))
+        .transpose()?;
+    match (optScheduler, optProcess) {
+        (Some(stScheduler), Some(stProcess)) if stScheduler == stProcess => Ok((stScheduler, true)),
+        (Some(stScheduler), Some(stProcess)) => anyhow::bail!(
+            "SCHEDULER_TIMEZONE ({}) must match process TZ ({})",
+            stScheduler.name(),
+            stProcess.name()
+        ),
+        (Some(_), None) => {
+            anyhow::bail!("process TZ must be set to the same value as SCHEDULER_TIMEZONE")
+        }
+        (None, Some(stProcess)) => Ok((stProcess, false)),
+        (None, None) => Ok((chrono_tz::Etc::UTC, false)),
+    }
+}
+
+fn optEnvironmentUtf8(sName: &str) -> anyhow::Result<Option<String>> {
+    match std::env::var(sName) {
+        Ok(sValue) => Ok(Some(sValue)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => anyhow::bail!("{sName} is not valid UTF-8"),
     }
 }
 
@@ -432,7 +513,7 @@ fn bValidSmtpHelo(sValue: &str) -> bool {
 mod tests {
     use super::{
         StConfig, bStrictBooleanValue, optHttpProxyUrl, sReadSingleLineValue, sWsUrlFromPublic,
-        vecTrustedProxyCidrs,
+        stIanaTimezone, stSchedulerTimezoneFromValues, vecTrustedProxyCidrs,
     };
 
     fn stConfig() -> StConfig {
@@ -440,6 +521,9 @@ mod tests {
             host: "127.0.0.1".to_owned(),
             port: 8181,
             database_url: "postgres://lor:strong-password@db/lor".to_owned(),
+            scheduler_timezone: chrono_tz::Europe::Moscow,
+            scheduler_timezone_configured: true,
+            legacy_jdbc_timezone: Some(chrono_tz::Europe::Moscow),
             public_url: "https://www.linux.org.ru".to_owned(),
             ws_url: "wss://www.linux.org.ru/".to_owned(),
             static_dir: "static".to_owned(),
@@ -527,6 +611,8 @@ mod tests {
         stConfig.enable_dev_bypasses = true;
         stConfig.smtp_port = 0;
         stConfig.smtp_helo_name = "localhost\r\nMAIL FROM:<evil>".to_owned();
+        stConfig.scheduler_timezone_configured = false;
+        stConfig.legacy_jdbc_timezone = None;
 
         let sError = stConfig
             .vValidateForEnvironment("production")
@@ -541,6 +627,58 @@ mod tests {
         assert!(sError.contains("ENABLE_DEV_BYPASSES"));
         assert!(sError.contains("SMTP_HOST and SMTP_PORT"));
         assert!(sError.contains("SMTP_HELO_NAME"));
+        assert!(sError.contains("SCHEDULER_TIMEZONE"));
+        assert!(sError.contains("LEGACY_JDBC_TIMEZONE"));
+    }
+
+    #[test]
+    fn legacy_jdbc_timezone_accepts_only_iana_names() {
+        assert_eq!(
+            stIanaTimezone("LEGACY_JDBC_TIMEZONE", "Europe/Berlin").unwrap(),
+            chrono_tz::Europe::Berlin
+        );
+        for sInvalid in ["", "Europe/Nowhere", "../UTC", "/usr/share/zoneinfo/UTC"] {
+            assert!(stIanaTimezone("LEGACY_JDBC_TIMEZONE", sInvalid).is_err());
+        }
+    }
+
+    #[test]
+    fn scheduler_timezone_is_parsed_once_and_must_match_process_tz() {
+        assert_eq!(
+            stSchedulerTimezoneFromValues(Some("Europe/Berlin"), Some("Europe/Berlin")).unwrap(),
+            (chrono_tz::Europe::Berlin, true)
+        );
+        assert!(
+            stSchedulerTimezoneFromValues(Some("Europe/Berlin"), Some("UTC"))
+                .unwrap_err()
+                .to_string()
+                .contains("must match process TZ")
+        );
+        assert!(
+            stSchedulerTimezoneFromValues(Some("../UTC"), Some("UTC"))
+                .unwrap_err()
+                .to_string()
+                .contains("valid IANA timezone")
+        );
+        assert!(
+            stSchedulerTimezoneFromValues(Some("Europe/Berlin"), None)
+                .unwrap_err()
+                .to_string()
+                .contains("process TZ must be set")
+        );
+        assert_eq!(
+            stSchedulerTimezoneFromValues(None, Some("Europe/Moscow")).unwrap(),
+            (chrono_tz::Europe::Moscow, false),
+            "legacy TZ-only development stays deterministic but is not production evidence"
+        );
+        assert_eq!(
+            stSchedulerTimezoneFromValues(None, None).unwrap(),
+            (chrono_tz::Etc::UTC, false)
+        );
+        let (stComparatorTimezone, bConfigured) =
+            stSchedulerTimezoneFromValues(Some("Etc/UTC"), Some("Etc/UTC")).unwrap();
+        assert!(bConfigured);
+        assert_eq!(stComparatorTimezone.name(), "Etc/UTC");
     }
 
     #[test]

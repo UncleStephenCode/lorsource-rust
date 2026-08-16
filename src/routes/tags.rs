@@ -2,7 +2,9 @@ use crate::{
     application::{
         boxlet::CBoxletService,
         tag::{
-            CTagTopicListService, bTagSectionHasNext, optTagSectionPreviousOffset, sTagSectionUrl,
+            CTagTopicListService, bTagSectionHasNext, dtTagTopicCountDeadline,
+            iTagTopicCountOrFallback, optCountTagTopicsBeforeDeadline, optTagSectionPreviousOffset,
+            sTagSectionUrl,
         },
     },
     auth::CurrentUser,
@@ -74,6 +76,8 @@ struct TagSectionGroup {
     add_url: Option<String>,
     add_reason: String,
     add_label: String,
+    more_url: Option<String>,
+    more_label: String,
 }
 
 #[derive(Debug, Clone)]
@@ -98,7 +102,7 @@ struct TagPageTemplate {
     counter: i64,
     sections: Vec<TagSectionGroup>,
     related_tags: Vec<TagLink>,
-    synonyms: Vec<String>,
+    synonyms: Vec<TagSynonymView>,
     show_favorite_button: bool,
     show_unfavorite_button: bool,
     show_ignore_button: bool,
@@ -107,12 +111,20 @@ struct TagPageTemplate {
     show_delete: bool,
     favorites_count: i64,
     ignored_count: i64,
+    csrf_token: String,
 }
 
 #[derive(Debug, Clone)]
 struct TagLink {
     name: String,
     url: String,
+}
+
+#[derive(Debug, Clone)]
+struct TagSynonymView {
+    name: String,
+    url: String,
+    delete_url: String,
 }
 
 #[derive(Debug, Clone)]
@@ -476,7 +488,7 @@ pub async fn tag_page(
     )
     .to_string();
     let Some(sRawSection) = crate::form::get(&vecParameters, "section") else {
-        return aggregate_tag_page(stState, sTag, stJar, optUser, sRemoteIp).await;
+        return aggregate_tag_page(stState, sTag, stJar, optUser, sRemoteIp, sCsrfToken).await;
     };
 
     // `defaultValue="0"` applies to an explicitly empty value too; a
@@ -701,6 +713,7 @@ async fn aggregate_tag_page(
     stJar: CookieJar,
     user: Option<crate::models::UserSummary>,
     sRemoteIp: String,
+    sCsrfToken: String,
 ) -> Result<axum::response::Response> {
     use axum::response::IntoResponse;
 
@@ -708,14 +721,50 @@ async fn aggregate_tag_page(
         return Err(AppError::NotFound);
     }
 
+    // TagPageController starts both OpenSearch futures before assembling the
+    // page and gives them the same absolute 500 ms deadline. The aggregate
+    // count deliberately has no section filter.
+    let dtSearchDeadline = dtTagTopicCountDeadline();
+    let cCountRepository = CTagTopicCountOpenSearchRepository::new(
+        state.config.opensearch_url.clone(),
+        state.http.clone(),
+    );
+    let sCountTag = tag.clone();
+    let dtCountDeadline = dtSearchDeadline;
+    let stCountTask = tokio::spawn(async move {
+        optCountTagTopicsBeforeDeadline(&cCountRepository, &sCountTag, None, dtCountDeadline).await
+    });
+    let stRelatedState = state.clone();
+    let sRelatedTag = tag.clone();
+    let dtRelatedDeadline = dtSearchDeadline;
+    let stRelatedTask = tokio::spawn(async move {
+        match tokio::time::timeout_at(
+            dtRelatedDeadline,
+            crate::search_index::vecRelatedTags(&stRelatedState, &sRelatedTag),
+        )
+        .await
+        {
+            Ok(Ok(vecTags)) => vecTags,
+            Ok(Err(stError)) => {
+                tracing::warn!(error = %stError, tag = %sRelatedTag, "unable to find related tags");
+                Vec::new()
+            }
+            Err(_) => {
+                tracing::warn!(tag = %sRelatedTag, "tag related search timed out");
+                Vec::new()
+            }
+        }
+    });
+
     let is_moderator = user.as_ref().map(|u| u.canmod).unwrap_or(false);
     let tag_row: Option<(i32, i64)> =
-        sqlx::query_as("SELECT id, counter::bigint FROM tags_values WHERE lower(value)=lower($1)")
+        sqlx::query_as("SELECT id, counter::bigint FROM tags_values WHERE value=$1")
             .bind(&tag)
             .fetch_optional(&state.pool)
             .await?;
 
-    let Some((tag_id, counter)) = tag_row.filter(|(_, counter)| is_moderator || *counter > 0)
+    let Some((tag_id, persisted_counter)) =
+        tag_row.filter(|(_, counter)| is_moderator || *counter > 0)
     else {
         // No direct tag (or a moderator-only zero-count tag hidden from
         // regular users) - check whether `tag` is actually a synonym
@@ -737,6 +786,8 @@ async fn aggregate_tag_page(
 
     let stTimezone = stRequestTimezone(&stJar);
     let dtNow = chrono::Utc::now();
+    let optViewerId = user.as_ref().map(|stUser| stUser.id);
+    let bViewerAuthorized = user.is_some();
     let mut sections = Vec::new();
     for (prefix, name) in TAG_SECTION_ORDER {
         let limit = section_topic_limit(prefix);
@@ -760,18 +811,28 @@ async fn aggregate_tag_page(
                JOIN sections s ON s.id=g.section
                JOIN tags tg ON tg.msgid=t.id AND tg.tagid=$2
                WHERE (CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(s.name) END) = $1
-                 AND NOT t.deleted AND NOT COALESCE(t.draft,false)
-                 AND ($3 OR t.moderate OR NOT s.moderate)
+                 AND NOT t.deleted
+                 AND ($1='gallery' OR NOT COALESCE(t.draft,false))
+                 AND (($1='forum' AND NOT s.moderate)
+                   OR ($1<>'forum' AND s.moderate AND t.commitdate IS NOT NULL
+                     AND ($1<>'gallery' OR t.moderate)))
+                 AND ($1='gallery' OR $3 OR t.open_warnings <= 2)
+                 AND ($1<>'forum' OR $4::int IS NULL OR NOT EXISTS (
+                   SELECT 1 FROM ignore_list il
+                    WHERE il.userid=$4 AND il.ignored=t.userid
+                 ))
                ORDER BY CASE WHEN t.moderate AND t.commitdate IS NOT NULL THEN t.commitdate ELSE t.postdate END DESC
-               LIMIT $4"#,
+               LIMIT $5"#,
         )
         .bind(prefix)
         .bind(tag_id)
-        .bind(is_moderator)
+        .bind(bViewerAuthorized)
+        .bind(optViewerId)
         .bind(limit)
         .fetch_all(&state.pool)
         .await?;
         if !topics.is_empty() {
+            let iLoadedTopicCount = topics.len() as i64;
             let newest_date = topics.first().map(|topic| topic.postdate);
             let recent_news = *prefix == "news"
                 && topics
@@ -799,8 +860,20 @@ async fn aggregate_tag_page(
                     }
                 }
             }
-            let brief_topics = if recent_news {
+            if *prefix == "gallery" && gallery.is_empty() {
+                continue;
+            }
+            let more_url = if *prefix == "gallery" {
+                (gallery.len() as i64 == limit).then(|| sTagSectionUrl(&tag, section_id, 0))
+            } else {
+                (iLoadedTopicCount == limit).then(|| sTagSectionUrl(&tag, section_id, 0))
+            };
+            let brief_topics = if *prefix == "gallery" {
+                Vec::new()
+            } else if recent_news {
                 topics.into_iter().skip(1).collect()
+            } else if *prefix == "news" {
+                topics.into_iter().take((limit - 1) as usize).collect()
             } else {
                 topics
             };
@@ -825,6 +898,12 @@ async fn aggregate_tag_page(
                 _ => "Добавить топик",
             }
             .to_string();
+            let more_label = match *prefix {
+                "news" => "Все новости",
+                "gallery" => "Все изображения",
+                _ => "Все топики",
+            }
+            .to_string();
             sections.push(TagSectionGroup {
                 section_prefix: prefix.to_string(),
                 section_name: name.to_string(),
@@ -835,6 +914,8 @@ async fn aggregate_tag_page(
                 add_url,
                 add_reason: add_reason.unwrap_or_default(),
                 add_label,
+                more_url,
+                more_label,
             });
         }
     }
@@ -877,6 +958,14 @@ async fn aggregate_tag_page(
             .bind(tag_id)
             .fetch_all(&state.pool)
             .await?;
+    let synonyms = synonyms
+        .into_iter()
+        .map(|sName| TagSynonymView {
+            url: format!("/tag/{}", urlencoding::encode(&sName)),
+            delete_url: format!("/tags/delete?tagName={}", urlencoding::encode(&sName)),
+            name: sName,
+        })
+        .collect();
 
     let (show_favorite_button, show_unfavorite_button, show_ignore_button, show_unignore_button) =
         match &user {
@@ -905,34 +994,33 @@ async fn aggregate_tag_page(
             .fetch_one(&state.pool)
             .await?;
 
-    let related_tags = match tokio::time::timeout(
-        std::time::Duration::from_millis(500),
-        crate::search_index::vecRelatedTags(&state, &tag),
-    )
-    .await
-    {
-        Ok(Ok(vecTags)) => vecTags
-            .into_iter()
-            .map(|name| TagLink {
-                url: format!("/tag/{}", urlencoding::encode(&name)),
-                name,
-            })
-            .collect(),
-        Ok(Err(stError)) => {
-            tracing::warn!(error = %stError, tag = %tag, "unable to find related tags");
-            Vec::new()
-        }
-        Err(_) => {
-            tracing::warn!(tag = %tag, "tag related search timed out");
-            Vec::new()
+    let optSearchCounter = match stCountTask.await {
+        Ok(optCount) => optCount,
+        Err(stError) => {
+            tracing::warn!(error = %stError, tag = %tag, "tag topic count task failed");
+            None
         }
     };
+    let counter = iTagTopicCountOrFallback(optSearchCounter, persisted_counter);
+    let related_tags = match stRelatedTask.await {
+        Ok(vecTags) => vecTags,
+        Err(stError) => {
+            tracing::warn!(error = %stError, tag = %tag, "related tag task failed");
+            Vec::new()
+        }
+    }
+    .into_iter()
+    .map(|name| TagLink {
+        url: format!("/tag/{}", urlencoding::encode(&name)),
+        name,
+    })
+    .collect();
 
     Ok(Html(
         TagPageTemplate {
             tag: tag.clone(),
             tag_query_value: urlencoding::encode(&tag).into_owned(),
-            title: format!("Метка: {}", capitalize_first(&tag)),
+            title: capitalize_first(&tag),
             counter,
             sections,
             related_tags,
@@ -945,6 +1033,7 @@ async fn aggregate_tag_page(
             show_delete: is_moderator,
             favorites_count,
             ignored_count,
+            csrf_token: sCsrfToken,
         }
         .render()?,
     )
@@ -1111,11 +1200,19 @@ mod create_tag_permission_tests {
         assert!(sHeader.contains("id=\"ignoreCount\""));
     }
 
+    #[test]
+    fn user_filter_autocomplete_waits_for_the_plugin_dependencies() {
+        let sTemplate = include_str!("../../templates/user_filter.html");
+        assert!(sTemplate.contains("$script.ready(\"plugins\""));
+        assert!(sTemplate.contains("$script(\"/js/tagsAutocomplete.js\")"));
+        assert!(!sTemplate.contains("<script src=\"/js/tagsAutocomplete.js\""));
+    }
+
     fn sAggregateTagControls(bAuthorized: bool, bFavorite: bool, bIgnored: bool) -> String {
         TagPageTemplate {
             tag: "rust+web".to_owned(),
             tag_query_value: "rust%2Bweb".to_owned(),
-            title: "Метка: Rust+web".to_owned(),
+            title: "Rust+web".to_owned(),
             counter: 0,
             sections: Vec::new(),
             related_tags: Vec::new(),
@@ -1128,6 +1225,7 @@ mod create_tag_permission_tests {
             show_delete: false,
             favorites_count: 0,
             ignored_count: 0,
+            csrf_token: "csrf-token".to_owned(),
         }
         .render()
         .unwrap()
@@ -1136,6 +1234,8 @@ mod create_tag_permission_tests {
     #[test]
     fn aggregate_tag_controls_match_java_get_link_contract() {
         let sAdd = sAggregateTagControls(true, false, false);
+        assert!(sAdd.contains("<h1><i class=\"icon-tag\"></i> Rust+web</h1>"));
+        assert!(!sAdd.contains("Метка: Rust+web"));
         assert!(
             sAdd.contains("id=\"tagFavAdd\" href=\"/user-filter?newFavoriteTagName=rust%2Bweb\"")
         );
@@ -1151,6 +1251,55 @@ mod create_tag_permission_tests {
         let sAnonymous = sAggregateTagControls(false, false, false);
         assert!(sAnonymous.contains("id=\"tagFavNoth\" href=\"#\""));
         assert!(sAnonymous.contains("id=\"tagIgnNoth\" href=\"#\""));
+    }
+
+    #[test]
+    fn aggregate_tag_identity_lookup_is_exact_and_keeps_synonym_fallback() {
+        let sSource = include_str!("tags.rs");
+        let sAggregate = sSource
+            .split(concat!("async fn ", "aggregate_tag_page("))
+            .nth(1)
+            .unwrap()
+            .split("fn capitalize_first")
+            .next()
+            .unwrap();
+        assert!(sAggregate.contains("SELECT id, counter::bigint FROM tags_values WHERE value=$1"));
+        assert!(!sAggregate.contains(concat!("lower(value)", "=lower($1)")));
+        assert!(sAggregate.contains(
+            "FROM tags_synonyms ts JOIN tags_values tv ON tv.id=ts.tagid WHERE ts.value=$1"
+        ));
+        assert!(sAggregate.contains("is_moderator || *counter > 0"));
+        assert!(sAggregate.contains("($1='forum' AND NOT s.moderate)"));
+        assert!(sAggregate.contains("$1<>'forum' AND s.moderate AND t.commitdate IS NOT NULL"));
+        assert!(sAggregate.contains("($1<>'gallery' OR t.moderate)"));
+        assert!(sAggregate.contains("($1='gallery' OR $3 OR t.open_warnings <= 2)"));
+        assert!(sAggregate.contains("il.userid=$4 AND il.ignored=t.userid"));
+        assert!(!sAggregate.contains("$3 OR t.moderate OR NOT s.moderate"));
+        assert!(sAggregate.contains("gallery.len() as i64 == limit"));
+        assert!(sAggregate.contains("load_topic_images(&state, topic.id)"));
+        assert!(include_str!("topics.rs").contains("ORDER BY main DESC, id"));
+    }
+
+    #[test]
+    fn aggregate_tag_searches_all_sections_and_uses_the_persisted_fallback() {
+        let sSource = include_str!("tags.rs");
+        let sAggregate = sSource
+            .split(concat!("async fn ", "aggregate_tag_page("))
+            .nth(1)
+            .unwrap()
+            .split("fn capitalize_first")
+            .next()
+            .unwrap();
+
+        assert!(sAggregate.contains(
+            "optCountTagTopicsBeforeDeadline(&cCountRepository, &sCountTag, None, dtCountDeadline)"
+        ));
+        assert!(
+            sAggregate.contains("iTagTopicCountOrFallback(optSearchCounter, persisted_counter)")
+        );
+        assert!(sAggregate.contains("tokio::time::timeout_at("));
+        assert!(sAggregate.contains("dtRelatedDeadline"));
+        assert!(!sAggregate.contains("std::time::Duration::from_millis(500)"));
     }
 
     #[test]
@@ -1630,10 +1779,47 @@ pub async fn delete_tag(
     };
 
     let mut tx = state.pool.begin().await?;
-    let new_tag_id: i32 = sqlx::query_scalar(
-        "INSERT INTO tags_values(value,counter) VALUES($1,0) ON CONFLICT(value) DO UPDATE SET value=EXCLUDED.value RETURNING id",
+    // TagService.getOrCreateTag resolves an exact canonical name first, then
+    // an exact synonym, and creates a canonical tag only when neither exists.
+    // In particular, merging into a synonym must target its existing tagid
+    // instead of creating a second tags_values row with the synonym's name.
+    let optCanonicalTagId: Option<i32> =
+        sqlx::query_scalar("SELECT id FROM tags_values WHERE value=$1")
+            .bind(tag_name)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let optResolvedTagId = if optCanonicalTagId.is_some() {
+        optCanonicalTagId
+    } else {
+        sqlx::query_scalar("SELECT tagid FROM tags_synonyms WHERE value=$1")
+            .bind(tag_name)
+            .fetch_optional(&mut *tx)
+            .await?
+    };
+    let new_tag_id: i32 = if let Some(iTagId) = optResolvedTagId {
+        iTagId
+    } else {
+        sqlx::query_scalar("INSERT INTO tags_values(value) VALUES($1) RETURNING id")
+            .bind(tag_name)
+            .fetch_one(&mut *tx)
+            .await?
+    };
+
+    // TopicTagDao.getCountReplacedTags/increaseCounterById: the original
+    // increments the persisted target counter only by rows that will really
+    // move. It deliberately does not replace that counter with raw count(*),
+    // because the hourly recalculation excludes deleted/uncommitted topics.
+    let iReplacedTagCount: i64 = sqlx::query_scalar(
+        r#"SELECT count(*)
+             FROM tags old_tag
+            WHERE old_tag.tagid=$1
+              AND NOT EXISTS (
+                SELECT 1 FROM tags target_tag
+                 WHERE target_tag.msgid=old_tag.msgid AND target_tag.tagid=$2
+              )"#,
     )
-    .bind(tag_name)
+    .bind(old_tag_id)
+    .bind(new_tag_id)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -1651,12 +1837,11 @@ pub async fn delete_tag(
         .execute(&mut *tx)
         .await?;
 
-    sqlx::query(
-        "UPDATE tags_values SET counter=(SELECT count(*) FROM tags WHERE tagid=$1) WHERE id=$1",
-    )
-    .bind(new_tag_id)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("UPDATE tags_values SET counter=counter+$2 WHERE id=$1")
+        .bind(new_tag_id)
+        .bind(iReplacedTagCount)
+        .execute(&mut *tx)
+        .await?;
 
     // Any synonym that pointed at the tag being removed now follows the merge target.
     sqlx::query("UPDATE tags_synonyms SET tagid=$2 WHERE tagid=$1")
@@ -1751,6 +1936,49 @@ mod tag_mutation_form_validation_tests {
             vecDeleteTagErrors(true, "old", Some(""), true),
             vec!["Не указан тег для создания синонима!"]
         );
+    }
+
+    #[test]
+    fn merge_counter_increments_only_rows_really_moved() {
+        let sSource = include_str!("tags.rs");
+        let sMerge = sSource
+            .split_once("let iReplacedTagCount: i64")
+            .expect("merge count")
+            .1
+            .split_once("// Any synonym")
+            .expect("end of merge counter block")
+            .0;
+        assert!(sMerge.contains("NOT EXISTS"));
+        assert!(sMerge.contains("target_tag.msgid=old_tag.msgid"));
+        assert!(sMerge.contains("counter=counter+$2"));
+        assert!(sMerge.contains(".bind(iReplacedTagCount)"));
+        assert!(!sMerge.contains("SET counter=(SELECT count(*)"));
+    }
+
+    #[test]
+    fn merge_resolves_exact_canonical_then_synonym_before_creating_tag() {
+        let sSource = include_str!("tags.rs");
+        let sResolution = sSource
+            .split_once("// TagService.getOrCreateTag resolves")
+            .expect("merge target resolution")
+            .1
+            .split_once("// TopicTagDao.getCountReplacedTags")
+            .expect("end of merge target resolution")
+            .0;
+        let iCanonical = sResolution
+            .find("SELECT id FROM tags_values WHERE value=$1")
+            .expect("exact canonical lookup");
+        let iSynonym = sResolution
+            .find("SELECT tagid FROM tags_synonyms WHERE value=$1")
+            .expect("exact synonym lookup");
+        let iCreate = sResolution
+            .find("INSERT INTO tags_values(value) VALUES($1) RETURNING id")
+            .expect("fallback tag creation");
+
+        assert!(iCanonical < iSynonym && iSynonym < iCreate);
+        assert!(sResolution.contains("if optCanonicalTagId.is_some()"));
+        assert!(sResolution.contains("if let Some(iTagId) = optResolvedTagId"));
+        assert!(!sResolution.contains("ON CONFLICT"));
     }
 
     #[test]

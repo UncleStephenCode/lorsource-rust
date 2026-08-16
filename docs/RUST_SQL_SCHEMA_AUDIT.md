@@ -5,40 +5,40 @@ This is a conservative static identifier audit. It is not a semantic-parity clai
 ## Summary
 
 - Canonical schema: **33 tables / 214 columns**.
-- Rust SQL-bearing literals inspected: **880** (19 dynamic templates; 107 continuation fragments).
-- Queries with confirmed identifier/type violations: **2**.
-- Confirmed findings: **2**.
-- Queries requiring static-review caution: **125**.
+- Rust SQL-bearing literals inspected: **941** (21 dynamic templates; 128 continuation fragments).
+- SQL literals in Rust test scope: **211** (local CREATE TABLE fixture columns apply only there).
+- Queries with confirmed identifier/type violations: **0**.
+- Confirmed findings: **0**.
+- Queries requiring static-review caution: **148**.
 - Intentional negative schema probes: **23** (reported separately, not failures).
 
 ## Runtime-critical SQL surfaces
 
 | Rank | Runtime surface | SQL-bearing literals | Invalid queries | Findings | Review |
 |---|---|---:|---:|---:|---:|
-| P0 | topic persistence/list/detail | 47 | 1 | 1 | 20 |
-| P0 | authentication/session | 24 | 0 | 0 | 1 |
-| P0 | comment create/render/moderation | 41 | 0 | 0 | 5 |
+| P0 | authentication/session | 20 | 0 | 0 | 1 |
+| P0 | comment create/render/moderation | 43 | 0 | 0 | 8 |
 | P0 | startup/schema compatibility | 14 | 0 | 0 | 0 |
-| P0 | topic create/list/detail | 55 | 0 | 0 | 2 |
-| P1 | PostgreSQL repository | 371 | 1 | 1 | 56 |
-| P1 | api routes | 69 | 0 | 0 | 12 |
-| P1 | groups routes | 10 | 0 | 0 | 4 |
-| P1 | legacy routes | 43 | 0 | 0 | 0 |
+| P0 | topic create/list/detail | 53 | 0 | 0 | 2 |
+| P0 | topic persistence/list/detail | 46 | 0 | 0 | 19 |
+| P1 | PostgreSQL repository | 379 | 0 | 0 | 56 |
+| P1 | api routes | 71 | 0 | 0 | 12 |
+| P1 | groups routes | 21 | 0 | 0 | 12 |
+| P1 | legacy routes | 43 | 0 | 0 | 1 |
 | P1 | search indexing | 10 | 0 | 0 | 0 |
-| P1 | tags routes | 36 | 0 | 0 | 0 |
-| P1 | topic browser flow | 26 | 0 | 0 | 6 |
-| P1 | users routes | 61 | 0 | 0 | 15 |
+| P1 | tags routes | 52 | 0 | 0 | 8 |
+| P1 | topic browser flow | 29 | 0 | 0 | 7 |
+| P1 | users routes | 61 | 0 | 0 | 16 |
 | P2 | media routes | 2 | 0 | 0 | 0 |
 | P2 | moderation/admin | 16 | 0 | 0 | 3 |
 | P2 | search routes | 4 | 0 | 0 | 0 |
-| P2 | supporting runtime | 51 | 0 | 0 | 1 |
+| P2 | supporting runtime | 77 | 0 | 0 | 3 |
 
 ## Confirmed findings, runtime-ranked
 
 | Rank | Kind | Identifier | Runtime surface | Source |
 |---|---|---|---|---|
-| P0 | `missing_unqualified_column` | `at` | topic persistence/list/detail | `src/infra/postgres/topic_repository.rs:843` `S_COMMENT_PAGE_META_SQL` |
-| P1 | `missing_unqualified_column` | `at` | PostgreSQL repository | `src/infra/postgres/comment_deletion_repository.rs:135` `S_UNDELETE_PREVIEW_SQL` |
+| — | — | — | No confirmed static violations | — |
 
 ## Intentional legacy-absence probes
 
@@ -75,4 +75,5 @@ These identifiers occur as data in the startup schema fingerprint. PostgreSQL is
 - Bind values and SQL assembled outside Rust string literals cannot be type-checked statically.
 - Columns produced by CTEs, subqueries, table-valued functions and system catalogs are not guessed.
 - Dynamic format fragments are inventoried and their statically visible identifiers are checked; runtime branches still require integration tests.
+- SQL in Rust test functions is inventoried against explicitly declared local CREATE TABLE fixture columns as well as the canonical schema; production literals never receive that fixture overlay.
 - A clean static result does not establish query behavior, transaction, authorization or migration parity.

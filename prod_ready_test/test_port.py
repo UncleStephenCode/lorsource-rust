@@ -196,6 +196,25 @@ def local_form_action_path(source: str, action: str) -> str | None:
     return st_target.path or "/"
 
 
+def profile_topic_history_targets(body: str, nick: str) -> tuple[str, ...]:
+    """Return the topic-history link only when profile statistics render it.
+
+    The pinned ``whois.jsp`` emits both the per-section statistics links and
+    ``/people/{nick}/`` from the same non-empty ``topicsBySection`` branch.
+    Those statistics come from OpenSearch, so a valid profile can omit both
+    links even when PostgreSQL contains topics for the user.
+    """
+
+    topics_path = f"/people/{nick}/"
+    has_topics_link = f'href="{topics_path}"' in body
+    has_section_link = f'href="{topics_path}?section=' in body
+    require(
+        has_topics_link == has_section_link,
+        "profile topic-history link and per-section statistics diverge",
+    )
+    return (topics_path,) if has_topics_link else ()
+
+
 def topic(path: str, client: Client | None = None) -> str:
     return require_html((client or ANON).request(path), path)
 
@@ -712,8 +731,10 @@ def tag_index() -> None:
 @test("tag aggregate, section feeds, offsets and viewer controls")
 def tag_page_and_section_contracts() -> None:
     aggregate = require_html(ANON.request("/tag/prod-ready"), "aggregate tag page")
+    # TagPageController passes WordUtils.capitalize(tag) as `title`, and
+    # tag-page.jsp renders that value verbatim without a "Метка:" prefix.
     require(
-        '<h1><i class="icon-tag"></i> Метка: Prod-ready</h1>' in aggregate,
+        '<h1><i class="icon-tag"></i> Prod-ready</h1>' in aggregate,
         "aggregate tag heading differs from TagPageController",
     )
     # TagPageController promotes only the newest recent news item to a full
@@ -1989,6 +2010,9 @@ def representative_interface_integrity() -> None:
         ),
         "/people/crane2000/settings": settings,
     }
+    profile_topic_targets = profile_topic_history_targets(
+        documents["/people/crane2000/profile"], "crane2000"
+    )
 
     expected_links = {
         "/": ("/news/", "/gallery/", "/polls/", "/articles/", "/forum/", "/tracker/", "/tags"),
@@ -1997,7 +2021,10 @@ def representative_interface_integrity() -> None:
         "/tag/prod-ready?section=1": ("/tag/prod-ready", "/news/russia/9101002"),
         "/tag/prod-ready?section=2": ("/tag/prod-ready", "/forum/games/9101003"),
         "/forum/games/9101003": ("/forum/games", "/people/oriole300/profile"),
-        "/people/crane2000/profile": ("/people/crane2000/",),
+        # Java's whois.jsp renders this link only when its OpenSearch
+        # topicsBySection aggregation is non-empty.  The interface fixture may
+        # deliberately run after removing fixture-authored search documents.
+        "/people/crane2000/profile": profile_topic_targets,
         "/login.jsp?from=/forum/": ("/register.jsp", "/lostpwd.jsp"),
         "/search.jsp": (),
         "/people/crane2000/settings": (

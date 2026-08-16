@@ -39,7 +39,10 @@ pub async fn section_rss(
         group: iRssParameter(&vecParameters, "group", 0)?,
         filter: crate::form::get(&vecParameters, "filter").map(ToOwned::to_owned),
     };
-    let cTopicService = CTopicService::new(CTopicPgRepository::new(stState.pool.clone()));
+    let cTopicService = CTopicService::new(CTopicPgRepository::new(
+        stState.pool.clone(),
+        stState.config.stLegacyJdbcTimezone(),
+    ));
     let stSource = cTopicService
         .stRssSource(
             stQuery.section,
