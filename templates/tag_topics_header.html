@@ -1,0 +1,23 @@
+<h1><i class="icon-tag"></i> <a href="{{ sTagUrl }}">{{ sTagTitle }}</a></h1>
+
+<nav>
+  {% if vecSectionLinks.len() > 1 %}
+    {% for stLink in vecSectionLinks %}<a href="{{ stLink.sUrl }}" class="btn {% if stLink.bSelected %}btn-selected{% else %}btn-default{% endif %}">{{ stLink.sName }}</a>{% endfor %}
+  {% endif %}
+  {% match optAddUrl %}{% when Some with (sUrl) %}<a class="btn btn-primary" href="{{ sUrl }}">Добавить</a>{% when None %}<a class="btn btn-primary disabled" title="{{ sAddReason }}"><i class="icon-lock"></i> Добавить</a>{% endmatch %}
+</nav>
+
+<div class="infoblock" style="font-size: medium">
+  <div class="fav-buttons">
+    {% if bShowFavorite %}<a id="tagFavAdd" href="/user-filter?newFavoriteTagName={{ sTagQueryValue }}" title="В избранное"><i class="icon-bell"></i></a>{% endif %}
+    {% if !bAuthorized %}<a id="tagFavNoth" href="#"><i class="icon-bell" title="Добавить в избранное"></i></a>{% endif %}
+    {% if bShowUnfavorite %}<a id="tagFavAdd" href="/user-filter" title="Удалить из избранного" class="selected"><i class="icon-bell"></i></a>{% endif %}
+    <br><span id="favsCount" title="Кол-во пользователей, добавивших в избранное">{{ iFavoritesCount }}</span>
+    <br>
+    {% if bShowIgnore %}<a id="tagIgnore" href="/user-filter?newIgnoreTagName={{ sTagQueryValue }}" title="Игнорировать"><i class="icon-eye-with-line"></i></a>{% endif %}
+    {% if !bShowIgnore && !bShowUnignore %}<a id="tagIgnNoth" href="#"><i class="icon-eye-with-line" title="Игнорировать"></i></a>{% endif %}
+    {% if bShowUnignore %}<a id="tagIgnore" href="/user-filter" title="Перестать игнорировать" class="selected"><i class="icon-eye-with-line"></i></a>{% endif %}
+    <br><span id="ignoreCount" title="Кол-во пользователей, игнорирующих тег">{{ iIgnoreCount }}</span>
+  </div>
+  {% if iCounter > 0 %}<p>Всего сообщений: {{ iCounter }}</p>{% endif %}
+</div>

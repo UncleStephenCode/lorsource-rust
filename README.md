@@ -26,8 +26,11 @@ http://localhost:8181
 
 PostgreSQL будет поднят рядом. Для нового пустого volume одноразовый
 `db-bootstrap` загрузит канонический Java demo dump и все Liquibase changesets.
-На уже существующей Java БД этот шаг только проверяет Liquibase history и
-ничего не накатывает. Mixed, legacy-Rust и неизвестные схемы отклоняются.
+На уже существующей Java БД этот шаг только проверяет canonical set из 187
+Liquibase identity/path/checksum, успешный execution state и headroom
+PK-sequences, ничего не накатывая. Отличающийся допустимый порядок/profile
+исполнения выводится как warning; mixed, legacy-Rust и неизвестные схемы
+отклоняются.
 
 ## Локальный запуск без сборки контейнера приложения
 
@@ -40,8 +43,11 @@ cargo run
 
 Rust-приложение не выполняет миграций при старте. Оно подключается как
 Java-role `linuxweb` и проверяет 33 таблицы, 214 колонок, enum и
-605-строчный required-object контракт PK/FK/UNIQUE/CHECK/default/index/
-sequence/ACL; дрейф owner и дополнительных объектов фиксируется отдельно.
+728-строчный required-object контракт PK/FK/UNIQUE/CHECK/default/index/
+sequence/ACL, RLS-флаги, function `EXECUTE` и schema/enum `USAGE`; дрейф
+owner, direct ACL и дополнительных индексов фиксируется отдельно, а
+дополнительные constraints/enabled triggers на canonical tables блокируют
+старт как потенциально меняющие семантику записи.
 
 ## Проверка
 

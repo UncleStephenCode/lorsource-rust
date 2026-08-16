@@ -6,34 +6,34 @@
     ],
     "handler": "get(geoip)",
     "source": "src/routes/admin.rs",
-    "line": 48
+    "line": 65
   },
   {
     "path": "/admin/email-domains",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(email_domains)",
+    "handler": "any(email_domains)",
     "source": "src/routes/admin.rs",
-    "line": 49
+    "line": 66
   },
   {
     "path": "/admin/email-domains/add",
     "methods": [
       "POST"
     ],
-    "handler": "post(email_domains_add)",
+    "handler": "auto(post(email_domains_add))",
     "source": "src/routes/admin.rs",
-    "line": 50
+    "line": 67
   },
   {
     "path": "/admin/email-domains/delete",
     "methods": [
       "POST"
     ],
-    "handler": "post(email_domains_delete)",
+    "handler": "auto(post(email_domains_delete))",
     "source": "src/routes/admin.rs",
-    "line": 51
+    "line": 68
   },
   {
     "path": "/admin/search-reindex",
@@ -41,36 +41,36 @@
       "GET",
       "POST"
     ],
-    "handler": "get(search_reindex_form).post(search_reindex),",
+    "handler": "get(search_reindex_form).post(search_reindex)",
     "source": "src/routes/admin.rs",
-    "line": 52
+    "line": 72
   },
   {
     "path": "/banip.jsp",
     "methods": [
       "POST"
     ],
-    "handler": "post(ban_ip)",
+    "handler": "auto(post(ban_ip))",
     "source": "src/routes/admin.rs",
-    "line": 56
+    "line": 76
   },
   {
     "path": "/delip.jsp",
     "methods": [
       "POST"
     ],
-    "handler": "post(del_ip)",
+    "handler": "auto(post(del_ip))",
     "source": "src/routes/admin.rs",
-    "line": 57
+    "line": 77
   },
   {
     "path": "/sameip.jsp",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(same_ip)",
+    "handler": "any(same_ip)",
     "source": "src/routes/admin.rs",
-    "line": 58
+    "line": 78
   },
   {
     "path": "/groupmod.jsp",
@@ -78,9 +78,9 @@
       "GET",
       "POST"
     ],
-    "handler": "get(groupmod_form).post(groupmod_save)",
+    "handler": "auto(get(groupmod_form).post(groupmod_save))",
     "source": "src/routes/admin.rs",
-    "line": 59
+    "line": 79
   },
   {
     "path": "/usermod.jsp",
@@ -90,7 +90,7 @@
     ],
     "handler": "get(usermod_get).post(usermod)",
     "source": "src/routes/admin.rs",
-    "line": 62
+    "line": 85
   },
   {
     "path": "/post-warning",
@@ -98,72 +98,45 @@
       "GET",
       "POST"
     ],
-    "handler": "get(post_warning_form).post(post_warning)",
+    "handler": "auto(get(post_warning_form).post(post_warning))",
     "source": "src/routes/admin.rs",
-    "line": 63
+    "line": 86
   },
   {
     "path": "/clear-warning",
     "methods": [
       "POST"
     ],
-    "handler": "post(clear_warning)",
+    "handler": "auto(post(clear_warning))",
     "source": "src/routes/admin.rs",
-    "line": 64
-  },
-  {
-    "path": "/ExceptionResolver",
-    "methods": [
-      "ANY"
-    ],
-    "handler": "any(exception_resolver)",
-    "source": "src/routes/legacy.rs",
-    "line": 53
-  },
-  {
-    "path": "/errors/403",
-    "methods": [
-      "ANY"
-    ],
-    "handler": "any(error_403)",
-    "source": "src/routes/legacy.rs",
-    "line": 54
-  },
-  {
-    "path": "/errors/404",
-    "methods": [
-      "ANY"
-    ],
-    "handler": "any(error_404)",
-    "source": "src/routes/legacy.rs",
-    "line": 55
+    "line": 90
   },
   {
     "path": "/",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(topics::index)",
+    "handler": "any(topics::index)",
     "source": "src/routes/mod.rs",
-    "line": 53
+    "line": 260
   },
   {
     "path": "/index.jsp",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(topics::index)",
+    "handler": "any(topics::index)",
     "source": "src/routes/mod.rs",
-    "line": 54
+    "line": 261
   },
   {
     "path": "/about",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(about)",
+    "handler": "any(about)",
     "source": "src/routes/mod.rs",
-    "line": 55
+    "line": 262
   },
   {
     "path": "/ws",
@@ -172,170 +145,169 @@
     ],
     "handler": "get(realtime::websocket)",
     "source": "src/routes/mod.rs",
-    "line": 56
+    "line": 263
   },
   {
     "path": "/forum",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(groups::forum_index)",
+    "handler": "any(groups::forum_index)",
     "source": "src/routes/mod.rs",
-    "line": 57
+    "line": 264
   },
   {
     "path": "/forum/",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(groups::forum_index)",
+    "handler": "any(groups::forum_index)",
     "source": "src/routes/mod.rs",
-    "line": 58
+    "line": 265
   },
   {
     "path": "/forum/lenta",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(topics::lenta)",
+    "handler": "any(topics::lenta)",
     "source": "src/routes/mod.rs",
-    "line": 59
+    "line": 266
   },
   {
     "path": "/forum/{group}",
     "methods": [
-      "GET",
-      "POST"
+      "ANY"
     ],
-    "handler": "get(groups::group_page).post(groups::group_page),",
+    "handler": "any(groups::group_page)",
     "source": "src/routes/mod.rs",
-    "line": 60
+    "line": 267
   },
   {
     "path": "/forum/{group}/archive",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(groups::group_archive)",
+    "handler": "any(groups::group_archive)",
     "source": "src/routes/mod.rs",
-    "line": 64
+    "line": 268
   },
   {
     "path": "/forum/{group}/archive/",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(groups::group_archive)",
+    "handler": "any(groups::group_archive)",
     "source": "src/routes/mod.rs",
-    "line": 65
+    "line": 269
   },
   {
     "path": "/forum/{group}/{id}",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(topics::topic_page)",
+    "handler": "any(topics::topic_page_any)",
     "source": "src/routes/mod.rs",
-    "line": 66
+    "line": 270
   },
   {
     "path": "/forum/{group}/{id_or_year}/{page_or_month}",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::forum_page_or_archive),",
+    "handler": "controller_any(legacy::forum_page_or_archive)",
     "source": "src/routes/mod.rs",
-    "line": 67
+    "line": 271
   },
   {
     "path": "/forum/{group}/{id_or_year}/{page_or_month}/",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::forum_page_or_archive),",
+    "handler": "controller_any(legacy::forum_page_or_archive)",
     "source": "src/routes/mod.rs",
-    "line": 71
+    "line": 275
   },
   {
     "path": "/news/",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(topics::section_topics)",
+    "handler": "any(topics::section_topics)",
     "source": "src/routes/mod.rs",
-    "line": 75
+    "line": 279
   },
   {
     "path": "/news/{group}",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(topics::section_group_topics)",
+    "handler": "any(topics::section_group_topics)",
     "source": "src/routes/mod.rs",
-    "line": 76
+    "line": 280
   },
   {
     "path": "/news/{group}/{id}",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(topics::topic_page)",
+    "handler": "any(topics::topic_page_any)",
     "source": "src/routes/mod.rs",
-    "line": 77
+    "line": 281
   },
   {
     "path": "/news/{group}/{id}/{page_marker}",
     "methods": [
       "GET"
     ],
-    "handler": "get(topics::topic_page_with_page),",
+    "handler": "get(topics::topic_page_with_page)",
     "source": "src/routes/mod.rs",
-    "line": 78
+    "line": 282
   },
   {
     "path": "/articles/",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(topics::section_topics)",
+    "handler": "any(topics::section_topics)",
     "source": "src/routes/mod.rs",
-    "line": 82
+    "line": 286
   },
   {
     "path": "/articles/{group}",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(topics::section_group_topics)",
+    "handler": "any(topics::section_group_topics)",
     "source": "src/routes/mod.rs",
-    "line": 83
+    "line": 287
   },
   {
     "path": "/articles/{group}/{id}",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(topics::topic_page)",
+    "handler": "any(topics::topic_page_any)",
     "source": "src/routes/mod.rs",
-    "line": 84
+    "line": 288
   },
   {
     "path": "/articles/{group}/{id}/{page_marker}",
     "methods": [
       "GET"
     ],
-    "handler": "get(topics::topic_page_with_page),",
+    "handler": "get(topics::topic_page_with_page)",
     "source": "src/routes/mod.rs",
-    "line": 85
+    "line": 289
   },
   {
     "path": "/gallery/",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(topics::section_topics)",
+    "handler": "any(topics::section_topics)",
     "source": "src/routes/mod.rs",
-    "line": 89
+    "line": 293
   },
   {
     "path": "/gallery/preview/{file}",
@@ -344,79 +316,79 @@
     ],
     "handler": "get(media::gallery_preview)",
     "source": "src/routes/mod.rs",
-    "line": 90
+    "line": 294
   },
   {
     "path": "/gallery-uploads/preview/{file}",
     "methods": [
       "GET"
     ],
-    "handler": "get(media::gallery_preview),",
+    "handler": "get(media::gallery_preview)",
     "source": "src/routes/mod.rs",
-    "line": 91
+    "line": 295
   },
   {
     "path": "/gallery/{group}",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(topics::section_group_topics)",
+    "handler": "any(topics::section_group_topics)",
     "source": "src/routes/mod.rs",
-    "line": 95
+    "line": 299
   },
   {
     "path": "/gallery/{group}/{id}",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(topics::topic_page)",
+    "handler": "any(topics::topic_page_any)",
     "source": "src/routes/mod.rs",
-    "line": 96
+    "line": 300
   },
   {
     "path": "/gallery/{group}/{id}/{page_marker}",
     "methods": [
       "GET"
     ],
-    "handler": "get(topics::topic_page_with_page),",
+    "handler": "get(topics::topic_page_with_page)",
     "source": "src/routes/mod.rs",
-    "line": 97
+    "line": 301
   },
   {
     "path": "/polls/",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(topics::section_topics)",
+    "handler": "any(topics::section_topics)",
     "source": "src/routes/mod.rs",
-    "line": 101
+    "line": 305
   },
   {
     "path": "/polls/{group}",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(topics::section_group_topics)",
+    "handler": "any(topics::section_group_topics)",
     "source": "src/routes/mod.rs",
-    "line": 102
+    "line": 306
   },
   {
     "path": "/polls/{group}/{id}",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(topics::topic_page)",
+    "handler": "any(topics::topic_page_any)",
     "source": "src/routes/mod.rs",
-    "line": 103
+    "line": 307
   },
   {
     "path": "/polls/{group}/{id}/{page_marker}",
     "methods": [
       "GET"
     ],
-    "handler": "get(topics::topic_page_with_page),",
+    "handler": "get(topics::topic_page_with_page)",
     "source": "src/routes/mod.rs",
-    "line": 104
+    "line": 308
   },
   {
     "path": "/images/{id}/{file}",
@@ -425,7 +397,7 @@
     ],
     "handler": "get(media::finalized_image)",
     "source": "src/routes/mod.rs",
-    "line": 108
+    "line": 312
   },
   {
     "path": "/photos/{file}",
@@ -434,7 +406,7 @@
     ],
     "handler": "get(media::userpic)",
     "source": "src/routes/mod.rs",
-    "line": 109
+    "line": 313
   },
   {
     "path": "/show-topics.jsp",
@@ -443,7 +415,7 @@
     ],
     "handler": "get(topics::legacy_show_topics)",
     "source": "src/routes/mod.rs",
-    "line": 110
+    "line": 314
   },
   {
     "path": "/view-all.jsp",
@@ -452,16 +424,16 @@
     ],
     "handler": "get(topics::view_all)",
     "source": "src/routes/mod.rs",
-    "line": 111
+    "line": 315
   },
   {
     "path": "/view-message.jsp",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(topics::legacy_view_message)",
+    "handler": "any(legacy::legacy_view_message)",
     "source": "src/routes/mod.rs",
-    "line": 112
+    "line": 316
   },
   {
     "path": "/jump-message.jsp",
@@ -470,7 +442,7 @@
     ],
     "handler": "get(comments::jump_message)",
     "source": "src/routes/mod.rs",
-    "line": 113
+    "line": 317
   },
   {
     "path": "/add.jsp",
@@ -478,18 +450,18 @@
       "GET",
       "POST"
     ],
-    "handler": "get(topics::new_topic_form) .post(topics::create_topic) .layer(DefaultBodyLimit::max(34 * 1024 * 1024)),",
+    "handler": "get(topics::new_topic_form) .post(topics::create_topic) .layer(DefaultBodyLimit::max(34 * 1024 * 1024))",
     "source": "src/routes/mod.rs",
-    "line": 114
+    "line": 318
   },
   {
     "path": "/add-section.jsp",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(topics::choose_topic_section)",
+    "handler": "any(topics::choose_topic_section)",
     "source": "src/routes/mod.rs",
-    "line": 120
+    "line": 324
   },
   {
     "path": "/edit.jsp",
@@ -497,9 +469,9 @@
       "GET",
       "POST"
     ],
-    "handler": "topics::stEditTopicRoute()",
+    "handler": "auto(topics::stEditTopicRoute())",
     "source": "src/routes/mod.rs",
-    "line": 121
+    "line": 325
   },
   {
     "path": "/delete.jsp",
@@ -507,9 +479,9 @@
       "GET",
       "POST"
     ],
-    "handler": "topic_deletion::stDeleteRoute()",
+    "handler": "auto(topic_deletion::stDeleteRoute())",
     "source": "src/routes/mod.rs",
-    "line": 122
+    "line": 326
   },
   {
     "path": "/undelete",
@@ -517,9 +489,9 @@
       "GET",
       "POST"
     ],
-    "handler": "topic_deletion::stUndeleteRoute()",
+    "handler": "auto(topic_deletion::stUndeleteRoute())",
     "source": "src/routes/mod.rs",
-    "line": 123
+    "line": 327
   },
   {
     "path": "/resolve.jsp",
@@ -530,9 +502,9 @@
       "DELETE",
       "PATCH"
     ],
-    "handler": "topic_moderation::stResolveRoute()",
+    "handler": "auto(topic_moderation::stResolveRoute())",
     "source": "src/routes/mod.rs",
-    "line": 124
+    "line": 328
   },
   {
     "path": "/add_comment.jsp",
@@ -540,9 +512,9 @@
       "GET",
       "POST"
     ],
-    "handler": "get(comments::add_comment_form).post(comments::add_comment),",
+    "handler": "get(comments::add_comment_form).post(comments::add_comment)",
     "source": "src/routes/mod.rs",
-    "line": 125
+    "line": 329
   },
   {
     "path": "/add_comment_ajax",
@@ -551,7 +523,7 @@
     ],
     "handler": "post(comments::add_comment_ajax)",
     "source": "src/routes/mod.rs",
-    "line": 129
+    "line": 333
   },
   {
     "path": "/comment-message.jsp",
@@ -564,7 +536,7 @@
     ],
     "handler": "comments::stCommentMessageRoute()",
     "source": "src/routes/mod.rs",
-    "line": 130
+    "line": 334
   },
   {
     "path": "/edit_comment",
@@ -572,9 +544,9 @@
       "GET",
       "POST"
     ],
-    "handler": "get(comments::edit_comment_form).post(comments::edit_comment),",
+    "handler": "get(comments::edit_comment_form).post(comments::edit_comment)",
     "source": "src/routes/mod.rs",
-    "line": 131
+    "line": 335
   },
   {
     "path": "/delete_comment.jsp",
@@ -582,9 +554,9 @@
       "GET",
       "POST"
     ],
-    "handler": "comments::stDeleteCommentRoute()",
+    "handler": "auto(comments::stDeleteCommentRoute())",
     "source": "src/routes/mod.rs",
-    "line": 135
+    "line": 339
   },
   {
     "path": "/undelete_comment",
@@ -592,9 +564,9 @@
       "GET",
       "POST"
     ],
-    "handler": "comments::stUndeleteCommentRoute()",
+    "handler": "auto(comments::stUndeleteCommentRoute())",
     "source": "src/routes/mod.rs",
-    "line": 136
+    "line": 343
   },
   {
     "path": "/search.jsp",
@@ -603,34 +575,34 @@
     ],
     "handler": "get(search::search)",
     "source": "src/routes/mod.rs",
-    "line": 137
+    "line": 347
   },
   {
     "path": "/tags",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(tags::all_tags)",
+    "handler": "any(tags::all_tags)",
     "source": "src/routes/mod.rs",
-    "line": 138
+    "line": 348
   },
   {
     "path": "/tags.jsp",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(tags::old_tags_redirect)",
+    "handler": "any(tags::old_tags_redirect)",
     "source": "src/routes/mod.rs",
-    "line": 139
+    "line": 349
   },
   {
     "path": "/tags/{first_letter}",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(tags::tags_by_letter)",
+    "handler": "any(tags::tags_by_letter)",
     "source": "src/routes/mod.rs",
-    "line": 140
+    "line": 350
   },
   {
     "path": "/tag/{tag}",
@@ -639,7 +611,7 @@
     ],
     "handler": "get(tags::tag_page)",
     "source": "src/routes/mod.rs",
-    "line": 141
+    "line": 351
   },
   {
     "path": "/people/{nick}/profile",
@@ -648,7 +620,7 @@
     ],
     "handler": "get(users::profile_full)",
     "source": "src/routes/mod.rs",
-    "line": 145
+    "line": 355
   },
   {
     "path": "/people/{nick}/profile/",
@@ -657,43 +629,43 @@
     ],
     "handler": "get(users::profile_full)",
     "source": "src/routes/mod.rs",
-    "line": 146
+    "line": 356
   },
   {
     "path": "/people/{nick}/reactions",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(users::reactions)",
+    "handler": "any(users::reactions)",
     "source": "src/routes/mod.rs",
-    "line": 147
+    "line": 357
   },
   {
     "path": "/people/{nick}/reactions/{mode}",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(users::reactions_mode),",
+    "handler": "any(users::reactions_mode)",
     "source": "src/routes/mod.rs",
-    "line": 148
+    "line": 358
   },
   {
     "path": "/people/{nick}/remarks",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(users::remarks)",
+    "handler": "any(users::remarks)",
     "source": "src/routes/mod.rs",
-    "line": 152
+    "line": 362
   },
   {
     "path": "/whois.jsp",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(users::legacy_whois)",
+    "handler": "any(users::legacy_whois)",
     "source": "src/routes/mod.rs",
-    "line": 153
+    "line": 363
   },
   {
     "path": "/login.jsp",
@@ -702,16 +674,16 @@
     ],
     "handler": "get(auth::login_form)",
     "source": "src/routes/mod.rs",
-    "line": 154
+    "line": 364
   },
   {
     "path": "/login_process",
     "methods": [
       "POST"
     ],
-    "handler": "post(auth::login)",
+    "handler": "auto(post(auth::login))",
     "source": "src/routes/mod.rs",
-    "line": 155
+    "line": 365
   },
   {
     "path": "/logout",
@@ -719,9 +691,9 @@
       "GET",
       "POST"
     ],
-    "handler": "get(auth::logout_link).post(auth::logout)",
+    "handler": "auto(get(auth::logout_link).post(auth::logout))",
     "source": "src/routes/mod.rs",
-    "line": 159
+    "line": 369
   },
   {
     "path": "/register.jsp",
@@ -729,9 +701,9 @@
       "GET",
       "POST"
     ],
-    "handler": "get(auth::register_form).post(auth::register),",
+    "handler": "auto(get(auth::register_form).post(auth::register))",
     "source": "src/routes/mod.rs",
-    "line": 160
+    "line": 370
   },
   {
     "path": "/lostpwd.jsp",
@@ -739,9 +711,9 @@
       "GET",
       "POST"
     ],
-    "handler": "get(auth::lost_password_form).post(auth::lost_password),",
+    "handler": "auto(get(auth::lost_password_form).post(auth::lost_password))",
     "source": "src/routes/mod.rs",
-    "line": 164
+    "line": 374
   },
   {
     "path": "/notifications",
@@ -749,9 +721,9 @@
       "GET",
       "POST"
     ],
-    "handler": "get(api::notifications).post(api::notifications_mark_read),",
+    "handler": "auto(get(api::notifications).post(api::notifications_mark_read))",
     "source": "src/routes/mod.rs",
-    "line": 168
+    "line": 378
   },
   {
     "path": "/notifications-count",
@@ -760,52 +732,52 @@
     ],
     "handler": "get(api::notifications_count)",
     "source": "src/routes/mod.rs",
-    "line": 172
+    "line": 382
   },
   {
     "path": "/notifications-reset",
     "methods": [
       "POST"
     ],
-    "handler": "post(api::notifications_reset)",
+    "handler": "auto(post(api::notifications_reset))",
     "source": "src/routes/mod.rs",
-    "line": 173
+    "line": 383
   },
   {
     "path": "/tracker",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(api::tracker)",
+    "handler": "any(api::tracker)",
     "source": "src/routes/mod.rs",
-    "line": 174
+    "line": 384
   },
   {
     "path": "/tracker/",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(api::tracker)",
+    "handler": "any(api::tracker)",
     "source": "src/routes/mod.rs",
-    "line": 175
+    "line": 385
   },
   {
     "path": "/tracker.jsp",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(api::tracker_old_redirect)",
+    "handler": "any(api::tracker_old_redirect)",
     "source": "src/routes/mod.rs",
-    "line": 176
+    "line": 386
   },
   {
     "path": "/section-rss.jsp",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(rss::section_rss)",
+    "handler": "any(rss::section_rss)",
     "source": "src/routes/mod.rs",
-    "line": 177
+    "line": 387
   },
   {
     "path": "/top10.boxlet",
@@ -814,7 +786,7 @@
     ],
     "handler": "any(api::top10_boxlet)",
     "source": "src/routes/mod.rs",
-    "line": 178
+    "line": 388
   },
   {
     "path": "/articles.boxlet",
@@ -823,7 +795,7 @@
     ],
     "handler": "any(api::articles_boxlet)",
     "source": "src/routes/mod.rs",
-    "line": 179
+    "line": 389
   },
   {
     "path": "/poll.boxlet",
@@ -832,7 +804,7 @@
     ],
     "handler": "any(api::poll_boxlet)",
     "source": "src/routes/mod.rs",
-    "line": 180
+    "line": 390
   },
   {
     "path": "/gallery.boxlet",
@@ -841,7 +813,7 @@
     ],
     "handler": "any(boxlets::gallery)",
     "source": "src/routes/mod.rs",
-    "line": 181
+    "line": 391
   },
   {
     "path": "/tagcloud.boxlet",
@@ -850,7 +822,7 @@
     ],
     "handler": "any(boxlets::tagCloud)",
     "source": "src/routes/mod.rs",
-    "line": 182
+    "line": 392
   },
   {
     "path": "/ExceptionResolver",
@@ -859,7 +831,7 @@
     ],
     "handler": "any(legacy::exception_resolver)",
     "source": "src/routes/mod.rs",
-    "line": 185
+    "line": 395
   },
   {
     "path": "/activate",
@@ -867,9 +839,9 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::activate_form).post(legacy::activate_post),",
+    "handler": "auto(get(legacy::activate_form).post(legacy::activate_post))",
     "source": "src/routes/mod.rs",
-    "line": 186
+    "line": 396
   },
   {
     "path": "/activate.jsp",
@@ -877,9 +849,9 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::activate_form).post(legacy::activate_post),",
+    "handler": "auto(get(legacy::activate_form).post(legacy::activate_post))",
     "source": "src/routes/mod.rs",
-    "line": 190
+    "line": 400
   },
   {
     "path": "/addphoto.jsp",
@@ -887,27 +859,27 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::addphoto_form).post(legacy::upload_userpic),",
+    "handler": "auto(get(legacy::addphoto_form).post(legacy::upload_userpic))",
     "source": "src/routes/mod.rs",
-    "line": 194
+    "line": 404
   },
   {
     "path": "/articles/archive",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::archive_section)",
+    "handler": "any(legacy::archive_section)",
     "source": "src/routes/mod.rs",
-    "line": 198
+    "line": 408
   },
   {
     "path": "/articles/archive/",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::archive_section)",
+    "handler": "any(legacy::archive_section)",
     "source": "src/routes/mod.rs",
-    "line": 199
+    "line": 409
   },
   {
     "path": "/commit.jsp",
@@ -916,7 +888,7 @@
     ],
     "handler": "topics::stCommitTopicRoute()",
     "source": "src/routes/mod.rs",
-    "line": 200
+    "line": 410
   },
   {
     "path": "/delete_image",
@@ -924,9 +896,9 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::delete_image_form).post(legacy::delete_image),",
+    "handler": "auto(get(legacy::delete_image_form).post(legacy::delete_image))",
     "source": "src/routes/mod.rs",
-    "line": 201
+    "line": 411
   },
   {
     "path": "/deregister.jsp",
@@ -934,9 +906,9 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::deregister_form).post(legacy::deregister_post),",
+    "handler": "auto(get(legacy::deregister_form).post(legacy::deregister_post))",
     "source": "src/routes/mod.rs",
-    "line": 205
+    "line": 415
   },
   {
     "path": "/errors/403",
@@ -945,7 +917,7 @@
     ],
     "handler": "any(legacy::error_403)",
     "source": "src/routes/mod.rs",
-    "line": 209
+    "line": 419
   },
   {
     "path": "/errors/404",
@@ -954,52 +926,52 @@
     ],
     "handler": "any(legacy::error_404)",
     "source": "src/routes/mod.rs",
-    "line": 210
+    "line": 420
   },
   {
     "path": "/gallery/archive",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::archive_section)",
+    "handler": "any(legacy::archive_section)",
     "source": "src/routes/mod.rs",
-    "line": 211
+    "line": 421
   },
   {
     "path": "/gallery/archive/",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::archive_section)",
+    "handler": "any(legacy::archive_section)",
     "source": "src/routes/mod.rs",
-    "line": 212
+    "line": 422
   },
   {
     "path": "/group-lastmod.jsp",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::group_lastmod_jsp)",
+    "handler": "any(legacy::group_lastmod_jsp)",
     "source": "src/routes/mod.rs",
-    "line": 213
+    "line": 423
   },
   {
     "path": "/group.jsp",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::group_jsp)",
+    "handler": "any(legacy::group_jsp)",
     "source": "src/routes/mod.rs",
-    "line": 214
+    "line": 424
   },
   {
     "path": "/help/{page}",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::help_page)",
+    "handler": "any(legacy::help_page)",
     "source": "src/routes/mod.rs",
-    "line": 215
+    "line": 425
   },
   {
     "path": "/logout_all_sessions",
@@ -1007,18 +979,18 @@
       "GET",
       "POST"
     ],
-    "handler": "get(auth::logout_link).post(auth::logout_all_sessions),",
+    "handler": "auto(get(auth::logout_link).post(auth::logout_all_sessions))",
     "source": "src/routes/mod.rs",
-    "line": 216
+    "line": 426
   },
   {
     "path": "/markup/preview",
     "methods": [
       "POST"
     ],
-    "handler": "post(legacy::markup_preview)",
+    "handler": "auto(post(legacy::markup_preview))",
     "source": "src/routes/mod.rs",
-    "line": 220
+    "line": 430
   },
   {
     "path": "/memories.jsp",
@@ -1027,7 +999,7 @@
     ],
     "handler": "post(legacy::memories)",
     "source": "src/routes/mod.rs",
-    "line": 221
+    "line": 431
   },
   {
     "path": "/mt.jsp",
@@ -1035,9 +1007,9 @@
       "GET",
       "POST"
     ],
-    "handler": "topic_moderation::stMoveRoute()",
+    "handler": "auto(topic_moderation::stMoveRoute())",
     "source": "src/routes/mod.rs",
-    "line": 222
+    "line": 432
   },
   {
     "path": "/mtn.jsp",
@@ -1046,61 +1018,61 @@
     ],
     "handler": "topic_moderation::stPremoderatedMoveRoute()",
     "source": "src/routes/mod.rs",
-    "line": 223
+    "line": 433
   },
   {
     "path": "/news/archive",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::archive_section)",
+    "handler": "any(legacy::archive_section)",
     "source": "src/routes/mod.rs",
-    "line": 224
+    "line": 434
   },
   {
     "path": "/news/archive/",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::archive_section)",
+    "handler": "any(legacy::archive_section)",
     "source": "src/routes/mod.rs",
-    "line": 225
+    "line": 435
   },
   {
     "path": "/notifications-click",
     "methods": [
       "POST"
     ],
-    "handler": "post(legacy::notifications_click)",
+    "handler": "auto(post(legacy::notifications_click))",
     "source": "src/routes/mod.rs",
-    "line": 226
+    "line": 436
   },
   {
     "path": "/notifications-click/ajax",
     "methods": [
       "POST"
     ],
-    "handler": "post(legacy::notifications_click_ajax),",
+    "handler": "auto(post(legacy::notifications_click_ajax))",
     "source": "src/routes/mod.rs",
-    "line": 227
+    "line": 440
   },
   {
     "path": "/polls/archive",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::archive_section)",
+    "handler": "any(legacy::archive_section)",
     "source": "src/routes/mod.rs",
-    "line": 231
+    "line": 444
   },
   {
     "path": "/polls/archive/",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::archive_section)",
+    "handler": "any(legacy::archive_section)",
     "source": "src/routes/mod.rs",
-    "line": 232
+    "line": 445
   },
   {
     "path": "/reactions",
@@ -1108,27 +1080,27 @@
       "GET",
       "POST"
     ],
-    "handler": "get(api::reactions_get).post(api::reactions_post),",
+    "handler": "auto(get(api::reactions_get).post(api::reactions_post))",
     "source": "src/routes/mod.rs",
-    "line": 233
+    "line": 446
   },
   {
     "path": "/reactions/ajax",
     "methods": [
       "POST"
     ],
-    "handler": "post(api::reactions_post_ajax)",
+    "handler": "auto(post(api::reactions_post_ajax))",
     "source": "src/routes/mod.rs",
-    "line": 237
+    "line": 450
   },
   {
     "path": "/remove-userpic.jsp",
     "methods": [
       "POST"
     ],
-    "handler": "post(legacy::remove_userpic)",
+    "handler": "auto(post(legacy::remove_userpic))",
     "source": "src/routes/mod.rs",
-    "line": 238
+    "line": 451
   },
   {
     "path": "/reset-password",
@@ -1136,9 +1108,9 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::reset_password_form).post(auth::reset_password_with_code),",
+    "handler": "auto(get(legacy::reset_password_form).post(auth::reset_password_with_code))",
     "source": "src/routes/mod.rs",
-    "line": 239
+    "line": 452
   },
   {
     "path": "/setpostscore.jsp",
@@ -1146,18 +1118,18 @@
       "GET",
       "POST"
     ],
-    "handler": "get(legacy::set_post_score_form).post(legacy::set_post_score),",
+    "handler": "auto(get(legacy::set_post_score_form).post(legacy::set_post_score))",
     "source": "src/routes/mod.rs",
-    "line": 243
+    "line": 456
   },
   {
     "path": "/show-comments.jsp",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::show_comments_jsp)",
+    "handler": "any(legacy::show_comments_jsp)",
     "source": "src/routes/mod.rs",
-    "line": 247
+    "line": 460
   },
   {
     "path": "/show-replies.jsp",
@@ -1166,7 +1138,7 @@
     ],
     "handler": "get(legacy::show_replies_jsp)",
     "source": "src/routes/mod.rs",
-    "line": 248
+    "line": 461
   },
   {
     "path": "/tags/change",
@@ -1174,9 +1146,9 @@
       "GET",
       "POST"
     ],
-    "handler": "get(tags::change_form).post(tags::change_tag),",
+    "handler": "auto(get(tags::change_form).post(tags::change_tag))",
     "source": "src/routes/mod.rs",
-    "line": 249
+    "line": 462
   },
   {
     "path": "/tags/delete",
@@ -1184,9 +1156,9 @@
       "GET",
       "POST"
     ],
-    "handler": "get(tags::delete_form).post(tags::delete_tag),",
+    "handler": "auto(get(tags::delete_form).post(tags::delete_tag))",
     "source": "src/routes/mod.rs",
-    "line": 253
+    "line": 466
   },
   {
     "path": "/uncommit.jsp",
@@ -1194,9 +1166,9 @@
       "GET",
       "POST"
     ],
-    "handler": "topic_moderation::stUncommitRoute()",
+    "handler": "auto(topic_moderation::stUncommitRoute())",
     "source": "src/routes/mod.rs",
-    "line": 257
+    "line": 470
   },
   {
     "path": "/user-filter",
@@ -1205,7 +1177,7 @@
     ],
     "handler": "get(legacy::user_filter)",
     "source": "src/routes/mod.rs",
-    "line": 258
+    "line": 471
   },
   {
     "path": "/user-filter/favorite-tag",
@@ -1214,7 +1186,7 @@
     ],
     "handler": "post(legacy::favorite_tag)",
     "source": "src/routes/mod.rs",
-    "line": 259
+    "line": 472
   },
   {
     "path": "/user-filter/ignore-tag",
@@ -1223,7 +1195,7 @@
     ],
     "handler": "post(legacy::ignore_tag)",
     "source": "src/routes/mod.rs",
-    "line": 260
+    "line": 473
   },
   {
     "path": "/user-filter/ignore-user",
@@ -1232,16 +1204,16 @@
     ],
     "handler": "post(legacy::ignore_user)",
     "source": "src/routes/mod.rs",
-    "line": 261
+    "line": 474
   },
   {
     "path": "/view-deleted",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::view_deleted)",
+    "handler": "any(legacy::view_deleted)",
     "source": "src/routes/mod.rs",
-    "line": 262
+    "line": 475
   },
   {
     "path": "/view-news.jsp",
@@ -1250,25 +1222,25 @@
     ],
     "handler": "get(legacy::view_news_jsp)",
     "source": "src/routes/mod.rs",
-    "line": 263
+    "line": 476
   },
   {
     "path": "/view-section.jsp",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::view_section_jsp)",
+    "handler": "any(legacy::view_section_jsp)",
     "source": "src/routes/mod.rs",
-    "line": 264
+    "line": 477
   },
   {
     "path": "/vote.jsp",
     "methods": [
       "POST"
     ],
-    "handler": "post(api::vote)",
+    "handler": "auto(post(api::vote))",
     "source": "src/routes/mod.rs",
-    "line": 265
+    "line": 478
   },
   {
     "path": "/yandex-tableau",
@@ -1277,25 +1249,25 @@
     ],
     "handler": "get(legacy::yandex_tableau)",
     "source": "src/routes/mod.rs",
-    "line": 266
+    "line": 479
   },
   {
     "path": "/check-login",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::check_login)",
+    "handler": "any(legacy::check_login)",
     "source": "src/routes/mod.rs",
-    "line": 267
+    "line": 480
   },
   {
     "path": "/people/{nick}/deleted-comments",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(comments::deleted_comments_by_user),",
+    "handler": "any(comments::deleted_comments_by_user)",
     "source": "src/routes/mod.rs",
-    "line": 268
+    "line": 481
   },
   {
     "path": "/people/{nick}/deleted-topics",
@@ -1304,16 +1276,16 @@
     ],
     "handler": "get(users::deleted_topics)",
     "source": "src/routes/mod.rs",
-    "line": 272
+    "line": 485
   },
   {
     "path": "/people/{nick}/drafts",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(users::drafts)",
+    "handler": "any(users::drafts)",
     "source": "src/routes/mod.rs",
-    "line": 273
+    "line": 486
   },
   {
     "path": "/people/{nick}/edit",
@@ -1321,18 +1293,18 @@
       "GET",
       "POST"
     ],
-    "handler": "get(users::edit_profile_form).post(users::edit_profile),",
+    "handler": "auto(get(users::edit_profile_form).post(users::edit_profile))",
     "source": "src/routes/mod.rs",
-    "line": 274
+    "line": 487
   },
   {
     "path": "/people/{nick}/favs",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(users::favs)",
+    "handler": "any(users::favs)",
     "source": "src/routes/mod.rs",
-    "line": 278
+    "line": 491
   },
   {
     "path": "/people/{nick}/profile/wipe",
@@ -1341,7 +1313,7 @@
     ],
     "handler": "get(users::profile_wipe)",
     "source": "src/routes/mod.rs",
-    "line": 279
+    "line": 492
   },
   {
     "path": "/people/{nick}/remark",
@@ -1349,9 +1321,9 @@
       "GET",
       "POST"
     ],
-    "handler": "get(users::remark_form).post(users::save_remark),",
+    "handler": "auto(get(users::remark_form).post(users::save_remark))",
     "source": "src/routes/mod.rs",
-    "line": 280
+    "line": 493
   },
   {
     "path": "/people/{nick}/remark/",
@@ -1359,9 +1331,9 @@
       "GET",
       "POST"
     ],
-    "handler": "get(users::remark_form).post(users::save_remark),",
+    "handler": "auto(get(users::remark_form).post(users::save_remark))",
     "source": "src/routes/mod.rs",
-    "line": 284
+    "line": 497
   },
   {
     "path": "/people/{nick}/settings",
@@ -1369,9 +1341,9 @@
       "GET",
       "POST"
     ],
-    "handler": "get(users::settings).post(users::save_settings),",
+    "handler": "auto(get(users::settings).post(users::save_settings))",
     "source": "src/routes/mod.rs",
-    "line": 288
+    "line": 501
   },
   {
     "path": "/people/{nick}/settings/",
@@ -1379,298 +1351,242 @@
       "GET",
       "POST"
     ],
-    "handler": "get(users::settings).post(users::save_settings),",
+    "handler": "auto(get(users::settings).post(users::save_settings))",
     "source": "src/routes/mod.rs",
-    "line": 292
+    "line": 505
   },
   {
     "path": "/people/{nick}/tracked",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(users::tracked)",
+    "handler": "any(users::tracked)",
     "source": "src/routes/mod.rs",
-    "line": 296
+    "line": 509
   },
   {
     "path": "/people/{nick}",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(users::topic_feed)",
+    "handler": "any(users::topic_feed)",
     "source": "src/routes/mod.rs",
-    "line": 297
+    "line": 510
   },
   {
     "path": "/people/{nick}/",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(users::topic_feed)",
+    "handler": "any(users::topic_feed)",
     "source": "src/routes/mod.rs",
-    "line": 298
+    "line": 511
   },
   {
     "path": "/forum/{group}/{id}/history",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::topic_history)",
+    "handler": "any(legacy::topic_history)",
     "source": "src/routes/mod.rs",
-    "line": 299
+    "line": 512
   },
   {
     "path": "/forum/{group}/{id}/{commentid}/history",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::comment_history),",
+    "handler": "any(legacy::comment_history)",
     "source": "src/routes/mod.rs",
-    "line": 300
+    "line": 513
   },
   {
     "path": "/news/{group}/{id}/history",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::topic_history)",
+    "handler": "any(legacy::topic_history)",
     "source": "src/routes/mod.rs",
-    "line": 304
+    "line": 517
   },
   {
     "path": "/news/{group}/{id}/{commentid}/history",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::comment_history),",
+    "handler": "any(legacy::comment_history)",
     "source": "src/routes/mod.rs",
-    "line": 305
+    "line": 518
   },
   {
     "path": "/articles/{group}/{id}/history",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::topic_history)",
+    "handler": "any(legacy::topic_history)",
     "source": "src/routes/mod.rs",
-    "line": 309
+    "line": 522
   },
   {
     "path": "/articles/{group}/{id}/{commentid}/history",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::comment_history),",
+    "handler": "any(legacy::comment_history)",
     "source": "src/routes/mod.rs",
-    "line": 310
+    "line": 523
   },
   {
     "path": "/gallery/{group}/{id}/history",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::topic_history)",
+    "handler": "any(legacy::topic_history)",
     "source": "src/routes/mod.rs",
-    "line": 314
+    "line": 527
   },
   {
     "path": "/gallery/{group}/{id}/{commentid}/history",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::comment_history),",
+    "handler": "any(legacy::comment_history)",
     "source": "src/routes/mod.rs",
-    "line": 315
+    "line": 528
   },
   {
     "path": "/polls/{group}/{id}/history",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::topic_history)",
+    "handler": "any(legacy::topic_history)",
     "source": "src/routes/mod.rs",
-    "line": 319
+    "line": 532
   },
   {
     "path": "/polls/{group}/{id}/{commentid}/history",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::comment_history),",
+    "handler": "any(legacy::comment_history)",
     "source": "src/routes/mod.rs",
-    "line": 320
+    "line": 533
   },
   {
     "path": "/news/archive/{year}/{month}",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::archive_section_month),",
+    "handler": "any(legacy::archive_section_month)",
     "source": "src/routes/mod.rs",
-    "line": 324
+    "line": 537
   },
   {
     "path": "/news/archive/{year}/{month}/",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::archive_section_month),",
+    "handler": "any(legacy::archive_section_month)",
     "source": "src/routes/mod.rs",
-    "line": 328
+    "line": 541
   },
   {
     "path": "/articles/archive/{year}/{month}",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::archive_section_month),",
+    "handler": "any(legacy::archive_section_month)",
     "source": "src/routes/mod.rs",
-    "line": 332
+    "line": 545
   },
   {
     "path": "/articles/archive/{year}/{month}/",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::archive_section_month),",
+    "handler": "any(legacy::archive_section_month)",
     "source": "src/routes/mod.rs",
-    "line": 336
+    "line": 549
   },
   {
     "path": "/gallery/archive/{year}/{month}",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::archive_section_month),",
+    "handler": "any(legacy::archive_section_month)",
     "source": "src/routes/mod.rs",
-    "line": 340
+    "line": 553
   },
   {
     "path": "/gallery/archive/{year}/{month}/",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::archive_section_month),",
+    "handler": "any(legacy::archive_section_month)",
     "source": "src/routes/mod.rs",
-    "line": 344
+    "line": 557
   },
   {
     "path": "/polls/archive/{year}/{month}",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::archive_section_month),",
+    "handler": "any(legacy::archive_section_month)",
     "source": "src/routes/mod.rs",
-    "line": 348
+    "line": 561
   },
   {
     "path": "/polls/archive/{year}/{month}/",
     "methods": [
-      "GET"
+      "ANY"
     ],
-    "handler": "get(legacy::archive_section_month),",
+    "handler": "any(legacy::archive_section_month)",
     "source": "src/routes/mod.rs",
-    "line": 352
+    "line": 565
   },
   {
     "path": "/forum/{group}/{id}/thread/{thread_root}",
     "methods": [
       "GET"
     ],
-    "handler": "get(topics::topic_thread),",
+    "handler": "get(topics::topic_thread)",
     "source": "src/routes/mod.rs",
-    "line": 356
+    "line": 569
   },
   {
     "path": "/news/{group}/{id}/thread/{thread_root}",
     "methods": [
       "GET"
     ],
-    "handler": "get(topics::topic_thread),",
+    "handler": "get(topics::topic_thread)",
     "source": "src/routes/mod.rs",
-    "line": 360
+    "line": 573
   },
   {
     "path": "/articles/{group}/{id}/thread/{thread_root}",
     "methods": [
       "GET"
     ],
-    "handler": "get(topics::topic_thread),",
+    "handler": "get(topics::topic_thread)",
     "source": "src/routes/mod.rs",
-    "line": 364
+    "line": 577
   },
   {
     "path": "/gallery/{group}/{id}/thread/{thread_root}",
     "methods": [
       "GET"
     ],
-    "handler": "get(topics::topic_thread),",
+    "handler": "get(topics::topic_thread)",
     "source": "src/routes/mod.rs",
-    "line": 368
+    "line": 581
   },
   {
     "path": "/polls/{group}/{id}/thread/{thread_root}",
     "methods": [
       "GET"
     ],
-    "handler": "get(topics::topic_thread),",
+    "handler": "get(topics::topic_thread)",
     "source": "src/routes/mod.rs",
-    "line": 372
-  },
-  {
-    "path": "/ws",
-    "methods": [
-      "GET"
-    ],
-    "handler": "get(websocket)",
-    "source": "src/routes/realtime.rs",
-    "line": 321
-  },
-  {
-    "path": "/people/{nick}/settings",
-    "methods": [
-      "GET"
-    ],
-    "handler": "get(settings)",
-    "source": "src/routes/users.rs",
-    "line": 2921
-  },
-  {
-    "path": "/people/{nick}/edit",
-    "methods": [
-      "GET"
-    ],
-    "handler": "get(edit_profile_form)",
-    "source": "src/routes/users.rs",
-    "line": 2922
-  },
-  {
-    "path": "/people/{nick}/drafts",
-    "methods": [
-      "GET"
-    ],
-    "handler": "get(drafts)",
-    "source": "src/routes/users.rs",
-    "line": 2923
-  },
-  {
-    "path": "/people/{nick}/remark",
-    "methods": [
-      "GET",
-      "POST"
-    ],
-    "handler": "get(remark_form).post(save_remark)",
-    "source": "src/routes/users.rs",
-    "line": 2924
-  },
-  {
-    "path": "/people/{nick}/remark/",
-    "methods": [
-      "GET",
-      "POST"
-    ],
-    "handler": "get(remark_form).post(save_remark)",
-    "source": "src/routes/users.rs",
-    "line": 2925
+    "line": 585
   }
 ]

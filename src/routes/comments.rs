@@ -7,7 +7,7 @@ use crate::{
     domain::comment::{
         deletion::{
             StCommentDeleteActor, StCommentDeletePreview, StDeleteCommentCommand,
-            VEC_DELETE_REASONS,
+            TrCommentReindexQueue, VEC_DELETE_REASONS,
         },
         message_form::{EnCommentMessageBindingError, stBindCommentMessageParameters},
     },
@@ -27,7 +27,7 @@ use axum::{
     extract::{ConnectInfo, Path, Query, Request, State},
     http::{HeaderMap, Method, StatusCode, Uri, header},
     response::{Html, IntoResponse, Response},
-    routing::{MethodRouter, get},
+    routing::{MethodRouter, get, post},
 };
 use serde::Deserialize;
 use std::net::SocketAddr;
@@ -36,6 +36,8 @@ const I_COMMENT_MESSAGE_PARAMETER_LIMIT: usize = 1024 * 1024;
 const S_ALLOW_COMMENT_MESSAGE: &str = "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS";
 const S_ALLOW_COMMENT_ACTION_OPTIONS: &str = "GET,HEAD,POST,OPTIONS";
 const S_ALLOW_COMMENT_ACTION_405: &str = "GET, POST";
+const S_ALLOW_COMMENT_UNDELETE_OPTIONS: &str = "POST,GET,HEAD,OPTIONS";
+const S_ALLOW_COMMENT_UNDELETE_405: &str = "POST, GET";
 
 #[derive(Deserialize)]
 pub struct JumpQuery {
@@ -124,6 +126,7 @@ struct StCommentMessageTemplate {
 #[derive(sqlx::FromRow)]
 struct StCommentFormReplySource {
     iTopicId: i32,
+    bDeleted: bool,
     sTitle: String,
     sMessage: String,
     sMarkup: String,
@@ -143,7 +146,7 @@ async fn optCommentFormContextHtml(
 ) -> Result<Option<String>> {
     if let Some(iReplyTo) = optReplyTo.filter(|iValue| *iValue > 0) {
         let optRow: Option<StCommentFormReplySource> = sqlx::query_as(
-            r#"SELECT c.topic AS "iTopicId",c.title AS "sTitle",
+            r#"SELECT c.topic AS "iTopicId",c.deleted AS "bDeleted",c.title AS "sTitle",
                       m.message AS "sMessage",m.markup::text AS "sMarkup",
                       c.postdate AS "dtPostdate",u.nick AS "sAuthor",
                       COALESCE(u.score,0) AS "iAuthorScore",
@@ -151,7 +154,7 @@ async fn optCommentFormContextHtml(
                       COALESCE(u.passwd,'')='' AS "bAuthorAnonymous",
                       COALESCE(u.frozen_until > CURRENT_TIMESTAMP,false) AS "bAuthorFrozen"
                FROM comments c JOIN msgbase m ON m.id=c.id JOIN users u ON u.id=c.userid
-               WHERE c.id=$1 AND NOT c.deleted"#,
+               WHERE c.id=$1"#,
         )
         .bind(iReplyTo)
         .fetch_optional(&state.pool)
@@ -159,8 +162,10 @@ async fn optCommentFormContextHtml(
         let Some(stRow) = optRow else {
             return Err(AppError::NotFound);
         };
-        if stRow.iTopicId != stTopic.id {
-            return Err(AppError::BadRequest("некорректная тема".into()));
+        if stRow.bDeleted || stRow.iTopicId != stTopic.id {
+            // The validator keeps the submitted reply id and re-renders the
+            // form. Avoid exposing a deleted/cross-topic body as context.
+            return Ok(None);
         }
         let sTitleHtml = crate::domain::title::optCommentTitlePlainForDisplay(&stRow.sTitle)
             .map(|sTitlePlain| {
@@ -264,7 +269,13 @@ async fn render_comment_form(
     ))
 }
 
-async fn comment_format(state: &AppState, user_id: i32) -> Result<(String, String, String)> {
+/// Resolves the current profile's comment-format form id, display title and
+/// stored database markup id.  Markup preview uses the same session-profile
+/// default as comment forms in the original application.
+pub(crate) async fn user_comment_format(
+    state: &AppState,
+    user_id: i32,
+) -> Result<(String, String, String)> {
     let settings_text: Option<String> =
         sqlx::query_scalar("SELECT settings::text FROM user_settings WHERE id=$1")
             .bind(user_id)
@@ -304,18 +315,19 @@ pub async fn add_comment_form(
     let stResolution =
         crate::application::auth::stResolvePostingIdentity(&state, user.as_ref(), None, None)
             .await?;
-    check_comment_posting_allowed(
+    let optPostingError = check_comment_posting_allowed(
         &state,
         &stResolution.stIdentity.stUser,
         !stResolution.stIdentity.bAuthorized,
         q.topic,
     )
-    .await?;
-    if let Some(sError) = optCommentReplyError(&state, q.topic, q.replyto).await? {
-        return Err(AppError::BadRequest(sError));
-    }
+    .await
+    .err()
+    .map(sCommentFormError)
+    .transpose()?;
+    let optReplyError = optCommentReplyError(&state, q.topic, q.replyto).await?;
     let (format_mode, format_title, _) = match &user {
-        Some(user) => comment_format(&state, user.id).await?,
+        Some(user) => user_comment_format(&state, user.id).await?,
         None => (
             crate::profile::DEFAULT_FORMAT_MODE.into(),
             "Markdown".into(),
@@ -340,7 +352,7 @@ pub async fn add_comment_form(
         csrf_token,
         format_mode,
         format_title,
-        None,
+        optPostingError.or(optReplyError),
         None,
         user.is_none(),
         bRequireCaptcha,
@@ -386,7 +398,7 @@ pub async fn add_comment(
     let bRequireCaptcha =
         !bSessionAuthorized || crate::routes::auth::bIpCaptchaRequired(&state, &sRemoteIp).await?;
     let (format_mode, format_title, markup) = match user.as_ref() {
-        Some(stUser) => comment_format(&state, stUser.id).await?,
+        Some(stUser) => user_comment_format(&state, stUser.id).await?,
         None => (
             crate::profile::DEFAULT_FORMAT_MODE.into(),
             "Markdown".into(),
@@ -501,6 +513,7 @@ pub async fn add_comment(
         &markup,
         &sRemoteIp,
         sUserAgent,
+        true,
     )
     .await?;
     let sLocation = comment_link(&state, id).await?;
@@ -509,11 +522,105 @@ pub async fn add_comment(
 
 pub async fn add_comment_ajax(
     State(state): State<AppState>,
-    headers: HeaderMap,
     CurrentUser(user): CurrentUser,
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
     ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
-    Form(form): Form<CommentForm>,
-) -> Result<axum::Json<serde_json::Value>> {
+    stRequest: Request,
+) -> Result<Response> {
+    let headers = stRequest.headers().clone();
+    let vecParameters = vecCommentMessageRequestParameters(stRequest).await?;
+    // CSRFHandlerInterceptor reads ServletRequest.getParameter, whose first
+    // value is the query parameter before an URL-encoded POST body value.
+    if !bCommentMessageCsrfValid(&vecParameters, &csrf_token) {
+        return Err(AppError::Forbidden);
+    }
+
+    let bMessageMissing = optAjaxCommentParameter(&vecParameters, "msg").is_none();
+    let sMessage = optAjaxCommentParameter(&vecParameters, "msg")
+        .unwrap_or_default()
+        .to_owned();
+    let optPreview = optAjaxCommentParameter(&vecParameters, "preview").map(ToOwned::to_owned);
+    let optNick = optAjaxCommentParameter(&vecParameters, "nick").map(ToOwned::to_owned);
+    let optPassword = optAjaxCommentParameter(&vecParameters, "password").map(ToOwned::to_owned);
+    let optCaptchaResponse = optAjaxCommentParameter(&vecParameters, "h-captcha-response");
+
+    let mut vecErrors = Vec::new();
+    let mut bCommentModel = false;
+    let mut optBoundParameters = None;
+    match stBindCommentMessageParameters(&vecParameters) {
+        Ok(stParameters) => {
+            bCommentModel = true;
+            let stOriginalParameters = stParameters.clone();
+            match CCommentMessageService::new(CCommentMessagePgRepository::new(state.pool.clone()))
+                .stValidate(stParameters)
+                .await
+            {
+                Ok(stValidated) => optBoundParameters = Some(stValidated),
+                Err(EnCommentMessageServiceError::Binding(stError)) => {
+                    if matches!(stError, EnCommentMessageBindingError::InvalidTopic) {
+                        bCommentModel = false;
+                    }
+                    vecErrors.push(sAjaxCommentBindingError(&stError, &stOriginalParameters));
+                    optBoundParameters = Some(stOriginalParameters);
+                }
+                Err(EnCommentMessageServiceError::Application(stError)) => return Err(stError),
+            }
+        }
+        Err(stError) => {
+            vecErrors.extend(vecAjaxCommentInitialBindingErrors(&stError, &vecParameters));
+            // A conversion failure on reply/original/nick/msg leaves that
+            // bean property unset, but Spring can still build the Comment
+            // model from a valid topic and therefore returns preview HTML.
+            if let Some(stFallback) = stAjaxCommentFallbackParameters(&vecParameters, &stError) {
+                let stOriginalFallback = stFallback.clone();
+                match CCommentMessageService::new(CCommentMessagePgRepository::new(
+                    state.pool.clone(),
+                ))
+                .stValidate(stFallback)
+                .await
+                {
+                    Ok(stValidated) => {
+                        bCommentModel = true;
+                        optBoundParameters = Some(stValidated);
+                    }
+                    Err(EnCommentMessageServiceError::Binding(stValidationError)) => {
+                        if !matches!(
+                            stValidationError,
+                            EnCommentMessageBindingError::InvalidTopic
+                        ) {
+                            bCommentModel = true;
+                            vecErrors.push(sAjaxCommentBindingError(
+                                &stValidationError,
+                                &stOriginalFallback,
+                            ));
+                            optBoundParameters = Some(stOriginalFallback);
+                        }
+                    }
+                    Err(EnCommentMessageServiceError::Application(stError)) => {
+                        return Err(stError);
+                    }
+                }
+            }
+        }
+    }
+
+    let optTopicId = optBoundParameters
+        .as_ref()
+        .map(|stParameters| stParameters.iTopicId);
+    let optReplyToId = optBoundParameters
+        .as_ref()
+        .and_then(|stParameters| stParameters.optReplyToId);
+    let form = CommentForm {
+        topic: optTopicId.unwrap_or_default(),
+        replyto: optReplyToId,
+        title: None,
+        msg: sMessage,
+        nick: optNick,
+        password: optPassword,
+        preview: optPreview,
+        captcha_response: optCaptchaResponse.map(ToOwned::to_owned),
+        csrf: Some(csrf_token),
+    };
     let sRemoteIp = crate::security::stClientIp(
         stPeerAddress.ip(),
         &headers,
@@ -523,15 +630,15 @@ pub async fn add_comment_ajax(
     let bRequireCaptcha =
         user.is_none() || crate::routes::auth::bIpCaptchaRequired(&state, &sRemoteIp).await?;
     let (_, _, markup) = match user.as_ref() {
-        Some(stUser) => comment_format(&state, stUser.id).await?,
+        Some(stUser) => user_comment_format(&state, stUser.id).await?,
         None => (
             crate::profile::DEFAULT_FORMAT_MODE.into(),
             "Markdown".into(),
             "MARKDOWN".into(),
         ),
     };
-    let mut vecErrors = Vec::new();
     if form.preview.is_none()
+        && vecErrors.is_empty()
         && bRequireCaptcha
         && let Err(sError) = crate::application::auth::sValidateCaptcha(
             &state.config,
@@ -543,15 +650,27 @@ pub async fn add_comment_ajax(
     {
         vecErrors.push(sError);
     }
+    // AuthUtil.postingUser returns the existing session without inspecting
+    // form credentials once model binding or CAPTCHA has already failed.
+    let (optPostingNick, optPostingPassword) = if vecErrors.is_empty() {
+        (form.nick.as_deref(), form.password.as_deref())
+    } else {
+        (None, None)
+    };
     let stResolution = crate::application::auth::stResolvePostingIdentity(
         &state,
         user.as_ref(),
-        form.nick.as_deref(),
-        form.password.as_deref(),
+        optPostingNick,
+        optPostingPassword,
     )
     .await?;
     if let Some(sError) = stResolution.optError {
         vecErrors.push(sError);
+    }
+    // CommentCreateService.checkPostData distinguishes an absent `msg`
+    // property from an explicitly submitted empty string.
+    if bMessageMissing {
+        vecErrors.push("комментарий не задан".to_owned());
     }
     let stIdentity = stResolution.stIdentity;
     if let Some(sError) = optCommentActorError(
@@ -572,37 +691,41 @@ pub async fn add_comment_ajax(
             vecErrors.push(sError);
         }
     }
-    if let Err(stError) = check_comment_posting_allowed(
-        &state,
-        &stIdentity.stUser,
-        !stIdentity.bAuthorized,
-        form.topic,
-    )
-    .await
+    if bCommentModel
+        && let Some(iTopicId) = optTopicId
+        && let Err(stError) = check_comment_posting_allowed(
+            &state,
+            &stIdentity.stUser,
+            !stIdentity.bAuthorized,
+            iTopicId,
+        )
+        .await
     {
         vecErrors.push(sCommentFormError(stError)?);
     }
-    if let Some(sError) = optCommentReplyError(&state, form.topic, form.replyto).await? {
+    if let Some(sError) = optCommentBodyErrorWithPolicy(&form.msg, !stIdentity.bAuthorized, false) {
         vecErrors.push(sError);
     }
-    if let Some(sError) = optCommentBodyError(&form.msg, !stIdentity.bAuthorized) {
-        vecErrors.push(sError);
-    }
-    if form.preview.is_some() || !vecErrors.is_empty() {
-        let stMarkupUsers = state
-            .markup
-            .stResolveBatch([(&*form.msg, &*markup)])
-            .await?;
-        return Ok(axum::Json(serde_json::json!({
-            "errors": vecErrors,
-            "preview": markup::render_message_with_markup_policy_and_users(
+    if form.preview.is_some() || !vecErrors.is_empty() || !bCommentModel {
+        let optPreviewHtml = if bCommentModel {
+            let stMarkupUsers = state
+                .markup
+                .stResolveBatch([(&*form.msg, &*markup)])
+                .await?;
+            Some(markup::render_message_with_markup_policy_and_users(
                 &form.msg,
                 Some(&markup),
                 None,
                 false,
                 Some(&state.config.public_url),
                 Some(&stMarkupUsers),
-            ),
+            ))
+        } else {
+            None
+        };
+        return Ok(stAjaxCommentJson(serde_json::json!({
+            "errors": vecErrors,
+            "preview": optPreviewHtml,
         })));
     }
     let sUserAgent = headers
@@ -617,10 +740,122 @@ pub async fn add_comment_ajax(
         &markup,
         &sRemoteIp,
         sUserAgent,
+        false,
     )
     .await?;
     let url = comment_link(&state, id).await?;
-    Ok(axum::Json(serde_json::json!({"url": url})))
+    Ok(stAjaxCommentJson(serde_json::json!({"url": url})))
+}
+
+fn optAjaxCommentParameter<'a>(
+    vecParameters: &'a [(String, String)],
+    sName: &str,
+) -> Option<&'a str> {
+    vecParameters
+        .iter()
+        .find_map(|(sKey, sValue)| (sKey == sName).then_some(sValue.as_str()))
+}
+
+fn stAjaxCommentFallbackParameters(
+    vecParameters: &[(String, String)],
+    stError: &EnCommentMessageBindingError,
+) -> Option<crate::domain::comment::message_form::StCommentMessageParameters> {
+    if matches!(
+        stError,
+        EnCommentMessageBindingError::MissingTopic | EnCommentMessageBindingError::InvalidTopic
+    ) {
+        return None;
+    }
+    let iTopicId = optAjaxCommentParameter(vecParameters, "topic")?
+        .split(',')
+        .next()
+        .unwrap_or_default()
+        .parse()
+        .ok()?;
+    Some(
+        crate::domain::comment::message_form::StCommentMessageParameters {
+            iTopicId,
+            optReplyToId: None,
+            optOriginalId: None,
+            optNick: None,
+            sMessage: optAjaxCommentParameter(vecParameters, "msg")
+                .unwrap_or_default()
+                .to_owned(),
+        },
+    )
+}
+
+fn vecAjaxCommentInitialBindingErrors(
+    stError: &EnCommentMessageBindingError,
+    vecParameters: &[(String, String)],
+) -> Vec<String> {
+    match stError {
+        EnCommentMessageBindingError::MissingTopic => vec!["тема не задана".to_owned()],
+        EnCommentMessageBindingError::InvalidTopic => vec![
+            "Failed to convert model attribute 'topic'".to_owned(),
+            "тема не задана".to_owned(),
+        ],
+        EnCommentMessageBindingError::InvalidReplyTo => {
+            vec!["Failed to convert model attribute 'replyto'".to_owned()]
+        }
+        EnCommentMessageBindingError::InvalidOriginal => {
+            vec!["Failed to convert model attribute 'original'".to_owned()]
+        }
+        EnCommentMessageBindingError::InvalidNick => {
+            vec!["Failed to convert model attribute 'nick'".to_owned()]
+        }
+        EnCommentMessageBindingError::InvalidMessage => {
+            let sMessage = optAjaxCommentParameter(vecParameters, "msg").unwrap_or_default();
+            vec![
+                optCommentBodyErrorWithPolicy(sMessage, false, false)
+                    .unwrap_or_else(|| "Validation failed for model attribute 'msg'".to_owned()),
+            ]
+        }
+        stOther => vec![stOther.to_string()],
+    }
+}
+
+fn sAjaxCommentBindingError(
+    stError: &EnCommentMessageBindingError,
+    stParameters: &crate::domain::comment::message_form::StCommentMessageParameters,
+) -> String {
+    match stError {
+        EnCommentMessageBindingError::InvalidTopic => {
+            format!("Сообщение #{} не существует", stParameters.iTopicId)
+        }
+        EnCommentMessageBindingError::InvalidReplyTo => format!(
+            "Сообщение #{} не существует",
+            stParameters.optReplyToId.unwrap_or_default()
+        ),
+        EnCommentMessageBindingError::InvalidOriginal => format!(
+            "Сообщение #{} не существует",
+            stParameters.optOriginalId.unwrap_or_default()
+        ),
+        EnCommentMessageBindingError::InvalidNick => format!(
+            "Пользователь \"{}\" не найден",
+            stParameters.optNick.as_deref().unwrap_or_default()
+        ),
+        EnCommentMessageBindingError::TopicDeleted => {
+            "нельзя добавлять в удаленные темы".to_owned()
+        }
+        EnCommentMessageBindingError::TopicExpired => {
+            "нельзя добавлять в устаревшие темы".to_owned()
+        }
+        EnCommentMessageBindingError::ReplyDeleted => {
+            "нельзя комментировать удаленные комментарии".to_owned()
+        }
+        EnCommentMessageBindingError::ReplyTopicMismatch => "некорректная тема".to_owned(),
+        stOther => stOther.to_string(),
+    }
+}
+
+fn stAjaxCommentJson(stValue: serde_json::Value) -> Response {
+    let mut stResponse = axum::Json(stValue).into_response();
+    stResponse.headers_mut().insert(
+        header::CONTENT_TYPE,
+        "application/json;charset=utf-8".parse().unwrap(),
+    );
+    stResponse
 }
 
 fn sCommentFormError(stError: AppError) -> Result<String> {
@@ -632,6 +867,14 @@ fn sCommentFormError(stError: AppError) -> Result<String> {
 }
 
 fn optCommentBodyError(sMessage: &str, bAnonymous: bool) -> Option<String> {
+    optCommentBodyErrorWithPolicy(sMessage, bAnonymous, true)
+}
+
+fn optCommentBodyErrorWithPolicy(
+    sMessage: &str,
+    bAnonymous: bool,
+    bRejectEmpty: bool,
+) -> Option<String> {
     if let Some(cInvalid) = sMessage.chars().find(|cValue| {
         !matches!(
             *cValue,
@@ -642,7 +885,7 @@ fn optCommentBodyError(sMessage: &str, bAnonymous: bool) -> Option<String> {
             "Недопустимый XML-символ U+{:04X}",
             u32::from(cInvalid)
         ))
-    } else if sMessage.trim().is_empty() {
+    } else if bRejectEmpty && sMessage.trim().is_empty() {
         Some("комментарий не может быть пустым".into())
     } else if sMessage.encode_utf16().count()
         > if bAnonymous {
@@ -989,10 +1232,10 @@ pub fn stDeleteCommentRoute() -> MethodRouter<AppState> {
 }
 
 pub fn stUndeleteCommentRoute() -> MethodRouter<AppState> {
-    get(undelete_comment_form)
-        .post(undelete_comment)
-        .options(options_comment_action)
-        .fallback(method_not_allowed_comment_action)
+    post(undelete_comment)
+        .get(undelete_comment_form)
+        .options(options_comment_undelete)
+        .fallback(method_not_allowed_comment_undelete)
 }
 
 fn stEmptyMethodResponse(stStatus: StatusCode, optAllow: Option<&'static str>) -> Response {
@@ -1026,6 +1269,17 @@ async fn method_not_allowed_comment_action() -> Response {
     stEmptyMethodResponse(
         StatusCode::METHOD_NOT_ALLOWED,
         Some(S_ALLOW_COMMENT_ACTION_405),
+    )
+}
+
+async fn options_comment_undelete() -> Response {
+    stEmptyMethodResponse(StatusCode::OK, Some(S_ALLOW_COMMENT_UNDELETE_OPTIONS))
+}
+
+async fn method_not_allowed_comment_undelete() -> Response {
+    stEmptyMethodResponse(
+        StatusCode::METHOD_NOT_ALLOWED,
+        Some(S_ALLOW_COMMENT_UNDELETE_405),
     )
 }
 
@@ -1159,7 +1413,7 @@ pub async fn comment_message(
         });
     }
     let (format_mode, format_title, _) = match &user {
-        Some(stUser) => comment_format(&state, stUser.id).await?,
+        Some(stUser) => user_comment_format(&state, stUser.id).await?,
         None => (
             crate::profile::DEFAULT_FORMAT_MODE.into(),
             "Markdown".into(),
@@ -1225,63 +1479,73 @@ struct EditCommentTemplate {
     captcha_site_key: String,
 }
 
-type TyEditableCommentRow = (
-    i32,
-    i32,
-    String,
-    String,
-    String,
-    bool,
-    chrono::DateTime<chrono::Utc>,
-    bool,
-);
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct StEditableCommentRow {
+    iTopicId: i32,
+    iAuthorId: i32,
+    sTitle: String,
+    sMessage: String,
+    sMarkup: String,
+    bDeleted: bool,
+    dtPostdate: chrono::DateTime<chrono::Utc>,
+    bHasReplies: bool,
+    bTopicDeleted: bool,
+    bTopicExpired: bool,
+}
 
-async fn stEditableComment(
-    state: &AppState,
-    user: &crate::models::UserSummary,
-    comment_id: i32,
-) -> Result<TyEditableCommentRow> {
-    let row: TyEditableCommentRow = sqlx::query_as(
-        r#"SELECT c.topic, c.userid, c.title, m.message, m.markup::text,
-                  c.deleted, c.postdate,
+async fn stEditableComment(state: &AppState, comment_id: i32) -> Result<StEditableCommentRow> {
+    sqlx::query_as(
+        r#"SELECT c.topic AS "iTopicId", c.userid AS "iAuthorId",
+                  c.title AS "sTitle", m.message AS "sMessage",
+                  m.markup::text AS "sMarkup", c.deleted AS "bDeleted",
+                  c.postdate AS "dtPostdate",
                   EXISTS(SELECT 1 FROM comments r WHERE r.replyto=c.id AND NOT r.deleted)
-           FROM comments c JOIN msgbase m ON m.id=c.id WHERE c.id=$1"#,
+                    AS "bHasReplies",
+                  t.deleted AS "bTopicDeleted",
+                  (NOT t.sticky AND COALESCE(t.commitdate,t.postdate) < now() - s.expire)
+                    AS "bTopicExpired"
+           FROM comments c
+           JOIN msgbase m ON m.id=c.id
+           JOIN topics t ON t.id=c.topic
+           JOIN groups g ON g.id=t.groupid
+           JOIN sections s ON s.id=g.section
+           WHERE c.id=$1"#,
     )
     .bind(comment_id)
     .fetch_optional(&state.pool)
     .await?
-    .ok_or(AppError::NotFound)?;
-    let (topic_id, author_id, _, _, _, deleted, postdate, has_replies) = &row;
-    let topic_deleted: bool = sqlx::query_scalar("SELECT deleted FROM topics WHERE id=$1")
-        .bind(topic_id)
-        .fetch_one(&state.pool)
-        .await?;
-    if *deleted || topic_deleted {
-        return Err(AppError::BadRequest("тема или комментарий удалены".into()));
+    .ok_or(AppError::NotFound)
+}
+
+fn optCommentEditEligibilityError(
+    stRow: &StEditableCommentRow,
+    stUser: &crate::models::UserSummary,
+    dtNow: chrono::DateTime<chrono::Utc>,
+) -> Option<String> {
+    // TopicPermissionService records these conditions in BindingResult. GET
+    // redirects when any error exists; POST re-renders the form with 200.
+    if stRow.bDeleted || stRow.bTopicDeleted {
+        return Some("Тема или комментарий удалены".to_owned());
     }
-    if is_topic_expired(state, *topic_id).await? {
-        return Err(AppError::BadRequest("сообщение уже устарело".into()));
+    if stRow.bTopicExpired {
+        return Some("Сообщение уже устарело".to_owned());
     }
-    if user.id != *author_id {
-        return Err(AppError::Forbidden);
+    if stUser.id != stRow.iAuthorId {
+        return Some("У вас недостаточно прав для редактирования этого комментария".to_owned());
     }
-    if *has_replies {
-        return Err(AppError::BadRequest(
-            "редактирование комментариев с ответами запрещено".into(),
-        ));
+    if dtNow > stRow.dtPostdate + chrono::Duration::minutes(COMMENT_EDIT_WINDOW_MINUTES) {
+        return Some("Истек срок редактирования".to_owned());
     }
-    if user.score.unwrap_or(0) < COMMENT_EDIT_MIN_SCORE {
-        return Err(AppError::Forbidden);
+    if stRow.bHasReplies {
+        return Some("Редактирование комментариев с ответами запрещено".to_owned());
     }
-    if row.4 == "PLAIN" && !user.candel {
-        return Err(AppError::BadRequest(
-            "Вы не можете редактировать тексты данного формата".into(),
-        ));
+    if stUser.score.unwrap_or(0) < COMMENT_EDIT_MIN_SCORE {
+        return Some("У вас недостаточно прав для редактирования этого комментария".to_owned());
     }
-    if chrono::Utc::now() > *postdate + chrono::Duration::minutes(COMMENT_EDIT_WINDOW_MINUTES) {
-        return Err(AppError::BadRequest("истек срок редактирования".into()));
+    if stRow.sMarkup == "PLAIN" && !stUser.candel {
+        return Some("Вы не можете редактировать тексты данного формата".to_owned());
     }
-    Ok(row)
+    None
 }
 
 pub async fn edit_comment_form(
@@ -1298,31 +1562,28 @@ pub async fn edit_comment_form(
         &state.config.trusted_proxy_cidrs,
     )
     .to_string();
+    // `EditCommentController` is wrapped in `AuthorizedOnly`; anonymous
+    // requests raise AccessViolationException and render the original 403
+    // page instead of being redirected to login.
     let Some(user) = user else {
-        return Ok(crate::routes::auth::login_redirect(&format!(
-            "/edit_comment?{}",
-            serde_urlencoded::to_string([
-                ("topic", query.topic.unwrap_or_default()),
-                (
-                    "original",
-                    query.original.or(query.msgid).unwrap_or_default(),
-                ),
-            ])
-            .unwrap_or_default()
-        )));
+        return Err(AppError::Forbidden);
     };
     let comment_id = query
         .original
         .or(query.msgid)
-        .ok_or_else(|| AppError::BadRequest("Комментарий не задан".into()))?;
-    let row = stEditableComment(&state, &user, comment_id).await?;
-    if query.topic.is_some_and(|topic_id| topic_id != row.0) {
+        .ok_or_else(|| AppError::BadParameter("Комментарий не задан".into()))?;
+    let requested_topic_id = query
+        .topic
+        .ok_or_else(|| AppError::BadParameter("тема не задана".into()))?;
+    let row = stEditableComment(&state, comment_id).await?;
+    if requested_topic_id != row.iTopicId {
         return Err(AppError::BadRequest("тема не совпадает".into()));
     }
-    let topic = crate::routes::topics::get_topic(&state, row.0).await?;
-    if check_comment_posting_allowed(&state, &user, false, row.0)
+    let topic = crate::routes::topics::get_topic(&state, row.iTopicId).await?;
+    if check_comment_posting_allowed(&state, &user, false, row.iTopicId)
         .await
         .is_err()
+        || optCommentEditEligibilityError(&row, &user, chrono::Utc::now()).is_some()
     {
         return Ok((
             StatusCode::FOUND,
@@ -1333,16 +1594,16 @@ pub async fn edit_comment_form(
         )
             .into_response());
     }
-    let (format_mode, format_title) = crate::routes::topics::markup_form_view(&row.4);
+    let (format_mode, format_title) = crate::routes::topics::markup_form_view(&row.sMarkup);
     let require_captcha = crate::routes::auth::bIpCaptchaRequired(&state, &sRemoteIp).await?;
     Ok(Html(
         EditCommentTemplate {
             comment_id,
-            topic_id: row.0,
+            topic_id: row.iTopicId,
             topic_url: topic.topic_url(),
-            postdate: row.6,
-            deadline: row.6 + chrono::Duration::minutes(COMMENT_EDIT_WINDOW_MINUTES),
-            msg: row.3,
+            postdate: row.dtPostdate,
+            deadline: row.dtPostdate + chrono::Duration::minutes(COMMENT_EDIT_WINDOW_MINUTES),
+            msg: row.sMessage,
             format_mode,
             format_title,
             csrf_token,
@@ -1390,6 +1651,39 @@ fn optCommentOldTitleForHistory(sOldTitle: &str) -> Option<&str> {
 mod comment_edit_title_contract_tests {
     use super::*;
 
+    fn stEditableFixture(dtPostdate: chrono::DateTime<chrono::Utc>) -> StEditableCommentRow {
+        StEditableCommentRow {
+            iTopicId: 100,
+            iAuthorId: 42,
+            sTitle: String::new(),
+            sMessage: "old".to_owned(),
+            sMarkup: "MARKDOWN".to_owned(),
+            bDeleted: false,
+            dtPostdate,
+            bHasReplies: false,
+            bTopicDeleted: false,
+            bTopicExpired: false,
+        }
+    }
+
+    fn stEditorFixture() -> crate::models::UserSummary {
+        crate::models::UserSummary {
+            id: 42,
+            nick: "editor".to_owned(),
+            name: None,
+            score: Some(45),
+            max_score: Some(45),
+            photo: None,
+            town: None,
+            regdate: None,
+            canmod: false,
+            candel: false,
+            corrector: false,
+            blocked: Some(false),
+            userinfo: None,
+        }
+    }
+
     #[test]
     fn edited_comment_title_is_always_empty() {
         assert_eq!(sCommentTitleAfterEdit(), "");
@@ -1409,6 +1703,46 @@ mod comment_edit_title_contract_tests {
         let sTemplate = include_str!("../../templates/edit_comment.html");
 
         assert!(!sTemplate.contains("name=\"title\""));
+    }
+
+    #[test]
+    fn edit_eligibility_is_a_form_outcome_not_an_http_bad_request() {
+        let dtNow = chrono::Utc::now();
+        let mut stRow = stEditableFixture(dtNow - chrono::Duration::minutes(5));
+        let stUser = stEditorFixture();
+        assert_eq!(optCommentEditEligibilityError(&stRow, &stUser, dtNow), None);
+
+        stRow.bHasReplies = true;
+        assert_eq!(
+            optCommentEditEligibilityError(&stRow, &stUser, dtNow).as_deref(),
+            Some("Редактирование комментариев с ответами запрещено")
+        );
+
+        stRow.bHasReplies = false;
+        stRow.bTopicDeleted = true;
+        assert_eq!(
+            optCommentEditEligibilityError(&stRow, &stUser, dtNow).as_deref(),
+            Some("Тема или комментарий удалены")
+        );
+    }
+
+    #[test]
+    fn deadline_and_legacy_markup_match_java_default_policy() {
+        let dtNow = chrono::Utc::now();
+        let stUser = stEditorFixture();
+        let stExpired =
+            stEditableFixture(dtNow - chrono::Duration::minutes(COMMENT_EDIT_WINDOW_MINUTES + 1));
+        assert_eq!(
+            optCommentEditEligibilityError(&stExpired, &stUser, dtNow).as_deref(),
+            Some("Истек срок редактирования")
+        );
+
+        let mut stLegacy = stEditableFixture(dtNow);
+        stLegacy.sMarkup = "PLAIN".to_owned();
+        assert_eq!(
+            optCommentEditEligibilityError(&stLegacy, &stUser, dtNow).as_deref(),
+            Some("Вы не можете редактировать тексты данного формата")
+        );
     }
 }
 
@@ -1437,8 +1771,8 @@ pub async fn edit_comment(
     let Some(user) = user else {
         return Err(AppError::Forbidden);
     };
-    let row = stEditableComment(&state, &user, form.msgid).await?;
-    let topic_id = row.0;
+    let row = stEditableComment(&state, form.msgid).await?;
+    let topic_id = row.iTopicId;
     if form.topic.is_some_and(|iTopicId| iTopicId != topic_id) {
         return Err(AppError::BadRequest("тема не совпадает".into()));
     }
@@ -1479,14 +1813,20 @@ pub async fn edit_comment(
     {
         optError = Some(sCommentFormError(stError)?);
     }
-    let (format_mode, format_title) = crate::routes::topics::markup_form_view(&row.4);
+    if optError.is_none() {
+        optError = optCommentEditEligibilityError(&row, &user, chrono::Utc::now());
+    }
+    let (format_mode, format_title) = crate::routes::topics::markup_form_view(&row.sMarkup);
     let topic = crate::routes::topics::get_topic(&state, topic_id).await?;
     if form.preview.is_some() || optError.is_some() {
         let optPreviewHtml = if form.preview.is_some() {
-            let stMarkupUsers = state.markup.stResolveBatch([(&*form.msg, &*row.4)]).await?;
+            let stMarkupUsers = state
+                .markup
+                .stResolveBatch([(&*form.msg, &*row.sMarkup)])
+                .await?;
             Some(markup::render_message_with_markup_policy_and_users(
                 &form.msg,
-                Some(&row.4),
+                Some(&row.sMarkup),
                 None,
                 false,
                 Some(&state.config.public_url),
@@ -1500,8 +1840,8 @@ pub async fn edit_comment(
                 comment_id: form.msgid,
                 topic_id,
                 topic_url: topic.topic_url(),
-                postdate: row.6,
-                deadline: row.6 + chrono::Duration::minutes(COMMENT_EDIT_WINDOW_MINUTES),
+                postdate: row.dtPostdate,
+                deadline: row.dtPostdate + chrono::Duration::minutes(COMMENT_EDIT_WINDOW_MINUTES),
                 msg: form.msg.clone(),
                 format_mode,
                 format_title,
@@ -1517,15 +1857,8 @@ pub async fn edit_comment(
     }
 
     let sNewTitle = sCommentTitleAfterEdit();
-    let optOldMessage = (row.3 != form.msg).then_some(row.3.as_str());
-    let optOldTitle = optCommentOldTitleForHistory(&row.2);
-    let setOldMentions = markup::extract_mentions(&row.3, &row.4)
-        .into_iter()
-        .collect::<std::collections::HashSet<_>>();
-    let vecNewMentions = markup::extract_mentions(&form.msg, &row.4)
-        .into_iter()
-        .filter(|sNick| !setOldMentions.contains(sNick))
-        .collect::<Vec<_>>();
+    let optOldMessage = (row.sMessage != form.msg).then_some(row.sMessage.as_str());
+    let optOldTitle = optCommentOldTitleForHistory(&row.sTitle);
     let mut tx = state.pool.begin().await?;
     sqlx::query("UPDATE msgbase SET message=$2 WHERE id=$1")
         .bind(form.msgid)
@@ -1565,44 +1898,20 @@ pub async fn edit_comment(
             .execute(&mut *tx)
             .await?;
     }
-    let mut vecNotified = if user.score.unwrap_or(0) >= 0 && !vecNewMentions.is_empty() {
-        sqlx::query_scalar(
-            r#"SELECT u.id FROM users u
-               WHERE u.nick=ANY($1) AND u.id<>$2
-                 AND ($3 OR NOT COALESCE(u.blocked,false))
-                 AND NOT EXISTS (
-                   SELECT 1 FROM ignore_list il WHERE il.userid=u.id AND il.ignored=$2
-                 )"#,
-        )
-        .bind(&vecNewMentions)
-        .bind(user.id)
-        .bind(markup::mentions_include_blocked_users(&row.4))
-        .fetch_all(&mut *tx)
-        .await?
-    } else {
-        Vec::new()
-    };
-    for iUserId in &vecNotified {
-        sqlx::query(
-            "INSERT INTO user_events(userid,type,private,message_id,comment_id) VALUES($1,'REF',false,$2,$3)",
-        )
-        .bind(iUserId)
-        .bind(topic_id)
-        .bind(form.msgid)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if !vecNotified.is_empty() {
-        vecNotified.sort_unstable();
-        vecNotified.dedup();
-        sqlx::query("UPDATE users SET unread_events=(SELECT count(*) FROM user_events e WHERE e.unread AND e.userid=users.id) WHERE id=ANY($1)")
-            .bind(&vecNotified)
-            .execute(&mut *tx)
-            .await?;
-    }
+    // Current Java reads `oldUserRefs` after it has already updated msgbase,
+    // so old/new mention sets are equal and edit-time REF events are never
+    // added. Preserve that observable behavior rather than fixing the source
+    // bug only in the port.
     tx.commit().await?;
-    state.realtime.vNotifyEvents(vecNotified.iter().copied());
-    crate::search_index::index_comment(&state, form.msgid).await;
+    // EditCommentController sends the committed message to SearchQueueSender
+    // and lets a queue failure reach the HTTP caller. Unlike comment create,
+    // the original edit controller does not publish a realtime event here.
+    CSearchQueueSender::new(
+        state.config.opensearch_url.as_deref(),
+        &state.config.upload_dir,
+    )
+    .vUpdateComments(&[form.msgid])
+    .await?;
     Ok((
         StatusCode::FOUND,
         [(header::LOCATION, comment_link(&state, form.msgid).await?)],
@@ -1933,7 +2242,7 @@ fn stCommentPreviewReactions(
     }
 }
 
-fn sCommentPreviewWarnings(sWarningsJson: &str, sCsrfToken: &str) -> String {
+pub(crate) fn sCommentPreviewWarnings(sWarningsJson: &str, sCsrfToken: &str) -> String {
     let Ok(vecWarnings) = serde_json::from_str::<Vec<serde_json::Value>>(sWarningsJson) else {
         return String::new();
     };
@@ -1958,6 +2267,7 @@ fn sCommentPreviewWarnings(sWarningsJson: &str, sCsrfToken: &str) -> String {
         };
         let bAuthorBlocked = stWarning["author_blocked"].as_bool().unwrap_or(false);
         let optClosedBy = stWarning["closed_by"].as_str();
+        let bClosedByBlocked = stWarning["closed_by_blocked"].as_bool().unwrap_or(false);
         let sAuthorHtml = format!(
             "{}<a href=\"/people/{}/profile\">{}</a>{}",
             if bAuthorBlocked { "<s>" } else { "" },
@@ -1974,11 +2284,14 @@ fn sCommentPreviewWarnings(sWarningsJson: &str, sCsrfToken: &str) -> String {
         );
         sHtml.push_str("<div style=\"margin-bottom: 0.5em\">⚠️ ");
         if let Some(sClosedBy) = optClosedBy {
-            sHtml.push_str(&format!(
-                "<s>{sWarningBody}</s> (закрыт <a href=\"/people/{}/profile\">{}</a>)",
+            let sClosedByHtml = format!(
+                "{}<a href=\"/people/{}/profile\">{}</a>{}",
+                if bClosedByBlocked { "<s>" } else { "" },
                 urlencoding::encode(sClosedBy),
                 html_escape::encode_text(sClosedBy),
-            ));
+                if bClosedByBlocked { "</s>" } else { "" },
+            );
+            sHtml.push_str(&format!("<s>{sWarningBody}</s> (закрыт {sClosedByHtml})",));
         } else {
             sHtml.push_str(&sWarningBody);
             sHtml.push_str(&format!(
@@ -2579,8 +2892,9 @@ async fn insert_comment(
     markup: &str,
     sRemoteIp: &str,
     optUserAgent: Option<&str>,
+    bRejectEmpty: bool,
 ) -> Result<i32> {
-    if let Some(sError) = optCommentBodyError(&form.msg, bAnonymous) {
+    if let Some(sError) = optCommentBodyErrorWithPolicy(&form.msg, bAnonymous, bRejectEmpty) {
         return Err(AppError::BadRequest(sError));
     }
     // The original inline form uses replyto=0 for a top-level comment;
@@ -2753,12 +3067,19 @@ async fn insert_comment(
     }
 
     tx.commit().await?;
-    // AddCommentController publishes only after the transaction succeeds and
-    // preserves this order: topic subscribers first, notification owners
-    // second.
+    // SearchQueueSender.updateComment runs after CommentCreateService's
+    // transaction commits.  A durable-send failure is visible to the caller,
+    // but cannot roll the already committed comment back.  Realtime events
+    // are published only after that send succeeds, in the controller's exact
+    // queue -> NewComment -> RefreshEvents order.
+    CSearchQueueSender::new(
+        state.config.opensearch_url.as_deref(),
+        &state.config.upload_dir,
+    )
+    .vUpdateComments(&[id])
+    .await?;
     state.realtime.vNotifyNewComment(form.topic, id);
     state.realtime.vNotifyEvents(notified.iter().copied());
-    crate::search_index::index_comment(state, id).await;
     Ok(id)
 }
 
@@ -2856,7 +3177,7 @@ pub async fn deleted_comments_by_user(
     const MAX_OFFSET: i64 = 300;
     let offset = query.offset.unwrap_or(0);
     if !(0..=MAX_OFFSET).contains(&offset) {
-        return Err(AppError::BadRequest("Некорректное значение offset".into()));
+        return Err(AppError::stUserError("Некорректное значение offset"));
     }
     let target = crate::routes::users::get_user(&state, &nick).await?;
     let filter = match query.filter.as_deref() {
@@ -3129,6 +3450,17 @@ mod deletion_semantics_tests {
     }
 
     #[test]
+    fn prepared_warning_uses_user_tag_blocked_markup_for_closed_by() {
+        let sHtml = sCommentPreviewWarnings(
+            r#"[{"id":7,"postdate":"2026-08-15T00:00:00Z","message":"rule","warning_type":"rule","author":"moderator","author_blocked":true,"closed_by":"blocked","closed_by_blocked":true}]"#,
+            "csrf",
+        );
+
+        assert!(sHtml.contains("<s><a href=\"/people/moderator/profile\">moderator</a></s>"));
+        assert!(sHtml.contains("(закрыт <s><a href=\"/people/blocked/profile\">blocked</a></s>)"));
+    }
+
+    #[test]
     fn deletion_confirmation_templates_keep_java_form_fields_and_order() {
         let sDelete = include_str!("../../templates/delete_comment.html");
         let iDeleteForm = sDelete
@@ -3229,13 +3561,36 @@ mod deletion_semantics_tests {
             sDeletedCommentsLink("user", 50, "penalty"),
             "/people/user/deleted-comments?offset=50&filter=penalty"
         );
+
+        let sSource = include_str!("comments.rs");
+        let sEditHandler = sSource
+            .split(concat!("pub async fn ", "edit_comment_form("))
+            .nth(1)
+            .unwrap()
+            .split(concat!(
+                "#[derive(Deserialize)]",
+                "\npub struct EditCommentForm"
+            ))
+            .next()
+            .unwrap();
+        assert!(sEditHandler.contains("AppError::BadParameter(\"Комментарий не задан\".into())"));
+        let sDeletedHandler = sSource
+            .split(concat!("pub async fn ", "deleted_comments_by_user("))
+            .nth(1)
+            .unwrap()
+            .split(concat!("#[cfg(test)]", "\nmod tests"))
+            .next()
+            .unwrap();
+        assert!(
+            sDeletedHandler.contains("AppError::stUserError(\"Некорректное значение offset\")")
+        );
     }
 }
 
 #[cfg(test)]
 mod comment_message_method_tests {
     use super::*;
-    use axum::body::Body;
+    use axum::body::{Body, to_bytes};
 
     fn stRequest(stMethod: Method, sUri: &str, sBody: &str) -> Request {
         Request::builder()
@@ -3286,6 +3641,73 @@ mod comment_message_method_tests {
         ];
         assert!(!bCommentMessageCsrfValid(&vecBadQueryFirst, "token"));
         assert!(!bCommentMessageCsrfValid(&[], "token"));
+    }
+
+    #[tokio::test]
+    async fn ajax_comment_csrf_uses_query_before_conflicting_form_value() {
+        let vecBadQuery = vecCommentMessageRequestParameters(stRequest(
+            Method::POST,
+            "/add_comment_ajax?csrf=wrong",
+            "csrf=token&topic=42&msg=test",
+        ))
+        .await
+        .unwrap();
+        assert!(!bCommentMessageCsrfValid(&vecBadQuery, "token"));
+
+        let vecGoodQuery = vecCommentMessageRequestParameters(stRequest(
+            Method::POST,
+            "/add_comment_ajax?csrf=token",
+            "csrf=wrong&topic=42&msg=test",
+        ))
+        .await
+        .unwrap();
+        assert!(bCommentMessageCsrfValid(&vecGoodQuery, "token"));
+    }
+
+    #[tokio::test]
+    async fn ajax_binding_errors_remain_json_utf8_with_nullable_preview() {
+        let vecErrors = vecAjaxCommentInitialBindingErrors(
+            &EnCommentMessageBindingError::MissingTopic,
+            &[("msg".to_owned(), "test".to_owned())],
+        );
+        assert_eq!(vecErrors, ["тема не задана"]);
+        let stResponse = stAjaxCommentJson(serde_json::json!({
+            "errors": vecErrors,
+            "preview": Option::<String>::None,
+        }));
+        assert_eq!(stResponse.status(), StatusCode::OK);
+        assert_eq!(
+            stResponse.headers()[header::CONTENT_TYPE],
+            "application/json;charset=utf-8"
+        );
+        let vecBody = to_bytes(stResponse.into_body(), 4096).await.unwrap();
+        let stBody: serde_json::Value = serde_json::from_slice(&vecBody).unwrap();
+        assert_eq!(stBody["errors"], serde_json::json!(["тема не задана"]));
+        assert!(stBody["preview"].is_null());
+    }
+
+    #[test]
+    fn ajax_binder_accepts_topic_suffix_and_never_defaults_malformed_actions() {
+        let stFallback = stAjaxCommentFallbackParameters(
+            &[
+                ("topic".to_owned(), "42,suffix".to_owned()),
+                ("replyto".to_owned(), "bad".to_owned()),
+                ("msg".to_owned(), "body".to_owned()),
+            ],
+            &EnCommentMessageBindingError::InvalidReplyTo,
+        )
+        .expect("valid topic survives a malformed reply");
+        assert_eq!(stFallback.iTopicId, 42);
+        assert_eq!(stFallback.optReplyToId, None);
+        assert_eq!(stFallback.sMessage, "body");
+        assert!(
+            stAjaxCommentFallbackParameters(
+                &[("topic".to_owned(), "bad".to_owned())],
+                &EnCommentMessageBindingError::InvalidTopic,
+            )
+            .is_none()
+        );
+        assert!(optCommentBodyErrorWithPolicy("", true, false).is_none());
     }
 
     #[tokio::test]
@@ -3342,6 +3764,21 @@ mod comment_message_method_tests {
         assert_eq!(
             stAction405.headers()[header::ALLOW],
             S_ALLOW_COMMENT_ACTION_405
+        );
+
+        let stUndeleteOptions = options_comment_undelete().await;
+        assert_eq!(stUndeleteOptions.status(), StatusCode::OK);
+        assert_eq!(
+            stUndeleteOptions.headers()[header::ALLOW],
+            S_ALLOW_COMMENT_UNDELETE_OPTIONS
+        );
+        assert_eq!(stUndeleteOptions.headers()[header::CONTENT_LENGTH], "0");
+
+        let stUndelete405 = method_not_allowed_comment_undelete().await;
+        assert_eq!(stUndelete405.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(
+            stUndelete405.headers()[header::ALLOW],
+            S_ALLOW_COMMENT_UNDELETE_405
         );
 
         let stTrace405 = method_not_allowed_comment_message().await;

@@ -143,5 +143,6 @@ fn canonical_and_uncommit_pages_share_the_full_topic_card_renderer() {
 #[test]
 fn edit_preview_uses_the_common_topic_card() {
     let sEditPreview = include_str!("../templates/edit_topic.html");
-    assert!(sEditPreview.contains("{{ topic_card_html|safe }}"));
+    assert!(sEditPreview.contains("{% match topic_card_html %}"));
+    assert!(sEditPreview.contains("{{ html|safe }}"));
 }

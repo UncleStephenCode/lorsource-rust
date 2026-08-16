@@ -32,6 +32,44 @@ pub struct StMainTopicSummary {
     pub bMinor: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StTopicScrollerItem {
+    pub iId: i32,
+    pub sStoredTitle: String,
+    pub sGroupUrlName: String,
+    pub sSectionPrefix: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StTopicScrollers {
+    pub bEnabled: bool,
+    pub optPrevious: Option<StTopicScrollerItem>,
+    pub optNext: Option<StTopicScrollerItem>,
+}
+
+/// Minimal read model used by the legacy `/view-message.jsp` redirect.
+///
+/// Keeping expiry and canonical-path lookup in the topic repository mirrors
+/// `TopicDao.getById` without making the HTTP compatibility handler issue its
+/// own SQL.
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+pub struct StLegacyTopicRedirect {
+    pub iTopicId: i32,
+    pub sGroupUrlName: String,
+    pub sSectionPrefix: String,
+    pub dtLastModified: DateTime<Utc>,
+    pub bExpired: bool,
+}
+
+impl StLegacyTopicRedirect {
+    pub fn sCanonicalUrl(&self) -> String {
+        format!(
+            "/{}/{}/{}",
+            self.sSectionPrefix, self.sGroupUrlName, self.iTopicId
+        )
+    }
+}
+
 impl StTopicSummary {
     pub fn sTitlePlain(&self) -> String {
         crate::domain::title::sTopicTitlePlainForDisplay(&self.title)

@@ -102,6 +102,9 @@ DELETE FROM ignore_list WHERE userid BETWEEN 9100001 AND 9100050 OR ignored BETW
 DELETE FROM user_remarks WHERE user_id BETWEEN 9100001 AND 9100050 OR ref_user_id BETWEEN 9100001 AND 9100050;
 DELETE FROM user_tags WHERE user_id BETWEEN 9100001 AND 9100050;
 DELETE FROM user_settings WHERE id BETWEEN 9100001 AND 9100050;
+DELETE FROM ban_info
+ WHERE userid BETWEEN 9100001 AND 9100050
+    OR ban_by BETWEEN 9100001 AND 9100050;
 DELETE FROM user_log
  WHERE userid BETWEEN 9100001 AND 9100050
     OR action_userid BETWEEN 9100001 AND 9100050;
@@ -304,10 +307,14 @@ INSERT INTO comments (
     (9102012,9101013,9100013,'Re: модераторская тема',CURRENT_TIMESTAMP-interval '35 hours',NULL,false,'198.51.100.12',NULL,NULL,0,'{}'),
     (9102013,9101015,9100014,'Re: безопасная конфигурация',CURRENT_TIMESTAMP-interval '23 hours',NULL,false,'198.51.100.13',NULL,NULL,0,'{}'),
     (9102014,9101004,9100014,'Re: Terraform mirror',CURRENT_TIMESTAMP-interval '90 minutes',9102005,false,'198.51.100.14',9100014,(CURRENT_TIMESTAMP-interval '80 minutes')::timestamp,1,jsonb_build_object('9100006','👍')),
-    (9102015,9101003,9100001,'Re: удалённый комментарий',CURRENT_TIMESTAMP-interval '70 minutes',NULL,true,'198.51.100.15',NULL,NULL,0,'{}'),
+    (9102015,9101003,9100001,'Re: удалённый комментарий',CURRENT_TIMESTAMP-interval '70 minutes',NULL,true,'198.51.100.15',NULL,NULL,0,jsonb_build_object('9100009','👍')),
     (9102016,9101003,9100001,'Re: score 45',CURRENT_TIMESTAMP-interval '55 minutes',9102004,false,'198.51.100.16',NULL,NULL,0,'{}'),
     (9102017,9101011,9100002,'Re: score 50',CURRENT_TIMESTAMP-interval '40 minutes',NULL,false,'198.51.100.17',NULL,NULL,0,jsonb_build_object('9100004','🎉')),
     (9102018,9101015,9100003,'Re: legacy line break',CURRENT_TIMESTAMP-interval '25 minutes',9102013,false,'198.51.100.18',NULL,NULL,0,'{}');
+
+UPDATE comments
+   SET ua_id=create_user_agent('prod-ready-browser/1.0')
+ WHERE id=9102004;
 
 -- Correct topic counters after trigger-driven inserts and the intentionally
 -- deleted comment. stat1/stat3 have the same visible-comment meaning here.
@@ -423,6 +430,7 @@ INSERT INTO reactions_log(origin_user,topic_id,comment_id,set_date,reaction) VAL
     (9100002,9101010,9102011,CURRENT_TIMESTAMP-interval '6 hours','😊'),
     (9100013,9101010,9102011,CURRENT_TIMESTAMP-interval '5 hours','☕☕'),
     (9100006,9101004,9102014,CURRENT_TIMESTAMP-interval '4 hours 50 minutes','👍'),
+    (9100009,9101003,9102015,CURRENT_TIMESTAMP-interval '65 minutes','👍'),
     (9100004,9101011,9102017,CURRENT_TIMESTAMP-interval '4 hours 40 minutes','🎉');
 
 INSERT INTO user_events(userid,type,private,event_date,message_id,comment_id,message,unread,origin_user)
@@ -457,6 +465,8 @@ INSERT INTO user_remarks(user_id,ref_user_id,remark_text) VALUES
     (9100013,9100001,'Новый пользователь: проверить ограничения score=45'),
     (9100013,9100011,'Корректор новостей'),
     (9100008,9100007,'Автор одиночной галереи');
+INSERT INTO message_warnings(topic,comment,author,message,warning_type) VALUES
+    (9101003,9102004,9100009,'Проверка DOM предупреждения','rule');
 INSERT INTO ignore_list(userid,ignored) VALUES
     (9100006,9100005),
     (9100008,9100001);

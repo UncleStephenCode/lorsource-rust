@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ title }}{% endblock %}
+{% block head_extra %}{% match me_link %}{% when Some with (url) %}<link rel="me" href="{{ url }}">{% when None %}{% endmatch %}{% endblock %}
 {% block content %}
 <h1>{{ nav_title }} <a href="{{ profile_url }}">{{ nick }}</a></h1>
 <nav>

@@ -17,6 +17,7 @@
 
 use crate::{
     domain::{markup::model::StMarkupUserDirectory, title::sMakeTitlePlainForDisplay},
+    infra::search_queue::CSearchQueueSender,
     state::AppState,
 };
 use chrono::{Datelike, TimeZone};
@@ -33,6 +34,7 @@ enum EnSearchQueueJob {
     Topic { id: i32, with_comments: bool },
     Comment { id: i32 },
     Comments { ids: Vec<i32> },
+    Month { year: i32, month: u32 },
 }
 
 fn base_url(state: &AppState) -> Option<&str> {
@@ -473,18 +475,6 @@ async fn vIndexTopic(state: &AppState, topic_id: i32, with_comments: bool) -> Re
     Ok(())
 }
 
-pub async fn index_topic(state: &AppState, topic_id: i32, with_comments: bool) {
-    if let Err(stError) = vEnqueue(
-        state,
-        &EnSearchQueueJob::Topic {
-            id: topic_id,
-            with_comments,
-        },
-    ) {
-        tracing::warn!(error = %stError, id = topic_id, "failed to queue topic reindex");
-    }
-}
-
 async fn vIndexComment(
     state: &AppState,
     comment_id: i32,
@@ -573,31 +563,10 @@ async fn vIndexComment(
     vPutDoc(state, base, comment_id, &doc).await
 }
 
-pub async fn index_comment(state: &AppState, comment_id: i32) {
-    if let Err(stError) = vEnqueue(state, &EnSearchQueueJob::Comment { id: comment_id }) {
-        tracing::warn!(error = %stError, id = comment_id, "failed to queue comment reindex");
-    }
-}
-
 fn stQueueDirectory(stState: &AppState, sName: &str) -> std::path::PathBuf {
     std::path::Path::new(&stState.config.upload_dir)
         .join("search-queue")
         .join(sName)
-}
-
-fn vEnqueue(stState: &AppState, stJob: &EnSearchQueueJob) -> Result<(), String> {
-    if base_url(stState).is_none() {
-        return Ok(());
-    }
-    let stPending = stQueueDirectory(stState, "pending");
-    std::fs::create_dir_all(&stPending).map_err(|stError| stError.to_string())?;
-    let sId = uuid::Uuid::new_v4().simple().to_string();
-    let stTemporary = stPending.join(format!(".{sId}.tmp"));
-    let stReady = stPending.join(format!("{sId}.json"));
-    let vecPayload = serde_json::to_vec(stJob).map_err(|stError| stError.to_string())?;
-    std::fs::write(&stTemporary, vecPayload).map_err(|stError| stError.to_string())?;
-    std::fs::rename(&stTemporary, &stReady).map_err(|stError| stError.to_string())?;
-    Ok(())
 }
 
 /// Drain a bounded batch from the durable spool. Renaming is the claim
@@ -624,9 +593,16 @@ pub(crate) async fn vDrainQueue(stState: &AppState) -> Result<(), String> {
                 .extension()
                 .is_some_and(|sExt| sExt == "json")
         })
-        .take(100)
         .collect::<Vec<_>>();
-    vecEntries.sort_by_key(|stEntry| stEntry.file_name());
+    // Java sends month rebuilds with JMS priority 1 and live topic/comment
+    // updates at the normal priority. Never let a large reindex backlog delay
+    // current writes. Pre-prefix spool files are normal-priority for rolling
+    // upgrade compatibility.
+    vecEntries.sort_by_key(|stEntry| {
+        let sName = stEntry.file_name();
+        (iQueueFilePriority(&sName), sName)
+    });
+    vecEntries.truncate(100);
 
     for stEntry in vecEntries {
         let stPendingFile = stEntry.path();
@@ -662,19 +638,39 @@ pub(crate) async fn vDrainQueue(stState: &AppState) -> Result<(), String> {
                 }
                 stResult
             }
+            EnSearchQueueJob::Month { year, month } => vReindexMonth(
+                stState,
+                StReindexMonth {
+                    iYear: year,
+                    iMonth: month,
+                },
+                stServerTimezone(),
+            )
+            .await
+            .map(|_| ()),
         };
-        match stResult {
-            Ok(()) => {
-                std::fs::remove_file(&stProcessingFile).map_err(|stError| stError.to_string())?
-            }
-            Err(stError) => {
-                std::fs::rename(&stProcessingFile, &stPendingFile)
-                    .map_err(|stRenameError| stRenameError.to_string())?;
-                return Err(stError);
-            }
-        }
+        vFinishQueueJob(&stProcessingFile, &stPendingFile, stResult)?;
     }
     Ok(())
+}
+
+fn iQueueFilePriority(sName: &std::ffi::OsStr) -> u8 {
+    u8::from(sName.to_string_lossy().starts_with("l-"))
+}
+
+fn vFinishQueueJob(
+    stProcessingFile: &std::path::Path,
+    stPendingFile: &std::path::Path,
+    stResult: Result<(), String>,
+) -> Result<(), String> {
+    match stResult {
+        Ok(()) => std::fs::remove_file(stProcessingFile).map_err(|stError| stError.to_string()),
+        Err(stError) => {
+            std::fs::rename(stProcessingFile, stPendingFile)
+                .map_err(|stRenameError| stRenameError.to_string())?;
+            Err(stError)
+        }
+    }
 }
 
 fn vReclaimStaleQueueJobs(
@@ -876,41 +872,30 @@ async fn vReindexMonth(
     Ok((iTopicCount, iCommentCount.max(0) as u64))
 }
 
-fn vSpawnReindex(stState: AppState, vecMonths: Vec<StReindexMonth>, stTimezone: chrono_tz::Tz) {
-    tokio::spawn(async move {
-        if let Err(stError) = vEnsureIndex(&stState).await {
-            tracing::error!(error = %stError, "search reindex could not ensure the index");
-            return;
-        }
-
-        for stMonth in vecMonths {
-            let stStarted = std::time::Instant::now();
-            match vReindexMonth(&stState, stMonth, stTimezone).await {
-                Ok((iTopics, iComments)) => tracing::info!(
-                    year = stMonth.iYear,
-                    month = stMonth.iMonth,
-                    topics = iTopics,
-                    comments = iComments,
-                    elapsed_ms = stStarted.elapsed().as_millis(),
-                    "search reindex month completed"
-                ),
-                Err(stError) => tracing::error!(
-                    error = %stError,
-                    year = stMonth.iYear,
-                    month = stMonth.iMonth,
-                    "search reindex month failed"
-                ),
-            }
-        }
-    });
+async fn vEnqueueReindexMonths(
+    stState: &AppState,
+    vecMonths: Vec<StReindexMonth>,
+) -> Result<(), String> {
+    let vecMonths = vecMonths
+        .into_iter()
+        .map(|stMonth| (stMonth.iYear, stMonth.iMonth))
+        .collect::<Vec<_>>();
+    CSearchQueueSender::new(
+        stState.config.opensearch_url.as_deref(),
+        &stState.config.upload_dir,
+    )
+    .vUpdateMonths(&vecMonths)
+    .await
+    .map_err(|stError| stError.to_string())
 }
 
 /// SearchControlController.reindexCurrentMonth: enqueue current and previous
-/// two calendar months and return to the administrator immediately.
-pub fn vScheduleCurrentReindex(stState: AppState) {
+/// two calendar months. The response is returned only after every queue file
+/// has been crash-durably published, not after OpenSearch indexing.
+pub async fn vScheduleCurrentReindex(stState: AppState) -> Result<(), String> {
     let stTimezone = stServerTimezone();
     let stNow = chrono::Utc::now().with_timezone(&stTimezone);
-    vSpawnReindex(stState, vecRecentReindexMonths(stNow), stTimezone);
+    vEnqueueReindexMonths(&stState, vecRecentReindexMonths(stNow)).await
 }
 
 /// SearchControlController.reindexAll: enqueue every month back to the first
@@ -926,12 +911,11 @@ pub async fn vScheduleAllReindex(stState: AppState) -> Result<(), String> {
     let stFirstTopic = optFirstTopic.ok_or_else(|| "no non-epoch topics to reindex".to_string())?;
     let stTimezone = stServerTimezone();
     let stNow = chrono::Utc::now().with_timezone(&stTimezone);
-    vSpawnReindex(
-        stState,
+    vEnqueueReindexMonths(
+        &stState,
         vecAllReindexMonths(stNow, stFirstTopic, stTimezone),
-        stTimezone,
-    );
-    Ok(())
+    )
+    .await
 }
 
 // --- search query ---
@@ -1869,10 +1853,10 @@ mod moderation_semantics_tests {
 
     use super::{
         CommentRow, EnSearchQueueJob, SearchInterval, SearchParams, SearchRange, SearchSort,
-        StReindexMonth, TopicRow, sTopicTitleForSearchIndex, stActiveTagsRequestBody,
-        stCommentIndexDocument, stIndexDefinition, stRelatedTagsRequestBody, stSearchRequestBody,
-        stSimilarRequestBody, topic_awaits_commit, vecAllReindexMonths, vecIndexContractProblems,
-        vecRecentReindexMonths,
+        StReindexMonth, TopicRow, iQueueFilePriority, sTopicTitleForSearchIndex,
+        stActiveTagsRequestBody, stCommentIndexDocument, stIndexDefinition,
+        stRelatedTagsRequestBody, stSearchRequestBody, stSimilarRequestBody, topic_awaits_commit,
+        vFinishQueueJob, vecAllReindexMonths, vecIndexContractProblems, vecRecentReindexMonths,
     };
 
     #[test]
@@ -1940,6 +1924,10 @@ mod moderation_semantics_tests {
             },
             EnSearchQueueJob::Comment { id: 43 },
             EnSearchQueueJob::Comments { ids: vec![44, 45] },
+            EnSearchQueueJob::Month {
+                year: 2026,
+                month: 8,
+            },
         ] {
             let vecPayload = serde_json::to_vec(&stJob).unwrap();
             assert_eq!(
@@ -1947,6 +1935,61 @@ mod moderation_semantics_tests {
                 stJob
             );
         }
+    }
+
+    #[test]
+    fn durable_queue_gives_live_updates_priority_over_month_rebuilds() {
+        assert_eq!(iQueueFilePriority(std::ffi::OsStr::new("h-0001-a.json")), 0);
+        assert_eq!(
+            iQueueFilePriority(std::ffi::OsStr::new("legacy-uuid.json")),
+            0
+        );
+        assert_eq!(iQueueFilePriority(std::ffi::OsStr::new("l-0001-a.json")), 1);
+
+        let mut vecNames = [
+            "l-00000000000000000001-month.json",
+            "h-00000000000000000003-topic.json",
+            "legacy-queued-comment.json",
+            "l-00000000000000000002-month.json",
+        ];
+        vecNames.sort_by_key(|sName| (iQueueFilePriority(sName.as_ref()), *sName));
+        assert_eq!(
+            vecNames,
+            [
+                "h-00000000000000000003-topic.json",
+                "legacy-queued-comment.json",
+                "l-00000000000000000001-month.json",
+                "l-00000000000000000002-month.json",
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_month_processing_is_returned_to_pending_for_retry() {
+        let pathRoot = std::env::temp_dir().join(format!(
+            "lor-search-month-retry-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let pathProcessing = pathRoot.join("processing/month.json");
+        let pathPending = pathRoot.join("pending/month.json");
+        std::fs::create_dir_all(pathProcessing.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(pathPending.parent().unwrap()).unwrap();
+        std::fs::write(
+            &pathProcessing,
+            br#"{"kind":"month","year":2026,"month":8}"#,
+        )
+        .unwrap();
+
+        let stResult = vFinishQueueJob(
+            &pathProcessing,
+            &pathPending,
+            Err("OpenSearch unavailable".to_owned()),
+        );
+
+        assert_eq!(stResult, Err("OpenSearch unavailable".to_owned()));
+        assert!(!pathProcessing.exists());
+        assert!(pathPending.exists());
+        std::fs::remove_dir_all(pathRoot).unwrap();
     }
 
     #[test]

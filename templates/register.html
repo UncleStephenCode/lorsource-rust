@@ -1,5 +1,25 @@
 {% extends "base.html" %}
 {% block title %}{{ title }}{% endblock %}
+{% block head_extra %}
+<script type="text/javascript">
+  $script.ready("plugins", function() {
+    $(function() {
+      $("#registerForm").validate({
+        errorElement : "span",
+        errorClass : "error help-inline",
+        rules : {
+          password2: {
+            equalTo: "#password"
+          },
+          nick: {
+            remote: "/check-login"
+          }
+        }
+      });
+    });
+  });
+</script>
+{% endblock %}
 {% block content %}
 <h1>Регистрация</h1>
 <p>Если вы уже регистрировались на нашем сайте и забыли пароль - вам <a href="/lostpwd.jsp">сюда</a>.</p>
@@ -10,7 +30,7 @@
   <div class="control-group"><label for="nick">Login</label><input id="nick" name="nick" required size="40" maxlength="19" pattern="[a-zA-Z][a-zA-Z0-9_-]*" autocapitalize="off" autofocus value="{{ form_nick }}"><div class="help-block">мы сохраняем регистр, в котором введён логин</div></div>
   <div class="control-group"><label for="email">E-mail</label><input id="email" name="email" type="email" class="email" size="40" required value="{{ form_email }}"><div class="help-block">позже этот e-mail пригодится для восстановления<br>учётной записи, если вы потеряете к ней доступ</div></div>
   <div class="control-group"><label for="password">Пароль</label><input id="password" name="password" type="password" size="40" required minlength="10"></div>
-  <div class="control-group"><label for="password2">Подтвердите пароль</label><input id="password2" name="password2" type="password" size="40" required minlength="10"></div>
+  <div class="control-group"><label for="password2">Подтвердите пароль</label><input id="password2" name="password2" type="password" size="40" required></div>
   <div class="control-group"><script src="https://js.hcaptcha.com/1/api.js" async defer></script><div class="h-captcha" data-sitekey="{{ captcha_site_key }}"></div></div>
   <div class="control-group"><label for="rules">С <a href="/help/rules.md" target="_blank" title="правила откроются в новом окне">правилами</a> ознакомился: <input id="rules" type="checkbox" name="rules" value="okay" required{% if rules_checked %} checked{% endif %}></label></div>
   <div class="form-actions"><button type="submit" class="btn btn-primary">Зарегистрироваться</button></div>

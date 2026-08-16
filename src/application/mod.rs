@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod adv_counter;
 pub mod auth;
 pub mod boxlet;

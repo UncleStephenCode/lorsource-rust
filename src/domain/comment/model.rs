@@ -41,3 +41,20 @@ impl StCommentItem {
         crate::domain::title::optCommentTitlePlainForDisplay(&self.title)
     }
 }
+
+/// Viewer-dependent fields prepared by Java's `CommentPrepareService` for a
+/// comment rendered on a canonical topic page.  Keeping this data separate
+/// from [`StCommentItem`] avoids leaking moderator-only IP/User-Agent data
+/// into the general comment listing model.
+#[derive(Debug, Clone)]
+pub struct StCommentPageMeta {
+    pub iCommentId: i32,
+    pub optRemark: Option<String>,
+    pub iEditCount: i32,
+    pub optEditDate: Option<DateTime<Utc>>,
+    pub optEditorNick: Option<String>,
+    pub optPostIp: Option<String>,
+    pub iUserAgentId: i32,
+    pub optUserAgent: Option<String>,
+    pub sWarningsJson: String,
+}

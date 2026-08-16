@@ -14,8 +14,8 @@
 <div class="forum"><table class="message-table"><thead><tr><th class="hideon-tablet">Группа</th><th>Заголовок</th><th>Последнее сообщение</th><th><i class="icon-reply"></i></th></tr></thead><tbody>
 {% for t in topics %}<tr>
   <td class="hideon-tablet"><a href="{{ t.sGroupUrl() }}" class="secondary">{{ t.stRow.group_title }}</a>{% if t.stRow.uncommitted %}, не подтверждено{% endif %}</td>
-  <td>{% if t.stRow.resolved %}<img src="/img/solved.png" alt="решено" title="решено" width="15" height="15">{% endif %}<a href="{{ t.sLastPageUrl() }}">{% for tag in t.vecTags() %}<span class="tag">{{ tag }}</span> {% endfor %}{{ t.sTitlePlain() }}</a> (<a href="/people/{{ t.stRow.topic_author }}/profile">{{ t.stRow.topic_author }}</a>)</td>
-  <td class="dateinterval"><time data-format="compact-interval" datetime="{{ t.stRow.postdate.to_rfc3339() }}">{{ t.stRow.postdate }}</time>, <a href="/people/{{ t.stRow.author }}/profile">{{ t.stRow.author }}</a></td>
+  <td>{% if t.stRow.resolved %}<img src="/img/solved.png" alt="решено" title="решено" width="15" height="15">{% endif %}<a href="{{ t.sLastPageUrl() }}">{% for tag in t.vecTags() %}<span class="tag">{{ tag }}</span> {% endfor %}{{ t.sTitlePlain() }}</a> ({% if t.stRow.topic_author_blocked %}<s>{% endif %}{{ t.stRow.topic_author }}{% if t.stRow.topic_author_blocked %}</s>{% endif %})</td>
+  <td class="dateinterval"><time data-format="compact-interval" datetime="{{ t.stRow.postdate.to_rfc3339() }}">{{ t.stRow.postdate }}</time>, {% if t.stRow.author_blocked %}<s>{% endif %}{{ t.stRow.author }}{% if t.stRow.author_blocked %}</s>{% endif %}</td>
   <td class="numbers">{% if t.stRow.comments == 0 %}-{% else %}{{ t.stRow.comments }}{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table></div>
@@ -23,11 +23,11 @@
 <div class="tracker">
 {% for t in topics %}
   <a href="{{ t.sLastPageUrl() }}" class="tracker-item">
-    <div class="tracker-src"><p><span class="group-label">{{ t.stRow.group_title }}</span>{% if t.stRow.uncommitted %}(не подтверждено){% endif %}<br class="hideon-phone hideon-tablet"><span>{{ t.stRow.topic_author }}</span></p></div>
+    <div class="tracker-src"><p><span class="group-label">{{ t.stRow.group_title }}</span>{% if t.stRow.uncommitted %}(не подтверждено){% endif %}<br class="hideon-phone hideon-tablet">{% if t.stRow.topic_author_blocked %}<s>{% endif %}{{ t.stRow.topic_author }}{% if t.stRow.topic_author_blocked %}</s>{% endif %}</p></div>
     <div class="tracker-count"><p>{% if t.stRow.comments == 0 %}-{% else %}<i class="icon-comment"></i> {{ t.stRow.comments }}{% endif %}</p></div>
     <div class="tracker-title"><p>{% if t.stRow.comments_closed %}<i class="icon-lock"></i>{% endif %}{% if t.stRow.resolved %}<i class="icon-check" title="решено"></i>{% endif %}{{ t.sTitlePlain() }}</p></div>
     <div class="tracker-tags"><p>{% for tag in t.vecTags() %}<span class="tag">{{ tag }}</span> {% endfor %}</p></div>
-    <div class="tracker-last"><p>{{ t.stRow.author }}, <time data-format="compact-interval" datetime="{{ t.stRow.postdate.to_rfc3339() }}">{{ t.stRow.postdate }}</time></p></div>
+    <div class="tracker-last"><p>{% if t.stRow.author_blocked %}<s>{% endif %}{{ t.stRow.author }}{% if t.stRow.author_blocked %}</s>{% endif %}, <time data-format="compact-interval" datetime="{{ t.stRow.postdate.to_rfc3339() }}">{{ t.stRow.postdate }}</time></p></div>
   </a>
 {% endfor %}
 </div>

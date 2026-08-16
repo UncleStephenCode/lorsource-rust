@@ -3,11 +3,12 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
 use std::collections::HashMap;
 
-use crate::domain::comment::model::StCommentItem;
+use crate::domain::comment::model::{StCommentItem, StCommentPageMeta};
 use crate::domain::topic::{
     model::{
-        StMainTopicSummary, StRssContext, StRssImage, StRssPoll, StRssPollVariant, StRssTag,
-        StRssTopic, StTopicDetail, StTopicSummary,
+        StLegacyTopicRedirect, StMainTopicSummary, StRssContext, StRssImage, StRssPoll,
+        StRssPollVariant, StRssTag, StRssTopic, StTopicDetail, StTopicScrollerItem,
+        StTopicScrollers, StTopicSummary,
     },
     repository::{StNewTopic, TrTopicRepository},
 };
@@ -60,6 +61,35 @@ struct StMainTopicRow {
     resolved: Option<bool>,
     tags: Option<String>,
     minor: bool,
+}
+
+#[derive(sqlx::FromRow)]
+struct StCommentPageMetaRow {
+    i_comment_id: i32,
+    opt_remark: Option<String>,
+    i_edit_count: i32,
+    opt_edit_date: Option<DateTime<Utc>>,
+    opt_editor_nick: Option<String>,
+    opt_post_ip: Option<String>,
+    i_user_agent_id: i32,
+    opt_user_agent: Option<String>,
+    s_warnings_json: String,
+}
+
+impl From<StCommentPageMetaRow> for StCommentPageMeta {
+    fn from(stRow: StCommentPageMetaRow) -> Self {
+        Self {
+            iCommentId: stRow.i_comment_id,
+            optRemark: stRow.opt_remark,
+            iEditCount: stRow.i_edit_count,
+            optEditDate: stRow.opt_edit_date,
+            optEditorNick: stRow.opt_editor_nick,
+            optPostIp: stRow.opt_post_ip,
+            iUserAgentId: stRow.i_user_agent_id,
+            optUserAgent: stRow.opt_user_agent,
+            sWarningsJson: stRow.s_warnings_json,
+        }
+    }
 }
 
 impl From<StMainTopicRow> for StMainTopicSummary {
@@ -121,6 +151,17 @@ struct StRssPollVariantRow {
 impl CTopicPgRepository {
     pub fn new(oPool: PgPool) -> Self {
         Self { oPool }
+    }
+}
+
+fn stTopicScrollerItem(
+    (iId, sStoredTitle, sGroupUrlName, sSectionPrefix): (i32, String, String, String),
+) -> StTopicScrollerItem {
+    StTopicScrollerItem {
+        iId,
+        sStoredTitle,
+        sGroupUrlName,
+        sSectionPrefix,
     }
 }
 
@@ -334,11 +375,186 @@ impl TrTopicRepository for CTopicPgRepository {
             .await?)
     }
 
+    async fn stLegacyTopicRedirect(&self, iTopicId: i32) -> Result<StLegacyTopicRedirect> {
+        sqlx::query_as::<_, StLegacyTopicRedirect>(
+            r#"SELECT t.id AS "iTopicId", g.urlname AS "sGroupUrlName",
+                      CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum'
+                           WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls'
+                           WHEN 6 THEN 'articles' ELSE lower(s.name)
+                      END AS "sSectionPrefix",
+                      t.lastmod AS "dtLastModified",
+                      (NOT t.sticky
+                       AND COALESCE(t.commitdate,t.postdate)
+                           < CURRENT_TIMESTAMP-s.expire) AS "bExpired"
+                 FROM topics t
+                 JOIN groups g ON g.id=t.groupid
+                 JOIN sections s ON s.id=g.section
+                WHERE t.id=$1"#,
+        )
+        .bind(iTopicId)
+        .fetch_optional(&self.oPool)
+        .await?
+        .ok_or(AppError::NotFound)
+    }
+
+    async fn stTopicScrollers(
+        &self,
+        iTopicId: i32,
+        optViewerIdForIgnoreList: Option<i32>,
+    ) -> Result<StTopicScrollers> {
+        type TyContext = (bool, String, DateTime<Utc>, Option<DateTime<Utc>>, i32, i32);
+        type TyItem = (i32, String, String, String);
+
+        let Some((bSticky, sScrollMode, dtPostDate, optCommitDate, iGroupId, iSectionId)) =
+            sqlx::query_as::<_, TyContext>(
+                r#"SELECT t.sticky, s.scroll_mode, t.postdate, t.commitdate,
+                          t.groupid, s.id
+                     FROM topics t JOIN groups g ON g.id=t.groupid
+                     JOIN sections s ON s.id=g.section WHERE t.id=$1"#,
+            )
+            .bind(iTopicId)
+            .fetch_optional(&self.oPool)
+            .await?
+        else {
+            return Err(AppError::NotFound);
+        };
+        let bEnabled = sScrollMode != "NO_SCROLL";
+        if !bEnabled || bSticky {
+            return Ok(StTopicScrollers {
+                bEnabled,
+                optPrevious: None,
+                optNext: None,
+            });
+        }
+
+        let (optPrevious, optNext): (Option<TyItem>, Option<TyItem>) = match sScrollMode.as_str() {
+            "SECTION" => {
+                let Some(dtCommitDate) = optCommitDate else {
+                    return Ok(StTopicScrollers {
+                        bEnabled: true,
+                        optPrevious: None,
+                        optNext: None,
+                    });
+                };
+                let optPrevious = sqlx::query_as(
+                    r#"SELECT t.id, t.title, g.urlname,
+                              CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum'
+                                   WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls'
+                                   WHEN 6 THEN 'articles' ELSE lower(s.name) END
+                         FROM topics t
+                         JOIN groups g ON g.id=t.groupid
+                         JOIN sections s ON s.id=g.section
+                        WHERE NOT t.draft AND t.commitdate<$1 AND g.section=$2
+                          AND (t.moderate OR NOT s.moderate)
+                          AND NOT t.deleted AND NOT t.sticky
+                        ORDER BY t.commitdate DESC LIMIT 1"#,
+                )
+                .bind(dtCommitDate)
+                .bind(iSectionId)
+                .fetch_optional(&self.oPool)
+                .await?;
+                let optNext = sqlx::query_as(
+                    r#"SELECT t.id, t.title, g.urlname,
+                              CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum'
+                                   WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls'
+                                   WHEN 6 THEN 'articles' ELSE lower(s.name) END
+                         FROM topics t
+                         JOIN groups g ON g.id=t.groupid
+                         JOIN sections s ON s.id=g.section
+                        WHERE NOT t.draft AND t.commitdate>$1 AND g.section=$2
+                          AND (t.moderate OR NOT s.moderate)
+                          AND NOT t.deleted AND NOT t.sticky
+                        ORDER BY t.commitdate ASC LIMIT 1"#,
+                )
+                .bind(dtCommitDate)
+                .bind(iSectionId)
+                .fetch_optional(&self.oPool)
+                .await?;
+                (optPrevious, optNext)
+            }
+            "GROUP" => {
+                let optPrevious = sqlx::query_as(
+                    r#"SELECT t.id, t.title, g.urlname,
+                              CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum'
+                                   WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls'
+                                   WHEN 6 THEN 'articles' ELSE lower(s.name) END
+                         FROM topics t
+                         JOIN groups g ON g.id=t.groupid
+                         JOIN sections s ON s.id=g.section
+                        WHERE NOT t.draft AND t.postdate<$1 AND t.groupid=$2
+                          AND NOT t.deleted AND NOT t.sticky
+                          AND ($3::integer IS NULL OR t.userid NOT IN
+                              (SELECT ignored FROM ignore_list WHERE userid=$3))
+                        ORDER BY t.postdate DESC LIMIT 1"#,
+                )
+                .bind(dtPostDate)
+                .bind(iGroupId)
+                .bind(optViewerIdForIgnoreList)
+                .fetch_optional(&self.oPool)
+                .await?;
+                let optNext = sqlx::query_as(
+                    r#"SELECT t.id, t.title, g.urlname,
+                              CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum'
+                                   WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls'
+                                   WHEN 6 THEN 'articles' ELSE lower(s.name) END
+                         FROM topics t
+                         JOIN groups g ON g.id=t.groupid
+                         JOIN sections s ON s.id=g.section
+                        WHERE NOT t.draft AND t.postdate>$1 AND t.groupid=$2
+                          AND NOT t.deleted AND NOT t.sticky
+                          AND ($3::integer IS NULL OR t.userid NOT IN
+                              (SELECT ignored FROM ignore_list WHERE userid=$3))
+                        ORDER BY t.postdate ASC LIMIT 1"#,
+                )
+                .bind(dtPostDate)
+                .bind(iGroupId)
+                .bind(optViewerIdForIgnoreList)
+                .fetch_optional(&self.oPool)
+                .await?;
+                (optPrevious, optNext)
+            }
+            // Only the three current Java enum values are valid. Treat a
+            // stale port-only value as disabled instead of inventing order.
+            _ => {
+                return Ok(StTopicScrollers {
+                    bEnabled: false,
+                    optPrevious: None,
+                    optNext: None,
+                });
+            }
+        };
+        Ok(StTopicScrollers {
+            bEnabled: true,
+            optPrevious: optPrevious.map(stTopicScrollerItem),
+            optNext: optNext.map(stTopicScrollerItem),
+        })
+    }
+
     async fn vecListComments(&self, iTopicId: i32) -> Result<Vec<StCommentItem>> {
         Ok(sqlx::query_as::<_, StCommentItem>(S_LIST_COMMENTS_SQL)
             .bind(iTopicId)
             .fetch_all(&self.oPool)
             .await?)
+    }
+
+    async fn vecCommentPageMeta(
+        &self,
+        vecCommentIds: &[i32],
+        optViewerId: Option<i32>,
+        bModeratorSession: bool,
+        bLoadWarnings: bool,
+    ) -> Result<Vec<StCommentPageMeta>> {
+        if vecCommentIds.is_empty() {
+            return Ok(Vec::new());
+        }
+        let vecRows = sqlx::query_as::<_, StCommentPageMetaRow>(S_COMMENT_PAGE_META_SQL)
+            .bind(vecCommentIds)
+            .bind(optViewerId)
+            .bind(bModeratorSession)
+            .bind(bLoadWarnings)
+            .fetch_all(&self.oPool)
+            .await?;
+        Ok(vecRows.into_iter().map(Into::into).collect())
     }
 
     async fn iNextMessageId(&self, txPg: &mut Transaction<'_, Postgres>) -> Result<i32> {
@@ -614,12 +830,77 @@ FROM comments c
 JOIN msgbase m ON m.id=c.id
 JOIN users u ON u.id=c.userid
 WHERE c.topic=$1
-ORDER BY c.postdate ASC
+ORDER BY c.id ASC
+"#;
+
+// Viewer-specific parts of Java `CommentPrepareService.prepareCommentList`.
+// The route supplies only IDs from the already selected page, and moderator
+// fields are suppressed in SQL as well as in the template-facing model.
+const S_COMMENT_PAGE_META_SQL: &str = r#"
+SELECT c.id AS i_comment_id,
+       remark.remark_text AS opt_remark,
+       COALESCE(c.edit_count,0) AS i_edit_count,
+       (c.edit_date AT TIME ZONE 'UTC') AS opt_edit_date,
+       editor.nick AS opt_editor_nick,
+       CASE WHEN $3 THEN host(c.postip) END AS opt_post_ip,
+       CASE WHEN $3 THEN COALESCE(c.ua_id,0) ELSE 0 END AS i_user_agent_id,
+       CASE WHEN $3 THEN user_agent.name END AS opt_user_agent,
+       CASE WHEN $4 THEN COALESCE((
+         SELECT jsonb_agg(jsonb_build_object(
+           'id',warning.id,'postdate',warning.postdate,'message',warning.message,
+           'warning_type',warning.warning_type::text,
+           'author',warning_author.nick,
+           'author_blocked',COALESCE(warning_author.blocked,false),
+           'closed_by',closed_by.nick,
+           'closed_by_blocked',COALESCE(closed_by.blocked,false)
+         ) ORDER BY warning.postdate)
+           FROM message_warnings warning
+           JOIN users warning_author ON warning_author.id=warning.author
+           LEFT JOIN users closed_by ON closed_by.id=warning.closed_by
+          WHERE warning.comment=c.id
+       ),'[]'::jsonb) ELSE '[]'::jsonb END::text AS s_warnings_json
+  FROM comments c
+  LEFT JOIN users editor ON editor.id=c.editor_id
+  LEFT JOIN user_agents user_agent ON user_agent.id=c.ua_id
+  LEFT JOIN user_remarks remark ON remark.user_id=$2 AND remark.ref_user_id=c.userid
+ WHERE c.id=ANY($1)
 "#;
 
 #[cfg(test)]
 mod listing_contract_tests {
-    use super::{S_LIST_MAIN_TOPICS_SQL, S_LIST_TOPICS_SQL};
+    use super::{
+        S_COMMENT_PAGE_META_SQL, S_LIST_COMMENTS_SQL, S_LIST_MAIN_TOPICS_SQL, S_LIST_TOPICS_SQL,
+    };
+
+    #[test]
+    fn comment_list_uses_java_msgid_order_for_paging_and_jumps() {
+        assert!(S_LIST_COMMENTS_SQL.contains("ORDER BY c.id ASC"));
+        assert!(!S_LIST_COMMENTS_SQL.contains("ORDER BY c.postdate"));
+    }
+
+    #[test]
+    fn java_timestamp_without_timezone_edit_date_is_decoded_as_utc() {
+        assert!(S_COMMENT_PAGE_META_SQL.contains("c.edit_date AT TIME ZONE 'UTC'"));
+    }
+
+    #[test]
+    fn comment_page_meta_covers_prepared_comment_viewer_fields() {
+        for sToken in [
+            "remark.remark_text",
+            "c.edit_count",
+            "c.edit_date",
+            "editor.nick",
+            "host(c.postip)",
+            "c.ua_id",
+            "user_agent.name",
+            "message_warnings",
+            "warning.comment=c.id",
+        ] {
+            assert!(S_COMMENT_PAGE_META_SQL.contains(sToken), "missing {sToken}");
+        }
+        assert!(S_COMMENT_PAGE_META_SQL.contains("CASE WHEN $3"));
+        assert!(S_COMMENT_PAGE_META_SQL.contains("CASE WHEN $4"));
+    }
 
     #[test]
     fn forum_feed_sql_keeps_java_filters_and_six_month_window() {

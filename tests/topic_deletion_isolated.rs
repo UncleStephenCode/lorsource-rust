@@ -436,8 +436,8 @@ mod database_delta_tests {
         .fetch_one(oPool)
         .await?;
         anyhow::ensure!(
-            stUndeleted.0 == false
-                && stUndeleted.1 == false
+            !stUndeleted.0
+                && !stUndeleted.1
                 && stUndeleted.2 > dtFixtureLastMod
                 && stUndeleted.3 == 5
                 && stUndeleted.4 == 0

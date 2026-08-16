@@ -1,12 +1,13 @@
 use crate::{
     application::{
         edit_history::{CEditHistoryService, StPreparedEditHistory},
+        topic::CTopicService,
         user::{account::CUserAccountService, userpic::CUserpicService},
     },
     auth::CurrentUser,
     error::{AppError, Result},
     infra::postgres::{
-        edit_history_repository::CEditHistoryPgRepository,
+        edit_history_repository::CEditHistoryPgRepository, topic_repository::CTopicPgRepository,
         user_account_repository::CUserAccountPgRepository,
         userpic_repository::CUserpicPgRepository,
     },
@@ -18,9 +19,9 @@ use crate::{
 use askama::Template;
 use axum::{
     Form, Json,
-    extract::{ConnectInfo, Multipart, Path, Query, State},
-    http::{HeaderMap, StatusCode, Uri, header},
-    response::{Html, IntoResponse, Redirect, Response},
+    extract::{ConnectInfo, Multipart, Path, Query, Request, State},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header},
+    response::{Html, IntoResponse, Response},
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar};
 use serde::Deserialize;
@@ -176,21 +177,44 @@ fn optLegacyI64Parameter(optValue: Option<&str>, sName: &str) -> Result<Option<i
         .transpose()
 }
 
-pub async fn group_jsp(
-    State(state): State<AppState>,
-    Query(q): Query<LegacyGroupQuery>,
-) -> Result<Redirect> {
-    group_redirect(state, q, false).await
+pub async fn group_jsp(State(state): State<AppState>, stRequest: Request) -> Result<Response> {
+    let stMethod = stRequest.method().clone();
+    let vecParameters = crate::form::servlet_request_parameters(stRequest).await?;
+    let q = LegacyGroupQuery {
+        group: crate::form::get(&vecParameters, "group").map(ToOwned::to_owned),
+        offset: crate::form::get(&vecParameters, "offset").map(ToOwned::to_owned),
+    };
+    stLegacyUnsafeBindingResult(group_redirect(state, q, false).await, &stMethod)
 }
 
 pub async fn group_lastmod_jsp(
     State(state): State<AppState>,
-    Query(q): Query<LegacyGroupQuery>,
-) -> Result<Redirect> {
-    group_redirect(state, q, true).await
+    stRequest: Request,
+) -> Result<Response> {
+    let stMethod = stRequest.method().clone();
+    let vecParameters = crate::form::servlet_request_parameters(stRequest).await?;
+    let q = LegacyGroupQuery {
+        group: crate::form::get(&vecParameters, "group").map(ToOwned::to_owned),
+        offset: crate::form::get(&vecParameters, "offset").map(ToOwned::to_owned),
+    };
+    stLegacyUnsafeBindingResult(group_redirect(state, q, true).await, &stMethod)
 }
 
-async fn group_redirect(state: AppState, q: LegacyGroupQuery, lastmod: bool) -> Result<Redirect> {
+fn stLegacyUnsafeBindingResult<T>(stResult: Result<T>, stMethod: &Method) -> Result<T> {
+    match (stMethod, stResult) {
+        // On the pinned servlet runtime unsafe methods reach unrestricted
+        // redirect mappings, but a required-parameter/binding failure is
+        // emitted by the container as an empty 400 instead of the JSP-backed
+        // 404 used by an ordinary GET request.
+        (
+            &Method::PUT | &Method::PATCH | &Method::DELETE,
+            Err(AppError::BadParameter(sMessage)),
+        ) => Err(AppError::BadRequest(sMessage)),
+        (_, stResult) => stResult,
+    }
+}
+
+async fn group_redirect(state: AppState, q: LegacyGroupQuery, lastmod: bool) -> Result<Response> {
     let iGroupId = iRequiredLegacyParameter(q.group.as_deref(), "group")?;
     let optOffset = optLegacyI64Parameter(q.offset.as_deref(), "offset")?;
     let (section, group): (String, String) = sqlx::query_as(
@@ -215,7 +239,7 @@ async fn group_redirect(state: AppState, q: LegacyGroupQuery, lastmod: bool) -> 
         url.push('?');
         url.push_str(&params.join("&"));
     }
-    Ok(Redirect::to(&url))
+    Ok(stLegacyFoundRedirect(url))
 }
 
 #[derive(Deserialize)]
@@ -225,9 +249,17 @@ pub struct LegacySectionQuery {
 
 pub async fn view_section_jsp(
     State(state): State<AppState>,
-    Query(q): Query<LegacySectionQuery>,
-) -> Result<Redirect> {
-    let iSectionId = iRequiredLegacyParameter(q.section.as_deref(), "section")?;
+    stRequest: Request,
+) -> Result<Response> {
+    let stMethod = stRequest.method().clone();
+    let vecParameters = crate::form::servlet_request_parameters(stRequest).await?;
+    let q = LegacySectionQuery {
+        section: crate::form::get(&vecParameters, "section").map(ToOwned::to_owned),
+    };
+    let iSectionId = stLegacyUnsafeBindingResult(
+        iRequiredLegacyParameter(q.section.as_deref(), "section"),
+        &stMethod,
+    )?;
     let section: String = sqlx::query_scalar(
         r#"SELECT CASE id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(name) END
            FROM sections WHERE id=$1"#,
@@ -241,7 +273,7 @@ pub async fn view_section_jsp(
     } else {
         format!("/{section}/")
     };
-    Ok(Redirect::to(&target))
+    Ok(stLegacyFoundRedirect(target))
 }
 
 #[derive(Deserialize)]
@@ -298,8 +330,8 @@ fn sEncodeSpringUriPath(sValue: &str) -> String {
 
 fn stViewNewsRedirect(stQuery: ViewNewsQuery) -> Result<Response> {
     // TagTopicListController.tagFeedOld is selected only by the Spring
-    // `params = "tag"` mapping condition. A request without that required
-    // parameter is rejected by Spring with HTTP 400 before rendering.
+    // `params = "tag"` mapping condition.  The pinned Java runtime rejects a
+    // request which does not satisfy that condition with HTTP 400.
     let sTag = stQuery
         .tag
         .ok_or_else(|| AppError::BadRequest("Required parameter 'tag' is missing".to_owned()))?;
@@ -313,11 +345,247 @@ pub async fn view_news_jsp(Query(stQuery): Query<ViewNewsQuery>) -> Result<Respo
     stViewNewsRedirect(stQuery)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StLegacyViewMessageParameters {
+    iMessageId: i32,
+    optPage: Option<i32>,
+    bLastModified: bool,
+    optFilter: Option<String>,
+    optOutput: Option<String>,
+}
+
+fn optServletNumber<T>(vecParameters: &[(String, String)], sName: &str) -> Result<Option<T>>
+where
+    T: std::str::FromStr,
+{
+    match crate::form::get(vecParameters, sName) {
+        None | Some("") => Ok(None),
+        Some(sValue) => sValue.parse().map(Some).map_err(|_| {
+            AppError::BadRequest(format!("Failed to convert request parameter '{sName}'"))
+        }),
+    }
+}
+
+fn stLegacyViewMessageParameters(
+    vecParameters: &[(String, String)],
+) -> Result<StLegacyViewMessageParameters> {
+    let sMessageId = crate::form::get(vecParameters, "msgid")
+        .ok_or_else(|| AppError::BadRequest("Required request parameter 'msgid'".to_owned()))?;
+    let iMessageId = sMessageId.parse().map_err(|_| {
+        AppError::BadRequest("Failed to convert request parameter 'msgid'".to_owned())
+    })?;
+    // Spring converts an empty optional wrapper value to null. A present
+    // non-empty `lastmod` must still bind as Long before the controller uses
+    // only its presence.
+    let optLastModified = optServletNumber::<i64>(vecParameters, "lastmod")?;
+    Ok(StLegacyViewMessageParameters {
+        iMessageId,
+        optPage: optServletNumber(vecParameters, "page")?,
+        bLastModified: optLastModified.is_some(),
+        optFilter: crate::form::get(vecParameters, "filter").map(ToOwned::to_owned),
+        optOutput: crate::form::get(vecParameters, "output").map(ToOwned::to_owned),
+    })
+}
+
+fn sLegacyViewMessageLocation(
+    stTopic: &crate::domain::topic::model::StLegacyTopicRedirect,
+    stParameters: &StLegacyViewMessageParameters,
+) -> String {
+    let mut sLocation = stTopic.sCanonicalUrl();
+    if let Some(iPage) = stParameters.optPage {
+        sLocation.push_str(&format!("/page{iPage}"));
+    }
+    let mut vecQuery = Vec::new();
+    if stParameters.bLastModified && !stTopic.bExpired {
+        vecQuery.push(format!(
+            "lastmod={}",
+            stTopic.dtLastModified.timestamp_millis()
+        ));
+    }
+    if let Some(sFilter) = stParameters.optFilter.as_deref() {
+        vecQuery.push(format!("filter={}", sRedirectViewQueryValue(sFilter)));
+    }
+    if let Some(sOutput) = stParameters.optOutput.as_deref() {
+        vecQuery.push(format!("output={}", sRedirectViewQueryValue(sOutput)));
+    }
+    if !vecQuery.is_empty() {
+        sLocation.push('?');
+        sLocation.push_str(&vecQuery.join("&"));
+    }
+    sLocation
+}
+
+fn sRedirectViewQueryValue(sValue: &str) -> String {
+    // The Java controller appends decoded parameters directly to the
+    // RedirectView URL. A pinned Spring Web MVC 6.2.19 render probe confirms
+    // that spaces, Unicode and visible query delimiters such as '&' remain in
+    // its logical target String; encoding here would change its query shape.
+    // Jetty's wire-header conversion is reproduced separately below.
+    sValue.to_owned()
+}
+
+fn vecServletRedirectHeaderBytes(sLocation: &str) -> Vec<u8> {
+    // RedirectView passes its decoded String directly to
+    // HttpServletResponse.sendRedirect.  The pinned Jetty 12 runtime writes
+    // that Location value as ISO-8859-1: representable characters keep their
+    // single byte and each unrepresentable UTF-16 code unit becomes a space.
+    // Iterating UTF-16 rather than Rust scalar values is observable for a
+    // supplementary character, which therefore produces two spaces.
+    sLocation
+        .encode_utf16()
+        .map(|iUnit| u8::try_from(iUnit).unwrap_or(b' '))
+        .collect()
+}
+
+fn stLegacyServletFoundRedirect(sLocation: String) -> Result<Response> {
+    let stLocation = HeaderValue::from_bytes(&vecServletRedirectHeaderBytes(&sLocation))
+        .map_err(|stError| AppError::Anyhow(anyhow::Error::new(stError)))?;
+    let mut stResponse = StatusCode::FOUND.into_response();
+    stResponse
+        .headers_mut()
+        .insert(header::LOCATION, stLocation);
+    Ok(stResponse)
+}
+
+/// TopicController.getMessageOld is a bare RequestMapping: every method
+/// admitted by StrictHttpFirewall reaches the same read-only redirect and
+/// sees the Servlet query/form parameter view.
+pub async fn legacy_view_message(
+    State(stState): State<AppState>,
+    stRequest: Request,
+) -> Result<Response> {
+    let vecParameters = crate::form::servlet_request_parameters(stRequest).await?;
+    let stParameters = stLegacyViewMessageParameters(&vecParameters)?;
+    let cService = CTopicService::new(CTopicPgRepository::new(stState.pool.clone()));
+    let stTopic = cService
+        .stLegacyTopicRedirect(stParameters.iMessageId)
+        .await?;
+    stLegacyServletFoundRedirect(sLegacyViewMessageLocation(&stTopic, &stParameters))
+}
+
+#[cfg(test)]
+mod legacy_view_message_tests {
+    use super::{
+        StLegacyViewMessageParameters, sLegacyViewMessageLocation, stLegacyServletFoundRedirect,
+        stLegacyViewMessageParameters, vecServletRedirectHeaderBytes,
+    };
+    use crate::{domain::topic::model::StLegacyTopicRedirect, error::AppError};
+    use axum::http::header;
+    use chrono::{TimeZone, Utc};
+
+    fn stTopic(bExpired: bool) -> StLegacyTopicRedirect {
+        StLegacyTopicRedirect {
+            iTopicId: 42,
+            sGroupUrlName: "rust".to_owned(),
+            sSectionPrefix: "news".to_owned(),
+            dtLastModified: Utc.timestamp_millis_opt(1_700_000_000_123).unwrap(),
+            bExpired,
+        }
+    }
+
+    #[test]
+    fn binding_is_query_first_and_ignores_unbound_from_history() {
+        let vecParameters = vec![
+            ("msgid".to_owned(), "42".to_owned()),
+            ("page".to_owned(), "3".to_owned()),
+            ("lastmod".to_owned(), "1".to_owned()),
+            ("filter".to_owned(), "show".to_owned()),
+            ("output".to_owned(), "rss".to_owned()),
+            ("fromHistory".to_owned(), "not-a-number".to_owned()),
+            ("msgid".to_owned(), "99".to_owned()),
+        ];
+        let stParameters = stLegacyViewMessageParameters(&vecParameters).unwrap();
+        assert_eq!(stParameters.iMessageId, 42);
+        assert_eq!(
+            sLegacyViewMessageLocation(&stTopic(false), &stParameters),
+            "/news/rust/42/page3?lastmod=1700000000123&filter=show&output=rss"
+        );
+    }
+
+    #[test]
+    fn redirect_view_preserves_logical_query_values_and_delimiters() {
+        let stParameters = StLegacyViewMessageParameters {
+            iMessageId: 42,
+            optPage: None,
+            bLastModified: false,
+            optFilter: Some("a b&extra=yes".to_owned()),
+            optOutput: Some("атом".to_owned()),
+        };
+        assert_eq!(
+            sLegacyViewMessageLocation(&stTopic(false), &stParameters),
+            "/news/rust/42?filter=a b&extra=yes&output=атом"
+        );
+    }
+
+    #[test]
+    fn servlet_redirect_serializes_latin1_and_replaces_utf16_units() {
+        let sLocation = "/news/rust/42?filter=a b&extra=yes&output=éатом🚀";
+        assert_eq!(
+            vecServletRedirectHeaderBytes(sLocation),
+            b"/news/rust/42?filter=a b&extra=yes&output=\xE9      "
+        );
+
+        let stResponse = stLegacyServletFoundRedirect(sLocation.to_owned())
+            .expect("Servlet-compatible redirect header");
+        assert_eq!(stResponse.status(), axum::http::StatusCode::FOUND);
+        assert_eq!(
+            stResponse.headers()[header::LOCATION].as_bytes(),
+            b"/news/rust/42?filter=a b&extra=yes&output=\xE9      "
+        );
+    }
+
+    #[test]
+    fn expired_topic_omits_lastmod_and_optional_empty_wrappers_bind_null() {
+        let stParameters = stLegacyViewMessageParameters(&[
+            ("msgid".to_owned(), "42".to_owned()),
+            ("page".to_owned(), String::new()),
+            ("lastmod".to_owned(), String::new()),
+            ("filter".to_owned(), String::new()),
+        ])
+        .unwrap();
+        assert_eq!(stParameters.optPage, None);
+        assert!(!stParameters.bLastModified);
+        assert_eq!(
+            sLegacyViewMessageLocation(&stTopic(true), &stParameters),
+            "/news/rust/42?filter="
+        );
+
+        let stWithLastmod = StLegacyViewMessageParameters {
+            bLastModified: true,
+            ..stParameters
+        };
+        assert_eq!(
+            sLegacyViewMessageLocation(&stTopic(true), &stWithLastmod),
+            "/news/rust/42?filter="
+        );
+    }
+
+    #[test]
+    fn required_and_numeric_binding_failures_are_400() {
+        for vecParameters in [
+            Vec::new(),
+            vec![("msgid".to_owned(), String::new())],
+            vec![("msgid".to_owned(), "bad".to_owned())],
+            vec![
+                ("msgid".to_owned(), "42".to_owned()),
+                ("page".to_owned(), "bad".to_owned()),
+            ],
+            vec![
+                ("msgid".to_owned(), "42".to_owned()),
+                ("lastmod".to_owned(), "bad".to_owned()),
+            ],
+        ] {
+            assert!(matches!(
+                stLegacyViewMessageParameters(&vecParameters),
+                Err(AppError::BadRequest(_))
+            ));
+        }
+    }
+}
+
 #[derive(Deserialize)]
 pub struct PreviewForm {
     pub text: Option<String>,
-    pub msg: Option<String>,
-    pub message: Option<String>,
     pub markup: Option<String>,
 }
 
@@ -330,30 +598,36 @@ pub async fn markup_preview(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
     Form(form): Form<PreviewForm>,
-) -> Result<Json<serde_json::Value>> {
-    let text = form.text.or(form.msg).or(form.message).unwrap_or_default();
+) -> Result<Response> {
+    // The Java controller binds exactly `text`; comment-form aliases such as
+    // `msg` or `message` are not part of this endpoint's API.
+    let text = form.text.unwrap_or_default();
 
-    let markup_id = form
-        .markup
-        .as_deref()
-        .unwrap_or(crate::profile::DEFAULT_FORMAT_MODE);
-    if !crate::profile::is_format_mode(markup_id) {
-        return Ok(Json(json!({"error": "Недопустимый режим разметки"})));
-    }
-    let _ = &user; // allowed_formats is identical for anon/registered in this port (see profile::FORMAT_MODES)
+    let markup_id = match form.markup {
+        Some(sMarkupId) => sMarkupId,
+        None => match user.as_ref() {
+            Some(stUser) => {
+                crate::routes::comments::user_comment_format(&state, stUser.id)
+                    .await?
+                    .0
+            }
+            None => crate::profile::DEFAULT_FORMAT_MODE.to_owned(),
+        },
+    };
+    let stored_markup = match optPreviewStoredMarkup(&markup_id, user.is_some()) {
+        Some(sStoredMarkup) => sStoredMarkup,
+        None => {
+            return Ok(stJsonUtf8(json!({"error": "Недопустимый режим разметки"})));
+        }
+    };
 
     if text.is_empty() {
-        return Ok(Json(json!({"html": ""})));
+        return Ok(stJsonUtf8(json!({"html": ""})));
     }
-    if text.chars().count() > 65_536 {
-        return Ok(Json(json!({"error": "Слишком длинный текст"})));
+    // Java String.length counts UTF-16 code units, not Unicode scalar values.
+    if bPreviewTextTooLong(&text) {
+        return Ok(stJsonUtf8(json!({"error": "Слишком длинный текст"})));
     }
-    let stored_markup = match markup_id {
-        "markdown" => "MARKDOWN",
-        "ntobr" => "BBCODE_ULB",
-        "lorcode" => "BBCODE_TEX",
-        _ => "PLAIN",
-    };
     let stMarkupUsers = state
         .markup
         .stResolveBatch([(&*text, stored_markup)])
@@ -366,26 +640,86 @@ pub async fn markup_preview(
         Some(&state.config.public_url),
         Some(&stMarkupUsers),
     );
-    Ok(Json(json!({"html": html})))
+    Ok(stJsonUtf8(json!({"html": html})))
 }
 
-#[derive(Deserialize)]
-pub struct CheckLoginQuery {
-    pub nick: Option<String>,
+fn optPreviewStoredMarkup(sMarkupId: &str, bAuthorized: bool) -> Option<&'static str> {
+    Some(match sMarkupId {
+        "markdown" => "MARKDOWN",
+        "lorcode" => "BBCODE_TEX",
+        // UserPermissionService.allowedFormats deliberately excludes the
+        // deprecated LorcodeUlb mode for anonymous preview requests.
+        "ntobr" if bAuthorized => "BBCODE_ULB",
+        _ => return None,
+    })
+}
+
+fn bPreviewTextTooLong(sText: &str) -> bool {
+    sText.encode_utf16().count() > 65_536
+}
+
+fn stJsonUtf8(stValue: serde_json::Value) -> Response {
+    let mut stResponse = Json(stValue).into_response();
+    stResponse.headers_mut().insert(
+        header::CONTENT_TYPE,
+        "application/json;charset=utf-8".parse().unwrap(),
+    );
+    stResponse
+}
+
+#[cfg(test)]
+mod markup_preview_contract_tests {
+    use axum::{body::to_bytes, http::header};
+
+    use super::{bPreviewTextTooLong, optPreviewStoredMarkup, stJsonUtf8};
+
+    #[test]
+    fn allowed_formats_match_user_permission_service() {
+        assert_eq!(optPreviewStoredMarkup("markdown", false), Some("MARKDOWN"));
+        assert_eq!(optPreviewStoredMarkup("lorcode", false), Some("BBCODE_TEX"));
+        assert_eq!(optPreviewStoredMarkup("ntobr", false), None);
+        assert_eq!(optPreviewStoredMarkup("ntobr", true), Some("BBCODE_ULB"));
+        assert_eq!(optPreviewStoredMarkup("plain", true), None);
+    }
+
+    #[test]
+    fn text_limit_uses_java_utf16_units() {
+        assert!(!bPreviewTextTooLong(&"🚀".repeat(32_768)));
+        assert!(bPreviewTextTooLong(&format!("{}a", "🚀".repeat(32_768))));
+    }
+
+    #[tokio::test]
+    async fn preview_declares_the_java_json_utf8_content_type() {
+        let stResponse = stJsonUtf8(serde_json::json!({"html": ""}));
+        assert_eq!(
+            stResponse
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|stValue| stValue.to_str().ok()),
+            Some("application/json;charset=utf-8")
+        );
+        let vecBody = to_bytes(stResponse.into_body(), 1024)
+            .await
+            .expect("preview json body");
+        assert_eq!(&vecBody[..], br#"{"html":""}"#);
+    }
 }
 
 pub async fn check_login(
     State(state): State<AppState>,
-    Query(q): Query<CheckLoginQuery>,
+    stRequest: Request,
 ) -> Result<Json<serde_json::Value>> {
-    let nick = q.nick.unwrap_or_default();
+    let vecParameters = crate::form::servlet_request_parameters(stRequest).await?;
+    let nick = crate::form::get(&vecParameters, "nick").ok_or_else(|| {
+        AppError::BadRequest("Required request parameter 'nick' is missing".into())
+    })?;
     let result = if nick.is_empty() {
         "Не задан nick.".to_string()
-    } else if !valid_login_name_for_java(&nick) {
+    } else if !valid_login_name_for_java(nick) {
         "Некорректное имя пользователя.".to_string()
     } else if nick.len() > 19 {
         "Слишком длинное имя пользователя.".to_string()
-    } else if user_exists_or_similar(&state, &nick).await? {
+    } else if user_exists_or_similar(&state, nick).await? {
         "Это имя пользователя уже используется. Пожалуйста выберите другое имя.".to_string()
     } else {
         "true".to_string()
@@ -400,15 +734,17 @@ pub async fn check_login(
 pub async fn yandex_tableau(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
-) -> Result<Json<serde_json::Value>> {
+) -> Result<Response> {
     let Some(user) = user else {
-        return Ok(Json(json!({})));
+        return Ok(Json(json!({})).into_response());
     };
     let count: i32 = sqlx::query_scalar("SELECT unread_events FROM users WHERE id=$1")
         .bind(user.id)
         .fetch_one(&state.pool)
         .await?;
-    Ok(Json(json!({"notifications": count})))
+    Ok(crate::routes::api::stNoCacheJson(
+        json!({"notifications": count}),
+    ))
 }
 
 /// Matches HelpController.HelpPages exactly - only these 3 real pages
@@ -523,6 +859,8 @@ pub async fn archive_section(
     State(state): State<AppState>,
     uri: Uri,
     CurrentUser(current_user): CurrentUser,
+    headers: HeaderMap,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
 ) -> Result<Html<String>> {
     let section = section_from_uri(&uri).unwrap_or("news");
     let section_name = match section {
@@ -534,9 +872,20 @@ pub async fn archive_section(
         _ => "Темы",
     };
     let rows = list_archive_year_months(&state, Some(section), None).await?;
-    let navigation =
-        crate::routes::topics::build_topic_list_navigation(&state, section, None, &current_user)
-            .await?;
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
+    let navigation = crate::routes::topics::build_topic_list_navigation(
+        &state,
+        section,
+        None,
+        &current_user,
+        &sRemoteIp,
+    )
+    .await?;
     let months = rows
         .into_iter()
         .map(|(y, m, c)| ArchiveMonthLink {
@@ -788,13 +1137,14 @@ pub async fn show_comments_jsp(
 #[cfg(test)]
 mod legacy_list_redirect_tests {
     use axum::{
-        http::{StatusCode, header},
+        http::{Method, StatusCode, header},
         response::IntoResponse,
     };
 
     use super::{
         ViewNewsQuery, iRequiredLegacyParameter, optLegacyI64Parameter, sEncodeSpringUriPath,
-        sRequiredLegacyParameter, sShowCommentsLocation, stLegacyFoundRedirect, stViewNewsRedirect,
+        sRequiredLegacyParameter, sShowCommentsLocation, stLegacyFoundRedirect,
+        stLegacyUnsafeBindingResult, stViewNewsRedirect,
     };
     use crate::error::AppError;
 
@@ -802,6 +1152,17 @@ mod legacy_list_redirect_tests {
     fn view_news_requires_the_original_tag_mapping_condition() {
         let stError = stViewNewsRedirect(ViewNewsQuery { tag: None })
             .expect_err("the tag mapping condition is required");
+
+        assert!(matches!(stError, AppError::BadRequest(_)));
+        assert_eq!(stError.into_response().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn view_news_unrelated_msgid_does_not_satisfy_the_tag_mapping_condition() {
+        let stQuery: ViewNewsQuery =
+            serde_urlencoded::from_str("msgid=invalid").expect("Servlet query binding");
+        let stError = stViewNewsRedirect(stQuery)
+            .expect_err("an unrelated parameter must not select tagFeedOld");
 
         assert!(matches!(stError, AppError::BadRequest(_)));
         assert_eq!(stError.into_response().status(), StatusCode::BAD_REQUEST);
@@ -865,14 +1226,26 @@ mod legacy_list_redirect_tests {
             Some(300)
         );
     }
-}
 
-#[derive(Deserialize)]
-pub struct ShowRepliesQuery {
-    pub nick: Option<String>,
-    pub output: Option<String>,
-    pub filter: Option<String>,
-    pub offset: Option<i64>,
+    #[test]
+    fn unsafe_legacy_redirect_binding_failure_uses_the_container_400_contract() {
+        for stMethod in [Method::PUT, Method::PATCH, Method::DELETE] {
+            let stUnsafeError =
+                stLegacyUnsafeBindingResult(iRequiredLegacyParameter(None, "group"), &stMethod)
+                    .expect_err("unsafe request without group must fail");
+            assert!(matches!(stUnsafeError, AppError::BadRequest(_)));
+            assert_eq!(
+                stUnsafeError.into_response().status(),
+                StatusCode::BAD_REQUEST
+            );
+        }
+
+        let stGetError =
+            stLegacyUnsafeBindingResult(iRequiredLegacyParameter(None, "group"), &Method::GET)
+                .expect_err("GET without group must fail");
+        assert!(matches!(stGetError, AppError::BadParameter(_)));
+        assert_eq!(stGetError.into_response().status(), StatusCode::NOT_FOUND);
+    }
 }
 
 /// UserEventController's three `/show-replies.jsp` branches (Spring
@@ -884,12 +1257,18 @@ pub struct ShowRepliesQuery {
 pub async fn show_replies_jsp(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
-    Query(q): Query<ShowRepliesQuery>,
+    stRequest: Request,
 ) -> Result<Response> {
-    if let Some(output) = q.output.as_deref() {
-        let nick = q.nick.clone().unwrap_or_default();
+    let vecParameters = crate::form::servlet_request_parameters(stRequest).await?;
+    let optOutput = crate::form::get(&vecParameters, "output");
+    let optNick = crate::form::get(&vecParameters, "nick");
+    let optFilter = crate::form::get(&vecParameters, "filter");
+    if let Some(output) = optOutput {
+        // Only the feed mapping binds output/filter/nick. Parameters belonging
+        // solely to the moderator HTML branch (such as offset) are ignored.
+        let nick = optNick.unwrap_or_default().to_owned();
         if !valid_login_name_for_java(&nick) {
-            return Err(AppError::BadRequest("некорректное имя пользователя".into()));
+            return Err(AppError::stBadInput("некорректное имя пользователя"));
         }
         let target: Option<(i32, String)> =
             sqlx::query_as("SELECT id, nick FROM users WHERE lower(nick)=lower($1)")
@@ -903,10 +1282,7 @@ pub async fn show_replies_jsp(
             .as_ref()
             .map(|u| u.nick.eq_ignore_ascii_case(&target_nick))
             .unwrap_or(false);
-        let db_type = q
-            .filter
-            .as_deref()
-            .and_then(crate::routes::api::filter_db_type);
+        let db_type = optFilter.and_then(crate::routes::api::filter_db_type);
         let events =
             crate::routes::api::fetch_events(&state, target_id, db_type, view_by_owner, 200, 0)
                 .await?;
@@ -938,20 +1314,20 @@ pub async fn show_replies_jsp(
         return Ok((headers, body).into_response());
     }
 
-    let Some(nick) = q.nick.clone() else {
+    let Some(nick) = optNick.map(ToOwned::to_owned) else {
         if user.is_none() {
             return Err(AppError::Forbidden);
         }
-        return Ok(Redirect::to("/notifications").into_response());
+        return Ok(crate::routes::stFoundRedirect("/notifications"));
     };
     if !valid_login_name_for_java(&nick) {
-        return Err(AppError::BadRequest("некорректное имя пользователя".into()));
+        return Err(AppError::stBadInput("некорректное имя пользователя"));
     }
     let Some(current) = user else {
         return Err(AppError::Forbidden);
     };
     if current.nick.eq_ignore_ascii_case(&nick) {
-        return Ok(Redirect::to("/notifications").into_response());
+        return Ok(crate::routes::stFoundRedirect("/notifications"));
     }
     if !current.canmod {
         return Err(AppError::Forbidden);
@@ -965,11 +1341,10 @@ pub async fn show_replies_jsp(
     let Some(target_id) = target_id else {
         return Err(AppError::NotFound);
     };
-    let db_type = q
-        .filter
-        .as_deref()
-        .and_then(crate::routes::api::filter_db_type);
-    let offset = q.offset.unwrap_or(0).max(0);
+    let db_type = optFilter.and_then(crate::routes::api::filter_db_type);
+    let offset = optServletNumber::<i64>(&vecParameters, "offset")?
+        .unwrap_or(0)
+        .max(0);
     let events =
         crate::routes::api::fetch_events(&state, target_id, db_type, true, 20, offset).await?;
 
@@ -1410,6 +1785,10 @@ struct StNotificationClickEvent {
 
 type TyNotificationClickRow = (i32, bool, String, Option<i32>, Option<i32>);
 
+const S_RESET_WATCH_NOTIFICATIONS: &str = r#"UPDATE user_events SET unread=false
+    WHERE userid=$1 AND unread AND id<=$2
+      AND type='WATCH'::event_type AND message_id=$3"#;
+
 fn bValidNotificationClickRange(
     first_id: i32,
     first: &StNotificationClickEvent,
@@ -1480,6 +1859,12 @@ mod notification_click_tests {
         let stEvent = stEvent("REF", 10, None);
         assert!(bValidNotificationClickRange(2, &stEvent, 2, &stEvent));
         assert!(!bValidNotificationClickRange(2, &stEvent, 3, &stEvent));
+    }
+
+    #[test]
+    fn watch_reset_never_consumes_an_event_newer_than_the_clicked_group() {
+        assert!(S_RESET_WATCH_NOTIFICATIONS.contains("id<=$2"));
+        assert!(S_RESET_WATCH_NOTIFICATIONS.contains("message_id=$3"));
     }
 
     #[test]
@@ -1574,15 +1959,20 @@ async fn process_notifications_click(
 
     if stLast.unread {
         if !bValidNotificationClickRange(form.first_id, &stFirst, form.last_id, &stLast) {
-            return Err(AppError::BadRequest(
-                "invalid notification click range".into(),
-            ));
+            return Err(AppError::stBadInput("invalid notification click range"));
         }
         let mut tx = state.pool.begin().await?;
         match stLast.event_type.as_str() {
             "WATCH" => {
-                sqlx::query("UPDATE user_events SET unread=false WHERE userid=$1 AND unread AND type='WATCH'::event_type AND message_id=$2")
-                    .bind(user_id).bind(stLast.topic_id).execute(&mut *tx).await?;
+                // UserEventDao.resetUnreadEvents scopes a grouped WATCH click
+                // to ids at or below the rendered group's last event. A newer
+                // concurrent event for the same topic must remain unread.
+                sqlx::query(S_RESET_WATCH_NOTIFICATIONS)
+                    .bind(user_id)
+                    .bind(form.last_id)
+                    .bind(stLast.topic_id)
+                    .execute(&mut *tx)
+                    .await?;
             }
             "REACTION" => {
                 sqlx::query("UPDATE user_events SET unread=false WHERE userid=$1 AND unread AND type='REACTION'::event_type AND id BETWEEN $2 AND $3 AND message_id IS NOT DISTINCT FROM $4 AND comment_id IS NOT DISTINCT FROM $5")
@@ -1685,8 +2075,17 @@ pub async fn activate_post(
     Form(form): Form<ActivationForm>,
 ) -> Result<impl IntoResponse> {
     if form.action.is_some() {
-        let nick = form.nick.as_deref().unwrap_or("").trim();
-        let password = form.passwd.as_deref().unwrap_or("");
+        // The `params = "action"` mapping binds nick/passwd as required
+        // strings. Empty values are legal strings, but absent fields are a
+        // Spring argument-binding 400 after CSRF.
+        let nick = form
+            .nick
+            .as_deref()
+            .ok_or_else(|| AppError::BadRequest("Required request parameter 'nick'".to_owned()))?
+            .trim();
+        let password = form.passwd.as_deref().ok_or_else(|| {
+            AppError::BadRequest("Required request parameter 'passwd'".to_owned())
+        })?;
         let Some((id, db_nick, email, regdate, activated)) = sqlx::query_as::<
             _,
             (
@@ -1714,7 +2113,7 @@ pub async fn activate_post(
         };
 
         if activated {
-            return Ok(Redirect::to("/").into_response());
+            return Ok(crate::routes::stFoundRedirect("/"));
         }
 
         match crate::auth::verify_login(&state.pool, nick, password).await? {
@@ -1736,7 +2135,9 @@ pub async fn activate_post(
                     "blocked user cannot be activated"
                 )));
             }
-            crate::auth::LoginOutcome::Success(_) => return Ok(Redirect::to("/").into_response()),
+            crate::auth::LoginOutcome::Success(_) => {
+                return Ok(crate::routes::stFoundRedirect("/"));
+            }
         }
 
         if !verify_activation_code(
@@ -1781,7 +2182,7 @@ pub async fn activate_post(
             &state.config.trusted_proxy_cidrs,
         ))
         .build();
-        return Ok((jar.add(cookie), Redirect::to("/")).into_response());
+        return Ok((jar.add(cookie), crate::routes::stFoundRedirect("/")).into_response());
     }
 
     let Some(user) = current_user else {
@@ -1798,7 +2199,9 @@ pub async fn activate_post(
         return Err(AppError::NotFound);
     };
     let Some(new_email) = email else {
-        return Err(AppError::BadRequest("new_email == null".into()));
+        // RegisterController throws AccessViolationException here; it is
+        // mapped to the dedicated 403 page before the common exception view.
+        return Err(AppError::Forbidden);
     };
 
     if !verify_activation_code(&state, &user.nick, &new_email, regdate, &form.activation) {
@@ -1816,11 +2219,10 @@ pub async fn activate_post(
         .execute(&state.pool)
         .await?;
     crate::audit::log_user_action(&state.pool, user.id, user.id, "accept_new_email", &[]).await?;
-    Ok(Redirect::to(&format!(
+    Ok(crate::routes::stFoundRedirect(format!(
         "/people/{}/profile",
         urlencoding::encode(&user.nick)
-    ))
-    .into_response())
+    )))
 }
 
 fn render_activation_form(
@@ -2240,16 +2642,36 @@ pub fn valid_login_name_for_java(nick: &str) -> bool {
     chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }
 
+#[derive(Deserialize)]
+pub struct ForumPageOrArchiveQuery {
+    offset: Option<i64>,
+    filter: Option<String>,
+}
+
+fn optForumTopicPageMethodResponse(stMethod: &Method) -> Option<Response> {
+    if stMethod == Method::OPTIONS {
+        return Some((StatusCode::OK, [(header::ALLOW, "GET,HEAD,OPTIONS")]).into_response());
+    }
+    if stMethod != Method::GET && stMethod != Method::HEAD {
+        return Some((StatusCode::METHOD_NOT_ALLOWED, [(header::ALLOW, "GET")]).into_response());
+    }
+    None
+}
+
 pub async fn forum_page_or_archive(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     Path((group, id_or_year, page_or_month)): Path<(String, String, String)>,
-    Query(q): Query<PagerQuery>,
+    stMethod: Method,
+    Query(q): Query<ForumPageOrArchiveQuery>,
     CurrentUser(current_user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
     ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
 ) -> Result<axum::response::Response> {
     if let Some(page) = page_or_month.strip_prefix("page") {
+        if let Some(stResponse) = optForumTopicPageMethodResponse(&stMethod) {
+            return Ok(stResponse);
+        }
         let page: i64 = page.parse().map_err(|_| AppError::NotFound)?;
         let id: i32 = id_or_year.parse().map_err(|_| AppError::NotFound)?;
         let sRemoteIp = crate::security::stClientIp(
@@ -2264,6 +2686,8 @@ pub async fn forum_page_or_archive(
             group,
             id,
             page,
+            q.filter,
+            headers,
             current_user,
             csrf_token,
             sRemoteIp,
@@ -2271,24 +2695,78 @@ pub async fn forum_page_or_archive(
         .await;
     }
 
+    // The calendar branch is a separate bare RequestMapping even though Axum
+    // must share one dynamic path with the GET-only page branch.
+    if stMethod == Method::OPTIONS {
+        return Ok(crate::routes::stSpringUnrestrictedOptionsResponse());
+    }
+
     let year: i32 = id_or_year.parse().map_err(|_| AppError::NotFound)?;
     let month: i32 = page_or_month.parse().map_err(|_| AppError::NotFound)?;
-    Ok(forum_archive_month(
+    let stResponse = forum_archive_month(
         State(state),
         Path((group, year, month)),
-        Query(q),
+        Query(PagerQuery { offset: q.offset }),
         CurrentUser(current_user),
     )
     .await?
-    .into_response())
+    .into_response();
+    if matches!(stMethod, Method::PUT | Method::PATCH | Method::DELETE) {
+        Ok(crate::routes::stSpringJspMethodNotAllowedResponse())
+    } else {
+        Ok(stResponse)
+    }
+}
+
+#[cfg(test)]
+mod forum_page_or_archive_method_tests {
+    use super::*;
+
+    #[test]
+    fn page_shape_retains_spring_get_mapping_while_archive_shape_is_any() {
+        assert!(optForumTopicPageMethodResponse(&Method::GET).is_none());
+        assert!(optForumTopicPageMethodResponse(&Method::HEAD).is_none());
+
+        let stOptions = optForumTopicPageMethodResponse(&Method::OPTIONS).unwrap();
+        assert_eq!(stOptions.status(), StatusCode::OK);
+        assert_eq!(
+            stOptions.headers().get(header::ALLOW).unwrap(),
+            "GET,HEAD,OPTIONS"
+        );
+
+        for stMethod in [Method::POST, Method::PUT, Method::PATCH, Method::DELETE] {
+            let stResponse = optForumTopicPageMethodResponse(&stMethod).unwrap();
+            assert_eq!(stResponse.status(), StatusCode::METHOD_NOT_ALLOWED);
+            assert_eq!(stResponse.headers().get(header::ALLOW).unwrap(), "GET");
+        }
+    }
+
+    #[test]
+    fn archive_calendar_bounds_use_the_servlet_bad_parameter_contract() {
+        assert!(matches!(
+            validate_year_month(1989, 1),
+            Err(AppError::BadParameter(ref sMessage))
+                if sMessage == "Bad format of 'year' указан некорректный год"
+        ));
+        assert!(matches!(
+            validate_year_month(2026, 13),
+            Err(AppError::BadParameter(ref sMessage))
+                if sMessage == "Bad format of 'month' указан некорректный месяц"
+        ));
+        assert!(validate_year_month(2026, 8).is_ok());
+    }
 }
 
 fn validate_year_month(year: i32, month: i32) -> Result<()> {
     if !(1990..=3000).contains(&year) {
-        return Err(AppError::BadRequest("указан некорректный год".into()));
+        return Err(AppError::BadParameter(
+            "Bad format of 'year' указан некорректный год".into(),
+        ));
     }
     if !(1..=12).contains(&month) {
-        return Err(AppError::BadRequest("указан некорректный месяц".into()));
+        return Err(AppError::BadParameter(
+            "Bad format of 'month' указан некорректный месяц".into(),
+        ));
     }
     Ok(())
 }
@@ -2304,12 +2782,67 @@ fn section_from_uri(uri: &Uri) -> Option<&'static str> {
     }
 }
 
-#[derive(Deserialize)]
-pub struct MemoryForm {
-    pub msgid: Option<i32>,
-    pub watch: Option<bool>,
-    pub id: Option<i32>,
-    pub remove: Option<String>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnMemoryAction {
+    Add { iTopicId: i32, bWatch: bool },
+    Remove { iMemoryId: i32 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnMemoryMapping {
+    Add,
+    Remove,
+}
+
+fn enMemoryMapping(vecParameters: &[(String, String)]) -> Result<EnMemoryMapping> {
+    let bAdd = crate::form::get(vecParameters, "add").is_some();
+    let bRemove = crate::form::get(vecParameters, "remove").is_some();
+    match (bAdd, bRemove) {
+        (true, false) => Ok(EnMemoryMapping::Add),
+        (false, true) => Ok(EnMemoryMapping::Remove),
+        // Spring raises UnsatisfiedServletRequestParameterException while
+        // selecting the mapping; its default resolver emits the servlet 400
+        // response before CSRF or controller argument binding.
+        (false, false) => Err(AppError::BadRequest(
+            "required add or remove mapping parameter is missing".to_owned(),
+        )),
+        (true, true) => Err(AppError::Anyhow(anyhow::anyhow!(
+            "ambiguous memories add/remove handler"
+        ))),
+    }
+}
+
+fn iMemoryParameter(vecParameters: &[(String, String)], sName: &str) -> Result<i32> {
+    crate::form::get(vecParameters, sName)
+        .ok_or_else(|| AppError::BadRequest(format!("missing {sName}")))?
+        .parse()
+        .map_err(|_| AppError::BadRequest(format!("invalid {sName}")))
+}
+
+fn enMemoryAction(
+    vecParameters: &[(String, String)],
+    enMapping: EnMemoryMapping,
+) -> Result<EnMemoryAction> {
+    match enMapping {
+        EnMemoryMapping::Remove => Ok(EnMemoryAction::Remove {
+            iMemoryId: iMemoryParameter(vecParameters, "id")?,
+        }),
+        EnMemoryMapping::Add => {
+            let sWatch = crate::form::get(vecParameters, "watch")
+                .ok_or_else(|| AppError::BadRequest("missing watch".to_owned()))?;
+            let bWatch = if sWatch.eq_ignore_ascii_case("true") {
+                true
+            } else if sWatch.eq_ignore_ascii_case("false") {
+                false
+            } else {
+                return Err(AppError::BadRequest("invalid watch".to_owned()));
+            };
+            Ok(EnMemoryAction::Add {
+                iTopicId: iMemoryParameter(vecParameters, "msgid")?,
+                bWatch,
+            })
+        }
+    }
 }
 
 /// MemoriesController.add/remove: "favorite" (watch=false) and "watch"
@@ -2321,15 +2854,23 @@ pub struct MemoryForm {
 pub async fn memories(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
-    Form(form): Form<MemoryForm>,
+    crate::csrf::CsrfToken(sCsrfToken): crate::csrf::CsrfToken,
+    stRequest: Request,
 ) -> Result<Json<serde_json::Value>> {
-    let Some(user) = user else {
+    let vecParameters = crate::form::servlet_request_parameters(stRequest).await?;
+    // RequestMapping selection precedes HandlerInterceptor execution. No
+    // matching predicate is 400 and both predicates are an ambiguous 500 even
+    // if the request has no CSRF field.
+    let enMapping = enMemoryMapping(&vecParameters)?;
+    // Once a mapping is selected, CSRF runs before @RequestParam conversion.
+    if !crate::csrf::bServletCsrfValid(&vecParameters, &sCsrfToken) {
         return Err(AppError::Forbidden);
-    };
+    }
+    let enAction = enMemoryAction(&vecParameters, enMapping)?;
 
-    if form.remove.is_some() {
-        let Some(id) = form.id else {
-            return Err(AppError::BadRequest("missing id".into()));
+    if let EnMemoryAction::Remove { iMemoryId: id } = enAction {
+        let Some(user) = user else {
+            return Err(AppError::Forbidden);
         };
         let row: Option<(i32, i32, bool)> =
             sqlx::query_as("SELECT userid, topic, watch FROM memories WHERE id=$1")
@@ -2355,17 +2896,23 @@ pub async fn memories(
         return Ok(Json(serde_json::json!(count)));
     }
 
-    let msgid = form
-        .msgid
-        .ok_or_else(|| AppError::BadRequest("missing msgid".into()))?;
-    let watch = form.watch.unwrap_or(false);
+    let EnMemoryAction::Add {
+        iTopicId: msgid,
+        bWatch: watch,
+    } = enAction
+    else {
+        unreachable!("remove action returned above")
+    };
+    let Some(user) = user else {
+        return Err(AppError::Forbidden);
+    };
     let deleted: bool = sqlx::query_scalar("SELECT deleted FROM topics WHERE id=$1")
         .bind(msgid)
         .fetch_optional(&state.pool)
         .await?
         .ok_or(AppError::NotFound)?;
     if deleted {
-        return Err(AppError::BadRequest("Тема удалена".into()));
+        return Err(AppError::stUserError("Тема удалена"));
     }
     let id: i32 = sqlx::query_scalar(
         "INSERT INTO memories(userid,topic,watch) VALUES($1,$2,$3) ON CONFLICT(userid,topic,watch) DO UPDATE SET topic=EXCLUDED.topic RETURNING id",
@@ -2380,6 +2927,68 @@ pub async fn memories(
             .fetch_one(&state.pool)
             .await?;
     Ok(Json(serde_json::json!({"id": id, "count": count})))
+}
+
+#[cfg(test)]
+mod memories_contract_tests {
+    use super::{EnMemoryAction, EnMemoryMapping, enMemoryAction, enMemoryMapping};
+    use crate::error::AppError;
+
+    fn vecParameters(vecValues: &[(&str, &str)]) -> Vec<(String, String)> {
+        vecValues
+            .iter()
+            .map(|(sName, sValue)| ((*sName).to_owned(), (*sValue).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn mapping_conditions_are_resolved_before_csrf_or_binding() {
+        assert!(matches!(enMemoryMapping(&[]), Err(AppError::BadRequest(_))));
+        assert!(matches!(
+            enMemoryMapping(&vecParameters(&[("add", ""), ("remove", "")])),
+            Err(AppError::Anyhow(_))
+        ));
+    }
+
+    #[test]
+    fn selected_mapping_checks_csrf_before_required_binding() {
+        let vecAdd = vecParameters(&[("add", ""), ("msgid", "42")]);
+        assert_eq!(enMemoryMapping(&vecAdd).unwrap(), EnMemoryMapping::Add);
+        assert!(!crate::csrf::bServletCsrfValid(&vecAdd, "token"));
+        assert!(matches!(
+            enMemoryAction(&vecAdd, EnMemoryMapping::Add),
+            Err(AppError::BadRequest(_))
+        ));
+
+        let vecValidAdd = vecParameters(&[
+            ("add", ""),
+            ("msgid", "42"),
+            ("watch", "FALSE"),
+            ("csrf", "token"),
+        ]);
+        assert!(crate::csrf::bServletCsrfValid(&vecValidAdd, "token"));
+        assert_eq!(
+            enMemoryAction(&vecValidAdd, EnMemoryMapping::Add).expect("favorite action"),
+            EnMemoryAction::Add {
+                iTopicId: 42,
+                bWatch: false
+            }
+        );
+
+        let vecRemove = vecParameters(&[("remove", "")]);
+        assert!(matches!(
+            enMemoryAction(&vecRemove, EnMemoryMapping::Remove),
+            Err(AppError::BadRequest(_))
+        ));
+        assert_eq!(
+            enMemoryAction(
+                &vecParameters(&[("remove", ""), ("id", "7")]),
+                EnMemoryMapping::Remove
+            )
+            .expect("remove action"),
+            EnMemoryAction::Remove { iMemoryId: 7 }
+        );
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -2487,116 +3096,141 @@ pub async fn user_filter(
     .await
 }
 
-#[derive(Deserialize)]
-pub struct UserTagForm {
-    pub tag: Option<String>,
-    #[serde(rename = "tagName")]
-    pub tag_name: Option<String>,
-    pub del: Option<String>,
-    pub add: Option<String>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnUserFilterMapping {
+    Add,
+    Remove,
+}
+
+fn enUserFilterMapping(vecParameters: &[(String, String)]) -> Result<EnUserFilterMapping> {
+    match (
+        crate::form::get(vecParameters, "add").is_some(),
+        crate::form::get(vecParameters, "del").is_some(),
+    ) {
+        (true, false) => Ok(EnUserFilterMapping::Add),
+        (false, true) => Ok(EnUserFilterMapping::Remove),
+        (false, false) => Err(AppError::BadRequest(
+            "required add or del mapping parameter is missing".to_owned(),
+        )),
+        (true, true) => Err(AppError::Anyhow(anyhow::anyhow!(
+            "ambiguous user-filter add/delete handler"
+        ))),
+    }
+}
+
+fn sRequiredServletParameter(vecParameters: &[(String, String)], sName: &str) -> Result<String> {
+    crate::form::get(vecParameters, sName)
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| AppError::BadParameter(format!("missing {sName}")))
 }
 
 pub async fn favorite_tag(
     State(stState): State<AppState>,
     CurrentUser(optUser): CurrentUser,
-    stHeaders: HeaderMap,
     crate::csrf::CsrfToken(sCsrfToken): crate::csrf::CsrfToken,
-    Form(form): Form<UserTagForm>,
+    stRequest: Request,
 ) -> Result<Response> {
-    save_or_delete_user_tag(stState, optUser, stHeaders, form, true, sCsrfToken).await
+    user_tag_action(stState, optUser, sCsrfToken, stRequest, true).await
 }
 
 pub async fn ignore_tag(
     State(stState): State<AppState>,
     CurrentUser(optUser): CurrentUser,
-    stHeaders: HeaderMap,
     crate::csrf::CsrfToken(sCsrfToken): crate::csrf::CsrfToken,
-    Form(form): Form<UserTagForm>,
+    stRequest: Request,
 ) -> Result<Response> {
-    if optUser.as_ref().is_some_and(|stUser| stUser.canmod) {
+    user_tag_action(stState, optUser, sCsrfToken, stRequest, false).await
+}
+
+async fn user_tag_action(
+    stState: AppState,
+    optUser: Option<crate::models::UserSummary>,
+    sCsrfToken: String,
+    stRequest: Request,
+    bFavorite: bool,
+) -> Result<Response> {
+    let stHeaders = stRequest.headers().clone();
+    let vecParameters = crate::form::servlet_request_parameters(stRequest).await?;
+    // RequestMapping params selection precedes CSRF, binding and auth. Both
+    // predicates are an ambiguous handler error and must never select delete.
+    let enMapping = enUserFilterMapping(&vecParameters)?;
+    if !crate::csrf::bServletCsrfValid(&vecParameters, &sCsrfToken) {
         return Err(AppError::Forbidden);
     }
-    save_or_delete_user_tag(stState, optUser, stHeaders, form, false, sCsrfToken).await
+    let sRawTag = sRequiredServletParameter(&vecParameters, "tagName")?;
+    save_or_delete_user_tag(
+        stState,
+        optUser,
+        stHeaders,
+        sRawTag,
+        matches!(enMapping, EnUserFilterMapping::Remove),
+        bFavorite,
+        sCsrfToken,
+    )
+    .await
 }
 
 async fn save_or_delete_user_tag(
     stState: AppState,
     optUser: Option<crate::models::UserSummary>,
     stHeaders: HeaderMap,
-    form: UserTagForm,
+    sRawTag: String,
+    bDelete: bool,
     bFavorite: bool,
     sCsrfToken: String,
 ) -> Result<Response> {
     let stUser = optUser.ok_or(AppError::Forbidden)?;
-    let sRawTag = form
-        .tag_name
-        .or(form.tag)
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    if sRawTag.is_empty() {
-        return Err(AppError::BadRequest("tagName is required".into()));
+    if !bFavorite && stUser.canmod {
+        return Err(AppError::Forbidden);
     }
     let bJson = bAcceptsJson(&stHeaders);
-    let bDelete = form.del.is_some();
-    if !bDelete && form.add.is_none() {
-        return Err(AppError::NotFound);
-    }
-    let vecTags = if bJson || bDelete {
-        vec![sRawTag.to_lowercase()]
-    } else {
-        crate::routes::tags::parse_tags(&sRawTag)
-    };
-    let mut vecErrors = Vec::new();
-    let mut iLastCount = 0_i64;
-    for sTag in &vecTags {
-        if !crate::routes::tags::is_good_tag(sTag) {
-            vecErrors.push(format!("Некорректный тег: '{sTag}'"));
-            continue;
-        }
-        let sCounterFilter = if bFavorite && !bDelete {
-            " AND counter>0"
-        } else {
-            ""
+
+    // favoriteDel/ignoreDel and favoriteTagAddJSON call TagDao.getTagId with
+    // the raw request value. TagDao uses exact `value=$tag` matching: case and
+    // surrounding whitespace are observable and must never select a different
+    // persisted tag. Only the HTML multi-add path normalizes via TagName.
+    if bDelete {
+        let Some(iTagId) =
+            optMutateExactUserTag(&stState, stUser.id, &sRawTag, true, bFavorite, false).await?
+        else {
+            return Err(AppError::NotFound);
         };
-        let sSql =
-            format!("SELECT id FROM tags_values WHERE lower(value)=lower($1){sCounterFilter}");
-        let optTagId: Option<i32> = sqlx::query_scalar(sqlx::AssertSqlSafe(sSql))
-            .bind(sTag)
-            .fetch_optional(&stState.pool)
-            .await?;
-        let Some(iTagId) = optTagId else {
-            vecErrors.push(format!("Тег не найден: '{sTag}'"));
-            continue;
-        };
-        if bDelete {
-            sqlx::query("DELETE FROM user_tags WHERE user_id=$1 AND tag_id=$2 AND is_favorite=$3")
-                .bind(stUser.id)
-                .bind(iTagId)
-                .bind(bFavorite)
-                .execute(&stState.pool)
-                .await?;
-        } else {
-            sqlx::query("INSERT INTO user_tags(user_id,tag_id,is_favorite) VALUES($1,$2,$3) ON CONFLICT DO NOTHING")
-                .bind(stUser.id)
-                .bind(iTagId)
-                .bind(bFavorite)
-                .execute(&stState.pool)
-                .await?;
+        if bJson {
+            let iCount = iUserTagCount(&stState, iTagId, bFavorite).await?;
+            return Ok(Json(json!({"count": iCount})).into_response());
         }
-        iLastCount =
-            sqlx::query_scalar("SELECT count(*) FROM user_tags WHERE tag_id=$1 AND is_favorite=$2")
-                .bind(iTagId)
-                .bind(bFavorite)
-                .fetch_one(&stState.pool)
-                .await?;
+        return Ok((StatusCode::FOUND, [(header::LOCATION, "/user-filter")]).into_response());
     }
+
+    if bJson && bFavorite {
+        let Some(iTagId) =
+            optMutateExactUserTag(&stState, stUser.id, &sRawTag, false, true, true).await?
+        else {
+            return Ok(Json(json!({"error": "Tag not found"})).into_response());
+        };
+        let iCount = iUserTagCount(&stState, iTagId, true).await?;
+        return Ok(Json(json!({"count": iCount})).into_response());
+    }
+
+    let vecErrors = vecAddMultipleUserTags(&stState, stUser.id, &sRawTag, bFavorite).await?;
+
+    // ignoreTagAddJSON first runs addMultiplyTags (which normalizes and may
+    // commit several tags), then performs one more exact lookup/add using the
+    // original raw string. A failure in that second operation is returned as
+    // JSON and does not roll the preceding per-tag transactions back.
     if bJson {
-        if let Some(sError) = vecErrors.first() {
-            return Ok(Json(json!({"error": sError})).into_response());
+        if !vecErrors.is_empty() {
+            return Ok(Json(json!({"error": vecErrors.join("; ")})).into_response());
         }
-        return Ok(Json(json!({"count": iLastCount})).into_response());
+        let Some(iTagId) =
+            optMutateExactUserTag(&stState, stUser.id, &sRawTag, false, false, false).await?
+        else {
+            return Ok(Json(json!({"error": "Tag not found"})).into_response());
+        };
+        let iCount = iUserTagCount(&stState, iTagId, false).await?;
+        return Ok(Json(json!({"count": iCount})).into_response());
     }
+
     if vecErrors.is_empty() {
         return Ok((StatusCode::FOUND, [(header::LOCATION, "/user-filter")]).into_response());
     }
@@ -2627,19 +3261,135 @@ async fn save_or_delete_user_tag(
     .await
 }
 
-#[derive(Deserialize)]
-pub struct IgnoreUserForm {
-    pub id: Option<i32>,
-    pub nick: Option<String>,
-    pub del: Option<String>,
-    pub add: Option<String>,
+const S_USER_TAG_ID_EXACT: &str = "SELECT id FROM tags_values WHERE value=$1";
+const S_ACTIVE_USER_TAG_ID_EXACT: &str = "SELECT id FROM tags_values WHERE value=$1 AND counter>0";
+
+fn stParseUserTagList(sRawTags: &str) -> (Vec<String>, Vec<String>) {
+    let mut vecGoodTags = Vec::new();
+    let mut vecErrors = Vec::new();
+    for sTag in crate::routes::tags::parse_tags(sRawTags) {
+        let iJavaLength = sTag.encode_utf16().count();
+        if iJavaLength <= 32 && crate::routes::tags::is_good_tag(&sTag) {
+            vecGoodTags.push(sTag);
+        } else {
+            // parseAndValidateTags supplies the human text as defaultMessage
+            // with a null errorCode, but errorsToStringList reads getCode().
+            // Spring 6.2.19 resolves that code to the empty object name, so
+            // the observable list element is an empty string.
+            vecErrors.push(String::new());
+        }
+    }
+    if vecErrors.is_empty() && vecGoodTags.is_empty() {
+        vecErrors.push(String::new());
+    }
+    (vecGoodTags, vecErrors)
+}
+
+async fn optMutateExactUserTag(
+    stState: &AppState,
+    iUserId: i32,
+    sTag: &str,
+    bDelete: bool,
+    bFavorite: bool,
+    bSkipZero: bool,
+) -> Result<Option<i32>> {
+    let mut stTransaction = stState.pool.begin().await?;
+    let sLookup = if bSkipZero {
+        S_ACTIVE_USER_TAG_ID_EXACT
+    } else {
+        S_USER_TAG_ID_EXACT
+    };
+    let optTagId: Option<i32> = sqlx::query_scalar(sLookup)
+        .bind(sTag)
+        .fetch_optional(&mut *stTransaction)
+        .await?;
+    let Some(iTagId) = optTagId else {
+        return Ok(None);
+    };
+    if bDelete {
+        sqlx::query("DELETE FROM user_tags WHERE user_id=$1 AND tag_id=$2 AND is_favorite=$3")
+            .bind(iUserId)
+            .bind(iTagId)
+            .bind(bFavorite)
+            .execute(&mut *stTransaction)
+            .await?;
+    } else {
+        sqlx::query("INSERT INTO user_tags(user_id,tag_id,is_favorite) VALUES($1,$2,$3) ON CONFLICT DO NOTHING")
+            .bind(iUserId)
+            .bind(iTagId)
+            .bind(bFavorite)
+            .execute(&mut *stTransaction)
+            .await?;
+    }
+    stTransaction.commit().await?;
+    Ok(Some(iTagId))
+}
+
+async fn vecAddMultipleUserTags(
+    stState: &AppState,
+    iUserId: i32,
+    sRawTags: &str,
+    bFavorite: bool,
+) -> Result<Vec<String>> {
+    let (vecTags, mut vecErrors) = stParseUserTagList(sRawTags);
+    for sTag in vecTags {
+        if optMutateExactUserTag(stState, iUserId, &sTag, false, bFavorite, bFavorite)
+            .await?
+            .is_none()
+        {
+            vecErrors.push(format!("Tag not found: '{sTag}'"));
+        }
+    }
+    Ok(vecErrors)
+}
+
+async fn iUserTagCount(stState: &AppState, iTagId: i32, bFavorite: bool) -> Result<i64> {
+    Ok(
+        sqlx::query_scalar("SELECT count(*) FROM user_tags WHERE tag_id=$1 AND is_favorite=$2")
+            .bind(iTagId)
+            .bind(bFavorite)
+            .fetch_one(&stState.pool)
+            .await?,
+    )
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum EnIgnoreUserAction {
+    Add { sNick: String },
+    Remove { iUserId: i32 },
+}
+
+fn enIgnoreUserAction(
+    vecParameters: &[(String, String)],
+    enMapping: EnUserFilterMapping,
+) -> Result<EnIgnoreUserAction> {
+    match enMapping {
+        EnUserFilterMapping::Add => Ok(EnIgnoreUserAction::Add {
+            sNick: sRequiredServletParameter(vecParameters, "nick")?,
+        }),
+        EnUserFilterMapping::Remove => {
+            let sId = sRequiredServletParameter(vecParameters, "id")?;
+            Ok(EnIgnoreUserAction::Remove {
+                iUserId: sId
+                    .parse()
+                    .map_err(|_| AppError::BadParameter("invalid id".to_owned()))?,
+            })
+        }
+    }
 }
 
 pub async fn ignore_user(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
-    Form(form): Form<IgnoreUserForm>,
+    crate::csrf::CsrfToken(sCsrfToken): crate::csrf::CsrfToken,
+    stRequest: Request,
 ) -> Result<Response> {
+    let vecParameters = crate::form::servlet_request_parameters(stRequest).await?;
+    let enMapping = enUserFilterMapping(&vecParameters)?;
+    if !crate::csrf::bServletCsrfValid(&vecParameters, &sCsrfToken) {
+        return Err(AppError::Forbidden);
+    }
+    let enAction = enIgnoreUserAction(&vecParameters, enMapping)?;
     let Some(user) = user else {
         return Err(AppError::Forbidden);
     };
@@ -2647,37 +3397,144 @@ pub async fn ignore_user(
     // has no moderator restriction at all - only ignore-*tags* is
     // moderator-restricted (moderators must see every tag), see
     // ignore_tag below.
-    let ignored_id: i32 = if let Some(id) = form.id {
-        id
-    } else {
-        let nick = form.nick.unwrap_or_default();
-        sqlx::query_scalar("SELECT id FROM users WHERE lower(nick)=lower($1)")
-            .bind(nick.trim())
-            .fetch_optional(&state.pool)
-            .await?
-            .ok_or(AppError::NotFound)?
+    let (ignored_id, bDelete): (i32, bool) = match enAction {
+        EnIgnoreUserAction::Add { sNick } => (
+            sqlx::query_scalar("SELECT id FROM users WHERE nick=$1")
+                .bind(&sNick)
+                .fetch_optional(&state.pool)
+                .await?
+                .ok_or_else(|| AppError::stBadInput("указанный пользователь не существует"))?,
+            false,
+        ),
+        EnIgnoreUserAction::Remove { iUserId } => {
+            let bExists: bool =
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id=$1)")
+                    .bind(iUserId)
+                    .fetch_one(&state.pool)
+                    .await?;
+            if !bExists {
+                return Err(AppError::NotFound);
+            }
+            (iUserId, true)
+        }
     };
     if ignored_id == user.id {
-        return Err(AppError::BadRequest(
-            "нельзя игнорировать самого себя".into(),
-        ));
+        return Err(AppError::stBadInput("нельзя игнорировать самого себя"));
     }
-    if form.del.is_some() {
+    if bDelete {
         sqlx::query("DELETE FROM ignore_list WHERE userid=$1 AND ignored=$2")
             .bind(user.id)
             .bind(ignored_id)
             .execute(&state.pool)
             .await?;
-    } else if form.add.is_some() {
+    } else {
         sqlx::query("INSERT INTO ignore_list(userid,ignored) VALUES($1,$2) ON CONFLICT DO NOTHING")
             .bind(user.id)
             .bind(ignored_id)
             .execute(&state.pool)
             .await?;
-    } else {
-        return Err(AppError::NotFound);
     }
     Ok((StatusCode::FOUND, [(header::LOCATION, "/user-filter")]).into_response())
+}
+
+#[cfg(test)]
+mod user_filter_dispatch_tests {
+    use super::{
+        EnIgnoreUserAction, EnUserFilterMapping, S_ACTIVE_USER_TAG_ID_EXACT, S_USER_TAG_ID_EXACT,
+        enIgnoreUserAction, enUserFilterMapping, sRequiredServletParameter, stParseUserTagList,
+    };
+    use crate::error::AppError;
+
+    #[test]
+    fn add_delete_parameter_mappings_fail_closed_on_none_or_ambiguity() {
+        assert!(matches!(
+            enUserFilterMapping(&[]),
+            Err(AppError::BadRequest(_))
+        ));
+        assert_eq!(
+            enUserFilterMapping(&[("add".to_owned(), String::new())]).unwrap(),
+            EnUserFilterMapping::Add
+        );
+        assert_eq!(
+            enUserFilterMapping(&[("del".to_owned(), String::new())]).unwrap(),
+            EnUserFilterMapping::Remove
+        );
+        assert!(matches!(
+            enUserFilterMapping(&[
+                ("add".to_owned(), String::new()),
+                ("del".to_owned(), String::new()),
+            ]),
+            Err(AppError::Anyhow(_))
+        ));
+    }
+
+    #[test]
+    fn ignore_user_binds_only_the_selected_mappings_arguments() {
+        assert_eq!(
+            enIgnoreUserAction(
+                &[("nick".to_owned(), "alice".to_owned())],
+                EnUserFilterMapping::Add,
+            )
+            .unwrap(),
+            EnIgnoreUserAction::Add {
+                sNick: "alice".to_owned()
+            }
+        );
+        assert_eq!(
+            enIgnoreUserAction(
+                &[("id".to_owned(), "42".to_owned())],
+                EnUserFilterMapping::Remove,
+            )
+            .unwrap(),
+            EnIgnoreUserAction::Remove { iUserId: 42 }
+        );
+        assert!(matches!(
+            enIgnoreUserAction(
+                &[("id".to_owned(), "not-an-id".to_owned())],
+                EnUserFilterMapping::Remove,
+            ),
+            Err(AppError::BadParameter(_))
+        ));
+    }
+
+    #[test]
+    fn required_arguments_keep_spring_bad_parameter_status_family() {
+        assert!(matches!(
+            sRequiredServletParameter(&[], "tagName"),
+            Err(AppError::BadParameter(_))
+        ));
+    }
+
+    #[test]
+    fn only_html_multi_add_normalizes_and_preserves_java_error_codes() {
+        assert_eq!(
+            stParseUserTagList(" Linux | rust, linux "),
+            (vec!["linux".to_owned(), "rust".to_owned()], Vec::new())
+        );
+        assert_eq!(stParseUserTagList(""), (Vec::new(), vec![String::new()]));
+        assert_eq!(
+            stParseUserTagList("linux,<bad>"),
+            (vec!["linux".to_owned()], vec![String::new()])
+        );
+        assert_eq!(
+            stParseUserTagList(&"𐐀".repeat(17)),
+            (Vec::new(), vec![String::new()])
+        );
+    }
+
+    #[test]
+    fn json_and_delete_lookups_are_exact_and_favorite_add_can_skip_zero() {
+        assert_eq!(
+            S_USER_TAG_ID_EXACT,
+            "SELECT id FROM tags_values WHERE value=$1"
+        );
+        assert_eq!(
+            S_ACTIVE_USER_TAG_ID_EXACT,
+            "SELECT id FROM tags_values WHERE value=$1 AND counter>0"
+        );
+        assert!(!S_USER_TAG_ID_EXACT.contains("lower"));
+        assert!(!S_ACTIVE_USER_TAG_ID_EXACT.contains("lower"));
+    }
 }
 
 fn bAcceptsJson(stHeaders: &HeaderMap) -> bool {
@@ -2984,4 +3841,77 @@ pub async fn reset_password_form(
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
 ) -> Result<Html<String>> {
     crate::routes::auth::render_reset_password_form(csrf_token, None)
+}
+
+#[cfg(test)]
+mod explicit_error_parity_tests {
+    #[test]
+    fn legacy_handlers_keep_java_exception_families() {
+        let sSource = include_str!("legacy.rs");
+
+        let sShowReplies = sSource
+            .split(concat!("pub async fn ", "show_replies_jsp("))
+            .nth(1)
+            .unwrap()
+            .split(concat!("fn ", "render_replies_feed("))
+            .next()
+            .unwrap();
+        assert_eq!(
+            sShowReplies
+                .matches(concat!(
+                    "AppError::st",
+                    "BadInput(\"некорректное имя пользователя\")"
+                ))
+                .count(),
+            2
+        );
+
+        let sNotificationClick = sSource
+            .split(concat!("async fn ", "process_notifications_click("))
+            .nth(1)
+            .unwrap()
+            .split(concat!("pub async fn ", "notifications_click("))
+            .next()
+            .unwrap();
+        assert!(sNotificationClick.contains(concat!(
+            "AppError::stBadInput(\"invalid notification ",
+            "click range\")"
+        )));
+
+        let sActivation = sSource
+            .split(concat!("pub async fn ", "activate_post("))
+            .nth(1)
+            .unwrap()
+            .split(concat!("fn ", "render_activation_form("))
+            .next()
+            .unwrap();
+        let sNewEmailBranch = sActivation
+            .split("let Some(new_email) = email else")
+            .nth(1)
+            .unwrap()
+            .split("if !verify_activation_code")
+            .next()
+            .unwrap();
+        assert!(sNewEmailBranch.contains("return Err(AppError::Forbidden)"));
+        assert!(!sNewEmailBranch.contains("AppError::BadRequest"));
+
+        let sMemories = sSource
+            .split(concat!("pub async fn ", "memories("))
+            .nth(1)
+            .unwrap()
+            .split(concat!("#[cfg(test)]", "\nmod memories_contract_tests"))
+            .next()
+            .unwrap();
+        assert!(sMemories.contains(concat!("AppError::stUser", "Error(\"Тема удалена\")")));
+
+        let sIgnoreUser = sSource
+            .split(concat!("pub async fn ", "ignore_user("))
+            .nth(1)
+            .unwrap()
+            .split(concat!("#[cfg(test)]", "\nmod user_filter_dispatch_tests"))
+            .next()
+            .unwrap();
+        assert_eq!(sIgnoreUser.matches("AppError::stBadInput").count(), 2);
+        assert!(!sIgnoreUser.contains("AppError::BadRequest"));
+    }
 }

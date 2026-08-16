@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Поиск по сайту{% if searched %} - {{ q }}{% endif %}{% endblock %}
+{% block title %}Поиск по сайту{% if title_has_query %} - {{ q }}{% endif %}{% endblock %}
 {% block content %}
 <h1>Поиск по сайту</h1>
 <form method="get" action="/search.jsp">

@@ -19,6 +19,7 @@ use serde::Deserialize;
 #[derive(Template)]
 #[template(path = "search.html")]
 struct SearchTemplate {
+    title_has_query: bool,
     q: String,
     user: String,
     usertopic: bool,
@@ -363,6 +364,7 @@ pub async fn search(
 
     Ok(Html(
         SearchTemplate {
+            title_has_query: !bInitial,
             q: sQueryText,
             user: optCanonicalUser.unwrap_or(sRequestedUser),
             usertopic: bUserTopic,
@@ -428,5 +430,15 @@ mod tests {
         assert!(sLink.contains("q=rust%20search&oldQ=rust%20search"));
         assert!(sLink.contains("group=linux-org-ru"));
         assert!(!sLink.contains("dt="));
+    }
+
+    #[test]
+    fn binding_error_title_depends_on_query_initial_state_not_search_execution() {
+        let sTemplate = include_str!("../../templates/search.html");
+        let sController = include_str!("search.rs");
+
+        assert!(sTemplate.contains("{% if title_has_query %} - {{ q }}{% endif %}"));
+        assert!(!sTemplate.contains("{% if searched %} - {{ q }}{% endif %}"));
+        assert!(sController.contains("title_has_query: !bInitial"));
     }
 }

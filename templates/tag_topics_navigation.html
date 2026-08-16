@@ -1,0 +1,4 @@
+<div class="nav"><div style="display: table; width: 100%">
+  <div style="display: table-cell; text-align: left">{% match optPreviousLink %}{% when Some with (sLink) %}<a href="{{ sLink }}">← предыдущие</a>{% when None %}{% endmatch %}</div>
+  <div style="display: table-cell; text-align: right">{% match optNextLink %}{% when Some with (sLink) %}<a href="{{ sLink }}">следующие →</a>{% when None %}{% endmatch %}</div>
+</div></div>

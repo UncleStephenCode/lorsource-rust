@@ -156,6 +156,23 @@ where
         Ok(bSlowModeRestricted(stActor, stInfo))
     }
 
+    /// Section-level AddTopicChecker input. Unlike group posting, the caller
+    /// already has `sections.restrict_topics`, but frozen/IP checks remain
+    /// request-dependent and must not be approximated by navigation code.
+    pub async fn stCheckRestriction(
+        &self,
+        iRestriction: i32,
+        stActor: StAddTopicActor,
+        sRemoteIp: &str,
+    ) -> Result<StAddTopicPermission> {
+        let bFrozen = match stActor.optUserId {
+            Some(iUserId) => self.oRepository.bIsUserFrozen(iUserId).await?,
+            None => false,
+        };
+        let stIpBlock = self.oRepository.stIpBlockInfo(sRemoteIp).await?;
+        Ok(stCheckAddTopic(stActor, bFrozen, stIpBlock, iRestriction))
+    }
+
     /// Loads the same request-dependent inputs used by Java's AnySession and
     /// checks the maximum of group and section `restrict_topics`.
     pub async fn optCheckGroup(
@@ -203,8 +220,8 @@ mod tests {
 
         async fn stIpBlockInfo(&self, sIp: &str) -> Result<StIpBlockInfo> {
             Ok(StIpBlockInfo {
-                bBlocked: sIp == "192.0.2.1",
-                bAllowRegisteredPosting: false,
+                bBlocked: matches!(sIp, "192.0.2.1" | "192.0.2.2"),
+                bAllowRegisteredPosting: sIp == "192.0.2.2",
             })
         }
 
@@ -226,6 +243,53 @@ mod tests {
             bBlocked: false,
             iScore,
         }
+    }
+
+    fn stAnonymousActor() -> StAddTopicActor {
+        StAddTopicActor {
+            optUserId: None,
+            bAnonymous: true,
+            bModerator: false,
+            bCorrector: false,
+            bBlocked: false,
+            iScore: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn ui_restriction_check_preserves_anonymous_and_ip_block_semantics() {
+        let cService = CAddTopicService::new(CTestRepository);
+
+        assert!(
+            cService
+                .stCheckRestriction(-9999, stAnonymousActor(), "127.0.0.1")
+                .await
+                .unwrap()
+                .bPermitted()
+        );
+        assert_eq!(
+            cService
+                .stCheckRestriction(-9999, stAnonymousActor(), "192.0.2.1")
+                .await
+                .unwrap()
+                .sReason(),
+            "анонимный постинг с этого IP адреса заблокирован"
+        );
+        assert_eq!(
+            cService
+                .stCheckRestriction(-9999, stActor(1, 49), "192.0.2.2")
+                .await
+                .unwrap()
+                .sReason(),
+            "постинг с этого IP адреса ограничен для пользователей с score < 50"
+        );
+        assert!(
+            cService
+                .stCheckRestriction(-9999, stActor(1, 50), "192.0.2.2")
+                .await
+                .unwrap()
+                .bPermitted()
+        );
     }
 
     #[tokio::test]

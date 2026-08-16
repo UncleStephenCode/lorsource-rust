@@ -72,6 +72,18 @@ mod database_delta_tests {
         infra::postgres::topic_moderation_repository::CTopicModerationPgRepository,
     };
 
+    type TyUncommittedTopicRow = (
+        bool,
+        Option<i32>,
+        Option<DateTime<Utc>>,
+        DateTime<Utc>,
+        i32,
+        Option<String>,
+        Option<String>,
+        bool,
+        String,
+    );
+
     async fn vExecute(oPool: &PgPool, sSql: &str) -> anyhow::Result<()> {
         // This test helper receives only literals above or a schema name
         // generated from UUID hexadecimal digits; no request/user input can
@@ -162,17 +174,7 @@ mod database_delta_tests {
             DateTime::parse_from_rfc3339("2026-08-01T10:00:00Z")?.with_timezone(&Utc);
 
         oRepository.vUncommit(42).await?;
-        let stUncommitted: (
-            bool,
-            Option<i32>,
-            Option<DateTime<Utc>>,
-            DateTime<Utc>,
-            i32,
-            Option<String>,
-            Option<String>,
-            bool,
-            String,
-        ) = sqlx::query_as(
+        let stUncommitted: TyUncommittedTopicRow = sqlx::query_as(
             "SELECT moderate,commitby,commitdate,lastmod,groupid,url,linktext,resolved,\
                     (SELECT message FROM msgbase WHERE id=topics.id) FROM topics WHERE id=42",
         )

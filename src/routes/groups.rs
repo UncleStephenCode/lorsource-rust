@@ -8,11 +8,12 @@ use crate::{
 };
 use askama::Template;
 use axum::{
-    extract::{Path, Query, State},
-    http::Method,
-    response::{Html, IntoResponse, Redirect, Response},
+    extract::{ConnectInfo, Path, Query, State},
+    http::{HeaderMap, Method},
+    response::{Html, IntoResponse, Response},
 };
 use serde::Deserialize;
+use std::net::SocketAddr;
 
 #[derive(Template)]
 #[template(path = "groups.html")]
@@ -187,19 +188,20 @@ pub async fn group_page(
     Path(group_urlname): Path<String>,
     Query(q): Query<ForumGroupQuery>,
     CurrentUser(user): CurrentUser,
+    headers: HeaderMap,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
 ) -> Result<Response> {
     let offset = q.offset.unwrap_or(0);
     if offset < 0 {
-        return Err(AppError::BadRequest(
-            "offset не может быть отрицательным".into(),
+        return Err(AppError::BadParameter(
+            "Bad format of 'offset' offset не может быть отрицательным".into(),
         ));
     }
     if offset > MAX_GROUP_OFFSET {
-        return Ok(Redirect::to(&format!(
+        return Ok(crate::routes::stFoundRedirect(format!(
             "/forum/{}/archive",
             urlencoding::encode(&group_urlname)
-        ))
-        .into_response());
+        )));
     }
 
     // GroupController.forum: showDeleted требует авторизации +
@@ -216,10 +218,10 @@ pub async fn group_page(
             return Err(AppError::Forbidden);
         }
         if method != Method::POST {
-            return Ok(
-                Redirect::to(&format!("/forum/{}", urlencoding::encode(&group_urlname)))
-                    .into_response(),
-            );
+            return Ok(crate::routes::stFoundRedirect(format!(
+                "/forum/{}",
+                urlencoding::encode(&group_urlname)
+            )));
         }
     }
     let show_deleted = show_deleted_requested;
@@ -366,8 +368,15 @@ pub async fn group_page(
 
     let restriction: i32 = sqlx::query_scalar("SELECT GREATEST(COALESCE(g.restrict_topics,-9999),COALESCE(s.restrict_topics,-9999)) FROM groups g JOIN sections s ON s.id=g.section WHERE g.id=$1")
         .bind(group_id).fetch_one(&state.pool).await?;
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
     let add_reason =
-        crate::routes::topics::posting_reason_for_port(&state, restriction, &user).await?;
+        crate::routes::topics::posting_reason_for_port(&state, restriction, &user, &sRemoteIp)
+            .await?;
     let tag_suffix = q
         .tag
         .as_deref()
@@ -497,6 +506,8 @@ pub async fn group_archive(
     State(state): State<AppState>,
     Path(group_name): Path<String>,
     CurrentUser(user): CurrentUser,
+    headers: HeaderMap,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
 ) -> Result<Html<String>> {
     let group = forum_service(&state)
         .stGroupBySectionAndUrlName("forum", &group_name)
@@ -519,8 +530,15 @@ pub async fn group_archive(
     .bind(group.id)
     .fetch_one(&state.pool)
     .await?;
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
     let add_reason =
-        crate::routes::topics::posting_reason_for_port(&state, restriction, &user).await?;
+        crate::routes::topics::posting_reason_for_port(&state, restriction, &user, &sRemoteIp)
+            .await?;
     Ok(Html(
         crate::routes::legacy::ArchiveIndexTemplate {
             title: format!("Форум - {} - Архив", group.title),

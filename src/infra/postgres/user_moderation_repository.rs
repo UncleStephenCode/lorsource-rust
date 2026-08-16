@@ -362,6 +362,18 @@ async fn stMassDelete(
             .bind(iTargetUserId)
             .fetch_all(&mut **oTransaction)
             .await?;
+    // deleteAllAndBlock resolves and locks both candidate collections before
+    // massDelete mutates either collection. Besides preserving Java's order,
+    // this closes the window in which a concurrent new comment could otherwise
+    // be picked up after topic deletion had already started.
+    let vecCandidateCommentIds: Vec<i32> = sqlx::query_scalar(
+        r#"SELECT id FROM comments
+           WHERE userid=$1 AND NOT deleted ORDER BY id DESC FOR UPDATE"#,
+    )
+    .bind(iTargetUserId)
+    .fetch_all(&mut **oTransaction)
+    .await?;
+
     let mut vecTopicIds = Vec::with_capacity(vecCandidateTopicIds.len());
     for iTopicId in vecCandidateTopicIds {
         let stUpdated =
@@ -378,13 +390,6 @@ async fn stMassDelete(
     // Java intentionally iterates newest-to-oldest and rechecks replies after
     // each deletion. Consequently a user's reply chain can be removed from
     // the leaves upward, while a comment with any surviving reply is skipped.
-    let vecCandidateCommentIds: Vec<i32> = sqlx::query_scalar(
-        r#"SELECT id FROM comments
-           WHERE userid=$1 AND NOT deleted ORDER BY id DESC FOR UPDATE"#,
-    )
-    .bind(iTargetUserId)
-    .fetch_all(&mut **oTransaction)
-    .await?;
     let mut vecCommentIds = Vec::new();
     let mut vecSkippedCommentIds = Vec::new();
     for iCommentId in vecCandidateCommentIds {
@@ -532,4 +537,28 @@ async fn vLog(
     .execute(&mut **oTransaction)
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn mass_delete_locks_both_candidate_sets_before_its_first_mutation() {
+        let sProduction = include_str!("user_moderation_repository.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source");
+        let iTopicSelect = sProduction
+            .find("let vecCandidateTopicIds")
+            .expect("topic candidate selector");
+        let iCommentSelect = sProduction
+            .find("let vecCandidateCommentIds")
+            .expect("comment candidate selector");
+        let iFirstMutation = sProduction
+            .find("let mut vecTopicIds")
+            .expect("first mass-delete mutation loop");
+
+        assert!(iTopicSelect < iCommentSelect);
+        assert!(iCommentSelect < iFirstMutation);
+        assert!(sProduction.contains("ORDER BY id DESC FOR UPDATE"));
+    }
 }

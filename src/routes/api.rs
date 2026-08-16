@@ -11,9 +11,9 @@ use crate::{
 use askama::Template;
 use axum::{
     Json,
-    extract::{Query, State},
+    extract::{Query, Request, State},
     http::{StatusCode, header},
-    response::{Html, IntoResponse, Redirect},
+    response::{Html, IntoResponse, Response},
 };
 use axum_extra::extract::cookie::CookieJar;
 use serde::Deserialize;
@@ -574,13 +574,13 @@ pub async fn notifications_mark_read(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
     axum::Form(form): axum::Form<NotificationsResetForm>,
-) -> Result<Redirect> {
+) -> Result<Response> {
     let Some(user) = user else {
         return Err(AppError::Forbidden);
     };
     reset_unread_events(&state, user.id, form.top_id).await?;
     state.realtime.vNotifyEvents([user.id]);
-    Ok(Redirect::to("/notifications"))
+    Ok(crate::routes::stFoundRedirect("/notifications"))
 }
 
 /// GET /notifications-count (UserEventApiController.getEventsCount) - bare
@@ -588,7 +588,7 @@ pub async fn notifications_mark_read(
 pub async fn notifications_count(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
-) -> Result<Json<serde_json::Value>> {
+) -> Result<Response> {
     let Some(user) = user else {
         return Err(AppError::Forbidden);
     };
@@ -596,7 +596,80 @@ pub async fn notifications_count(
         .bind(user.id)
         .fetch_one(&state.pool)
         .await?;
-    Ok(Json(json!(count)))
+    Ok(stNoCacheJson(json!(count)))
+}
+
+pub(crate) fn stNoCacheJson(stValue: serde_json::Value) -> Response {
+    let mut stResponse = Json(stValue).into_response();
+    stResponse
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, "no-cache".parse().unwrap());
+    stResponse
+}
+
+#[cfg(test)]
+mod user_event_api_contract_tests {
+    use axum::http::{StatusCode, header};
+
+    use super::stNoCacheJson;
+
+    #[test]
+    fn authenticated_event_counters_disable_client_caching() {
+        let stResponse = stNoCacheJson(serde_json::json!(3));
+        assert_eq!(
+            stResponse
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|stValue| stValue.to_str().ok()),
+            Some("no-cache")
+        );
+        assert_eq!(
+            stResponse
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|stValue| stValue.to_str().ok()),
+            Some("application/json")
+        );
+    }
+
+    #[test]
+    fn browser_mutations_use_java_redirect_view_found_status() {
+        let stResponse = crate::routes::stFoundRedirect("/notifications");
+        assert_eq!(stResponse.status(), StatusCode::FOUND);
+        assert_eq!(
+            stResponse
+                .headers()
+                .get(header::LOCATION)
+                .and_then(|stValue| stValue.to_str().ok()),
+            Some("/notifications")
+        );
+
+        let sSource = include_str!("api.rs");
+        for (sStart, sEnd) in [
+            (
+                concat!("pub async fn ", "notifications_mark_read("),
+                concat!("/// GET ", "/notifications-count"),
+            ),
+            (
+                concat!("pub async fn ", "reactions_post("),
+                concat!("/// ReactionController.", "setCommentReactionAjax"),
+            ),
+            (
+                concat!("pub async fn ", "vote("),
+                concat!("#[cfg(test)]", "\nmod moderation_semantics_tests"),
+            ),
+        ] {
+            let sHandler = sSource
+                .split(sStart)
+                .nth(1)
+                .unwrap()
+                .split(sEnd)
+                .next()
+                .unwrap();
+            assert!(sHandler.contains("crate::routes::stFoundRedirect"));
+            assert!(!sHandler.contains("Redirect::to"));
+        }
+    }
 }
 
 /// POST /notifications-reset (UserEventApiController.resetNotifications) -
@@ -669,7 +742,9 @@ struct TrackerTopicRow {
     title: String,
     postdate: chrono::DateTime<chrono::Utc>,
     topic_author: String,
+    topic_author_blocked: bool,
     author: String,
+    author_blocked: bool,
     group_title: String,
     group_urlname: String,
     section_prefix: String,
@@ -730,6 +805,85 @@ impl TrackerTopic {
     }
 }
 
+#[cfg(test)]
+mod tracker_template_tests {
+    use askama::Template;
+
+    use super::{TrackerTemplate, TrackerTopic, TrackerTopicRow};
+
+    fn stTopic(
+        iId: i32,
+        sTopicAuthor: &str,
+        bTopicAuthorBlocked: bool,
+        sLastAuthor: &str,
+        bLastAuthorBlocked: bool,
+    ) -> TrackerTopic {
+        TrackerTopic {
+            stRow: TrackerTopicRow {
+                id: iId,
+                title: format!("topic {iId}"),
+                postdate: chrono::DateTime::parse_from_rfc3339("2026-02-03T04:05:06Z")
+                    .unwrap()
+                    .with_timezone(&chrono::Utc),
+                topic_author: sTopicAuthor.to_owned(),
+                topic_author_blocked: bTopicAuthorBlocked,
+                author: sLastAuthor.to_owned(),
+                author_blocked: bLastAuthorBlocked,
+                group_title: "Group".to_owned(),
+                group_urlname: "group".to_owned(),
+                section_prefix: "forum".to_owned(),
+                comments: 1,
+                raw_comments: 1,
+                resolved: false,
+                tags: None,
+                last_comment_id: Some(10),
+                comments_closed: false,
+                uncommitted: false,
+            },
+            iPages: 1,
+        }
+    }
+
+    fn sRenderTracker(bOldTracker: bool) -> String {
+        TrackerTemplate {
+            title: "Tracker".to_owned(),
+            filter: "main".to_owned(),
+            default_filter: "main".to_owned(),
+            topics: vec![
+                stTopic(1, "blocked-topic", true, "anonymous", false),
+                stTopic(2, "anonymous", false, "blocked-last", true),
+            ],
+            prev_link: None,
+            next_link: None,
+            is_moderator: false,
+            old_tracker: bOldTracker,
+            uncommitted: Vec::new(),
+            new_users: Vec::new(),
+            frozen_users: Vec::new(),
+            unfrozen_users: Vec::new(),
+            blocked_users: Vec::new(),
+            unblocked_users: Vec::new(),
+            recent_userpics: Vec::new(),
+            blocked_ips: Vec::new(),
+            unblocked_ips: Vec::new(),
+        }
+        .render()
+        .expect("tracker template")
+    }
+
+    #[test]
+    fn tracker_user_tag_is_plain_and_strikes_only_blocked_users() {
+        for bOldTracker in [false, true] {
+            let sHtml = sRenderTracker(bOldTracker);
+            assert!(sHtml.contains("<s>blocked-topic</s>"));
+            assert!(sHtml.contains("<s>blocked-last</s>"));
+            assert!(sHtml.contains("anonymous"));
+            assert!(!sHtml.contains("<s>anonymous</s>"));
+            assert!(!sHtml.contains("href=\"/people/"));
+        }
+    }
+}
+
 fn sTrackerOldLocation(optFilter: Option<&str>, sDefaultFilter: &str) -> String {
     // @RequestParam(defaultValue = "all") followed by
     // TrackerFilterEnum.getByValue: invalid and empty values are deliberately
@@ -763,10 +917,14 @@ async fn stTrackerProfile(
 pub async fn tracker_old_redirect(
     State(stState): State<AppState>,
     CurrentUser(optUser): CurrentUser,
-    Query(stQuery): Query<TrackerQuery>,
+    stRequest: Request,
 ) -> Result<axum::response::Response> {
+    let vecParameters = crate::form::servlet_request_parameters(stRequest).await?;
     let stProfile = stTrackerProfile(&stState, optUser.as_ref()).await?;
-    let sLocation = sTrackerOldLocation(stQuery.filter.as_deref(), &stProfile.tracker_mode);
+    let sLocation = sTrackerOldLocation(
+        crate::form::get(&vecParameters, "filter"),
+        &stProfile.tracker_mode,
+    );
     Ok((
         axum::http::StatusCode::FOUND,
         [(axum::http::header::LOCATION, sLocation)],
@@ -951,7 +1109,7 @@ pub async fn tracker(
     Query(q): Query<TrackerQuery>,
 ) -> Result<Html<String>> {
     if q.offset.unwrap_or(0) < 0 || q.offset.unwrap_or(0) > 300 {
-        return Err(AppError::BadRequest("Некорректное значение offset".into()));
+        return Err(AppError::stUserError("Некорректное значение offset"));
     }
     let offset = q.offset.unwrap_or(0).clamp(0, 300);
     // GroupListDao.getTrackerTopics uses session.profile.topics, not a
@@ -973,7 +1131,9 @@ pub async fn tracker(
     let sql = format!(
         r#"SELECT t.id, t.title,
                   GREATEST(t.postdate,COALESCE(lc.postdate,t.postdate)) AS postdate,
-                  u.nick AS topic_author, COALESCE(lu.nick,u.nick) AS author,
+                  u.nick AS topic_author, COALESCE(u.blocked,false) AS topic_author_blocked,
+                  COALESCE(lu.nick,u.nick) AS author,
+                  COALESCE(lu.blocked,u.blocked,false) AS author_blocked,
                   g.title AS group_title, g.urlname AS group_urlname,
                   CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(s.name) END AS section_prefix,
                   CASE WHEN t.postscore IS DISTINCT FROM 10002 THEN t.stat1 ELSE 0 END AS comments,
@@ -1445,44 +1605,74 @@ pub struct ReactionQuery {
     pub results: Option<String>,
 }
 
-#[derive(serde::Deserialize)]
-pub struct ReactionForm {
-    pub topic: Option<i32>,
-    pub comment: Option<i32>,
-    pub msgid: Option<i32>,
-    pub reaction: Option<String>,
-    pub value: Option<bool>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnReactionTarget {
+    Topic(i32),
+    Comment(i32),
 }
 
-fn parse_reaction_action(raw: Option<String>, value: Option<bool>) -> (String, bool) {
-    let raw = raw.unwrap_or_else(|| "+1-true".to_string());
-    if let Some((reaction, action)) = raw.rsplit_once('-')
-        && (action == "true" || action == "false")
-    {
-        return (reaction.to_string(), action == "true");
-    }
-    (raw, value.unwrap_or(true))
+fn stBindReactionPostParameters(
+    vecParameters: &[(String, String)],
+) -> Result<(EnReactionTarget, String)> {
+    // Spring chooses the comment handler by parameter presence. Otherwise it
+    // chooses the topic handler, whose `topic` argument is required. Both
+    // numeric conversion and the required `reaction` binding happen before
+    // AuthorizedOnly enters its block.
+    let enTarget = if let Some(sCommentId) = crate::form::get(vecParameters, "comment") {
+        EnReactionTarget::Comment(sCommentId.parse().map_err(|_| {
+            AppError::BadRequest("Failed to convert request parameter 'comment'".to_owned())
+        })?)
+    } else {
+        let sTopicId = crate::form::get(vecParameters, "topic").ok_or_else(|| {
+            AppError::BadRequest("Required request parameter 'topic' is missing".to_owned())
+        })?;
+        EnReactionTarget::Topic(sTopicId.parse().map_err(|_| {
+            AppError::BadRequest("Failed to convert request parameter 'topic'".to_owned())
+        })?)
+    };
+    let sReactionAction = crate::form::get(vecParameters, "reaction")
+        .ok_or_else(|| {
+            AppError::BadRequest("Required request parameter 'reaction' is missing".to_owned())
+        })?
+        .to_owned();
+    Ok((enTarget, sReactionAction))
+}
+
+fn parse_reaction_action(raw: &str) -> Result<(String, bool)> {
+    // Scala's `split("-", 2)` uses the first separator. Any action other
+    // than the exact lower-case string `true` means removal. A present value
+    // without the separator fails the Scala Array destructuring with
+    // MatchError inside AuthorizedOnly and therefore reaches the 500 resolver.
+    let (reaction, action) = raw
+        .split_once('-')
+        .ok_or_else(|| AppError::Anyhow(anyhow::anyhow!("invalid reaction action shape")))?;
+    Ok((reaction.to_owned(), action == "true"))
 }
 
 async fn resolve_reaction_target(
     pool: &sqlx::PgPool,
-    topic: Option<i32>,
-    comment: Option<i32>,
-    msgid: Option<i32>,
+    enTarget: EnReactionTarget,
 ) -> Result<(i32, Option<i32>)> {
-    if let Some(comment_id) = comment {
-        let topic_id: i32 = sqlx::query_scalar("SELECT topic FROM comments WHERE id=$1")
-            .bind(comment_id)
+    match enTarget {
+        EnReactionTarget::Comment(iCommentId) => {
+            let iTopicId: i32 = sqlx::query_scalar(
+                "SELECT c.topic FROM comments c JOIN topics t ON t.id=c.topic WHERE c.id=$1",
+            )
+            .bind(iCommentId)
             .fetch_optional(pool)
             .await?
             .ok_or(crate::error::AppError::NotFound)?;
-        return Ok((topic_id, Some(comment_id)));
+            Ok((iTopicId, Some(iCommentId)))
+        }
+        EnReactionTarget::Topic(iTopicId) => {
+            let iExistingTopicId: i32 = sqlx::query_scalar("SELECT id FROM topics WHERE id=$1")
+                .bind(iTopicId)
+                .fetch_optional(pool)
+                .await?
+                .ok_or(crate::error::AppError::NotFound)?;
+            Ok((iExistingTopicId, None))
+        }
     }
-
-    let topic_id = topic
-        .or(msgid)
-        .ok_or_else(|| crate::error::AppError::BadRequest("missing topic/comment".into()))?;
-    Ok((topic_id, None))
 }
 
 async fn reaction_target_link(
@@ -2185,6 +2375,67 @@ mod reaction_get_contract_tests {
     use chrono::TimeZone;
 
     #[test]
+    fn reaction_action_binding_matches_the_required_java_parameter() {
+        let stMissing = vec![("topic".to_owned(), "1".to_owned())];
+        assert!(matches!(
+            stBindReactionPostParameters(&stMissing),
+            Err(AppError::BadRequest(_))
+        ));
+        assert!(matches!(
+            stBindReactionPostParameters(&[("topic".to_owned(), "not-an-integer".to_owned())]),
+            Err(AppError::BadRequest(_))
+        ));
+        assert!(matches!(
+            stBindReactionPostParameters(&[
+                ("msgid".to_owned(), "1".to_owned()),
+                ("reaction".to_owned(), "👍-true".to_owned())
+            ]),
+            Err(AppError::BadRequest(_))
+        ));
+        assert!(matches!(
+            parse_reaction_action("👍"),
+            Err(AppError::Anyhow(_))
+        ));
+        assert_eq!(
+            parse_reaction_action("👍-true").expect("set reaction"),
+            ("👍".to_owned(), true)
+        );
+        assert_eq!(
+            parse_reaction_action("👍-false").expect("remove reaction"),
+            ("👍".to_owned(), false)
+        );
+        assert_eq!(
+            parse_reaction_action("👍-").expect("empty action means remove"),
+            ("👍".to_owned(), false)
+        );
+        assert_eq!(
+            parse_reaction_action("-true").expect("empty reaction is parsed before allow-list"),
+            (String::new(), true)
+        );
+        assert_eq!(
+            parse_reaction_action("👍-true-extra").expect("first separator"),
+            ("👍".to_owned(), false)
+        );
+    }
+
+    #[test]
+    fn reaction_policy_uses_java_target_then_rate_then_allow_list_precedence() {
+        assert_eq!(
+            enReactionPolicyFailure(false, true, 5, false),
+            Some(EnReactionPolicyFailure::TargetForbidden)
+        );
+        assert_eq!(
+            enReactionPolicyFailure(true, true, 5, false),
+            Some(EnReactionPolicyFailure::RateLimited)
+        );
+        assert_eq!(
+            enReactionPolicyFailure(true, true, 4, false),
+            Some(EnReactionPolicyFailure::Unsupported)
+        );
+        assert_eq!(enReactionPolicyFailure(true, false, 99, true), None);
+    }
+
+    #[test]
     fn all_mode_renders_every_choice_and_author_log_like_reactions_tag() {
         let dtSet = chrono::Utc
             .with_ymd_and_hms(2026, 8, 15, 9, 10, 11)
@@ -2266,6 +2517,32 @@ mod reaction_get_contract_tests {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnReactionPolicyFailure {
+    TargetForbidden,
+    RateLimited,
+    Unsupported,
+}
+
+fn enReactionPolicyFailure(
+    bAllowInteract: bool,
+    bSet: bool,
+    iRecentCount: i64,
+    bSupported: bool,
+) -> Option<EnReactionPolicyFailure> {
+    // ReactionController.doSet*Reaction checks these in this exact order.
+    // The precedence is observable when more than one condition is false.
+    if !bAllowInteract {
+        Some(EnReactionPolicyFailure::TargetForbidden)
+    } else if bSet && iRecentCount >= 5 {
+        Some(EnReactionPolicyFailure::RateLimited)
+    } else if !bSupported {
+        Some(EnReactionPolicyFailure::Unsupported)
+    } else {
+        None
+    }
+}
+
 async fn check_reaction_allowed(
     pool: &sqlx::PgPool,
     user_id: i32,
@@ -2274,23 +2551,6 @@ async fn check_reaction_allowed(
     set: bool,
     reaction: &str,
 ) -> Result<()> {
-    if !REACTIONS.iter().any(|(r, _)| *r == reaction) {
-        return Err(crate::error::AppError::Forbidden);
-    }
-    if set {
-        let recent: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM reactions_log WHERE origin_user=$1 AND set_date > CURRENT_TIMESTAMP - interval '10 minutes'",
-        )
-        .bind(user_id)
-        .fetch_one(pool)
-        .await?;
-        if recent >= 5 {
-            return Err(crate::error::AppError::TooManyRequests(
-                "Попробуйте позже".into(),
-            ));
-        }
-    }
-
     let (author_id, topic_deleted, topic_expired, comment_deleted, topic_postscore): (
         i32,
         bool,
@@ -2333,14 +2593,11 @@ async fn check_reaction_allowed(
     const POSTSCORE_HIDE_COMMENTS: i32 = 10002;
     let comments_hidden = comment_id.is_some() && topic_postscore == POSTSCORE_HIDE_COMMENTS;
 
-    if user_id == author_id
+    let bAllowTarget = !(user_id == author_id
         || topic_deleted
         || topic_expired
         || comment_deleted.unwrap_or(false)
-        || comments_hidden
-    {
-        return Err(crate::error::AppError::Forbidden);
-    }
+        || comments_hidden);
 
     let frozen_until: Option<chrono::DateTime<chrono::Utc>> =
         sqlx::query_scalar("SELECT frozen_until FROM users WHERE id=$1")
@@ -2348,11 +2605,38 @@ async fn check_reaction_allowed(
             .fetch_optional(pool)
             .await?
             .flatten();
-    if frozen_until
-        .map(|u| u > chrono::Utc::now())
-        .unwrap_or(false)
-    {
-        return Err(crate::error::AppError::Forbidden);
+    let bAllowInteract = bAllowTarget
+        && !frozen_until
+            .map(|u| u > chrono::Utc::now())
+            .unwrap_or(false);
+
+    // Java does not touch the rate-limit DAO when allowInteract fails.  It
+    // does query it before validating the reaction allow-list when setting.
+    let iRecentCount = if bAllowInteract && set {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM reactions_log WHERE origin_user=$1 AND set_date > CURRENT_TIMESTAMP - interval '10 minutes'",
+        )
+        .bind(user_id)
+        .fetch_one(pool)
+        .await?
+    } else {
+        0
+    };
+    match enReactionPolicyFailure(
+        bAllowInteract,
+        set,
+        iRecentCount,
+        REACTIONS.iter().any(|(r, _)| *r == reaction),
+    ) {
+        Some(EnReactionPolicyFailure::TargetForbidden | EnReactionPolicyFailure::Unsupported) => {
+            return Err(crate::error::AppError::Forbidden);
+        }
+        Some(EnReactionPolicyFailure::RateLimited) => {
+            return Err(crate::error::AppError::TooManyRequests(
+                "Попробуйте позже".into(),
+            ));
+        }
+        None => {}
     }
 
     Ok(())
@@ -2367,11 +2651,13 @@ struct SetReactionResult {
 async fn do_set_reaction(
     state: &AppState,
     user_id: i32,
-    form: ReactionForm,
+    enTarget: EnReactionTarget,
+    sReactionAction: &str,
 ) -> Result<SetReactionResult> {
-    let (topic_id, comment_id) =
-        resolve_reaction_target(&state.pool, form.topic, form.comment, form.msgid).await?;
-    let (reaction, set) = parse_reaction_action(form.reaction, form.value);
+    // TopicDao/CommentDao load the target before Scala destructures the
+    // reaction action inside doSet*Reaction.
+    let (topic_id, comment_id) = resolve_reaction_target(&state.pool, enTarget).await?;
+    let (reaction, set) = parse_reaction_action(sReactionAction)?;
     check_reaction_allowed(&state.pool, user_id, topic_id, comment_id, set, &reaction).await?;
 
     let mut tx = state.pool.begin().await?;
@@ -2503,26 +2789,30 @@ async fn do_set_reaction(
 pub async fn reactions_post(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
-    axum::Form(form): axum::Form<ReactionForm>,
-) -> Result<Redirect> {
+    stRequest: axum::extract::Request,
+) -> Result<Response> {
+    let vecParameters = crate::form::servlet_request_parameters(stRequest).await?;
+    let (enTarget, sReactionAction) = stBindReactionPostParameters(&vecParameters)?;
     let Some(user) = user else {
         return Err(AppError::Forbidden);
     };
-    let result = do_set_reaction(&state, user.id, form).await?;
+    let result = do_set_reaction(&state, user.id, enTarget, &sReactionAction).await?;
     let link = reaction_target_link(&state.pool, result.topic_id, result.comment_id).await?;
-    Ok(Redirect::to(&link))
+    Ok(crate::routes::stFoundRedirect(link))
 }
 
 /// ReactionController.setCommentReactionAjax/setTopicReactionAjax (POST /reactions/ajax).
 pub async fn reactions_post_ajax(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
-    axum::Form(form): axum::Form<ReactionForm>,
+    stRequest: axum::extract::Request,
 ) -> Result<Json<serde_json::Value>> {
+    let vecParameters = crate::form::servlet_request_parameters(stRequest).await?;
+    let (enTarget, sReactionAction) = stBindReactionPostParameters(&vecParameters)?;
     let Some(user) = user else {
         return Err(AppError::Forbidden);
     };
-    let result = do_set_reaction(&state, user.id, form).await?;
+    let result = do_set_reaction(&state, user.id, enTarget, &sReactionAction).await?;
     Ok(Json(json!({"count": result.count})))
 }
 
@@ -2533,23 +2823,58 @@ pub struct VoteForm {
     pub vote: Vec<i32>,
 }
 
+fn stPollNotFoundError() -> AppError {
+    AppError::stScriptErrorAs(
+        "Голосование не существует",
+        "ru.org.linux.poll.PollNotFoundException",
+    )
+}
+
+fn stBadVoteError(sMessage: impl Into<String>) -> AppError {
+    AppError::stScriptErrorAs(sMessage, "ru.org.linux.poll.BadVoteException")
+}
+
+fn vValidateVoteRequest(
+    bCommitted: bool,
+    bExpired: bool,
+    bMultiSelect: bool,
+    vecVotes: &[i32],
+) -> Result<()> {
+    if !bCommitted {
+        return Err(stBadVoteError("Опрос еще не подтвержден"));
+    }
+    if bExpired {
+        return Err(stBadVoteError("Опрос завершен"));
+    }
+    if vecVotes.is_empty() {
+        return Err(AppError::stUserError("ничего не выбрано"));
+    }
+    if !bMultiSelect && vecVotes.len() != 1 {
+        return Err(stBadVoteError(
+            "этот опрос допускает только один вариант ответа",
+        ));
+    }
+    Ok(())
+}
+
 /// `VoteController` rejects `!msg.commited`; `Topic.commited` is read
 /// directly from `topics.moderate` in the Java model.
 const VOTE_TOPIC_SQL: &str = r#"SELECT p.topic, p.multiselect,
           CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(s.name) END AS section_prefix,
           g.urlname,
+          t.moderate AS committed,
           NOT t.sticky AND COALESCE(t.commitdate,t.postdate) < now() - s.expire AS expired
    FROM polls p
    JOIN topics t ON t.id=p.topic
    JOIN groups g ON g.id=t.groupid
    JOIN sections s ON s.id=g.section
-   WHERE p.id=$1 AND t.moderate AND NOT t.deleted AND NOT t.draft"#;
+   WHERE p.id=$1"#;
 
 pub async fn vote(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
     body: axum::body::Bytes,
-) -> Result<axum::response::Redirect> {
+) -> Result<Response> {
     let Some(user) = user else {
         return Err(crate::error::AppError::Forbidden);
     };
@@ -2563,46 +2888,20 @@ pub async fn vote(
             .filter_map(|v| v.parse().ok())
             .collect(),
     };
-    if form.vote.is_empty() {
-        return Err(crate::error::AppError::BadRequest(
-            "ничего не выбрано".into(),
-        ));
-    }
-
-    let Some((topic_id, multiselect, section_prefix, group_urlname, expired)) =
-        sqlx::query_as::<_, (i32, bool, String, String, bool)>(VOTE_TOPIC_SQL)
+    let Some((topic_id, multiselect, section_prefix, group_urlname, committed, expired)) =
+        sqlx::query_as::<_, (i32, bool, String, String, bool, bool)>(VOTE_TOPIC_SQL)
             .bind(form.voteid)
             .fetch_optional(&state.pool)
             .await?
     else {
-        return Err(crate::error::AppError::BadRequest(
-            "опрос не найден или ещё не подтверждён".into(),
-        ));
+        return Err(stPollNotFoundError());
     };
 
-    if expired {
-        return Err(crate::error::AppError::BadRequest("Опрос завершен".into()));
-    }
-    if !multiselect && form.vote.len() != 1 {
-        return Err(crate::error::AppError::BadRequest(
-            "этот опрос допускает только один вариант ответа".into(),
-        ));
-    }
+    vValidateVoteRequest(committed, expired, multiselect, &form.vote)?;
 
     let mut selected = form.vote;
     selected.sort_unstable();
     selected.dedup();
-    let valid_count: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM polls_variants WHERE vote=$1 AND id = ANY($2)")
-            .bind(form.voteid)
-            .bind(&selected)
-            .fetch_one(&state.pool)
-            .await?;
-    if valid_count != selected.len() as i64 {
-        return Err(crate::error::AppError::BadRequest(
-            "неправильный вариант ответа".into(),
-        ));
-    }
 
     let mut tx = state.pool.begin().await?;
     let already_voted: i64 =
@@ -2612,6 +2911,16 @@ pub async fn vote(
             .fetch_one(&mut *tx)
             .await?;
     if already_voted == 0 {
+        let valid_count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM polls_variants WHERE vote=$1 AND id = ANY($2)",
+        )
+        .bind(form.voteid)
+        .bind(&selected)
+        .fetch_one(&mut *tx)
+        .await?;
+        if valid_count != selected.len() as i64 {
+            return Err(stBadVoteError("Неверный id опроса"));
+        }
         for variant_id in selected {
             let inserted = sqlx::query(
                 "INSERT INTO vote_users(vote, userid, variant_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
@@ -2633,7 +2942,7 @@ pub async fn vote(
     }
     tx.commit().await?;
 
-    Ok(axum::response::Redirect::to(&format!(
+    Ok(crate::routes::stFoundRedirect(format!(
         "/{section_prefix}/{group_urlname}/{topic_id}"
     )))
 }
@@ -2643,8 +2952,10 @@ mod moderation_semantics_tests {
     use super::{
         NotificationEvent, TRACKER_PUBLIC_TOPICS_CLAUSE, UNCOMMITTED_COUNTS_SQL, VOTE_TOPIC_SQL,
         bNotificationIsCurrent, sNotificationDetails, sTrackerOldLocation, sUnreadDescription,
-        tracker_commit_visibility_clause, vecPrepareNotifications,
+        stPollNotFoundError, tracker_commit_visibility_clause, vValidateVoteRequest,
+        vecPrepareNotifications,
     };
+    use crate::error::AppError;
 
     fn stNotification(
         iId: i32,
@@ -2819,8 +3130,54 @@ mod moderation_semantics_tests {
     }
 
     #[test]
-    fn vote_lookup_requires_a_committed_topic() {
-        assert!(VOTE_TOPIC_SQL.contains("p.id=$1 AND t.moderate AND NOT t.deleted"));
-        assert!(!VOTE_TOPIC_SQL.contains("AND NOT t.moderate"));
+    fn vote_lookup_exposes_committed_state_for_java_ordering() {
+        assert!(VOTE_TOPIC_SQL.contains("t.moderate AS committed"));
+        assert!(VOTE_TOPIC_SQL.contains("WHERE p.id=$1"));
+        assert!(!VOTE_TOPIC_SQL.contains("AND t.moderate"));
+        assert!(!VOTE_TOPIC_SQL.contains("NOT t.deleted"));
+    }
+
+    #[test]
+    fn vote_errors_preserve_java_user_and_script_classes() {
+        assert!(matches!(
+            stPollNotFoundError(),
+            AppError::ScriptError {
+                sClass: "ru.org.linux.poll.PollNotFoundException",
+                ..
+            }
+        ));
+        assert!(matches!(
+            vValidateVoteRequest(true, false, false, &[]),
+            Err(AppError::UserError { .. })
+        ));
+        for stError in [
+            vValidateVoteRequest(false, false, false, &[1]).unwrap_err(),
+            vValidateVoteRequest(true, true, false, &[1]).unwrap_err(),
+            vValidateVoteRequest(true, false, false, &[1, 2]).unwrap_err(),
+        ] {
+            assert!(matches!(
+                stError,
+                AppError::ScriptError {
+                    sClass: "ru.org.linux.poll.BadVoteException",
+                    ..
+                }
+            ));
+        }
+
+        let sHandler = include_str!("api.rs")
+            .split(concat!("pub async fn ", "vote("))
+            .nth(1)
+            .unwrap()
+            .split(concat!("#[cfg(test)]", "\nmod moderation_semantics_tests"))
+            .next()
+            .unwrap();
+        assert!(
+            sHandler.find("fetch_optional(&state.pool)").unwrap()
+                < sHandler.find("vValidateVoteRequest").unwrap()
+        );
+        assert!(
+            sHandler.find("already_voted == 0").unwrap()
+                < sHandler.find("valid_count != selected.len()").unwrap()
+        );
     }
 }

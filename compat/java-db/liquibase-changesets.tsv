@@ -1,0 +1,187 @@
+1	2011122301	hizel	sql/updates/2011-12-23-poll.xml	8:e0235ffae6539accd6263ad9bde1a32b	EXECUTED
+2	2011122302	hizel	sql/updates/2011-12-23-themed-wiki.xml	8:4b709495127210dd37361ad3f73c58a2	EXECUTED
+3	2011122501	Slava Zanko	sql/updates/2011-12-25-ban.xml	8:a5226d477b8fa23c18c500ae11bc77d9	EXECUTED
+4	2011122901	Slava Zanko	sql/updates/2011-12-29-section-scrollMode.xml	8:d3a363996a1654bd0778229afd50eb39	EXECUTED
+5	2011122902	Slava Zanko	sql/updates/2011-12-29-section-scrollMode.xml	8:2b840dbaa7dcb764eb42525f3948cf83	EXECUTED
+6	2012012401	Maxim Valyanskiy	sql/updates/2012-01-24-delscore.xml	8:0fce960a23fdd4300e2c47390f70dc50	EXECUTED
+7	2012020201	hizel	sql/updates/2012-02-02-grant-wiki.xml	8:ad4f886ce63c0c384ce493f21e5e20fc	EXECUTED
+8	2012021601	maxcom	sql/updates/2012-02-16-topic-perm-fix.xml	8:2f4c7a9cd492e37d81c424906fa50f9e	EXECUTED
+9	2012021701	Maxim Valyanskiy	sql/updates/2012-02-17-section-score.xml	8:a896dfd408890cee6ba8f696adc496ca	EXECUTED
+10	2012022801	Slava Zanko	sql/updates/2012-02-28-tags-first-letter-index.xml	8:89ca81f909ccf00c4ad6dae69c498145	EXECUTED
+11	2012031901	Slava Zanko	sql/updates/2012-03-19-tags_values-grant-delete.xml	8:942827f493f3dfdfb208b77d51af577d	EXECUTED
+12	2012032001	hizel	sql/updates/2012-03-20-grant-move-wiki-moder.xml	8:97df1604ec915dff26c6eca46191fcff	EXECUTED
+13	2012032301	Slava Zanko	sql/updates/2012-03-23-user-tags-table.xml	8:55692ef61ffd3528197e6514b67c27be	EXECUTED
+14	2012032302	Slava Zanko	sql/updates/2012-03-23-user-tags-table.xml	8:067426cbe59fb6fa6cc4160dea410f5d	EXECUTED
+15	2012032303	Slava Zanko	sql/updates/2012-03-23-user-tags-table.xml	8:7ed4688522ccd5c71c164c188c1c481e	EXECUTED
+16	2012032601	Maxim Valyanskiy	sql/updates/2012-03-26-drop-sections-preformat.xml	8:08168169f2e7039be6f07f887566ad0b	EXECUTED
+17	2012032701	Slava Zanko	sql/updates/2012-03-27-add-value-to-event_type.xml	8:b9828919b3a7bf5ffa0796dec852ac40	MARK_RAN
+18	2012033001	Slava Zanko	sql/updates/2012-03-30-add-value-to-event_type-9.1.xml	8:4f0a4c1cadfd229052bc1378648cf953	EXECUTED
+19	2012042501	Maxim Valyanskiy	sql/updates/2012-04-25-sticky-index.xml	8:2223e6740da1751cfafa76581ca4f416	EXECUTED
+20	2012050401	Maxim Valyanskiy	sql/updates/2012-05-04-comdel-to-java.xml	8:bb307e92316a1b5fdc2c6b69f21d2887	EXECUTED
+21	2012050606	Maxim Valyanskiy	sql/updates/2012-05-06-optimize-statupdate2.xml	8:408b7d5b1aeb5ec818e816086ffc74d6	EXECUTED
+22	2012050601	Maxim Valyanskiy	sql/updates/2012-05-06-remove-groups-stat4.xml	8:952adce7c0bc033bc37688bd15ec5ddf	EXECUTED
+23	2012050602	Maxim Valyanskiy	sql/updates/2012-05-06-remove-groups-stat4.xml	8:5c72257a47c5c2a8842ab9d0cf848572	EXECUTED
+24	2012050603	Maxim Valyanskiy	sql/updates/2012-05-06-remove-groups-stat4.xml	8:1762dbc42d086a241e3d152d19f67a82	EXECUTED
+25	2012050703	Slava Zanko	sql/updates/2012-05-07-add-comment-edit-info.xml	8:ef578f9507b8ba462285e7ebfd4a0030	EXECUTED
+26	2012050701	Slava Zanko	sql/updates/2012-05-07-add-edithistory-type.xml	8:258ab8f038a1e7ec680af5a5c0757ecf	EXECUTED
+27	2012050702	Slava Zanko	sql/updates/2012-05-07-add-edithistory-type.xml	8:0f3842936a5593b52a118d4a3c1df3c3	EXECUTED
+28	2012051101	Maxim Valyanskiy	sql/updates/2012-05-11-memories-type.xml	8:5450067bb663da5b6417dec495e67a87	EXECUTED
+29	2012051102	Maxim Valyanskiy	sql/updates/2012-05-11-memories-type.xml	8:8c211b75c13a344ce10da0420dba652f	EXECUTED
+30	2012051201	Maxim Valyanskiy	sql/updates/2012-05-12-memories-topic-index.xml	8:86153df62075067e8b93ac4f953833b9	EXECUTED
+31	2012060501	Maxim Valyanskiy	sql/updates/2012-06-05-remove-groups-stat2.xml	8:5ae9e89ea70b569cf2877def1f2d364e	EXECUTED
+32	2012060502	Maxim Valyanskiy	sql/updates/2012-06-05-remove-groups-stat2.xml	8:091a0ae79bffe75a9db8b56dbcf2b36e	EXECUTED
+33	2012060503	Maxim Valyanskiy	sql/updates/2012-06-05-remove-groups-stat2.xml	8:12c6cc7d238678d163e61dd66dd69191	EXECUTED
+34	2012072001	Maxim Valyanskiy	sql/updates/2012-07-20-images-table.xml	8:355b710181d04f8f2137a38993487061	EXECUTED
+35	2012072002	Maxim Valynskiy	sql/updates/2012-07-20-images-table.xml	8:ea1372d25d4bc4b4c323dff79ef3fe2f	EXECUTED
+36	2012072003	Maxim Valynskiy	sql/updates/2012-07-20-images-table.xml	8:4ecefa61f43cd375c08c8de7b0b9b0fa	EXECUTED
+37	2012072701	Maxim Valyanskiy	sql/updates/2012-07-27-drop-check-replyto.xml	8:77aedd4ab22083daafdf9c5ac744de20	EXECUTED
+38	2012082801	Maxim Valyanskiy	sql/updates/2012-08-28-add-imageallowed.xml	8:3aca050f30e6f9c401df6d8a10aba898	EXECUTED
+39	2012083001	Maxim Valyanskiy	sql/updates/2012-08-30-add-editminor.xml	8:bed46828a2e801d3aedd236fbf19002e	EXECUTED
+40	2012091310	Maxim Valyanskiy	sql/updates/2012-09-13-add-editimage.xml	8:a1a69b8e721e233485ea7d782ba0e675	EXECUTED
+41	2012091301	Maxim Valyanskiy	sql/updates/2012-09-13-add-image-delete.xml	8:5ec708644658d7856f864ed714276a93	EXECUTED
+42	2012091302	Maxim Valyanskiy	sql/updates/2012-09-13-add-image-delete.xml	8:854fb7624995df985af53635978377b2	EXECUTED
+43	2012091331	Maxim Valyanskiy	sql/updates/2012-09-13-editinfo-type-notnull.xml	8:d2869f7a97088239c1da4cd1ec4f0d4a	EXECUTED
+44	2012091801	Yury Fedorchenko	sql/updates/2012-09-18-user-of-usercomments-table.xml	8:a546f13910ab686422f46734f28aeb13	EXECUTED
+45	2012091802	Yury Fedorchenko	sql/updates/2012-09-18-user-of-usercomments-table.xml	8:19d61f0966afc99ff046ae70565b134a	EXECUTED
+46	2012091803	Yury Fedorchenko	sql/updates/2012-09-18-user-of-usercomments-table.xml	8:3095cd3a3ca0f755f0e7b11f91f2837b	EXECUTED
+47	2012091804	Yury Fedorchenko	sql/updates/2012-09-18-user-of-usercomments-table.xml	8:c895279d5af9ae2b6a70caeb78fa1f3b	EXECUTED
+48	2012100201	hizel	sql/updates/2012-10-02-security-remember-logins.xml	8:884b3a596717bacd6a6cfb75eb902cc0	EXECUTED
+49	2012100202	hizel	sql/updates/2012-10-02-security-remember-logins.xml	8:ba4138171e3ee831b401c860f93013ed	EXECUTED
+50	2012103101	hizel	sql/updates/2012-10-31-remove-remember-repo.xml	8:903b2aee3666d824fe97e75e016b4b6a	EXECUTED
+51	2012111401	Maxim Valyanskiy	sql/updates/2012-11-14-unactivated-index.xml	8:0b74d6879b5826159009f1c7914c6412	EXECUTED
+52	2013011801	Maxim Valyanskiy	sql/updates/2013-01-18-tagcloud-idx.xml	8:f2408ad365e1e6f2855476efab5fa2b4	EXECUTED
+53	2013011901	Maxim Valyanskiy	sql/updates/2013-01-19-vote_idx.xml	8:539520c07cae038d1c92ad07d8c96b21	EXECUTED
+54	2013012102	Maxim Valyanskiy	sql/updates/2013-01-21-optimize_stat_update.xml	8:a96074af3c644d7abd79db63175968e8	EXECUTED
+55	2013030101	Maxim Valyanskiy	sql/updates/2013-03-11-user_comments_count.xml	8:e99b0ecfb09049db908e8902d6b58b39	EXECUTED
+56	2013030102	Maxim Valyanskiy	sql/updates/2013-03-11-user_comments_count.xml	8:c828e19ad2d616a454d74a5d0880795d	EXECUTED
+57	2013032601	Maxim Valyanskiy	sql/updates/2013-03-26-hstore.xml	8:06f8006e59e299165ecb8dbc1fbd9b60	EXECUTED
+58	2013032602	Maxim Valyanskiy	sql/updates/2013-03-26-hstore.xml	8:5ddadde810702b65592df60237fb6f2f	EXECUTED
+59	2013032603	Maxim Valyanskiy	sql/updates/2013-03-26-hstore.xml	8:cbe20bb273a4d3eb5fa07e6576ecd02d	EXECUTED
+60	2013040105	Maxim Valyanskiy	sql/updates/2013-04-01-userlog.xml	8:97d61a274e7439ed8312f5fd7aa20dea	EXECUTED
+61	2013040106	Maxim Valyanskiy	sql/updates/2013-04-01-userlog.xml	8:58cf47e3d0b8c551bfda200a2c5e797e	EXECUTED
+62	2013040107	Maxim Valyanskiy	sql/updates/2013-04-01-userlog.xml	8:b12e7b0e6172cb94c651b30014238f75	EXECUTED
+63	2013050701	Maxim Valyanskiy	sql/updates/2013-05-07-topic_users_notified.xml	8:5d7415e40bb065aafa9ff4a37299bf0a	EXECUTED
+64	2013050702	Maxim Valynskiy	sql/updates/2013-05-07-topic_users_notified.xml	8:82c61cd5cbd3a1712acf801656991a86	EXECUTED
+65	2013050703	Maxim Valynskiy	sql/updates/2013-05-07-topic_users_notified.xml	8:4ac2ba673714e79502f70bdd56e9a093	EXECUTED
+66	2013052803	Slava Zanko	sql/updates/2013-05-28-ignored-index.xml	8:ccbeb0546adc228bcd217da2d16cf509	EXECUTED
+67	2013061901	hizel	sql/updates/2013-06-19-msg-type-field.xml	8:302cf763fd996d86873e8646c6663ce3	EXECUTED
+68	2013061902	hizel	sql/updates/2013-06-19-msg-type-field.xml	8:eca37c8e1c72924d5fd925c929ec15d5	EXECUTED
+69	2013061903	hizel	sql/updates/2013-06-19-msg-type-field.xml	8:ce2d9e4515c0552ee9a51e4ebd5ca05f	EXECUTED
+70	2013061904	hizel	sql/updates/2013-06-19-msg-type-field.xml	8:00aa1da3ed7f6d59a3317fd6dced0459	EXECUTED
+71	2013062401	Maxim Valyanskiy	sql/updates/2013-06-24-draft-field.xml	8:a44567ff8829a35112f690b5179bb455	EXECUTED
+72	2013082702	Maxim Valyanskiy	sql/updates/2013-08-27-editinfo_register.xml	8:30df09d2acad30a569564b57764a3372	EXECUTED
+73	2013091001	Maxim Valyanskiy	sql/updates/2013-09-10-tags-prefix-index.xml	8:c9fbe776ca85a062a89112e9c9d267f6	EXECUTED
+74	2013091104	Maxim Valyanskiy	sql/updates/2013-09-11-userlog-cascade.xml	8:157655913db201d01b597083caffe122	EXECUTED
+75	2013091103	Maxim Valyanskiy	sql/updates/2013-09-11-userlog-cascade.xml	8:fe1e80bfb150e5e5fd1d888cd17d6b39	EXECUTED
+76	2013092303	Maxim Valyanskiy	sql/updates/2013-09-23-drop-unused-idx.xml	8:0ef427c019fd028ba68f4042fb8ed0a1	EXECUTED
+77	2013092301	Maxim Valyanskiy	sql/updates/2013-09-23-event_delete_simplify.xml	8:ef3464899ee9e49a1ca6f6e576e40c11	EXECUTED
+78	2013092302	Maxim Valyanskiy	sql/updates/2013-09-23-userevents-indexes.xml	8:4575a6bc2bc2cea24f36a666a4ce06c4	EXECUTED
+79	2013102701	Maxim Valyanskiy	sql/updates/2013-10-27-remove-edit-trigger.xml	8:166bdee3bdcc5a0502923a5ea5884339	EXECUTED
+80	2014010701	Maxim Valyanskiy	sql/updates/2014-01-07-notop-fix.xml	8:253c8c97ecf87ccc833f5d2c111aabb5	EXECUTED
+81	2014030601	Maxim Valyanskiy	sql/updates/2014-03-06-userlog_score50.xml	8:90ae7fb86411b04f51be1190252bf855	EXECUTED
+82	2014032801	Maxim Valyanskiy	sql/updates/2014-03-28-userlog_corrector.xml	8:9a08f45b0186396525bf7c36c1266987	EXECUTED
+83	2014051301	Maxim Valyanskiy	sql/updates/2014-05-13-drop-user_comments_count.xml	8:90693133720f186732ac3679487b3cbb	EXECUTED
+84	2014072401	Maxim Valyanskiy	sql/updates/2014-07-24-drop-group-stat1.xml	8:0d2ddd637e568169bf9dc5dafa4b51ff	EXECUTED
+85	2014072402	Maxim Valyanskiy	sql/updates/2014-07-24-drop-group-stat1.xml	8:06b4d1e8e610b61f45ac88668384c774	EXECUTED
+86	2014072403	Maxim Valyanskiy	sql/updates/2014-07-24-drop-group-stat1.xml	8:b4e6c5f7ae577eb989d8049bb991fe2e	EXECUTED
+87	2014072404	Maxim Valyanskiy	sql/updates/2014-07-24-drop-group-stat1.xml	8:a4b42d4b020fbe41c63763e0f8935e36	EXECUTED
+88	2014072405	Maxim Valyanskiy	sql/updates/2014-07-24-drop-group-stat1.xml	8:fa3839196a5dc65b8c9492018296fc5c	EXECUTED
+89	2014072406	Maxim Valyanskiy	sql/updates/2014-07-24-drop-group-stat1.xml	8:1369d1eca5d59ce3342272eaa75ce996	EXECUTED
+90	2014081201	Maxim Valyanskiy	sql/updates/2014-08-12-optimize-statupdate2.xml	8:c425e48d792563e536616c0f3e9802fc	EXECUTED
+91	2014101601	Maxim Valyanskiy	sql/updates/2014-10-16-drop-unused-idx.xml	8:52ab013516cbfb36d1573c1d61272149	EXECUTED
+92	2014102701	Maxim Valyanskiy	sql/updates/2014-10-27-timestamp-timezone.xml	8:c85aad204780a2498d7d2347ccc199b5	EXECUTED
+93	2014102702	Maxim Valyanskiy	sql/updates/2014-10-27-timestamp-timezone.xml	8:ead3f118e4c6d433c34c66c88d7f5594	EXECUTED
+94	2014102703	Maxim Valyanskiy	sql/updates/2014-10-27-timestamp-timezone.xml	8:ba19b290b59563ec3419a1e626219c27	EXECUTED
+95	2014102901	Maxim Valyanskiy	sql/updates/2014-10-27-timestamp-timezone.xml	8:ebf7015a0356a7abe9e6243564e9c68b	EXECUTED
+96	2014111501	Maxim Valyanskiy	sql/updates/2014-11-15-remove-topic-deleted-column.xml	8:be281d5758178ed3d7f05e8b42cfab55	EXECUTED
+97	2014111502	Maxim Valyanskiy	sql/updates/2014-11-15-remove-topic-deleted-column.xml	8:f92db9cded867f0c7e74e22a63ec13c5	EXECUTED
+98	2014111503	Maxim Valyanskiy	sql/updates/2014-11-15-remove-topic-deleted-column.xml	8:6e1e5fffdb502134e28de4b567983049	EXECUTED
+99	2015022801	Maxim Valyanskiy	sql/updates/2015-02-28-remove-topics-stat4.xml	8:c12c5b2f0d3f56817ad1b39e24276b8e	EXECUTED
+100	2015030301	Maxim Valyanskiy	sql/updates/2015-03-03-remove-topics-stat2.xml	8:f613b4cffed07d6d5adfe8ee8ec80f42	EXECUTED
+101	2015041301	Maxim Valyanskiy	sql/updates/2015-04-13-user-remarks-fkey.xml	8:70f4cd946e40a95d2e33d1eadbc69053	EXECUTED
+102	2015081801	Maxim Valyanskiy	sql/updates/2015-08-18-image-name-idx.xml	8:bfbc6d830717780bc5fffa177ad2ec90	EXECUTED
+103	2015102901	Maxim Valyanskiy	sql/updates/2015-10-29-drop-jamwiki.xml	8:1f4cf4a0aa5d8db9f4b04ccfda5265ad	EXECUTED
+104	2015102902	Maxim Valyanskiy	sql/updates/2015-10-29-drop-jamwiki.xml	8:40c91f401677a2107e1b3d04edd997a9	EXECUTED
+105	2015102903	Maxim Valyanskiy	sql/updates/2015-10-29-drop-jamwiki.xml	8:675f20b8b4bc16b00a3f558ed9449ffe	EXECUTED
+106	2015102910	Maxim Valyanskiy	sql/updates/2015-10-29-drop-unused-idx.xml	8:ab41945613bf11c8fa8c1da738e278e5	EXECUTED
+107	2015103101	Maxim Valyanskiy	sql/updates/2015-10-31-drop-jamwiki.xml	8:554809747e9a6fab46d2e466a9821b4d	EXECUTED
+108	2015111101	Maxim Valyanskiy	sql/updates/2015-11-11-events-idx.xml	8:aae164f6f4230cfeb581a9bef3671fd1	EXECUTED
+109	2016012801	Maxim Valyanskiy	sql/updates/2016-01-28-fuzzystrmatch.xml	8:de26630be723a8833b9f56236dc59bce	EXECUTED
+110	2017021701	Maxim Valyanskiy	sql/updates/2017-02-27-images-table.xml	8:267bbd0a4a6f64be32984bc6045af234	EXECUTED
+111	2017102802	Maxim Valyanskiy	sql/updates/2017-10-28-branch-authors.xml	8:60c8e217eb4fd3310c8733a69ce39980	EXECUTED
+112	2017111301	Mikhail Klementev	sql/updates/2017-11-13-force-unlogin.xml	8:376487f83c41a72c2227e5a454d3c670	EXECUTED
+113	2018050601	Maxim Valyanskiy	sql/updates/2018-05-06-imagepost.xml	8:96a6e3bf0b73ba1b2e6c4e51b8cfc63b	EXECUTED
+114	2018050602	Maxim Valyanskiy	sql/updates/2018-05-06-imagepost.xml	8:3f2f4b8e08c2c35ceaded49f5c8fc708	EXECUTED
+115	2018050603	Maxim Valyanskiy	sql/updates/2018-05-06-imagepost.xml	8:d92ff632d4d4c917a29eb0fc6b0c4cb4	EXECUTED
+116	2018102801	Mikhail Klementev	sql/updates/2018-10-28-deleted.xml	8:e20266ff3729812c65d60d3568566025	EXECUTED
+117	2019051201	Mikhail Klementev	sql/updates/2019-05-12-grant-deleted.xml	8:2bc928c1d542088d7c473af56e1fe3ba	EXECUTED
+118	2019051201	Maxim Valyanskiy	sql/updates/2019-11-28-lastmod-notnull.xml	8:f0eb2e57c208f4e0b0b6bfdeb6719f57	EXECUTED
+119	2019051201	Maxim Valyanskiy	sql/updates/2020-01-02-no-anon.xml	8:1bdb00d9e9744863a57e2a4e9b3771c5	EXECUTED
+120	2021011701	Maxim Valyanskiy	sql/updates/2021-01-17-poll-history.xml	8:12113d37521b5651ddfe8816186d96e1	EXECUTED
+121	2021031001	Maxim Valyanskiy	sql/updates/2021-03-10-telegram.xml	8:fada8f23026c82449d9b4ec5fb8f02f4	EXECUTED
+122	2021031002	Maxim Valyanskiy	sql/updates/2021-03-10-telegram.xml	8:8466e4f7960598ec81f0f4bd0e255e70	EXECUTED
+123	2021032101	Maxim Valyanskiy	sql/updates/2021-03-10-telegram.xml	8:81ce3f66db6b8148d5ad182b0b5ba7e5	EXECUTED
+124	2021081101	Konstantin Ivanov	sql/updates/2021-08-11-frozen-users.xml	8:bbf8aac5d2ea15f0179c9b7569cb2d18	EXECUTED
+125	2021081102	Konstantin Ivanov	sql/updates/2021-08-11-frozen-users.xml	8:44b3fe96f353b1240e7bac2c829b2256	EXECUTED
+126	2021120801	maxcom	sql/updates/2021-12-09-missing-index.xml	8:e04483f28d4187052d9c3eab4cdde644	EXECUTED
+127	2021121405	maxcom	sql/updates/2021-12-14-email-normalize.xml	8:ccb8c1121f15afc6c30c62a07d2fb6b4	EXECUTED
+128	2021121451	maxcom	sql/updates/2021-12-14-email-normalize.xml	8:9a07e8974d37ff538184aeafbab718a5	EXECUTED
+129	2021121701	Maxim Valynskiy	sql/updates/2021-12-17-fix-user-delete.xml	8:0d1f4aa3bc5561cf1b1ee091e69334b3	EXECUTED
+130	2022032601	Maxim Valyanskiy	sql/updates/2022-03-26-trigger-to-code.xml	8:4eed4e652f24ad1966838d90d14927ca	EXECUTED
+131	2022040301	Maxim Valyanskiy	sql/updates/2022-04-03-invites.xml	8:17ed19df7840171f8554b87ec1879180	EXECUTED
+132	2022040303	Maxim Valyanskiy	sql/updates/2022-04-03-invites.xml	8:768a4d19b073391afb26a8370924b804	EXECUTED
+133	2022040304	Maxim Valyanskiy	sql/updates/2022-04-03-invites.xml	8:06898e408348fc15b02170a2d1a98d8c	EXECUTED
+134	2022040305	Maxim Valyanskiy	sql/updates/2022-04-03-invites.xml	8:346026c6a93a467e2cb169f0bc336146	EXECUTED
+135	2022070401	Maxim Valyanskiy	sql/updates/2022-07-04-reset-url-town.xml	8:42ff40962216e436cc57b8863c577ea3	EXECUTED
+136	2022071001	Maxim Valyanskiy	sql/updates/2022-07-10-more-add-info.xml	8:488964acca3d2b05a95d6bb4b3a69f8a	EXECUTED
+137	2022091501	Maxim Valyanskiy	sql/updates/2022-09-15-articles.xml	8:48afc38f671bec0f9be5ce70bde66c97	EXECUTED
+138	2022091502	Maxim Valyanskiy	sql/updates/2022-09-15-articles.xml	8:e137a1fb604007cf1c0db672b9ec0761	EXECUTED
+139	2022110701	Maxim Valyanskiy	sql/updates/2022-11-07-log-set-info.xml	8:5d117a59e8d4518510d88f37621780e4	EXECUTED
+140	2022112201	Maxim Valyanskiy	sql/updates/2022-11-22-reactions.xml	8:3c4a65f5840a47e766f71cd7dae728a8	EXECUTED
+141	2022112901	Maxim Valyanskiy	sql/updates/2022-11-28-group-stat-fix.xml	8:1f9cde10e0e19554a64308408e546533	EXECUTED
+142	2022113001	Maxim Valyanskiy	sql/updates/2022-11-30-reaction-events.xml	8:4fa4e339377e53cd4fe2ca0662bac97e	EXECUTED
+143	2022113003	Maxim Valyanskiy	sql/updates/2022-11-30-reaction-events.xml	8:a00054d01998aa8c77536838db383fa2	EXECUTED
+144	2023012801	Maxim Valyanskiy	sql/updates/2023-01-28-tag-synonyms.xml	8:1300bb97414f4ba5118b126e1b74b8f6	EXECUTED
+145	2023012803	Maxim Valyanskiy	sql/updates/2023-01-28-tag-synonyms.xml	8:37096676d74eb962f618ac2bf04a5e70	EXECUTED
+146	2023092303	Maxim Valyanskiy	sql/updates/2023-09-23-reactions-log.xml	8:b634badb86327ec4635838d602b1f092	EXECUTED
+147	2023092304	Maxim Valyanskiy	sql/updates/2023-09-23-reactions-log.xml	8:01cabcac817a24ed50c22287e8fdfa22	EXECUTED
+148	2023101601	Maxim Valyanskiy	sql/updates/2023-10-16-branch-authors.xml	8:376ea50a68f0f4392b04374d041a8aff	EXECUTED
+149	2023101602	Maxim Valyanskiy	sql/updates/2023-10-16-branch-authors.xml	8:a126e72b758d3fdabbac72770c3c9753	EXECUTED
+150	2024031501	Maxim Valyanskiy	sql/updates/2024-03-15-primary-image.xml	8:166aa4342af0ab44f2e18a6e209edaca	EXECUTED
+151	2024071301	Maxim Valyanskiy	sql/updates/2024-07-13-adv-count.xml	8:42bc686e16f12231c98b00da6db2f356	EXECUTED
+152	2024071303	Maxim Valyanskiy	sql/updates/2024-07-13-adv-count.xml	8:f1c4ebbc461c012b6d792988c4db5514	EXECUTED
+153	2024102603	Maxim Valyanskiy	sql/updates/2024-10-26-warnings.xml	8:0833b79dc0c5c6a2093e77bf2815fb41	EXECUTED
+154	2024110101	Maxim Valyanskiy	sql/updates/2024-10-26-warnings.xml	8:acdf739c84f8b62bb08e7963a51a5340	EXECUTED
+155	2024110102	Maxim Valyanskiy	sql/updates/2024-10-26-warnings.xml	8:e0e850ef063b4e32e0fc88814f20104c	EXECUTED
+156	2024110201	Maxim Valyanskiy	sql/updates/2024-10-26-warnings.xml	8:01cba188bfb6ad1a66d95afd770174c4	EXECUTED
+157	2024110202	Maxim Valyanskiy	sql/updates/2024-10-26-warnings.xml	8:385ff89f3784b45bad7df8a99d6e3883	EXECUTED
+158	2024110203	Maxim Valyanskiy	sql/updates/2024-10-26-warnings.xml	8:52bbca22016b9f96db182381b2ada73f	EXECUTED
+159	2024110501	Maxim Valyanskiy	sql/updates/2024-10-26-warnings.xml	8:4b06af9b31a7cc58d461972324651a74	EXECUTED
+160	2024110601	Maxim Valyanskiy	sql/updates/2024-10-26-warnings.xml	8:b1b121e8f096decb83222247e19b71ba	EXECUTED
+161	2024111001	Maxim Valyanskiy	sql/updates/2024-11-10-reset-password-action.xml	8:20c9555bc6af4caf67f39de52d1a9014	EXECUTED
+162	2024112402	Maxim Valyanskiy	sql/updates/2024-11-24-delete-events.xml	8:6c7b6d1883f1ad29a44068772d56b4c0	EXECUTED
+163	2024122401	Maxim Valyanskiy	sql/updates/2024-12-24-image-history.xml	8:30bae7d2c9b8c42c5054babfd08f80ac	EXECUTED
+164	2025042401	Maxim Valyanskiy	sql/updates/2025-04-24-warning-counters.xml	8:6a895e4dacb18127ef9ad986fa498675	EXECUTED
+165	2025042403	Maxim Valyanskiy	sql/updates/2025-04-24-warning-counters.xml	8:ed58b3a8c05849542b3f0612539be345	EXECUTED
+166	2025091701	Maxim Valyanskiy	sql/updates/2025-09-17-domain-block.xml	8:30cadcc38006d3050a64fe42f4120eb2	EXECUTED
+167	2025091702	Maxim Valyanskiy	sql/updates/2025-09-17-domain-block.xml	8:1e60ce3920de60e50c18c122a2693dae	EXECUTED
+168	2025112701	Maxim Valyanskiy	sql/updates/2025-11-27-scoreloss-idx.xml	8:5b927f4d4ff16c79659af2db4b433cda	EXECUTED
+169	2026050101	migration	sql/updates/2026-05-01-style-to-settings.xml	8:39b7504038ad91a09bc1acdbf2be490a	EXECUTED
+170	2026050102	migration	sql/updates/2026-05-01-style-to-settings.xml	8:cc3c190fedd810c112676703d26836c4	EXECUTED
+171	2026050103	Maxim Valyanskiy	sql/updates/2026-05-02-drop-main.xml	8:049eb4b90524bfba4647d858915356bc	EXECUTED
+172	2026051201	migration	sql/updates/2026-05-12-userinfo-markup.xml	8:3f1fefee7432a80ed677104f68b2d00f	EXECUTED
+173	2026051202	migration	sql/updates/2026-05-12-userinfo-markup.xml	8:d5740e52cbda2afdae9c1d93123183ba	EXECUTED
+174	2026051401	migration	sql/updates/2026-05-14-anon-no-memories.xml	8:018299eae80c49c25ca287f19909d267	EXECUTED
+175	2026051402	migration	sql/updates/2026-05-14-anon-no-memories.xml	8:ad5c96ac6a304dd68f62a4f47a3a883b	EXECUTED
+176	2026060101	migration	sql/updates/2026-06-01-user-remarks-unique.xml	8:d52e626e380b57dc0dcdf482860a0e41	EXECUTED
+177	2026061601	migration	sql/updates/2026-06-16-bcrypt-passwd.xml	8:362e51093d03f37c16d67324ef8bdce2	EXECUTED
+178	2026070201	maxcom	sql/updates/2026-07-02-linktext-unescape.xml	8:500771fe6a15ac2a30fab579159ee1dc	EXECUTED
+179	2026070202	maxcom	sql/updates/2026-07-02-linktext-unescape.xml	8:e909bf67d027918c563391a4583323e3	EXECUTED
+180	2026071401	Maxim Valyanskiy	sql/updates/2026-07-14-notifications-old.xml	8:9e15e03006c91ca6bbf9b93d658a328c	EXECUTED
+181	2026073001	Maxim Valyanskiy	sql/updates/2026-07-30-email-domains-auto.xml	8:09beb87ccee1280589970cff51ddf3e0	EXECUTED
+182	2026073002	Maxim Valyanskiy	sql/updates/2026-07-30-email-domains-auto.xml	8:186e8924444629d7a38689e6d23967bb	EXECUTED
+183	2026073003	Maxim Valyanskiy	sql/updates/2026-07-30-email-domains-auto.xml	8:60ac717b9f5afb61a2ae7aebd1cb8749	EXECUTED
+184	2026073005	Maxim Valyanskiy	sql/updates/2026-07-30-email-domains-auto.xml	8:22536a7743539bd93f4049a875fab778	EXECUTED
+185	2026073101	Maxim Valyanskiy	sql/updates/2026-07-31-users-blocked-not-null.xml	8:f2c51b759272530088fb0ca11cf01281	EXECUTED
+186	2026073102	Maxim Valyanskiy	sql/updates/2026-07-31-users-blocked-not-null.xml	8:602453115bd0fb358db1d44b37c76cc4	EXECUTED
+187	2026080501	Maxim Valyanskiy	sql/updates/2026-08-05-userlog-userpic-idx.xml	8:d52bfe13718eea6a248d7c3abc488f2d	EXECUTED

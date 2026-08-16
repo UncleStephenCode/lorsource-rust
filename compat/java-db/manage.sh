@@ -27,7 +27,8 @@ Usage: compat/java-db/manage.sh bootstrap|validate|classify
 bootstrap  Create/load only a missing or empty database after explicit
            LOR_DB_BOOTSTRAP_CONFIRM=bootstrap-empty-java-db confirmation.
            A detected Java database is validated without being updated.
-validate   Validate vendor checksums, Liquibase history and terminal changeset.
+validate   Validate vendor checksums, the canonical Liquibase identity/checksum
+           set, terminal changeset and sequence headroom without changing data.
 classify   Print missing, empty, java, legacy-rust, mixed or unknown.
 EOF
 }
@@ -229,6 +230,96 @@ vRunLiquibase() {
   mvn --batch-mode --no-transfer-progress --file "$sDir/pom.xml" "liquibase:$sGoal"
 }
 
+vValidateLiquibaseHistory() {
+  local sActualRaw sActualRequired sExpectedRequired sActualProfile sInvalidExecutions
+  sActualRaw="$(mktemp)"
+  sActualRequired="$(mktemp)"
+  sExpectedRequired="$(mktemp)"
+  sActualProfile="$(mktemp)"
+
+  cut --fields=2-5 "$sDir/liquibase-changesets.tsv" \
+    | LC_ALL=C sort >"$sExpectedRequired"
+
+  if ! LC_ALL=C psql "$JAVA_DATABASE_MIGRATION_URL" \
+    --no-psqlrc --tuples-only --no-align --quiet --set ON_ERROR_STOP=1 \
+    --command "COPY (
+      SELECT id, author, filename, md5sum
+        FROM databasechangelog
+    ) TO STDOUT" >"$sActualRaw"; then
+    rm -f "$sActualRaw" "$sActualRequired" "$sExpectedRequired" "$sActualProfile"
+    vDie "failed to read the Liquibase history"
+  fi
+  LC_ALL=C sort "$sActualRaw" >"$sActualRequired"
+
+  if ! cmp --silent "$sExpectedRequired" "$sActualRequired"; then
+    echo "Liquibase identity/checksum set differs from the canonical 187-changeSet ledger:" >&2
+    diff --unified=3 "$sExpectedRequired" "$sActualRequired" \
+      | sed -n '1,120p' >&2 || true
+    rm -f "$sActualRaw" "$sActualRequired" "$sExpectedRequired" "$sActualProfile"
+    vDie "Liquibase history has a missing, additional or non-canonical identity/path/checksum row"
+  fi
+
+  if ! sInvalidExecutions="$(sPsqlScalar "$JAVA_DATABASE_MIGRATION_URL" "
+      SELECT COALESCE(
+        string_agg(
+          format('%s/%s/%s=%s', filename, id, author, exectype),
+          E'\\n' ORDER BY filename, id, author
+        ),
+        ''
+      )
+        FROM databasechangelog
+       WHERE exectype IS NULL
+          OR exectype NOT IN ('EXECUTED', 'MARK_RAN', 'RERAN')
+    ")"; then
+    rm -f "$sActualRaw" "$sActualRequired" "$sExpectedRequired" "$sActualProfile"
+    vDie "failed to inspect Liquibase execution states"
+  fi
+  if test -n "$sInvalidExecutions"; then
+    printf '%s\n' "$sInvalidExecutions" >&2
+    rm -f "$sActualRaw" "$sActualRequired" "$sExpectedRequired" "$sActualProfile"
+    vDie "Liquibase history contains a non-successful execution state"
+  fi
+
+  if ! LC_ALL=C psql "$JAVA_DATABASE_MIGRATION_URL" \
+    --no-psqlrc --tuples-only --no-align --quiet --set ON_ERROR_STOP=1 \
+    --command "COPY (
+      SELECT
+        row_number() OVER (ORDER BY orderexecuted, id, author, filename),
+        id,
+        author,
+        filename,
+        md5sum,
+        exectype
+        FROM databasechangelog
+       ORDER BY orderexecuted, id, author, filename
+    ) TO STDOUT" >"$sActualProfile"; then
+    rm -f "$sActualRaw" "$sActualRequired" "$sExpectedRequired" "$sActualProfile"
+    vDie "failed to read the Liquibase execution profile"
+  fi
+
+  if ! cmp --silent "$sDir/liquibase-changesets.tsv" "$sActualProfile"; then
+    echo "database workflow warning: Liquibase relative order/execution profile differs from the fresh canonical bootstrap; identity/path/checksum set and successful states are compatible" >&2
+    diff --unified=3 "$sDir/liquibase-changesets.tsv" "$sActualProfile" \
+      | sed -n '1,80p' >&2 || true
+  fi
+
+  rm -f "$sActualRaw" "$sActualRequired" "$sExpectedRequired" "$sActualProfile"
+}
+
+vValidateSequenceHeadroom() {
+  local sProblems
+  sProblems="$(
+    LC_ALL=C psql "$JAVA_DATABASE_MIGRATION_URL" \
+      --no-psqlrc --tuples-only --no-align --quiet --set ON_ERROR_STOP=1 \
+      --file "$sDir/check-sequence-headroom.sql"
+  )" || vDie "failed to inspect canonical sequence headroom"
+
+  if test -n "$sProblems"; then
+    printf '%s\n' "$sProblems" >&2
+    vDie "a canonical primary-key sequence is missing its mapping or can issue an existing ID"
+  fi
+}
+
 vValidateCurrentJavaDatabase() {
   local sKind sTerminal
   sKind="$(sClassifyDatabase)"
@@ -236,6 +327,7 @@ vValidateCurrentJavaDatabase() {
     || vDie "expected a clean Java database, detected: $sKind"
 
   vRunLiquibase validate
+  vValidateLiquibaseHistory
 
   sTerminal="$(sPsqlScalar "$JAVA_DATABASE_MIGRATION_URL" "
     SELECT count(*) = 1
@@ -249,6 +341,8 @@ vValidateCurrentJavaDatabase() {
   test "$sTerminal" = "t" \
     || vDie "terminal Liquibase changeset 2026080501 is absent or has an unexpected identity/checksum"
 
+  vValidateSequenceHeadroom
+
   if test -n "$JAVA_DATABASE_RUNTIME_URL"; then
     test "$(sPsqlScalar "$JAVA_DATABASE_RUNTIME_URL" "
       SELECT to_regclass('public.users') IS NOT NULL
@@ -257,7 +351,7 @@ vValidateCurrentJavaDatabase() {
     ")" = "t" || vDie "runtime role cannot read the Java application schema"
   fi
 
-  echo "Java database validation passed through terminal changeset 2026080501."
+  echo "Java database validation passed for all 187 canonical changesets and primary-key sequence headroom."
 }
 
 vBootstrap() {

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import http.cookiejar
 import json
 import re
@@ -153,6 +154,48 @@ def require_html(response: Response, context: str) -> str:
     return response.text
 
 
+_LOOPBACK_HOST_ALIASES = frozenset(("localhost", "127.0.0.1", "::1"))
+
+
+def local_form_action_path(source: str, action: str) -> str | None:
+    """Resolve a form action while treating supported loopback hosts as one origin.
+
+    The application intentionally renders some absolute actions from PUBLIC_URL.
+    Docker's default PUBLIC_URL uses ``localhost`` while this suite defaults to
+    ``127.0.0.1``; those names address the same test deployment when their
+    scheme and effective port match.
+    """
+    if action.startswith("//") or any(
+        marker in action for marker in ("{", "}", "None", "undefined")
+    ):
+        return None
+    try:
+        st_base = urllib.parse.urlsplit(BASE)
+        source_url = urllib.parse.urljoin(BASE, source.lstrip("/"))
+        st_target = urllib.parse.urlsplit(urllib.parse.urljoin(source_url, action))
+        base_port = st_base.port or (443 if st_base.scheme == "https" else 80)
+        target_port = st_target.port or (443 if st_target.scheme == "https" else 80)
+    except ValueError:
+        return None
+
+    if (
+        st_target.scheme not in ("http", "https")
+        or st_target.scheme != st_base.scheme
+        or st_target.username is not None
+        or st_target.password is not None
+        or target_port != base_port
+    ):
+        return None
+    base_host = (st_base.hostname or "").lower()
+    target_host = (st_target.hostname or "").lower()
+    if target_host != base_host and not {
+        base_host,
+        target_host,
+    }.issubset(_LOOPBACK_HOST_ALIASES):
+        return None
+    return st_target.path or "/"
+
+
 def topic(path: str, client: Client | None = None) -> str:
     return require_html((client or ANON).request(path), path)
 
@@ -284,15 +327,41 @@ def database_interactions() -> None:
 def profiles() -> None:
     for user in MANIFEST["users"]:
         if user.get("blocked", False):
+            blocked = ANON.request(f"/people/{user['nick']}/profile")
             require(
-                ANON.request(f"/people/{user['nick']}/profile").status == 403,
+                blocked.status == 403,
                 f"anonymous blocked profile must be forbidden: {user['nick']}",
+            )
+            require(
+                blocked.headers.get("Content-Type", "").startswith("text/html")
+                and '<main id="bd">' in blocked.text
+                and f"Пользователь {user['nick']} забанен." in blocked.text
+                and "Проверка страницы заблокированного профиля" in blocked.text
+                and "начиная с" in blocked.text,
+                f"blocked profile does not use the original user-banned model: {user['nick']}",
             )
             continue
         page = require_html(ANON.request(f"/people/{user['nick']}/profile"), user["nick"])
         require(user["nick"] in page, f"profile nick missing: {user['nick']}")
     legacy = require_html(ANON.request("/people/albatross3000/profile"), "legacy profile")
     require("<script>alert(1)</script>" not in legacy, "profile stored XSS was not sanitized")
+
+    retired = ANON.request("/people/swift45/?output=rss")
+    require(retired.status == 410, f"retired user RSS returned {retired.status}")
+    require(
+        retired.headers.get("Content-Type", "").startswith("text/html")
+        and '<main id="bd">' in retired.text
+        and "RSS-фид для этой страницы удалён." in retired.text
+        and "The RSS feed for this page has been retired." in retired.text,
+        "retired user RSS does not render the original themed 410 page",
+    )
+
+    anonymous_feed = ANON.request("/people/anonymous/")
+    require(
+        anonymous_feed.status == 500
+        and "Лента для пользователя anonymous не доступна" in anonymous_feed.text,
+        "anonymous user feed does not preserve UserErrorException 500",
+    )
 
 
 @test("local userpics for all monthly fixture users")
@@ -640,8 +709,185 @@ def tag_index() -> None:
     require(ANON.request("/tags/definitely-missing-letter").status == 404, "empty tag letter is not 404")
 
 
+@test("tag aggregate, section feeds, offsets and viewer controls")
+def tag_page_and_section_contracts() -> None:
+    aggregate = require_html(ANON.request("/tag/prod-ready"), "aggregate tag page")
+    require(
+        '<h1><i class="icon-tag"></i> Метка: Prod-ready</h1>' in aggregate,
+        "aggregate tag heading differs from TagPageController",
+    )
+    # TagPageController promotes only the newest recent news item to a full
+    # card; older news and forum topics remain in the brief section lists.
+    require(
+        'id="topic-9101012"' in aggregate
+        and "/news/russia/9101002" in aggregate
+        and "/forum/games/9101003" in aggregate
+        and "Проходите ли вы игры, которые покупаете?" in aggregate,
+        "aggregate tag page does not combine its news and forum fixtures",
+    )
+    require(
+        'id="tagFavNoth" href="#"' in aggregate
+        and 'id="tagIgnNoth" href="#"' in aggregate,
+        "anonymous aggregate tag controls differ from the JSP placeholders",
+    )
+    require(
+        "/user-filter/favorite-tag" not in aggregate
+        and "/user-filter/ignore-tag" not in aggregate,
+        "aggregate tag page exposes direct mutation forms instead of /user-filter links",
+    )
+
+    aggregate_with_offset = require_html(
+        ANON.request("/tag/prod-ready?offset=-1"),
+        "aggregate tag page with an ignored offset",
+    )
+    require(
+        'id="topic-9101012"' in aggregate_with_offset
+        and "/news/russia/9101002" in aggregate_with_offset
+        and "/forum/games/9101003" in aggregate_with_offset,
+        "offset without section incorrectly selects the section-feed controller",
+    )
+
+    news = require_html(
+        ANON.request("/tag/prod-ready?section=1"),
+        "news tag section",
+    )
+    require(
+        '<h1><i class="icon-tag"></i> <a href="/tag/prod-ready">Prod-ready</a></h1>'
+        in news,
+        "news tag feed does not link its heading to the aggregate page",
+    )
+    require(
+        'href="/tag/prod-ready?section=1" class="btn btn-selected"' in news,
+        "news tag section is not selected in section navigation",
+    )
+    require(
+        'id="topic-9101002"' in news and 'id="topic-9101003"' not in news,
+        "news tag feed is not isolated from forum topics",
+    )
+
+    forum = require_html(
+        ANON.request("/tag/prod-ready?section=2"),
+        "forum tag section",
+    )
+    require('class="tracker"' in forum, "forum tag feed does not use tracker DOM")
+    require(
+        'href="/tag/prod-ready?section=2" class="btn btn-selected"' in forum,
+        "forum tag section is not selected in section navigation",
+    )
+    require(
+        "/forum/games/9101003" in forum
+        and "Проходите ли вы игры, которые покупаете?" in forum
+        and 'id="topic-9101002"' not in forum,
+        "forum tag feed is not isolated from news topics",
+    )
+
+    news_at_zero = require_html(
+        ANON.request("/tag/prod-ready?section=1&offset=0"),
+        "news tag section at zero offset",
+    )
+    news_at_negative = require_html(
+        ANON.request("/tag/prod-ready?section=1&offset=-1"),
+        "news tag section at negative offset",
+    )
+    require(
+        'id="topic-9101002"' in news_at_zero
+        and 'id="topic-9101002"' in news_at_negative,
+        "TopicListService.fixOffset compatibility does not clamp a negative offset to zero",
+    )
+
+    for path, label in (
+        ("/tag/prod-ready?section=", "empty section"),
+        ("/tag/prod-ready?section=0", "zero section"),
+    ):
+        require(
+            ANON.request(path).status == 404,
+            f"{label} does not use the source not-found 404 contract",
+        )
+
+    for path, label in (
+        ("/tag/prod-ready?section=invalid", "malformed section"),
+        ("/tag/prod-ready?section=1&offset=invalid", "malformed offset"),
+    ):
+        require(
+            ANON.request(path).status == 400,
+            f"{label} does not use the live Spring binding 400 contract",
+        )
+
+    registered = Client(BASE)
+    registered.login("lark70")
+    registered_aggregate = require_html(
+        registered.request("/tag/prod-ready"),
+        "registered aggregate tag page",
+    )
+    for fragment in (
+        'id="tagFavAdd" href="/user-filter?newFavoriteTagName=prod-ready"',
+        'id="tagIgnore" href="/user-filter?newIgnoreTagName=prod-ready"',
+    ):
+        require(fragment in registered_aggregate, f"registered aggregate control is absent: {fragment}")
+    require(
+        'id="tagFavNoth"' not in registered_aggregate
+        and 'id="tagIgnNoth"' not in registered_aggregate,
+        "registered aggregate tag page still renders anonymous placeholders",
+    )
+
+    registered_news = require_html(
+        registered.request("/tag/prod-ready?section=1"),
+        "registered news tag section",
+    )
+    require(
+        'id="tagFavAdd" href="/user-filter?newFavoriteTagName=prod-ready"'
+        in registered_news
+        and 'id="tagIgnore" href="/user-filter?newIgnoreTagName=prod-ready"'
+        in registered_news,
+        "registered section tag controls differ from the aggregate/JSP contract",
+    )
+
+    stored = Client(BASE)
+    stored.login("robin201")
+    favorite = require_html(
+        stored.request("/tag/linux%20foundation"),
+        "stored favorite tag state",
+    )
+    ignored = require_html(
+        stored.request("/tag/%D0%B8%D0%B3%D1%80%D1%8B"),
+        "stored ignored tag state",
+    )
+    require(
+        'id="tagFavAdd" href="/user-filter" class="selected"' in favorite,
+        "stored favorite does not render the selected removal control",
+    )
+    require(
+        'id="tagIgnore" href="/user-filter" class="selected"' in ignored,
+        "stored ignored tag does not render the selected removal control",
+    )
+
+
 @test("canonical content routes")
 def canonical_routes() -> None:
+    home_response = ANON.request("/")
+    require_html(home_response, "canonical home page")
+    require(
+        home_response.headers.get("X-Frame-Options") == "DENY",
+        "global X-Frame-Options does not match the pinned Spring Security response",
+    )
+    require(
+        home_response.headers.get("X-XSS-Protection") == "0",
+        "global Spring Security X-XSS-Protection compatibility header is absent",
+    )
+    require(
+        home_response.headers.get("Expires")
+        == "Thu, 01 Jan 1970 00:00:00 GMT",
+        "dynamic response does not preserve the Java expiry header",
+    )
+    require(
+        home_response.headers.get("X-Content-Type-Options") == "nosniff",
+        "global X-Content-Type-Options is absent",
+    )
+    require(
+        "frame-ancestors 'self'"
+        in home_response.headers.get("Content-Security-Policy", ""),
+        "global CSP frame-ancestors policy is absent",
+    )
     for fixture in MANIFEST["topics"]:
         page = topic(fixture["path"])
         require(str(fixture["id"]) in page, f"topic id missing: {fixture['path']}")
@@ -721,23 +967,67 @@ def galleries() -> None:
 
 @test("comment actions follow viewer security restrictions")
 def comment_action_visibility() -> None:
-    anonymous_home = require_html(ANON.request("/"), "anonymous home page")
+    unrestricted_feed_path = db(
+        "SELECT CASE s.id WHEN 1 THEN '/news/' WHEN 2 THEN '/forum/' "
+        "WHEN 3 THEN '/gallery/' WHEN 5 THEN '/polls/' WHEN 6 THEN '/articles/' END||g.urlname "
+        "FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section "
+        "WHERE t.id=9101014"
+    )
+    unrestricted_feed = require_html(
+        ANON.request(unrestricted_feed_path), "anonymous unrestricted feed"
+    )
+    unrestricted_card = re.search(
+        r'<article class="news" id="topic-9101014">(.*?)</article>',
+        unrestricted_feed,
+        re.S,
+    )
     require(
-        "comment-message.jsp?topic=" not in anonymous_home,
-        "anonymous user sees an add-comment action in the topic feed",
+        unrestricted_card is not None
+        and "5 комментариев" in unrestricted_card.group(1)
+        and "comment-message.jsp?topic=9101014" not in unrestricted_card.group(1),
+        "feed card does not follow the Java existing-comments action contract",
     )
     anonymous_topic = topic("/forum/games/9101003")
     require(
-        re.search(r">\s*Ответить\s*</a>", anonymous_topic) is None,
-        "anonymous user sees a reply action on the topic page",
+        re.search(r">\s*Ответить\s*</a>", anonymous_topic) is not None,
+        "anonymous user does not see a reply action on an unrestricted topic",
     )
     require(
-        'id="commentForm"' not in anonymous_topic,
-        "anonymous user receives the inline comment form",
+        'id="commentForm"' in anonymous_topic
+        and 'name="nick"' in anonymous_topic
+        and 'name="password"' in anonymous_topic
+        and re.search(
+            r'<input[^>]*name="password"[^>]*></div><div class="help-block">.*?</div>',
+            anonymous_topic,
+            re.S,
+        )
+        is not None,
+        "anonymous unrestricted topic omits the inline identity form",
     )
     require(
-        "/js/add-form.js" not in anonymous_topic,
-        "anonymous topic page loads the reply-form script",
+        "/js/add-form.js" in anonymous_topic,
+        "anonymous unrestricted topic does not load the reply-form script",
+    )
+
+    restricted_topic = topic("/news/opensource/9101012")
+    require(
+        'id="commentForm"' not in restricted_topic
+        and re.search(r">\s*Ответить\s*</a>", restricted_topic) is None,
+        "registered-only topic exposes anonymous reply controls",
+    )
+    require(
+        "Для того чтобы оставить комментарий" in restricted_topic
+        and "register.jsp" in restricted_topic,
+        "registered-only topic omits the Java login/register invite",
+    )
+    restricted_feed = require_html(ANON.request("/news/opensource"), "anonymous restricted feed")
+    restricted_card = re.search(
+        r'<article class="news" id="topic-9101012">(.*?)</article>', restricted_feed, re.S
+    )
+    require(
+        restricted_card is not None
+        and "comment-message.jsp?topic=9101012" not in restricted_card.group(1),
+        "registered-only feed card exposes an anonymous comment action",
     )
 
     registered = Client(BASE)
@@ -786,10 +1076,61 @@ def comment_action_visibility() -> None:
         '/delete_comment.jsp?msgid=9102004' in moderator_topic,
         "moderator does not see the comment delete action",
     )
+    require(
+        'itemprop="creator"' in moderator_topic
+        and '<br class="visible-phone"> <span class="hideon-phone">(</span>' in moderator_topic,
+        "comment sign differs from the Java mobile/user DOM",
+    )
+    require(
+        'sameip.jsp?ip=198.51.100.4' in moderator_topic
+        and 'prod-ready-browser/1.0' in moderator_topic
+        and 'sameip.jsp?ua=' in moderator_topic,
+        "moderator comment IP/User-Agent metadata is absent",
+    )
+    require(
+        "Новый пользователь: проверить ограничения score=45" in moderator_topic,
+        "viewer-owned comment author remark is absent",
+    )
+    require(
+        "[Нарушение правил] Проверка DOM предупреждения" in moderator_topic
+        and 'class="clear-warning-form"' in moderator_topic,
+        "prepared comment warning DOM is absent",
+    )
+
+    edit_fixture = db(
+        "SELECT '/'||CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' "
+        "WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' END||"
+        "'/'||g.urlname||'/'||t.id "
+        "FROM comments c JOIN topics t ON t.id=c.topic JOIN groups g ON g.id=t.groupid "
+        "JOIN sections s ON s.id=g.section WHERE c.id=9102014"
+    )
+    edited_topic = topic(edit_fixture, moderator)
+    require(
+        "Последнее исправление:" in edited_topic
+        and f'{edit_fixture}/9102014/history' in edited_topic
+        and "исправлений: 1" in edited_topic,
+        "comment edit summary/history link is absent",
+    )
 
 
 @test("comment forms, preview and reply target validation")
 def comment_form_contracts() -> None:
+    anonymous_edit = ANON.request(
+        "/edit_comment?topic=9101003&original=9102004"
+    )
+    require(
+        anonymous_edit.status == 403 and anonymous_edit.headers.get("Location") is None,
+        "anonymous edit-comment must use the Java AuthorizedOnly 403 contract",
+    )
+    restricted_form = require_html(
+        ANON.request("/add_comment.jsp?topic=9101012"),
+        "restricted anonymous comment form",
+    )
+    require(
+        "Это сообщение нельзя комментировать" in restricted_form,
+        "GET comment validation escaped as HTTP error instead of BindingResult form",
+    )
+
     client = Client(BASE)
     client.login("crane2000")
 
@@ -816,6 +1157,32 @@ def comment_form_contracts() -> None:
     require(
         'name="replyto" value="9102004"' in reply_form,
         "reply form loses its parent comment id",
+    )
+
+    stale_edit = client.request(
+        "/edit_comment?topic=9101003&original=9102004"
+    )
+    require(
+        stale_edit.status == 302
+        and stale_edit.headers.get("Location")
+        == "/forum/games/9101003?cid=9102004",
+        "non-editable GET comment did not use the Java topic redirect",
+    )
+    stale_edit_post = require_html(
+        client.request(
+            "/edit_comment",
+            "POST",
+            [
+                ("topic", "9101003"),
+                ("original", "9102004"),
+                ("msg", "unchanged old comment"),
+            ],
+        ),
+        "non-editable POST comment form",
+    )
+    require(
+        "Истек срок редактирования" in stale_edit_post,
+        "non-editable POST comment escaped as HTTP error instead of form validation",
     )
 
     preview = client.request(
@@ -1095,7 +1462,18 @@ def topic_dom_contract() -> None:
     require(re.search(r'<div class="messages"[^>]*>\s*<article class="msg"', page) is not None, "topic is outside .messages")
     require('<link rel="canonical"' in page, "canonical link is absent")
     require('property="og:title"' in page, "OpenGraph title is absent")
-    require("/js/add-form.js" not in page, "anonymous page loads authenticated reply controls")
+    require('property="og:description"' in page, "OpenGraph description is absent")
+    require('property="og:tag"' in page, "OpenGraph tag metadata is absent")
+    require(
+        'property="article:section" content="Форум: Games"' in page,
+        "article section metadata does not include section and group",
+    )
+    require("initNextPrevKeys()" in page, "topic keyboard navigation is not initialized")
+    require('id="interpage"' in page and "init_interpage_adv(ads)" in page, "interpage ad hook is absent")
+    require(
+        "/js/add-form.js" in page and 'id="commentForm"' in page,
+        "unrestricted anonymous topic omits Java reply controls",
+    )
     require("/login.jsp?from=" in page, "header login link does not preserve current URL")
     require(
         re.search(r'>oriole300</a>\s*<span class="stars">★★★</span>', page) is not None,
@@ -1104,6 +1482,92 @@ def topic_dom_contract() -> None:
     require(
         re.search(r'>crane2000</a>\s*<span class="stars">★★★★★</span>', page) is not None,
         "comment author score stars are absent",
+    )
+
+    page_minus_one = ANON.request("/forum/games/9101003/page-1")
+    require(page_minus_one.status == 302, "page-1 does not redirect to the canonical topic")
+    require(
+        page_minus_one.headers.get("Location", "").endswith("/forum/games/9101003"),
+        "page-1 redirect target is not the canonical topic",
+    )
+
+
+@test("topic scrollers, ignored subtree filter and deleted-comments POST contract")
+def topic_navigation_filter_deleted_contract() -> None:
+    scroller_path = db(
+        "SELECT '/forum/'||g.urlname||'/'||t.id FROM topics t "
+        "JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section "
+        "WHERE s.id=2 AND s.scroll_mode='GROUP' AND NOT t.deleted AND NOT t.draft "
+        "AND NOT t.sticky AND t.stat1>0 AND EXISTS (SELECT 1 FROM topics n "
+        "WHERE n.groupid=t.groupid AND NOT n.deleted AND NOT n.draft AND NOT n.sticky "
+        "AND n.postdate<>t.postdate) ORDER BY t.id LIMIT 1"
+    )
+    require(scroller_path != "", "no DB-derived forum topic is available for scroller coverage")
+    scroller_page = topic(scroller_path)
+    require('class="scroller-row"' in scroller_page, "topic scroller DOM is absent")
+    require('class="scroller-arrow"' in scroller_page, "topic scroller has no adjacent link")
+
+    ignored_fixture = db(
+        "SELECT viewer.nick||'|'||"
+        "CASE s.id WHEN 1 THEN '/news/' WHEN 2 THEN '/forum/' WHEN 3 THEN '/gallery/' "
+        "WHEN 5 THEN '/polls/' WHEN 6 THEN '/articles/' END||g.urlname||'/'||t.id||'|'||"
+        "parent.id||'|'||child.id FROM ignore_list il "
+        "JOIN users viewer ON viewer.id=il.userid "
+        "JOIN comments parent ON parent.userid=il.ignored AND NOT parent.deleted "
+        "JOIN comments child ON child.replyto=parent.id AND NOT child.deleted "
+        "JOIN topics t ON t.id=parent.topic AND t.id=child.topic "
+        "JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section "
+        "WHERE viewer.id BETWEEN 9100001 AND 9100050 "
+        "AND NOT t.deleted AND NOT t.draft AND COALESCE(t.postscore,-9999)<>10002 "
+        "AND (SELECT count(*) FROM comments direct_child "
+        "WHERE direct_child.replyto=parent.id AND NOT direct_child.deleted)=1 "
+        "ORDER BY t.id,parent.id LIMIT 1"
+    )
+    require(ignored_fixture != "", "no DB-derived ignored reply subtree is available")
+    viewer_nick, ignored_path, parent_id, child_id = ignored_fixture.split("|")
+    viewer = Client(BASE)
+    viewer.login(viewer_nick)
+    filtered_page = topic(ignored_path, viewer)
+    require(f'id="comment-{parent_id}"' not in filtered_page, "ignored parent is still rendered")
+    require(f'id="comment-{child_id}"' not in filtered_page, "ignored reply subtree is still rendered")
+    shown_page = topic(f"{ignored_path}?filter=show", viewer)
+    require(f'id="comment-{parent_id}"' in shown_page, "filter=show does not restore ignored parent")
+    require(f'id="comment-{child_id}"' in shown_page, "filter=show does not restore ignored child")
+    single_answer_hrefs = {
+        html.unescape(value)
+        for value in re.findall(
+            r'<a href="([^"]+)" data-samepage="(?:true|false)">\s*Показать ответ\s*</a>',
+            shown_page,
+        )
+    }
+    require(
+        f"{ignored_path}?filter=show&cid={child_id}" in single_answer_hrefs,
+        "single-answer link does not preserve filter=show",
+    )
+
+    eligible = Client(BASE)
+    eligible.login("crane2000")
+    live_page = topic("/forum/games/9101003", eligible)
+    require(
+        'action="/forum/games/9101003" method="POST"' in live_page
+        and 'name="deleted" value="1"' in live_page,
+        "deleted-comments action is not the source POST form",
+    )
+    deleted_get = eligible.request("/forum/games/9101003?deleted=1")
+    require(deleted_get.status == 302, "eligible non-moderator GET deleted view is not canonicalized")
+    deleted_post = require_html(
+        eligible.request(
+            "/forum/games/9101003",
+            "POST",
+            [("deleted", "1")],
+        ),
+        "eligible deleted-comments POST",
+    )
+    require('id="comment-9102015"' in deleted_post, "deleted-comments POST omits deleted comment")
+    deleted_card = re.search(r'id="comment-9102015"(.*?)</article>', deleted_post, re.S)
+    require(
+        deleted_card is not None and "👍" in deleted_card.group(1),
+        "deleted comment loses its reaction display",
     )
 
 
@@ -1152,8 +1616,145 @@ def authorization() -> None:
     moderator = Client(BASE)
     moderator.login("hawk_moderator")
     require(moderator.request("/commit.jsp?msgid=9101001").status == 200, "moderator cannot open commit form")
-    require(moderator.request("/groupmod.jsp?group=126").status == 200, "moderator cannot edit group")
+    single_group = moderator.request("/add-section.jsp?section=5")
+    require(
+        single_group.status == 302
+        and single_group.headers.get("Location") == "/add.jsp?group=19387",
+        "single-group add-section redirect differs from SectionController",
+    )
+    groupmod = require_html(
+        moderator.request("/groupmod.jsp?group=126"),
+        "moderator group settings",
+    )
+    require('id="groupModForm" action="groupmod.jsp" method="POST"' in groupmod, "groupmod form contract differs")
+    for field in (
+        'name="group" value="126"',
+        'name="title"',
+        'name="info"',
+        'name="urlName"',
+        'name="longinfo"',
+        'name="resolvable"',
+        'name="csrf"',
+    ):
+        require(field in groupmod, f"groupmod field is absent: {field}")
+    require(
+        moderator.request("/groupmod.jsp").status == 404
+        and moderator.request("/groupmod.jsp?group=invalid").status == 404,
+        "groupmod required numeric binding differs from the original bad-parameter contract",
+    )
     require(ordinary.request("/groupmod.jsp?group=126").status == 403, "ordinary user can edit group")
+
+    same_ip = require_html(
+        # Comment 9102014 is inside SameIPController's five-day window.
+        # Comment 9102004 at 5 days 20 hours is intentionally outside it and
+        # therefore cannot exercise the JSP's `not empty comments` delete form.
+        moderator.request("/sameip.jsp?ip=198.51.100.14"),
+        "moderator same-IP workflow",
+    )
+    for fragment in (
+        '<form action="sameip.jsp">',
+        'action="delip.jsp"',
+        'action="banip.jsp"',
+        'name="ip" value="198.51.100.14"',
+        'name="ban_time"',
+        'name="ban_mode"',
+        'name="allow_posting"',
+        'name="captcha_required"',
+        'name="csrf"',
+        "function banTimeChange",
+        "/admin/geoip?ip=198.51.100.14",
+        "/people/eagle_moderator/profile",
+        "Вожусь с Terraform: тест локального mirror",
+    ):
+        require(fragment in same_ip, f"same-IP workflow fragment is absent: {fragment}")
+    require(
+        "Re: Terraform mirror" not in same_ip,
+        "same-IP result uses the comment title instead of the Java topic title",
+    )
+    same_ip_root = require_html(moderator.request("/sameip.jsp"), "same-IP search form")
+    require(
+        'action="delip.jsp"' not in same_ip_root and 'action="banip.jsp"' not in same_ip_root,
+        "same-IP mutation controls are visible without an exact IP",
+    )
+    require_html(
+        moderator.request("/sameip.jsp?mask=33"),
+        "same-IP ignores mask without an IP",
+    )
+    invalid_ip = moderator.request("/sameip.jsp?ip=not-an-ip")
+    require(
+        invalid_ip.status == 500 and "not ip" in invalid_ip.text,
+        "same-IP invalid address does not preserve BadInputException 500",
+    )
+    invalid_mask = moderator.request("/sameip.jsp?ip=198.51.100.4&mask=33")
+    require(
+        invalid_mask.status == 500 and "bad mask" in invalid_mask.text,
+        "same-IP invalid mask does not preserve BadInputException 500",
+    )
+    require(ordinary.request("/sameip.jsp?ip=198.51.100.4").status == 403, "ordinary user can open same-IP moderation")
+
+
+@test("explicit Java user errors keep visible 500 responses without mutation")
+def explicit_user_error_contracts() -> None:
+    for path in ("/tracker?offset=-1", "/tracker/?offset=301"):
+        response = ANON.request(path)
+        require(
+            response.status == 500 and "Некорректное значение offset" in response.text,
+            f"tracker invalid offset differs from UserErrorException: {path}",
+        )
+
+    moderator = Client(BASE)
+    moderator.login("hawk_moderator")
+    invalid_domain_offset = moderator.request("/admin/email-domains?offset=-1")
+    require(
+        invalid_domain_offset.status == 500 and "Wrong offset" in invalid_domain_offset.text,
+        "email-domain offset does not preserve BadInputException 500",
+    )
+    invalid_domain = moderator.request(
+        "/admin/email-domains/add", "POST", [("domain", "invalid_domain!")]
+    )
+    require(
+        invalid_domain.status == 500 and "Invalid domain" in invalid_domain.text,
+        "email-domain add validation does not preserve BadInputException 500",
+    )
+    delete_legacy_shape = moderator.request(
+        "/admin/email-domains/delete", "POST", [("domain", "invalid_domain!")]
+    )
+    require(
+        delete_legacy_shape.status == 302
+        and delete_legacy_shape.headers.get("Location") == "/admin/email-domains",
+        "email-domain delete applies the add-only regex or has a wrong redirect",
+    )
+
+    owner = Client(BASE)
+    owner.login("crane2000")
+    settings_before = db("SELECT settings::text FROM user_settings WHERE id=9100009")
+    invalid_settings = owner.request(
+        "/people/crane2000/settings",
+        "POST",
+        [
+            ("topics", "31"),
+            ("messages", "500"),
+            ("style", "tango-light"),
+            ("format_mode", "markdown"),
+            ("avatar", "empty"),
+            ("trackerMode", "main"),
+        ],
+    )
+    require(
+        invalid_settings.status == 500
+        and "некорректное число тем" in invalid_settings.text
+        and db("SELECT settings::text FROM user_settings WHERE id=9100009") == settings_before,
+        "invalid settings do not fail atomically with BadInputException 500",
+    )
+    own_remark = owner.request("/people/crane2000/remark")
+    require(
+        own_remark.status == 500 and "Нельзя оставить заметку самому себе" in own_remark.text,
+        "self-remark does not preserve UserErrorException 500",
+    )
+    require_html(
+        owner.request("/people/crane2000/remarks?offset=-1&sort=99"),
+        "empty remarks skip offset/sort validation",
+    )
 
 
 @test("group list uses original compact DOM")
@@ -1302,6 +1903,25 @@ def archive_index() -> None:
 
 @test("public page and form DOM contracts")
 def public_page_contracts() -> None:
+    add_without_group = ANON.request("/add.jsp")
+    require(
+        add_without_group.status == 302
+        and add_without_group.headers.get("Location") == "/add-section.jsp",
+        "add.jsp without group has a non-Spring redirect contract",
+    )
+    invalid_group_offset = ANON.request("/forum/games?offset=-1")
+    require(
+        invalid_group_offset.status == 404
+        and "Bad format of &#39;offset&#39; offset не может быть отрицательным"
+        in invalid_group_offset.text,
+        "negative group offset differs from ServletParameterBadValueException",
+    )
+    require(
+        ANON.request("/forum/games/1989/1/").status == 404
+        and ANON.request("/forum/games/2026/13/").status == 404,
+        "archive calendar bounds do not use the bad-parameter 404 contract",
+    )
+
     forum = require_html(ANON.request("/forum/"), "forum index")
     for heading in ("Технический форум", "Остальное", "Лента форума", "RSS подписки"):
         require(f"<h1>{heading}</h1>" in forum, f"forum heading is absent: {heading}")
@@ -1321,12 +1941,191 @@ def public_page_contracts() -> None:
     for field in ('id="registerForm"', 'name="nick"', 'name="email"', 'name="password"', 'name="password2"', 'name="rules" value="okay"'):
         require(field in register, f"registration field is absent: {field}")
     require('href="/help/rules.md"' in register, "registration rules URL differs")
+    require(
+        'equalTo: "#password"' in register and 'remote: "/check-login"' in register,
+        "registration client validation differs from the original JSP",
+    )
 
     rules = require_html(ANON.request("/help/rules.md"), "forum rules")
     require("Правил" in rules, "forum rules content is absent")
     require('rel="search" title="Search L.O.R." href="/search.jsp"' in rules, "global search relation is absent")
     require(re.search(r'<base href="https?://[^\"]+:8181/">', rules) is not None, "original-compatible base URL is absent")
     require('href="/help/markdown.md">Разметка Markdown</a>' in rules, "anonymous footer markup help is absent")
+
+
+@test("representative internal links, forms and rendered assets stay resolvable")
+def representative_interface_integrity() -> None:
+    owner = Client(BASE)
+    owner.login("crane2000")
+    settings = require_html(
+        owner.request("/people/crane2000/settings"),
+        "interface-integrity settings",
+    )
+    documents = {
+        "/": require_html(ANON.request("/"), "interface-integrity home"),
+        "/forum/": require_html(ANON.request("/forum/"), "interface-integrity forum"),
+        "/tag/prod-ready": require_html(
+            ANON.request("/tag/prod-ready"), "interface-integrity aggregate tag"
+        ),
+        "/tag/prod-ready?section=1": require_html(
+            ANON.request("/tag/prod-ready?section=1"),
+            "interface-integrity news tag",
+        ),
+        "/tag/prod-ready?section=2": require_html(
+            ANON.request("/tag/prod-ready?section=2"),
+            "interface-integrity forum tag",
+        ),
+        "/forum/games/9101003": topic("/forum/games/9101003"),
+        "/people/crane2000/profile": require_html(
+            ANON.request("/people/crane2000/profile"),
+            "interface-integrity profile",
+        ),
+        "/login.jsp?from=/forum/": require_html(
+            ANON.request("/login.jsp?from=/forum/"),
+            "interface-integrity login",
+        ),
+        "/search.jsp": require_html(
+            ANON.request("/search.jsp"), "interface-integrity search"
+        ),
+        "/people/crane2000/settings": settings,
+    }
+
+    expected_links = {
+        "/": ("/news/", "/gallery/", "/polls/", "/articles/", "/forum/", "/tracker/", "/tags"),
+        "/forum/": ("/forum/games", "/forum/lenta"),
+        "/tag/prod-ready": ("/news/russia/9101002",),
+        "/tag/prod-ready?section=1": ("/tag/prod-ready", "/news/russia/9101002"),
+        "/tag/prod-ready?section=2": ("/tag/prod-ready", "/forum/games/9101003"),
+        "/forum/games/9101003": ("/forum/games", "/people/oriole300/profile"),
+        "/people/crane2000/profile": ("/people/crane2000/",),
+        "/login.jsp?from=/forum/": ("/register.jsp", "/lostpwd.jsp"),
+        "/search.jsp": (),
+        "/people/crane2000/settings": (
+            "/people/crane2000/edit",
+            "/addphoto.jsp",
+            "/user-filter",
+        ),
+    }
+    safe_targets: dict[str, Client] = {}
+    for source, vec_targets in expected_links.items():
+        body = documents[source]
+        source_client = owner if source == "/people/crane2000/settings" else ANON
+        for target in vec_targets:
+            require(
+                f'href="{target}' in body,
+                f"representative internal link is absent: {source} -> {target}",
+            )
+            safe_targets[target] = source_client
+
+    for target, client in sorted(safe_targets.items()):
+        response = client.request(target)
+        require(response.status == 200, f"representative internal link is not 200: {target}")
+        require(
+            response.headers.get("Content-Type", "").startswith("text/html"),
+            f"representative internal link is not HTML: {target}",
+        )
+
+    form_documents = {
+        "/login.jsp?from=/forum/": documents["/login.jsp?from=/forum/"],
+        "/search.jsp": documents["/search.jsp"],
+        "/forum/games/9101003": documents["/forum/games/9101003"],
+        "/people/crane2000/settings": settings,
+    }
+    form_action_pattern = re.compile(
+        r'<form\b[^>]*\baction=(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))',
+        re.I,
+    )
+    form_action_paths: dict[str, list[str]] = {}
+    for source, body in form_documents.items():
+        actions = [next(value for value in match if value != "") for match in form_action_pattern.findall(body)]
+        require(actions, f"representative page has no expected form: {source}")
+        form_action_paths[source] = []
+        for action in actions:
+            path = local_form_action_path(source, action)
+            require(
+                path is not None,
+                f"form action is not a resolved local target: {source} -> {action}",
+            )
+            form_action_paths[source].append(path)
+    require(
+        '/login_process' in form_action_paths["/login.jsp?from=/forum/"],
+        "login form action is not /login_process",
+    )
+    require(
+        '/search.jsp' in form_action_paths["/search.jsp"],
+        "search form action is not /search.jsp",
+    )
+    require(
+        '/add_comment.jsp' in form_action_paths["/forum/games/9101003"],
+        "topic reply form action is not /add_comment.jsp",
+    )
+    require(
+        '/people/crane2000/settings'
+        in form_action_paths["/people/crane2000/settings"],
+        "settings form action is not the owner settings route",
+    )
+
+    asset_paths = {
+        "/favicon.ico",
+        "/manifest.json",
+        "/tango/combined.css",
+        # Historical Java demo/import rows still use these pre-2016 names;
+        # current source ships their replacement images under new filenames.
+        "/tango/img/kde-logo-new2.png",
+        "/tango/img/klogo.png",
+        "/tango/img/money-logo.png",
+        "/tango/img/red-copyright.png",
+        "/js/script.min.js",
+        "/js/lor.js",
+        "/js/plugins.js",
+        "/js/highlight.min.js",
+        "/js/realtime.js",
+        "/webjars/jquery/3.7.1/jquery.min.js",
+    }
+    for body in documents.values():
+        for reference in re.findall(r'(?:href|src)="(/[^"]+)"', body):
+            path = urllib.parse.urlsplit(reference).path
+            if path.startswith(
+                (
+                    "/img/",
+                    "/images/",
+                    "/photos/",
+                    "/font/",
+                    "/js/",
+                    "/tango/",
+                    "/black/",
+                    "/white2/",
+                    "/waltz/",
+                    "/zomg_ponies/",
+                    "/webjars/",
+                )
+            ):
+                asset_paths.add(reference)
+
+    asset_responses = {}
+    for path in sorted(asset_paths):
+        response = ANON.request(path)
+        require(response.status == 200, f"rendered local asset is not 200: {path}")
+        require(len(response.body) > 0, f"rendered local asset is empty: {path}")
+        asset_responses[path] = response
+
+    for legacy_path, current_path in (
+        ("/tango/img/kde-logo-new2.png", "/tango/img/klogo.png"),
+        ("/tango/img/money-logo.png", "/tango/img/red-copyright.png"),
+    ):
+        require(
+            asset_responses[legacy_path].headers.get("Content-Type") == "image/png"
+            and asset_responses[legacy_path].body == asset_responses[current_path].body,
+            f"historical group-image alias does not serve its current PNG: {legacy_path}",
+        )
+
+    require(
+        asset_responses["/tango/combined.css"].headers.get("X-Frame-Options")
+        == "SAMEORIGIN"
+        and asset_responses["/tango/combined.css"].headers.get("X-XSS-Protection")
+        is None,
+        "security-excluded static asset headers differ from the Java MVC interceptor",
+    )
 
 
 @test("saved theme and authenticated tracker matrix")

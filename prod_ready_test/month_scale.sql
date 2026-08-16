@@ -39,6 +39,12 @@ SELECT id,hstore(
 )
 FROM users WHERE id BETWEEN 9100015 AND 9100050;
 
+-- A real ban record exercises the anonymous `errors/user-banned` profile
+-- model (date and reason), not only the users.blocked authorization flag.
+INSERT INTO ban_info(userid,bandate,reason,ban_by) VALUES
+    (9100050,CURRENT_TIMESTAMP-interval '7 days',
+     'Проверка страницы заблокированного профиля',9100013);
+
 -- Moderator tracker renders recent photos through the same Userpic JSP tag.
 -- Keep three fresh audit entries for the landscape, portrait, and small
 -- fixtures so that surface is exercised on every current-date seed run.

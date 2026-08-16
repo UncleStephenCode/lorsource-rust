@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ title }}{% endblock %}
+{% block head_extra %}{% match navigation %}{% when Some with (nav) %}{% match nav.rss_url %}{% when Some with (url) %}<link rel="alternate" href="{{ url }}" type="application/rss+xml">{% when None %}{% endmatch %}{% when None %}{% endmatch %}{% endblock %}
 {% block content %}
 {% if main_page %}<div id="mainpage"><div id="news">{% else %}<h1>{{ title }}</h1>{% endif %}
 

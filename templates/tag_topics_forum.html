@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}{{ sTitle }}{% endblock %}
+{% block content %}
+{% include "tag_topics_header.html" %}
+
+{% if bOldTracker %}
+<div class="forum"><table class="message-table"><thead><tr><th class="hideon-tablet">Группа</th><th>Заголовок</th><th>Последнее сообщение</th><th><i class="icon-reply"></i></th></tr></thead><tbody>
+{% for stItem in vecTopics %}<tr>
+  <td class="hideon-tablet"><a href="{{ stItem.sGroupUrl }}" class="secondary">{{ stItem.stTopic.sGroupTitle }}</a>{% if stItem.stTopic.bUncommitted %}, не подтверждено{% endif %}</td>
+  <td>{% if stItem.stTopic.bResolved %}<img src="/img/solved.png" alt="решено" title="решено" width="15" height="15">{% endif %}<a href="{{ stItem.sLastPageUrl }}">{% for sTopicTag in stItem.vecTags() %}<span class="tag">{{ sTopicTag }}</span> {% endfor %}{{ stItem.sTitlePlain() }}</a> ({% if stItem.stTopic.bTopicAuthorBlocked %}<s>{% endif %}{{ stItem.stTopic.sTopicAuthor }}{% if stItem.stTopic.bTopicAuthorBlocked %}</s>{% endif %}<span class="hideon-desktop"> в <a href="{{ stItem.sGroupUrl }}" class="secondary">{{ stItem.stTopic.sGroupTitle }}</a></span>)</td>
+  <td class="dateinterval"><time data-format="interval" datetime="{{ stItem.stTopic.dtLastPost.to_rfc3339() }}">{{ stItem.stTopic.dtLastPost }}</time>, {% if stItem.stTopic.bLastAuthorBlocked %}<s>{% endif %}{{ stItem.stTopic.sLastAuthor }}{% if stItem.stTopic.bLastAuthorBlocked %}</s>{% endif %}</td>
+  <td class="numbers">{% if stItem.iVisibleCommentCount == 0 %}-{% else %}{{ stItem.iVisibleCommentCount }}{% endif %}</td>
+</tr>{% endfor %}
+</tbody></table></div>
+{% else %}
+<div class="tracker">
+{% for stItem in vecTopics %}<a href="{{ stItem.sLastPageUrl }}" class="tracker-item">
+  <div class="tracker-src"><p><span class="group-label">{{ stItem.stTopic.sGroupTitle }}</span>{% if stItem.stTopic.bUncommitted %}(не подтверждено){% endif %}<br class="hideon-phone hideon-tablet">{% if stItem.stTopic.bTopicAuthorBlocked %}<s>{% endif %}{{ stItem.stTopic.sTopicAuthor }}{% if stItem.stTopic.bTopicAuthorBlocked %}</s>{% endif %}</p></div>
+  <div class="tracker-count"><p>{% if stItem.iVisibleCommentCount == 0 %}-{% else %}<i class="icon-comment"></i> {{ stItem.iVisibleCommentCount }}{% endif %}</p></div>
+  <div class="tracker-title"><p>{% if stItem.bCommentsClosed && !stItem.stTopic.bDeleted %}<i class="icon-lock"></i>{% endif %}{% if stItem.stTopic.bResolved %}<i class="icon-check" title="решено"></i>{% endif %}{{ stItem.sTitlePlain() }}</p></div>
+  <div class="tracker-tags"><p>{% for sTopicTag in stItem.vecTags() %}<span class="tag">{{ sTopicTag }}</span> {% endfor %}</p></div>
+  <div class="tracker-last"><p>{% if stItem.stTopic.bLastAuthorBlocked %}<s>{% endif %}{{ stItem.stTopic.sLastAuthor }}{% if stItem.stTopic.bLastAuthorBlocked %}</s>{% endif %}, <time data-format="compact-interval" datetime="{{ stItem.stTopic.dtLastPost.to_rfc3339() }}">{{ stItem.stTopic.dtLastPost }}</time></p></div>
+</a>{% endfor %}
+</div>
+{% endif %}
+
+{% include "tag_topics_navigation.html" %}
+{% endblock %}

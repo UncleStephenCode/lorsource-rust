@@ -26,12 +26,12 @@ use crate::{
 };
 
 const I_PARAMETER_BODY_LIMIT: usize = 1024 * 1024;
-const S_ALLOW_MOVE: &str = "POST,GET,HEAD,OPTIONS";
-const S_ALLOW_UNCOMMIT: &str = "POST,GET,HEAD,OPTIONS";
+const S_ALLOW_MOVE: &str = "GET,HEAD,POST,OPTIONS";
+const S_ALLOW_UNCOMMIT: &str = "GET,HEAD,POST,OPTIONS";
 const S_ALLOW_GET: &str = "GET,HEAD,OPTIONS";
 const S_ALLOW_RESOLVE: &str = "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS";
-const S_METHODS_MOVE: &str = "POST, GET";
-const S_METHODS_UNCOMMIT: &str = "POST, GET";
+const S_METHODS_MOVE: &str = "GET, POST";
+const S_METHODS_UNCOMMIT: &str = "GET, POST";
 const S_METHODS_GET: &str = "GET";
 
 type TyModerationService =
@@ -443,6 +443,16 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/src/routes/topic_moderation.rs"
         ));
+        let sRoutesSource = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/routes/mod.rs"));
+        let sResolveRoute = ".route(\"/resolve.jsp\", auto(topic_moderation::stResolveRoute()))";
+        let sMoveRoute = ".route(\"/mt.jsp\", auto(topic_moderation::stMoveRoute()))";
+        let sPremoderatedMoveRoute =
+            ".route(\"/mtn.jsp\", topic_moderation::stPremoderatedMoveRoute())";
+        let sUncommitRoute = ".route(\"/uncommit.jsp\", auto(topic_moderation::stUncommitRoute()))";
+        assert!(sRoutesSource.contains(sResolveRoute));
+        assert!(sRoutesSource.contains(sMoveRoute));
+        assert!(sRoutesSource.contains(sPremoderatedMoveRoute));
+        assert!(sRoutesSource.contains(sUncommitRoute));
         assert!(sSource.contains(".options(options_move)"));
         assert!(sSource.contains(".fallback(method_not_allowed_move)"));
         assert!(sSource.contains(".options(options_uncommit)"));
@@ -459,6 +469,11 @@ mod tests {
 
     #[tokio::test]
     async fn explicit_options_and_405_responses_keep_spring_allow_values() {
+        assert_eq!(S_ALLOW_MOVE, "GET,HEAD,POST,OPTIONS");
+        assert_eq!(S_ALLOW_UNCOMMIT, "GET,HEAD,POST,OPTIONS");
+        assert_eq!(S_METHODS_MOVE, "GET, POST");
+        assert_eq!(S_METHODS_UNCOMMIT, "GET, POST");
+
         for (stResponse, sAllow) in [
             (options_move().await, S_ALLOW_MOVE),
             (options_uncommit().await, S_ALLOW_UNCOMMIT),

@@ -11,7 +11,7 @@ use crate::{
 use askama::Template;
 use axum::{
     Form, Json,
-    extract::{ConnectInfo, Path, Query, RawQuery, State},
+    extract::{ConnectInfo, Path, Query, RawQuery, Request, State},
     http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Response},
 };
@@ -81,9 +81,9 @@ struct StUserSectionStat {
 
 #[derive(Debug, Clone)]
 struct UserStats {
-    topic_count: i64,
     comment_count: i64,
     ignore_count: i64,
+    incomplete: bool,
     first_topic: Option<chrono::DateTime<chrono::Utc>>,
     last_topic: Option<chrono::DateTime<chrono::Utc>>,
     first_comment: Option<chrono::DateTime<chrono::Utc>>,
@@ -95,7 +95,7 @@ struct UserStats {
 struct BanInfo {
     bandate: chrono::DateTime<chrono::Utc>,
     reason: String,
-    moderator_nick: String,
+    moderator_nick: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -233,6 +233,18 @@ struct UserTemplate {
 }
 
 #[derive(Template)]
+#[template(path = "error_410.html")]
+struct StUserTopicsGoneTemplate;
+
+#[derive(Template)]
+#[template(path = "user_banned.html")]
+struct StUserBannedTemplate {
+    sNick: String,
+    optBanDate: Option<chrono::DateTime<chrono::Utc>>,
+    optReason: Option<String>,
+}
+
+#[derive(Template)]
 #[template(path = "settings.html")]
 struct SettingsTemplate {
     user: UserSummary,
@@ -318,6 +330,7 @@ struct UserSectionLink {
 struct UserTopicsTemplate {
     title: String,
     nav_title: String,
+    me_link: Option<String>,
     nick: String,
     profile_url: String,
     topics: Vec<crate::routes::topics::NewsTopicView>,
@@ -327,6 +340,28 @@ struct UserTopicsTemplate {
     prev_link: Option<String>,
     prev_label: &'static str,
     next_link: Option<String>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct StUserTopicAuthorLinkState {
+    optUrl: Option<String>,
+    iScore: i32,
+    bBlocked: bool,
+    bAnonymous: bool,
+    bFrozen: bool,
+}
+
+impl StUserTopicAuthorLinkState {
+    fn optMeLink(self) -> Option<String> {
+        let bFollow = crate::domain::topic::link_policy::StAuthorLinkState {
+            iScore: self.iScore,
+            bBlocked: self.bBlocked,
+            bAnonymous: self.bAnonymous,
+            bFrozen: self.bFrozen,
+        }
+        .bFollowAuthorLinks();
+        if bFollow { self.optUrl } else { None }
+    }
 }
 
 #[derive(Template)]
@@ -374,7 +409,6 @@ struct StPrivatePageTemplate {
 pub struct UserTopicFeedQuery {
     pub offset: Option<i64>,
     pub section: Option<i32>,
-    pub output: Option<String>,
 }
 
 fn sUserTopicFeedPageUrl(sBase: &str, optSection: Option<i32>, iOffset: i64) -> String {
@@ -416,21 +450,44 @@ fn sUserTopicPrevLabel(iOffset: i64) -> &'static str {
 pub async fn topic_feed(
     State(state): State<AppState>,
     Path(nick): Path<String>,
-    Query(q): Query<UserTopicFeedQuery>,
     current: CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+    stRequest: Request,
 ) -> Result<Response> {
-    if q.output.as_deref() == Some("rss") {
-        return Ok(StatusCode::GONE.into_response());
+    let vecParameters = crate::form::servlet_request_parameters(stRequest).await?;
+    // The exact `params = "output=rss"` mapping is more specific than the
+    // ordinary handler and binds no offset/section arguments. It therefore
+    // returns 410 even when unrelated numeric parameters are malformed.
+    if crate::form::get(&vecParameters, "output") == Some("rss") {
+        return Ok((StatusCode::GONE, Html(StUserTopicsGoneTemplate.render()?)).into_response());
     }
+    let q = UserTopicFeedQuery {
+        offset: optUserTopicFeedNumber(&vecParameters, "offset")?,
+        section: optUserTopicFeedNumber(&vecParameters, "section")?,
+    };
     let user = get_user(&state, &nick).await?;
     if user.id == crate::routes::comments::ANONYMOUS_USER_ID
         && !current.0.as_ref().is_some_and(|stUser| stUser.canmod)
     {
-        return Err(AppError::BadRequest(
-            "Лента для пользователя anonymous не доступна".into(),
+        return Err(AppError::stUserError(
+            "Лента для пользователя anonymous не доступна",
         ));
     }
+    // UserTopicListController exposes UserInfo.url as rel=me only when
+    // TopicPermissionService.followAuthorLinks permits links by this author.
+    // Activation is deliberately not part of that Java policy.
+    let me_link = sqlx::query_as::<_, StUserTopicAuthorLinkState>(
+        r#"SELECT url AS "optUrl",
+                  COALESCE(score,0) AS "iScore",
+                  COALESCE(blocked,false) AS "bBlocked",
+                  COALESCE(passwd,'')='' AS "bAnonymous",
+                  COALESCE(frozen_until>CURRENT_TIMESTAMP,false) AS "bFrozen"
+           FROM users WHERE id=$1"#,
+    )
+    .bind(user.id)
+    .fetch_one(&state.pool)
+    .await?
+    .optMeLink();
     let pager = crate::pagination::topic_feed_pager(q.offset.unwrap_or(0));
     let optSection = q.section.filter(|iSection| *iSection != 0);
 
@@ -496,6 +553,7 @@ pub async fn topic_feed(
         UserTopicsTemplate {
             title: format!("Сообщения {}", user.nick),
             nav_title: "Сообщения".to_owned(),
+            me_link,
             profile_url: format!("/people/{}/profile", urlencoding::encode(&user.nick)),
             nick: user.nick,
             topics,
@@ -511,6 +569,18 @@ pub async fn topic_feed(
     .into_response())
 }
 
+fn optUserTopicFeedNumber<T>(vecParameters: &[(String, String)], sName: &str) -> Result<Option<T>>
+where
+    T: std::str::FromStr,
+{
+    match crate::form::get(vecParameters, sName) {
+        None | Some("") => Ok(None),
+        Some(sValue) => sValue.parse().map(Some).map_err(|_| {
+            AppError::BadRequest(format!("Failed to convert request parameter '{sName}'"))
+        }),
+    }
+}
+
 pub async fn profile_full(
     State(state): State<AppState>,
     Path(nick): Path<String>,
@@ -520,7 +590,11 @@ pub async fn profile_full(
     stJar: CookieJar,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
 ) -> Result<Response> {
-    if bHasRequestParameter(optRawQuery.as_deref(), "year-stats") {
+    let enMapping = enProfileParameterMapping(
+        bHasRequestParameter(optRawQuery.as_deref(), "year-stats"),
+        bHasRequestParameter(optRawQuery.as_deref(), "reset-password"),
+    )?;
+    if enMapping == EnProfileParameterMapping::YearStats {
         let stProfile = get_user_profile(&state, &nick).await?;
         if stProfile.blocked
             && !current
@@ -544,7 +618,7 @@ pub async fn profile_full(
         return Ok(Json(mapStats).into_response());
     }
 
-    if bHasRequestParameter(optRawQuery.as_deref(), "reset-password") {
+    if enMapping == EnProfileParameterMapping::ResetPassword {
         let _stModerator = current
             .0
             .as_ref()
@@ -569,6 +643,30 @@ pub async fn profile_full(
             .await?
             .into_response(),
     )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnProfileParameterMapping {
+    Default,
+    YearStats,
+    ResetPassword,
+}
+
+fn enProfileParameterMapping(
+    bYearStats: bool,
+    bResetPassword: bool,
+) -> Result<EnProfileParameterMapping> {
+    match (bYearStats, bResetPassword) {
+        (false, false) => Ok(EnProfileParameterMapping::Default),
+        (true, false) => Ok(EnProfileParameterMapping::YearStats),
+        (false, true) => Ok(EnProfileParameterMapping::ResetPassword),
+        // Two equally-specific Spring handler methods match this request.
+        // DispatcherServlet raises an ambiguous-handler failure before either
+        // method performs authorization or loads a user.
+        (true, true) => Err(AppError::Anyhow(anyhow::anyhow!(
+            "ambiguous profile parameter handler"
+        ))),
+    }
 }
 
 fn bHasRequestParameter(optRawQuery: Option<&str>, sName: &str) -> bool {
@@ -602,17 +700,39 @@ async fn render_profile(
     current: CurrentUser,
     stTimezone: chrono_tz::Tz,
     csrf_token: String,
-) -> Result<Html<String>> {
+) -> Result<Response> {
     let profile = get_user_profile(&state, &nick).await?;
     let target_summary = get_user(&state, &nick).await?;
+    let ban_info = if profile.blocked {
+        optProfileBanInfo(&state, profile.id).await?
+    } else {
+        None
+    };
     if profile.blocked && current.0.is_none() {
-        return Err(AppError::Forbidden);
+        let optBanDate = ban_info.as_ref().map(|stBanInfo| stBanInfo.bandate);
+        let optReason = ban_info
+            .as_ref()
+            .map(|stBanInfo| stBanInfo.reason.trim())
+            .filter(|sReason| !sReason.is_empty())
+            .map(str::to_owned);
+        return Ok((
+            StatusCode::FORBIDDEN,
+            Html(
+                StUserBannedTemplate {
+                    sNick: profile.nick,
+                    optBanDate,
+                    optReason,
+                }
+                .render()?,
+            ),
+        )
+            .into_response());
     }
     if !profile.activated && !current.0.as_ref().map(|u| u.canmod).unwrap_or(false) {
         return Err(AppError::NotFound);
     }
 
-    let stats = user_stats(&state, profile.id).await?;
+    let stats = user_stats(&state, profile.id, &profile.nick).await?;
     let favorite_tags = user_tags(&state, profile.id, true).await?;
     let ignore_tags = user_tags(&state, profile.id, false).await?;
     let is_owner = current
@@ -714,22 +834,6 @@ async fn render_profile(
     // implementation didn't surface at all - a moderator had no way to see
     // ban/freeze history or other accounts sharing an email from the
     // profile page itself.
-    let ban_info = if profile.blocked {
-        sqlx::query_as::<_, (chrono::DateTime<chrono::Utc>, String, String)>(
-            r#"SELECT b.bandate, b.reason, u.nick FROM ban_info b JOIN users u ON u.id=b.ban_by WHERE b.userid=$1"#,
-        )
-        .bind(profile.id)
-        .fetch_optional(&state.pool)
-        .await?
-        .map(|(bandate, reason, moderator_nick)| BanInfo {
-            bandate,
-            reason,
-            moderator_nick,
-        })
-    } else {
-        None
-    };
-
     let frozen_until: Option<chrono::DateTime<chrono::Utc>> =
         sqlx::query_scalar("SELECT frozen_until FROM users WHERE id=$1")
             .bind(profile.id)
@@ -965,7 +1069,8 @@ async fn render_profile(
             csrf_token,
         }
         .render()?,
-    ))
+    )
+    .into_response())
 }
 
 #[derive(Deserialize)]
@@ -1312,6 +1417,22 @@ struct StRemarksTemplate {
     bHasMore: bool,
 }
 
+fn vValidateRemarksQuery(iCount: i64, iOffset: i64, iSort: i32) -> Result<()> {
+    // ShowRemarkController validates both values only inside `count > 0`.
+    // With an empty notebook even otherwise-invalid values render the empty
+    // page instead of producing a UserErrorException.
+    if iCount == 0 {
+        return Ok(());
+    }
+    if iOffset < 0 || iOffset >= iCount {
+        return Err(AppError::stUserError("Wrong offset"));
+    }
+    if !matches!(iSort, 0 | 1) {
+        return Err(AppError::stUserError("Wrong sort"));
+    }
+    Ok(())
+}
+
 pub async fn remarks(
     State(state): State<AppState>,
     Path(nick): Path<String>,
@@ -1322,24 +1443,15 @@ pub async fn remarks(
     // remarks about other people (keyed by user_id = viewer), never other
     // people's remarks about the profile being viewed - it is a private
     // notebook, not a public annotation feed. `nick` must equal the viewer.
-    let Some(me) = current.0 else {
-        return Err(AppError::Forbidden);
-    };
-    if !me.nick.eq_ignore_ascii_case(&nick) {
-        return Err(AppError::Forbidden);
-    }
+    ensure_self_service_actor(&current.0, &nick)?;
+    let me = current.0.expect("checked by ensure_self_service_actor");
     let iOffset = stQuery.offset.unwrap_or(0);
     let iSort = stQuery.sort.unwrap_or(0);
-    if !matches!(iSort, 0 | 1) {
-        return Err(AppError::BadRequest("Wrong sort".into()));
-    }
     let iCount: i64 = sqlx::query_scalar("SELECT count(*) FROM user_remarks WHERE user_id=$1")
         .bind(me.id)
         .fetch_one(&state.pool)
         .await?;
-    if iCount > 0 && (iOffset < 0 || iOffset >= iCount) {
-        return Err(AppError::BadRequest("Wrong offset".into()));
-    }
+    vValidateRemarksQuery(iCount, iOffset, iSort)?;
     let iLimit = crate::routes::topics::messages_per_page(&state, &Some(me.clone())).await;
     let sOrder = if iSort == 1 {
         "r.remark_text ASC"
@@ -1349,15 +1461,19 @@ pub async fn remarks(
     let sSql = format!(
         "SELECT u.nick, r.remark_text FROM user_remarks r JOIN users u ON u.id=r.ref_user_id WHERE r.user_id=$1 ORDER BY {sOrder} LIMIT $2 OFFSET $3"
     );
-    let vecRemarks = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sSql))
-        .bind(me.id)
-        .bind(iLimit)
-        .bind(iOffset)
-        .fetch_all(&state.pool)
-        .await?
-        .into_iter()
-        .map(|(sNick, sText)| StRemarkListRow { sNick, sText })
-        .collect();
+    let vecRemarks = if iCount > 0 {
+        sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sSql))
+            .bind(me.id)
+            .bind(iLimit)
+            .bind(iOffset)
+            .fetch_all(&state.pool)
+            .await?
+            .into_iter()
+            .map(|(sNick, sText)| StRemarkListRow { sNick, sText })
+            .collect()
+    } else {
+        Vec::new()
+    };
     Ok(Html(
         StRemarksTemplate {
             sNick: me.nick,
@@ -1371,31 +1487,12 @@ pub async fn remarks(
     ))
 }
 
-pub async fn get_user(state: &AppState, nick: &str) -> Result<UserSummary> {
-    sqlx::query_as::<_, UserSummary>(
-        "SELECT id,nick,name,score,max_score,photo,town,regdate,canmod,COALESCE(candel,false) AS candel,COALESCE(corrector,false) AS corrector,blocked,userinfo FROM users WHERE lower(nick)=lower($1)",
-    )
-    .bind(nick)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)
-}
+// UserDao.findUserId uses PostgreSQL `nick = ?`, not a case-folded lookup.
+// Existing Java databases may legally contain names which differ only by
+// case, so `lower(nick)=lower($1)` can select an arbitrary identity.
+const S_USER_SUMMARY_BY_NICK_SQL: &str = "SELECT id,nick,name,score,max_score,photo,town,regdate,canmod,COALESCE(candel,false) AS candel,COALESCE(corrector,false) AS corrector,blocked,userinfo FROM users WHERE nick=$1";
 
-/// Exact nickname lookup for legacy controllers backed by
-/// `UserDao.getUser(String)`, whose PostgreSQL predicate is `nick = ?`.
-pub async fn get_user_exact(state: &AppState, nick: &str) -> Result<UserSummary> {
-    sqlx::query_as::<_, UserSummary>(
-        "SELECT id,nick,name,score,max_score,photo,town,regdate,canmod,COALESCE(candel,false) AS candel,COALESCE(corrector,false) AS corrector,blocked,userinfo FROM users WHERE nick=$1",
-    )
-    .bind(nick)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)
-}
-
-async fn get_user_profile(state: &AppState, nick: &str) -> Result<UserProfileData> {
-    sqlx::query_as::<_, UserProfileData>(
-        r#"SELECT id, nick, name,
+const S_USER_PROFILE_BY_NICK_SQL: &str = r#"SELECT id, nick, name,
                   COALESCE(score,0) AS score,
                   COALESCE(max_score,0) AS max_score,
                   photo, town, userinfo, url, email,
@@ -1407,69 +1504,87 @@ async fn get_user_profile(state: &AppState, nick: &str) -> Result<UserProfileDat
                   COALESCE(activated,true) AS activated,
                   regdate, lastlogin,
                   userinfo_markup::text AS userinfo_markup
-           FROM users WHERE lower(nick)=lower($1)"#,
-    )
-    .bind(nick)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)
+           FROM users WHERE nick=$1"#;
+
+pub async fn get_user(state: &AppState, nick: &str) -> Result<UserSummary> {
+    sqlx::query_as::<_, UserSummary>(S_USER_SUMMARY_BY_NICK_SQL)
+        .bind(nick)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound)
 }
 
-async fn user_stats(state: &AppState, user_id: i32) -> Result<UserStats> {
-    let (topic_count, first_topic, last_topic): (
-        i64,
-        Option<chrono::DateTime<chrono::Utc>>,
-        Option<chrono::DateTime<chrono::Utc>>,
-    ) = sqlx::query_as(
-        "SELECT count(*)::bigint, min(postdate), max(postdate) FROM topics WHERE userid=$1 AND NOT COALESCE(deleted,false) AND NOT COALESCE(draft,false)",
+/// Compatibility alias retained for callers which previously had to opt in
+/// to Java's exact nickname lookup. All nickname lookups are now exact.
+pub async fn get_user_exact(state: &AppState, nick: &str) -> Result<UserSummary> {
+    get_user(state, nick).await
+}
+
+async fn get_user_profile(state: &AppState, nick: &str) -> Result<UserProfileData> {
+    sqlx::query_as::<_, UserProfileData>(S_USER_PROFILE_BY_NICK_SQL)
+        .bind(nick)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound)
+}
+
+/// `UserDao.getBanInfoClass` returns the ban row even when its historic
+/// moderator cannot be resolved. `WhoisController` treats the moderator as
+/// optional, but still shows the ban date and reason. A LEFT JOIN is therefore
+/// required for in-place migration data; an inner join would erase the whole
+/// public ban record.
+async fn optProfileBanInfo(state: &AppState, iUserId: i32) -> Result<Option<BanInfo>> {
+    Ok(
+        sqlx::query_as::<_, (chrono::DateTime<chrono::Utc>, String, Option<String>)>(
+            r#"SELECT b.bandate, b.reason,
+                  CASE WHEN b.ban_by<>b.userid THEN moderator.nick END
+             FROM ban_info b
+             LEFT JOIN users moderator ON moderator.id=b.ban_by
+            WHERE b.userid=$1"#,
+        )
+        .bind(iUserId)
+        .fetch_optional(&state.pool)
+        .await?
+        .map(|(bandate, reason, moderator_nick)| BanInfo {
+            bandate,
+            reason,
+            moderator_nick,
+        }),
     )
-    .bind(user_id)
-    .fetch_one(&state.pool)
-    .await?;
-    let (comment_count, first_comment, last_comment): (
-        i64,
-        Option<chrono::DateTime<chrono::Utc>>,
-        Option<chrono::DateTime<chrono::Utc>>,
-    ) = sqlx::query_as(
-        "SELECT count(*) FILTER (WHERE NOT COALESCE(deleted,false))::bigint, min(postdate), max(postdate) FROM comments WHERE userid=$1",
-    )
-    .bind(user_id)
-    .fetch_one(&state.pool)
-    .await?;
-    let ignore_count: i64 = sqlx::query_scalar(
-        r#"SELECT count(*)::bigint
-             FROM ignore_list il JOIN users u ON u.id=il.userid
-            WHERE il.ignored=$1 AND NOT COALESCE(u.blocked,false)"#,
-    )
-    .bind(user_id)
-    .fetch_one(&state.pool)
-    .await?;
-    let topics_by_section = sqlx::query_as::<_, (i32, String, i64)>(
-        r#"SELECT s.id, s.name, count(t.id)::bigint
-             FROM topics t
-             JOIN groups g ON g.id=t.groupid
-             JOIN sections s ON s.id=g.section
-            WHERE t.userid=$1
-              AND NOT COALESCE(t.deleted,false)
-              AND NOT COALESCE(t.draft,false)
-            GROUP BY s.id,s.name
-            ORDER BY s.id"#,
-    )
-    .bind(user_id)
-    .fetch_all(&state.pool)
-    .await?
-    .into_iter()
-    .map(|(id, name, count)| StUserSectionStat { id, name, count })
-    .collect();
+}
+
+async fn user_stats(state: &AppState, user_id: i32, sNick: &str) -> Result<UserStats> {
+    let cSearchRepository = crate::infra::opensearch::CUserStatisticsOpenSearchRepository::new(
+        state.config.opensearch_url.clone(),
+        state.http.clone(),
+    );
+    let cLocalRepository =
+        crate::infra::postgres::user_statistics_repository::CUserStatisticsPgRepository::new(
+            state.pool.clone(),
+        );
+    let cService = crate::application::user::statistics::CUserProfileStatisticsService::new(
+        cSearchRepository,
+        cLocalRepository,
+    );
+    let stStatistics = cService.stGetStats(user_id, sNick).await?;
+
     Ok(UserStats {
-        topic_count,
-        comment_count,
-        ignore_count,
-        first_topic,
-        last_topic,
-        first_comment,
-        last_comment,
-        topics_by_section,
+        comment_count: stStatistics.iCommentCount,
+        ignore_count: stStatistics.iIgnoreCount,
+        incomplete: stStatistics.bIncomplete,
+        first_topic: stStatistics.optFirstTopic,
+        last_topic: stStatistics.optLastTopic,
+        first_comment: stStatistics.optFirstComment,
+        last_comment: stStatistics.optLastComment,
+        topics_by_section: stStatistics
+            .vecTopicsBySection
+            .into_iter()
+            .map(|stSection| StUserSectionStat {
+                id: stSection.iId,
+                name: stSection.sName,
+                count: stSection.iCount,
+            })
+            .collect(),
     })
 }
 
@@ -1630,6 +1745,7 @@ pub async fn drafts(
         UserTopicsTemplate {
             title: format!("Черновики {}", stTarget.nick),
             nav_title: "Черновики".to_owned(),
+            me_link: None,
             profile_url: format!("/people/{}/profile", urlencoding::encode(&stTarget.nick)),
             nick: stTarget.nick,
             topics: vecTopics,
@@ -1701,6 +1817,7 @@ pub async fn favs(
         UserTopicsTemplate {
             title: format!("Избранные сообщения {}", stTarget.nick),
             nav_title: "Избранные сообщения".to_owned(),
+            me_link: None,
             profile_url: format!("/people/{}/profile", urlencoding::encode(&stTarget.nick)),
             nick: stTarget.nick,
             topics: vecTopics,
@@ -2398,10 +2515,9 @@ pub async fn edit_profile(
                 .render()?,
             )
             .into_response(),
-            Err(stError) => {
+            Err(stError) if bIsSmtpAddressRejected(&stError) => {
                 tracing::warn!(
-                    error_type = std::any::type_name_of_val(&stError),
-                    "profile activation email could not be delivered"
+                    "profile activation email address was rejected"
                 );
                 stRenderEditProfileValidation(
                     &state,
@@ -2419,6 +2535,13 @@ pub async fn edit_profile(
                 )
                 .await?
             }
+            // EditProfileController catches only SMTPAddressFailedException.
+            // Connection, protocol and other infrastructure failures escape
+            // to the global exception resolver. Build that error response
+            // here (instead of returning early) so the already-committed
+            // password change still receives its refreshed remember-me cookie
+            // and authenticated theme identity below.
+            Err(stError) => stError.into_response(),
         }
     } else {
         (
@@ -2440,6 +2563,10 @@ pub async fn edit_profile(
         new_password_hash.is_some(),
         user.id,
     ))
+}
+
+fn bIsSmtpAddressRejected(stError: &AppError) -> bool {
+    matches!(stError, AppError::SmtpAddressRejected { .. })
 }
 
 fn stFinalizeEditProfileResponse(
@@ -2521,7 +2648,7 @@ pub async fn save_settings(
     let current_settings = ProfileSettings::from_hstore_text(settings_text);
     let settings = current_settings
         .apply_form(&form)
-        .map_err(AppError::BadRequest)?;
+        .map_err(AppError::stBadInput)?;
     let (keys, values) = settings.to_hstore_arrays();
     sqlx::query(
         "INSERT INTO user_settings(id,settings) VALUES($1,hstore($2::text[],$3::text[])) ON CONFLICT(id) DO UPDATE SET settings=EXCLUDED.settings",
@@ -2557,9 +2684,7 @@ pub async fn remark_form(
     };
     let target = get_user(&state, &nick).await?;
     if me.id == target.id {
-        return Err(AppError::BadRequest(
-            "Нельзя оставить заметку самому себе".into(),
-        ));
+        return Err(AppError::stUserError("Нельзя оставить заметку самому себе"));
     }
     let remark: Option<String> = sqlx::query_scalar(
         "SELECT remark_text FROM user_remarks WHERE user_id=$1 AND ref_user_id=$2",
@@ -2696,12 +2821,16 @@ fn ensure_self(current: &Option<UserSummary>, target: &UserSummary) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::{
-        bHasRequestParameter, drafts, edit_profile_form, ensure_self_service_actor,
-        optEditProfileInfoRestriction, optFixedProfileUrl, remark_form, sMarkupIdFromForm,
-        sUserTopicCollectionPageUrl, sUserTopicFeedPageUrl, sUserTopicPrevLabel, save_remark,
-        settings, stFinalizeEditProfileResponse,
+        EnProfileParameterMapping, S_USER_PROFILE_BY_NICK_SQL, S_USER_SUMMARY_BY_NICK_SQL,
+        StUserBannedTemplate, StUserTopicAuthorLinkState, StUserTopicsGoneTemplate,
+        bHasRequestParameter, bIsSmtpAddressRejected, drafts, edit_profile_form,
+        enProfileParameterMapping, ensure_self_service_actor, optEditProfileInfoRestriction,
+        optFixedProfileUrl, remark_form, sMarkupIdFromForm, sUserTopicCollectionPageUrl,
+        sUserTopicFeedPageUrl, sUserTopicPrevLabel, save_remark, settings,
+        stFinalizeEditProfileResponse, vValidateRemarksQuery,
     };
     use crate::{config::StConfig, error::AppError, models::UserSummary, state::AppState};
+    use askama::Template;
     use axum::{
         Router,
         http::{StatusCode, header},
@@ -2735,6 +2864,87 @@ mod tests {
             ensure_self_service_actor(&optCurrent, "other"),
             Err(AppError::Forbidden)
         ));
+    }
+
+    #[test]
+    fn nickname_queries_do_not_collapse_case_distinct_java_rows() {
+        for sSql in [S_USER_SUMMARY_BY_NICK_SQL, S_USER_PROFILE_BY_NICK_SQL] {
+            assert!(sSql.contains("FROM users WHERE nick=$1"));
+            assert!(!sSql.to_ascii_lowercase().contains("lower(nick)"));
+        }
+    }
+
+    #[test]
+    fn case_distinct_users_remain_distinct_in_path_authorization() {
+        let optAnonymous = Some(stUser(2, "anonymous"));
+        let optHistoricMixedCase = Some(stUser(2102, "Anonymous"));
+
+        assert!(ensure_self_service_actor(&optAnonymous, "anonymous").is_ok());
+        assert!(matches!(
+            ensure_self_service_actor(&optAnonymous, "Anonymous"),
+            Err(AppError::Forbidden)
+        ));
+        assert!(ensure_self_service_actor(&optHistoricMixedCase, "Anonymous").is_ok());
+        assert!(matches!(
+            ensure_self_service_actor(&optHistoricMixedCase, "anonymous"),
+            Err(AppError::Forbidden)
+        ));
+    }
+
+    #[test]
+    fn retired_user_rss_uses_the_original_themed_410_dom() {
+        let sHtml = StUserTopicsGoneTemplate.render().expect("410 template");
+        assert!(sHtml.contains("<title>Error 410</title>"));
+        assert!(sHtml.contains("id=\"warning-body\""));
+        assert!(sHtml.contains("/img/good-penguin.png"));
+        assert!(sHtml.contains("RSS-фид для этой страницы удалён."));
+        assert!(sHtml.contains("The RSS feed for this page has been retired."));
+    }
+
+    #[test]
+    fn blocked_profile_page_keeps_nick_date_reason_and_escapes_values() {
+        let dtBanDate = chrono::DateTime::parse_from_rfc3339("2026-02-03T04:05:06Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let sHtml = StUserBannedTemplate {
+            sNick: "bad<script>".to_owned(),
+            optBanDate: Some(dtBanDate),
+            optReason: Some("reason <unsafe>".to_owned()),
+        }
+        .render()
+        .expect("user-banned template");
+        assert!(sHtml.contains("id=\"warning-body\""));
+        assert!(sHtml.contains("Пользователь bad&#60;script&#62; забанен."));
+        assert!(sHtml.contains("datetime=\"2026-02-03T04:05:06+00:00\""));
+        assert!(sHtml.contains("Причина тому проста: <i>reason &#60;unsafe&#62;</i>."));
+        assert!(!sHtml.contains("bad<script>"));
+        assert!(!sHtml.contains("reason <unsafe>"));
+    }
+
+    #[test]
+    fn ban_info_query_keeps_rows_when_historic_moderator_is_missing() {
+        let sSource = include_str!("users.rs");
+        let sHelper = sSource
+            .split("async fn optProfileBanInfo")
+            .nth(1)
+            .expect("ban info helper")
+            .split("async fn user_stats")
+            .next()
+            .expect("ban info helper body");
+        assert!(sHelper.contains("FROM ban_info b"));
+        assert!(sHelper.contains("LEFT JOIN users moderator"));
+        assert!(!sHelper.contains("JOIN users u ON"));
+    }
+
+    #[test]
+    fn remarks_validate_sort_and_offset_only_when_notebook_is_nonempty() {
+        assert!(vValidateRemarksQuery(0, -1, 99).is_ok());
+        for stError in [
+            vValidateRemarksQuery(2, -1, 0).unwrap_err(),
+            vValidateRemarksQuery(2, 0, 99).unwrap_err(),
+        ] {
+            assert!(matches!(stError, AppError::UserError { .. }));
+        }
     }
 
     #[test]
@@ -2779,6 +2989,57 @@ mod tests {
     }
 
     #[test]
+    fn user_topic_rel_me_uses_follow_author_links_policy() {
+        let stAllowed = StUserTopicAuthorLinkState {
+            optUrl: Some("https://alice.example/".to_owned()),
+            iScore: 100,
+            bBlocked: false,
+            bAnonymous: false,
+            bFrozen: false,
+        };
+        assert_eq!(
+            stAllowed.optMeLink().as_deref(),
+            Some("https://alice.example/")
+        );
+
+        for stRestricted in [
+            StUserTopicAuthorLinkState {
+                optUrl: Some("https://alice.example/".to_owned()),
+                iScore: 99,
+                bBlocked: false,
+                bAnonymous: false,
+                bFrozen: false,
+            },
+            StUserTopicAuthorLinkState {
+                optUrl: Some("https://alice.example/".to_owned()),
+                iScore: 1000,
+                bBlocked: true,
+                bAnonymous: false,
+                bFrozen: false,
+            },
+            StUserTopicAuthorLinkState {
+                optUrl: Some("https://alice.example/".to_owned()),
+                iScore: 1000,
+                bBlocked: false,
+                bAnonymous: true,
+                bFrozen: false,
+            },
+            StUserTopicAuthorLinkState {
+                optUrl: Some("https://alice.example/".to_owned()),
+                iScore: 1000,
+                bBlocked: false,
+                bAnonymous: false,
+                bFrozen: true,
+            },
+        ] {
+            assert_eq!(stRestricted.optMeLink(), None);
+        }
+
+        let sTemplate = include_str!("../../templates/user_topics.html");
+        assert!(sTemplate.contains("<link rel=\"me\" href=\"{{ url }}\">"));
+    }
+
+    #[test]
     fn authenticated_owner_passes_self_service_entrypoint() {
         let optCurrent = Some(stUser(1, "maxcom"));
 
@@ -2801,6 +3062,26 @@ mod tests {
         ));
         assert!(bHasRequestParameter(Some("year-stats"), "year-stats"));
         assert!(!bHasRequestParameter(Some("year_stats=true"), "year-stats"));
+    }
+
+    #[test]
+    fn profile_parameter_handlers_fail_closed_when_both_specific_mappings_match() {
+        assert_eq!(
+            enProfileParameterMapping(false, false).unwrap(),
+            EnProfileParameterMapping::Default
+        );
+        assert_eq!(
+            enProfileParameterMapping(true, false).unwrap(),
+            EnProfileParameterMapping::YearStats
+        );
+        assert_eq!(
+            enProfileParameterMapping(false, true).unwrap(),
+            EnProfileParameterMapping::ResetPassword
+        );
+        assert!(matches!(
+            enProfileParameterMapping(true, true),
+            Err(AppError::Anyhow(_))
+        ));
     }
 
     #[test]
@@ -2842,9 +3123,38 @@ mod tests {
     }
 
     #[test]
-    fn password_and_email_smtp_error_html_keeps_authenticated_theme_identity() {
+    fn password_and_email_address_error_html_keeps_authenticated_theme_identity() {
+        let stError = AppError::SmtpAddressRejected {
+            iStatus: 550,
+            sResponse: "550 mailbox unavailable".to_owned(),
+        };
+        assert!(bIsSmtpAddressRejected(&stError));
+        assert!(!bIsSmtpAddressRejected(&AppError::BadRequest(
+            "Incorrect email address".to_owned()
+        )));
+        assert!(!bIsSmtpAddressRejected(&AppError::Anyhow(anyhow::anyhow!(
+            "SMTP unavailable"
+        ))));
         let stResponse = stCredentialChangeResponse(Html("email validation error").into_response());
         assert_eq!(stResponse.status(), StatusCode::OK);
+        assert_eq!(
+            crate::theme_middleware::optResponseThemeUserId(&stResponse),
+            Some(42)
+        );
+    }
+
+    #[test]
+    fn password_and_email_infrastructure_failure_stays_reportable_and_authenticated() {
+        let stResponse = stCredentialChangeResponse(
+            AppError::Anyhow(anyhow::anyhow!("SMTP unavailable")).into_response(),
+        );
+        assert_eq!(stResponse.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            stResponse
+                .extensions()
+                .get::<crate::error::StInternalErrorReport>()
+                .is_some()
+        );
         assert_eq!(
             crate::theme_middleware::optResponseThemeUserId(&stResponse),
             Some(42)
@@ -2881,6 +3191,19 @@ mod tests {
             .find("{% if can_view_private %}\n{% match frozen_until %}")
             .expect("private moderation block");
         assert!(iBan < iPrivate);
+    }
+
+    #[test]
+    fn profile_statistics_template_preserves_partial_opensearch_contract() {
+        let sTemplate = include_str!("../../templates/user.html");
+        assert!(sTemplate.contains("{% if stats.incomplete %}"));
+        assert!(sTemplate.contains(
+            "Внимание! Статистику пользователя не удалось полностью загрузить. Попробуйте обновить страницу позже."
+        ));
+        assert!(
+            sTemplate.contains("{% if stats.topics_by_section.len() > 0 || can_view_private %}")
+        );
+        assert!(!sTemplate.contains("stats.topic_count"));
     }
 
     #[tokio::test]

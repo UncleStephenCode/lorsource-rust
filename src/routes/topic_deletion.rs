@@ -4,7 +4,7 @@ use axum::{
     extract::{Request, State},
     http::{StatusCode, Uri, header},
     response::{Html, IntoResponse, Response},
-    routing::{MethodRouter, get},
+    routing::{MethodRouter, post},
 };
 
 use crate::{
@@ -26,8 +26,8 @@ use crate::{
 };
 
 const I_PARAMETER_BODY_LIMIT: usize = 1024 * 1024;
-const S_ALLOW: &str = "GET,HEAD,POST,OPTIONS";
-const S_ALLOWED_METHODS: &str = "GET, POST";
+const S_ALLOW: &str = "POST,GET,HEAD,OPTIONS";
+const S_ALLOWED_METHODS: &str = "POST, GET";
 
 type TyTopicDeletionService = CTopicDeletionService<CTopicDeletionPgRepository, CSearchQueueSender>;
 type TyRouteResult = std::result::Result<Response, EnTopicDeletionRouteError>;
@@ -132,15 +132,15 @@ impl IntoResponse for EnTopicDeletionRouteError {
 }
 
 pub fn stDeleteRoute() -> MethodRouter<AppState> {
-    get(delete_form)
-        .post(delete_submit)
+    post(delete_submit)
+        .get(delete_form)
         .options(options)
         .fallback(method_not_allowed)
 }
 
 pub fn stUndeleteRoute() -> MethodRouter<AppState> {
-    get(undelete_form)
-        .post(undelete_submit)
+    post(undelete_submit)
+        .get(undelete_form)
         .options(options)
         .fallback(method_not_allowed)
 }
@@ -363,11 +363,11 @@ mod tests {
     #[tokio::test]
     async fn options_and_unsupported_methods_keep_the_exact_spring_allow_contract() {
         for (stResponse, stExpectedStatus, sExpectedAllow) in [
-            (options().await, StatusCode::OK, "GET,HEAD,POST,OPTIONS"),
+            (options().await, StatusCode::OK, "POST,GET,HEAD,OPTIONS"),
             (
                 method_not_allowed().await,
                 StatusCode::METHOD_NOT_ALLOWED,
-                "GET, POST",
+                "POST, GET",
             ),
         ] {
             assert_eq!(stResponse.status(), stExpectedStatus);

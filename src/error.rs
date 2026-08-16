@@ -12,6 +12,32 @@ pub enum AppError {
     Forbidden,
     #[error("bad request: {0}")]
     BadRequest(String),
+    /// A source-level `UserErrorException` (including `BadInputException`).
+    ///
+    /// The original resolver deliberately renders the exception message in
+    /// `errors/common.jsp` with HTTP 500, but classifies it as `IGNORED`: no
+    /// exception report is sent and no internal-error explanatory block is
+    /// shown.  Keep this separate from both HTTP 400 validation and genuine
+    /// reportable internal failures.
+    #[error("user error: {sMessage}")]
+    UserError {
+        sMessage: String,
+        sClass: &'static str,
+    },
+    /// A source-level `ScriptErrorException` and its subclasses.
+    ///
+    /// Java renders the message with HTTP 500 and the same explanatory text
+    /// as its bad-parameter page, but only debug-logs it: no exception report
+    /// and no generic internal-error notice are produced.
+    #[error("script error: {sMessage}")]
+    ScriptError {
+        sMessage: String,
+        sClass: &'static str,
+    },
+    /// Spring Security StrictHttpFirewall rejection. Its configured rejected
+    /// request handler deliberately returns an empty 400 response.
+    #[error("request rejected by HTTP firewall")]
+    RequestRejected,
     /// Spring binding/servlet-parameter failures mapped to
     /// `errors/bad-parameter.jsp`.  The original page deliberately uses 404,
     /// which is distinct from the port's explicit HTTP 400 validation errors.
@@ -19,6 +45,15 @@ pub enum AppError {
     BadParameter(String),
     #[error("too many requests: {0}")]
     TooManyRequests(String),
+    /// The SMTP server rejected the envelope recipient at `RCPT TO`.
+    ///
+    /// This remains an internal error by default.  The Java edit-profile
+    /// controller is the sole caller which catches the corresponding
+    /// `SMTPAddressFailedException` and turns it into a field error; callers
+    /// such as registration must continue to fail through the global error
+    /// handler.
+    #[error("SMTP recipient rejected with status {iStatus}: {sResponse}")]
+    SmtpAddressRejected { iStatus: u16, sResponse: String },
     #[error("database error: {0}")]
     Sqlx(#[from] sqlx::Error),
     #[error("I/O error: {0}")]
@@ -55,12 +90,35 @@ struct StForbiddenErrorTemplate;
 struct StNotFoundErrorTemplate;
 
 impl AppError {
+    pub fn stUserError(sMessage: impl Into<String>) -> Self {
+        Self::UserError {
+            sMessage: sMessage.into(),
+            sClass: "ru.org.linux.user.UserErrorException",
+        }
+    }
+
+    pub fn stBadInput(sMessage: impl Into<String>) -> Self {
+        Self::UserError {
+            sMessage: sMessage.into(),
+            sClass: "ru.org.linux.site.BadInputException",
+        }
+    }
+
+    pub fn stScriptErrorAs(sMessage: impl Into<String>, sClass: &'static str) -> Self {
+        Self::ScriptError {
+            sMessage: sMessage.into(),
+            sClass,
+        }
+    }
+
     fn sInternalType(&self) -> &'static str {
         match self {
+            AppError::UserError { sClass, .. } | AppError::ScriptError { sClass, .. } => sClass,
             AppError::Sqlx(_) => "sqlx::Error",
             AppError::Io(_) => "std::io::Error",
             AppError::Template(_) => "askama::Error",
             AppError::Anyhow(_) => "anyhow::Error",
+            AppError::SmtpAddressRejected { .. } => "SMTPAddressFailedException",
             _ => "AppError",
         }
     }
@@ -82,6 +140,17 @@ impl AppError {
                 "Некорректный запрос",
                 message.clone(),
             ),
+            AppError::UserError { sMessage, sClass } => {
+                (StatusCode::INTERNAL_SERVER_ERROR, sClass, sMessage.clone())
+            }
+            AppError::ScriptError { sMessage, sClass } => {
+                (StatusCode::INTERNAL_SERVER_ERROR, sClass, sMessage.clone())
+            }
+            AppError::RequestRejected => (
+                StatusCode::BAD_REQUEST,
+                "Некорректный запрос",
+                String::new(),
+            ),
             AppError::BadParameter(message) => (
                 StatusCode::NOT_FOUND,
                 "Некорректные параметры",
@@ -92,7 +161,11 @@ impl AppError {
                 "Попробуйте позже",
                 message.clone(),
             ),
-            AppError::Sqlx(_) | AppError::Io(_) | AppError::Template(_) | AppError::Anyhow(_) => (
+            AppError::Sqlx(_)
+            | AppError::Io(_)
+            | AppError::Template(_)
+            | AppError::Anyhow(_)
+            | AppError::SmtpAddressRejected { .. } => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Ошибка",
                 "Внутренняя ошибка сервера".to_string(),
@@ -103,14 +176,20 @@ impl AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
+        if matches!(self, AppError::RequestRejected) {
+            return StatusCode::BAD_REQUEST.into_response();
+        }
         let bBadParameter = matches!(&self, AppError::BadParameter(_));
+        let bUserError = matches!(&self, AppError::UserError { .. });
+        let bScriptError = matches!(&self, AppError::ScriptError { .. });
         let (status, title, message) = self.response_parts();
-        let optReport =
-            (status == StatusCode::INTERNAL_SERVER_ERROR).then(|| StInternalErrorReport {
-                sType: self.sInternalType().to_owned(),
-                sDebug: format!("{self:?}"),
-            });
-        if status == StatusCode::INTERNAL_SERVER_ERROR {
+        let bReportableInternal =
+            status == StatusCode::INTERNAL_SERVER_ERROR && !bUserError && !bScriptError;
+        let optReport = bReportableInternal.then(|| StInternalErrorReport {
+            sType: self.sInternalType().to_owned(),
+            sDebug: format!("{self:?}"),
+        });
+        if bReportableInternal {
             // Request-derived values can reach an error's Debug representation.
             // The sanitized exception reporter remains the diagnostic channel;
             // never duplicate the raw error (and possible credentials) in logs.
@@ -132,8 +211,8 @@ impl IntoResponse for AppError {
             _ => StCommonErrorTemplate {
                 title,
                 message: &message,
-                bBadParameter: false,
-                bInternal: status == StatusCode::INTERNAL_SERVER_ERROR,
+                bBadParameter: bScriptError,
+                bInternal: bReportableInternal,
             }
             .render(),
         }
@@ -180,6 +259,27 @@ mod tests {
         assert!(!sBody.contains("stack"));
     }
 
+    #[tokio::test]
+    async fn smtp_recipient_rejection_is_internal_unless_a_caller_handles_it() {
+        let stResponse = AppError::SmtpAddressRejected {
+            iStatus: 550,
+            sResponse: "550 mailbox unavailable for private@example.org".to_owned(),
+        }
+        .into_response();
+        assert_eq!(stResponse.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let stReport = stResponse
+            .extensions()
+            .get::<StInternalErrorReport>()
+            .expect("uncaught SMTP rejection must be reportable");
+        assert_eq!(stReport.sType, "SMTPAddressFailedException");
+        let vecBody = to_bytes(stResponse.into_body(), 128 * 1024)
+            .await
+            .expect("error page body");
+        let sBody = String::from_utf8(vecBody.to_vec()).expect("UTF-8 error page");
+        assert!(!sBody.contains("private@example.org"));
+        assert!(!sBody.contains("mailbox unavailable"));
+    }
+
     #[test]
     fn validation_error_remains_visible_to_the_client() {
         let error = AppError::BadRequest("неверное имя поля".to_string());
@@ -187,6 +287,49 @@ mod tests {
 
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(message, "неверное имя поля");
+    }
+
+    #[tokio::test]
+    async fn java_user_error_is_visible_500_without_internal_report() {
+        let stResponse = AppError::stBadInput("bad mask").into_response();
+        assert_eq!(stResponse.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            stResponse
+                .extensions()
+                .get::<StInternalErrorReport>()
+                .is_none()
+        );
+        let vecBody = to_bytes(stResponse.into_body(), 128 * 1024)
+            .await
+            .expect("user error body");
+        let sBody = String::from_utf8(vecBody.to_vec()).expect("UTF-8 error page");
+        assert!(sBody.contains("<title>Ошибка: ru.org.linux.site.BadInputException</title>"));
+        assert!(sBody.contains("<h1>bad mask</h1>"));
+        assert!(!sBody.contains("Произошла непредвиденная ошибка"));
+        assert!(!sBody.contains("Администраторы получили"));
+    }
+
+    #[tokio::test]
+    async fn java_script_error_is_visible_nonreportable_500_with_parameter_help() {
+        let stResponse =
+            AppError::stScriptErrorAs("Опрос <неверен>", "ru.org.linux.poll.BadVoteException")
+                .into_response();
+        assert_eq!(stResponse.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            stResponse
+                .extensions()
+                .get::<StInternalErrorReport>()
+                .is_none()
+        );
+        let vecBody = to_bytes(stResponse.into_body(), 128 * 1024)
+            .await
+            .expect("script error body");
+        let sBody = String::from_utf8(vecBody.to_vec()).expect("UTF-8 error page");
+        assert!(sBody.contains("<title>Ошибка: ru.org.linux.poll.BadVoteException</title>"));
+        assert!(sBody.contains("<h1>Опрос &#60;неверен&#62;</h1>"));
+        assert!(sBody.contains("Скрипту, генерирующему страничку"));
+        assert!(!sBody.contains("Произошла непредвиденная ошибка"));
+        assert!(!sBody.contains("Администраторы получили"));
     }
 
     #[tokio::test]

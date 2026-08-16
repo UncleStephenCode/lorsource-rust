@@ -1,7 +1,7 @@
 //! Java-compatible request timezone and `<lor:date*>` rendering support.
 
 use axum_extra::extract::cookie::CookieJar;
-use chrono::{DateTime, Duration, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, Timelike, Utc};
 use once_cell::sync::Lazy;
 use regex::{Captures, Regex};
 
@@ -37,7 +37,7 @@ pub fn stRequestTimezone(stJar: &CookieJar) -> chrono_tz::Tz {
 pub fn sTimeTag(sFormat: &str, dtValue: DateTime<Utc>) -> String {
     debug_assert!(matches!(
         sFormat,
-        "default" | "date" | "interval" | "compact-interval"
+        "default" | "date" | "long-date" | "interval" | "compact-interval"
     ));
     format!(
         r#"<time data-format="{sFormat}" datetime="{}">{dtValue}</time>"#,
@@ -121,6 +121,28 @@ fn sFormatTime(
                 .format("%d.%m.%y")
                 .to_string(),
         ),
+        // DateFormats.formatDateLong uses Java's localized LONG date with
+        // the Russian locale (for example, `9 августа 2026 г.`). chrono does
+        // not ship locale data, so keep the exact Russian genitive month
+        // names here while still applying the request timezone first.
+        "long-date" => {
+            let dtLocal = dtValue.with_timezone(&stTimezone);
+            let sMonth = [
+                "января",
+                "февраля",
+                "марта",
+                "апреля",
+                "мая",
+                "июня",
+                "июля",
+                "августа",
+                "сентября",
+                "октября",
+                "ноября",
+                "декабря",
+            ][dtLocal.month0() as usize];
+            Some(format!("{} {sMonth} {} г.", dtLocal.day(), dtLocal.year()))
+        }
         "interval" => Some(sFormatInterval(dtValue, stTimezone, dtNow, false)),
         "compact-interval" => Some(sFormatInterval(dtValue, stTimezone, dtNow, true)),
         _ => None,
@@ -197,5 +219,13 @@ mod tests {
             )
         );
         assert!(sTag.ends_with(" UTC</time>"));
+    }
+
+    #[test]
+    fn long_date_matches_java_russian_locale_and_request_timezone() {
+        let dtNow = Utc.with_ymd_and_hms(2026, 8, 9, 0, 0, 0).unwrap();
+        let sHtml = r#"<time data-format="long-date" datetime="2026-08-08T22:30:00Z">raw</time>"#;
+        let sActual = sRewriteHtmlTimes(sHtml, chrono_tz::Europe::Moscow, dtNow);
+        assert!(sActual.contains(">9 августа 2026 г.</time>"));
     }
 }

@@ -1,15 +1,15 @@
 status,methods,path,params,headers,consumes,produces,controller,handler,rust_match,source,semantic_parity
-partial-method,ANY,/,,,,,MainPageController,mainPage,GET /,src/main/scala/ru/org/linux/spring/MainPageController.scala:40,not-evaluated
-method-declared,ANY,/ExceptionResolver,,,,,ExceptionController,defaultExceptionHandler,ANY /ExceptionResolver; ANY /ExceptionResolver,src/main/scala/ru/org/linux/exception/ExceptionController.scala:27,not-evaluated
-partial-method,ANY,/about,,,,,ServerInfoController,serverInfo,GET /about,src/main/scala/ru/org/linux/spring/ServerInfoController.scala:26,not-evaluated
+method-declared,ANY,/,,,,,MainPageController,mainPage,ANY /,src/main/scala/ru/org/linux/spring/MainPageController.scala:40,not-evaluated
+method-declared,ANY,/ExceptionResolver,,,,,ExceptionController,defaultExceptionHandler,ANY /ExceptionResolver,src/main/scala/ru/org/linux/exception/ExceptionController.scala:27,not-evaluated
+method-declared,ANY,/about,,,,,ServerInfoController,serverInfo,ANY /about,src/main/scala/ru/org/linux/spring/ServerInfoController.scala:26,not-evaluated
 method-declared,GET,/activate,,,,,RegisterController,activateForm,"GET,POST /activate",src/main/scala/ru/org/linux/user/RegisterController.scala:117,not-evaluated
 method-declared,POST,/activate,action,,,,RegisterController,activateNew,"GET,POST /activate",src/main/scala/ru/org/linux/user/RegisterController.scala:123,not-evaluated
 method-declared,POST,/activate,!action,,,,RegisterController,activate,"GET,POST /activate",src/main/scala/ru/org/linux/user/RegisterController.scala:172,not-evaluated
 method-declared,GET,/activate.jsp,,,,,RegisterController,activateForm,"GET,POST /activate.jsp",src/main/scala/ru/org/linux/user/RegisterController.scala:117,not-evaluated
 method-declared,POST,/activate.jsp,action,,,,RegisterController,activateNew,"GET,POST /activate.jsp",src/main/scala/ru/org/linux/user/RegisterController.scala:123,not-evaluated
 method-declared,POST,/activate.jsp,!action,,,,RegisterController,activate,"GET,POST /activate.jsp",src/main/scala/ru/org/linux/user/RegisterController.scala:172,not-evaluated
-partial-method,ANY,/add-section.jsp,section,,,,AddTopicController,showFormWithSection,GET /add-section.jsp,src/main/scala/ru/org/linux/topic/AddTopicController.scala:318,not-evaluated
-partial-method,ANY,/add-section.jsp,!section,,,,AddTopicController,showFormAllSections,GET /add-section.jsp,src/main/scala/ru/org/linux/topic/AddTopicController.scala:383,not-evaluated
+method-declared,ANY,/add-section.jsp,section,,,,AddTopicController,showFormWithSection,ANY /add-section.jsp,src/main/scala/ru/org/linux/topic/AddTopicController.scala:318,not-evaluated
+method-declared,ANY,/add-section.jsp,!section,,,,AddTopicController,showFormAllSections,ANY /add-section.jsp,src/main/scala/ru/org/linux/topic/AddTopicController.scala:383,not-evaluated
 method-declared,GET,/add.jsp,,,,,AddTopicController,add,"GET,POST /add.jsp",src/main/scala/ru/org/linux/topic/AddTopicController.scala:134,not-evaluated
 method-declared,POST,/add.jsp,,,,,AddTopicController,doAdd,"GET,POST /add.jsp",src/main/scala/ru/org/linux/topic/AddTopicController.scala:183,not-evaluated
 method-declared,GET,/add_comment.jsp,,,,,AddCommentController,showFormReply,"GET,POST /add_comment.jsp",src/main/scala/ru/org/linux/comment/AddCommentController.scala:54,not-evaluated
@@ -17,7 +17,7 @@ method-declared,POST,/add_comment.jsp,,,,,AddCommentController,addComment,"GET,P
 method-declared,POST,/add_comment_ajax,,,,application/json; charset=UTF-8,AddCommentController,addCommentAjax,POST /add_comment_ajax,src/main/scala/ru/org/linux/comment/AddCommentController.scala:136,not-evaluated
 method-declared,GET,/addphoto.jsp,,,,,UserpicController,showForm,"GET,POST /addphoto.jsp",src/main/scala/ru/org/linux/user/UserpicController.scala:45,not-evaluated
 method-declared,POST,/addphoto.jsp,,,,,UserpicController,addPhoto,"GET,POST /addphoto.jsp",src/main/scala/ru/org/linux/user/UserpicController.scala:52,not-evaluated
-partial-method,ANY,/admin/email-domains,,,,,EmailDomainsBlockController,list,GET /admin/email-domains,src/main/scala/ru/org/linux/admin/EmailDomainsBlockController.scala:48,not-evaluated
+method-declared,ANY,/admin/email-domains,,,,,EmailDomainsBlockController,list,ANY /admin/email-domains,src/main/scala/ru/org/linux/admin/EmailDomainsBlockController.scala:48,not-evaluated
 method-declared,POST,/admin/email-domains/add,,,,,EmailDomainsBlockController,add,POST /admin/email-domains/add,src/main/scala/ru/org/linux/admin/EmailDomainsBlockController.scala:83,not-evaluated
 method-declared,POST,/admin/email-domains/delete,,,,,EmailDomainsBlockController,delete,POST /admin/email-domains/delete,src/main/scala/ru/org/linux/admin/EmailDomainsBlockController.scala:97,not-evaluated
 method-declared,GET,/admin/geoip,,,,,GeoLocationController,geoip,GET /admin/geoip,src/main/scala/ru/org/linux/auth/GeoLocationController.scala:24,not-evaluated
@@ -25,11 +25,11 @@ method-declared,POST,/admin/search-reindex,action=all,,,,SearchControlController
 method-declared,POST,/admin/search-reindex,action=current,,,,SearchControlController,reindexCurrentMonth,"GET,POST /admin/search-reindex",src/main/scala/ru/org/linux/search/SearchControlController.scala:51,not-evaluated
 method-declared,GET,/admin/search-reindex,,,,,SearchControlController,reindex,"GET,POST /admin/search-reindex",src/main/scala/ru/org/linux/search/SearchControlController.scala:64,not-evaluated
 method-declared,ANY,/articles.boxlet,,,,,ArticlesBoxlet,getData,ANY /articles.boxlet,src/main/scala/ru/org/linux/boxlets/ArticlesBoxlet.scala:29,not-evaluated
-partial-method,ANY,/articles/archive,,,,,ArchiveController,articlesArchive,GET /articles/archive; GET /articles/archive/,src/main/scala/ru/org/linux/topic/ArchiveController.scala:85,not-evaluated
-partial-method,ANY,/articles/{group}/{id}/history,,,,,EditHistoryController,showEditInfo,GET /articles/{group}/{id}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35,not-evaluated
-partial-method,ANY,/articles/{group}/{id}/{commentid}/history,,,,,EditHistoryController,showCommentEditInfo,GET /articles/{group}/{id}/{commentid}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60,not-evaluated
+method-declared,ANY,/articles/archive,,,,,ArchiveController,articlesArchive,ANY /articles/archive; ANY /articles/archive/,src/main/scala/ru/org/linux/topic/ArchiveController.scala:85,not-evaluated
+method-declared,ANY,/articles/{group}/{id}/history,,,,,EditHistoryController,showEditInfo,ANY /articles/{group}/{id}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35,not-evaluated
+method-declared,ANY,/articles/{group}/{id}/{commentid}/history,,,,,EditHistoryController,showCommentEditInfo,ANY /articles/{group}/{id}/{commentid}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60,not-evaluated
 method-declared,POST,/banip.jsp,,,,,BanIPController,banIP,POST /banip.jsp,src/main/scala/ru/org/linux/auth/BanIPController.scala:34,not-evaluated
-partial-method,ANY,/check-login,,,,,RegisterController,ajaxLoginCheck,GET /check-login,src/main/scala/ru/org/linux/user/RegisterController.scala:194,not-evaluated
+method-declared,ANY,/check-login,,,,,RegisterController,ajaxLoginCheck,ANY /check-login,src/main/scala/ru/org/linux/user/RegisterController.scala:194,not-evaluated
 method-declared,POST,/clear-warning,,,,,WarningController,clear,POST /clear-warning,src/main/scala/ru/org/linux/warning/WarningController.scala:198,not-evaluated
 partial-method,ANY,/comment-message.jsp,,,,,AddCommentController,showFormTopic,"GET,POST,PUT,DELETE,PATCH /comment-message.jsp",src/main/scala/ru/org/linux/comment/AddCommentController.scala:71,not-evaluated
 method-declared,GET,/commit.jsp,,,,,EditTopicController,showCommitForm,GET /commit.jsp,src/main/scala/ru/org/linux/topic/EditTopicController.scala:58,not-evaluated
@@ -46,25 +46,25 @@ method-declared,GET,/edit.jsp,,,,,EditTopicController,showEditForm,"GET,POST /ed
 method-declared,POST,/edit.jsp,,,,,EditTopicController,edit,"GET,POST /edit.jsp",src/main/scala/ru/org/linux/topic/EditTopicController.scala:233,not-evaluated
 method-declared,GET,/edit_comment,,,,,EditCommentController,editCommentShowHandler,"GET,POST /edit_comment",src/main/scala/ru/org/linux/comment/EditCommentController.scala:54,not-evaluated
 method-declared,POST,/edit_comment,,,,,EditCommentController,editCommentPostHandler,"GET,POST /edit_comment",src/main/scala/ru/org/linux/comment/EditCommentController.scala:96,not-evaluated
-method-declared,ANY,/errors/403,,,,,HttpErrorController,handle403,ANY /errors/403; ANY /errors/403,src/main/scala/ru/org/linux/site/HttpErrorController.scala:25,not-evaluated
-method-declared,ANY,/errors/404,,,,,HttpErrorController,handle404,ANY /errors/404; ANY /errors/404,src/main/scala/ru/org/linux/site/HttpErrorController.scala:22,not-evaluated
-partial-method,ANY,/forum,,,,,SectionController,forum,GET /forum; GET /forum/,src/main/scala/ru/org/linux/section/SectionController.scala:30,not-evaluated
-partial-method,ANY,/forum/lenta,,,,,TopicListController,forum,GET /forum/lenta,src/main/scala/ru/org/linux/topic/TopicListController.scala:185,not-evaluated
-partial-method,ANY,/forum/{group},,,,,GroupController,forum,"GET,POST /forum/{group}",src/main/scala/ru/org/linux/group/GroupController.scala:104,not-evaluated
-partial-method,ANY,/forum/{group}/archive,,,,,ArchiveController,forumArchive,GET /forum/{group}/archive; GET /forum/{group}/archive/,src/main/scala/ru/org/linux/topic/ArchiveController.scala:88,not-evaluated
-partial-method,ANY,/forum/{group}/{id}/history,,,,,EditHistoryController,showEditInfo,GET /forum/{group}/{id}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35,not-evaluated
-partial-method,ANY,/forum/{group}/{id}/{commentid}/history,,,,,EditHistoryController,showCommentEditInfo,GET /forum/{group}/{id}/{commentid}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60,not-evaluated
-partial-method,ANY,/forum/{group}/{year}/{month},,,,,GroupController,forumArchive,GET /forum/{group}/{id_or_year}/{page_or_month}; GET /forum/{group}/{id_or_year}/{page_or_month}/,src/main/scala/ru/org/linux/group/GroupController.scala:71,not-evaluated
+method-declared,ANY,/errors/403,,,,,HttpErrorController,handle403,ANY /errors/403,src/main/scala/ru/org/linux/site/HttpErrorController.scala:25,not-evaluated
+method-declared,ANY,/errors/404,,,,,HttpErrorController,handle404,ANY /errors/404,src/main/scala/ru/org/linux/site/HttpErrorController.scala:22,not-evaluated
+method-declared,ANY,/forum,,,,,SectionController,forum,ANY /forum; ANY /forum/,src/main/scala/ru/org/linux/section/SectionController.scala:30,not-evaluated
+method-declared,ANY,/forum/lenta,,,,,TopicListController,forum,ANY /forum/lenta,src/main/scala/ru/org/linux/topic/TopicListController.scala:185,not-evaluated
+method-declared,ANY,/forum/{group},,,,,GroupController,forum,ANY /forum/{group},src/main/scala/ru/org/linux/group/GroupController.scala:104,not-evaluated
+method-declared,ANY,/forum/{group}/archive,,,,,ArchiveController,forumArchive,ANY /forum/{group}/archive; ANY /forum/{group}/archive/,src/main/scala/ru/org/linux/topic/ArchiveController.scala:88,not-evaluated
+method-declared,ANY,/forum/{group}/{id}/history,,,,,EditHistoryController,showEditInfo,ANY /forum/{group}/{id}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35,not-evaluated
+method-declared,ANY,/forum/{group}/{id}/{commentid}/history,,,,,EditHistoryController,showCommentEditInfo,ANY /forum/{group}/{id}/{commentid}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60,not-evaluated
+method-declared,ANY,/forum/{group}/{year}/{month},,,,,GroupController,forumArchive,ANY /forum/{group}/{id_or_year}/{page_or_month}; ANY /forum/{group}/{id_or_year}/{page_or_month}/,src/main/scala/ru/org/linux/group/GroupController.scala:71,not-evaluated
 method-declared,ANY,/gallery.boxlet,,,,,GalleryBoxlet,getData,ANY /gallery.boxlet,src/main/java/ru/org/linux/gallery/GalleryBoxlet.java:38,not-evaluated
-partial-method,ANY,/gallery/archive,,,,,ArchiveController,galleryArchive,GET /gallery/archive; GET /gallery/archive/,src/main/scala/ru/org/linux/topic/ArchiveController.scala:76,not-evaluated
-partial-method,ANY,/gallery/{group}/{id}/history,,,,,EditHistoryController,showEditInfo,GET /gallery/{group}/{id}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35,not-evaluated
-partial-method,ANY,/gallery/{group}/{id}/{commentid}/history,,,,,EditHistoryController,showCommentEditInfo,GET /gallery/{group}/{id}/{commentid}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60,not-evaluated
-partial-method,ANY,/group-lastmod.jsp,,,,,GroupController,topicsLastmod,GET /group-lastmod.jsp,src/main/scala/ru/org/linux/group/GroupController.scala:59,not-evaluated
-partial-method,ANY,/group.jsp,,,,,GroupController,topics,GET /group.jsp,src/main/scala/ru/org/linux/group/GroupController.scala:47,not-evaluated
+method-declared,ANY,/gallery/archive,,,,,ArchiveController,galleryArchive,ANY /gallery/archive; ANY /gallery/archive/,src/main/scala/ru/org/linux/topic/ArchiveController.scala:76,not-evaluated
+method-declared,ANY,/gallery/{group}/{id}/history,,,,,EditHistoryController,showEditInfo,ANY /gallery/{group}/{id}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35,not-evaluated
+method-declared,ANY,/gallery/{group}/{id}/{commentid}/history,,,,,EditHistoryController,showCommentEditInfo,ANY /gallery/{group}/{id}/{commentid}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60,not-evaluated
+method-declared,ANY,/group-lastmod.jsp,,,,,GroupController,topicsLastmod,ANY /group-lastmod.jsp,src/main/scala/ru/org/linux/group/GroupController.scala:59,not-evaluated
+method-declared,ANY,/group.jsp,,,,,GroupController,topics,ANY /group.jsp,src/main/scala/ru/org/linux/group/GroupController.scala:47,not-evaluated
 method-declared,GET,/groupmod.jsp,,,,,GroupModificationController,showForm,"GET,POST /groupmod.jsp",src/main/scala/ru/org/linux/group/GroupModificationController.scala:30,not-evaluated
 method-declared,POST,/groupmod.jsp,,,,,GroupModificationController,modifyGroup,"GET,POST /groupmod.jsp",src/main/scala/ru/org/linux/group/GroupModificationController.scala:44,not-evaluated
-partial-method,ANY,/help/{page},,,,,HelpController,helpPage,GET /help/{page},src/main/scala/ru/org/linux/help/HelpController.scala:34,not-evaluated
-partial-method,ANY,/index.jsp,,,,,MainPageController,mainPage,GET /index.jsp,src/main/scala/ru/org/linux/spring/MainPageController.scala:40,not-evaluated
+method-declared,ANY,/help/{page},,,,,HelpController,helpPage,ANY /help/{page},src/main/scala/ru/org/linux/help/HelpController.scala:34,not-evaluated
+method-declared,ANY,/index.jsp,,,,,MainPageController,mainPage,ANY /index.jsp,src/main/scala/ru/org/linux/spring/MainPageController.scala:40,not-evaluated
 partial-method,"GET,HEAD",/jump-message.jsp,,,,,TopicController,jumpMessage,GET /jump-message.jsp,src/main/scala/ru/org/linux/topic/TopicController.scala:450,not-evaluated
 partial-method,"GET,HEAD",/login.jsp,,,,,LoginController,loginForm,GET /login.jsp,src/main/scala/ru/org/linux/auth/LoginController.scala:131,not-evaluated
 method-declared,POST,/login_process,,,,,LoginController,loginProcess,POST /login_process,src/main/scala/ru/org/linux/auth/LoginController.scala:54,not-evaluated
@@ -80,39 +80,39 @@ method-declared,POST,/memories.jsp,remove,,,,MemoriesController,remove,POST /mem
 method-declared,POST,/mt.jsp,,,,,TopicModificationController,moveTopic,"GET,POST /mt.jsp",src/main/scala/ru/org/linux/topic/TopicModificationController.scala:99,not-evaluated
 method-declared,GET,/mt.jsp,,,,,TopicModificationController,moveToForumForm,"GET,POST /mt.jsp",src/main/scala/ru/org/linux/topic/TopicModificationController.scala:119,not-evaluated
 method-declared,GET,/mtn.jsp,,,,,TopicModificationController,movePremoderatedForm,GET /mtn.jsp,src/main/scala/ru/org/linux/topic/TopicModificationController.scala:134,not-evaluated
-partial-method,ANY,/news/archive,,,,,ArchiveController,newsArchive,GET /news/archive; GET /news/archive/,src/main/scala/ru/org/linux/topic/ArchiveController.scala:79,not-evaluated
-partial-method,ANY,/news/{group}/{id}/history,,,,,EditHistoryController,showEditInfo,GET /news/{group}/{id}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35,not-evaluated
-partial-method,ANY,/news/{group}/{id}/{commentid}/history,,,,,EditHistoryController,showCommentEditInfo,GET /news/{group}/{id}/{commentid}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60,not-evaluated
+method-declared,ANY,/news/archive,,,,,ArchiveController,newsArchive,ANY /news/archive; ANY /news/archive/,src/main/scala/ru/org/linux/topic/ArchiveController.scala:79,not-evaluated
+method-declared,ANY,/news/{group}/{id}/history,,,,,EditHistoryController,showEditInfo,ANY /news/{group}/{id}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35,not-evaluated
+method-declared,ANY,/news/{group}/{id}/{commentid}/history,,,,,EditHistoryController,showCommentEditInfo,ANY /news/{group}/{id}/{commentid}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60,not-evaluated
 method-declared,POST,/notifications,,,,,UserEventController,resetNotifications,"GET,POST /notifications",src/main/scala/ru/org/linux/user/UserEventController.scala:58,not-evaluated
 partial-method,"GET,HEAD",/notifications,,,,,UserEventController,showNotifications,"GET,POST /notifications",src/main/scala/ru/org/linux/user/UserEventController.scala:126,not-evaluated
 method-declared,POST,/notifications-click,,,,,UserEventController,clickNotifications,POST /notifications-click,src/main/scala/ru/org/linux/user/UserEventController.scala:68,not-evaluated
 method-declared,POST,/notifications-click/ajax,,,,application/json,UserEventController,clickNotificationsAjax,POST /notifications-click/ajax,src/main/scala/ru/org/linux/user/UserEventController.scala:76,not-evaluated
 method-declared,GET,/notifications-count,,,,,UserEventApiController,getEventsCount,GET /notifications-count,src/main/scala/ru/org/linux/user/UserEventApiController.scala:31,not-evaluated
 method-declared,POST,/notifications-reset,,,,,UserEventApiController,resetNotifications,POST /notifications-reset,src/main/scala/ru/org/linux/user/UserEventApiController.scala:37,not-evaluated
-partial-method,ANY,/people/{nick},output=rss,,,,UserTopicListController,showUserTopicsRssGone,GET /people/{nick}; GET /people/{nick}/,src/main/scala/ru/org/linux/topic/UserTopicListController.scala:84,not-evaluated
-partial-method,ANY,/people/{nick},,,,,UserTopicListController,showUserTopics,GET /people/{nick}; GET /people/{nick}/,src/main/scala/ru/org/linux/topic/UserTopicListController.scala:88,not-evaluated
-partial-method,ANY,/people/{nick}/deleted-comments,,,,,ShowCommentsController,showDeletedComments,GET /people/{nick}/deleted-comments,src/main/scala/ru/org/linux/comment/ShowCommentsController.scala:61,not-evaluated
+method-declared,ANY,/people/{nick},output=rss,,,,UserTopicListController,showUserTopicsRssGone,ANY /people/{nick}; ANY /people/{nick}/,src/main/scala/ru/org/linux/topic/UserTopicListController.scala:84,not-evaluated
+method-declared,ANY,/people/{nick},,,,,UserTopicListController,showUserTopics,ANY /people/{nick}; ANY /people/{nick}/,src/main/scala/ru/org/linux/topic/UserTopicListController.scala:88,not-evaluated
+method-declared,ANY,/people/{nick}/deleted-comments,,,,,ShowCommentsController,showDeletedComments,ANY /people/{nick}/deleted-comments,src/main/scala/ru/org/linux/comment/ShowCommentsController.scala:61,not-evaluated
 method-declared,GET,/people/{nick}/deleted-topics,,,,,UserTopicListController,showDeletedTopics,GET /people/{nick}/deleted-topics,src/main/scala/ru/org/linux/topic/UserTopicListController.scala:143,not-evaluated
-partial-method,ANY,/people/{nick}/drafts,,,,,UserTopicListController,showUserDrafts,GET /people/{nick}/drafts; GET /people/{nick}/drafts,src/main/scala/ru/org/linux/topic/UserTopicListController.scala:59,not-evaluated
-method-declared,GET,/people/{nick}/edit,,,,,EditProfileController,show,"GET,POST /people/{nick}/edit; GET /people/{nick}/edit",src/main/scala/ru/org/linux/user/EditProfileController.scala:58,not-evaluated
+method-declared,ANY,/people/{nick}/drafts,,,,,UserTopicListController,showUserDrafts,ANY /people/{nick}/drafts,src/main/scala/ru/org/linux/topic/UserTopicListController.scala:59,not-evaluated
+method-declared,GET,/people/{nick}/edit,,,,,EditProfileController,show,"GET,POST /people/{nick}/edit",src/main/scala/ru/org/linux/user/EditProfileController.scala:58,not-evaluated
 method-declared,POST,/people/{nick}/edit,,,,,EditProfileController,edit,"GET,POST /people/{nick}/edit",src/main/scala/ru/org/linux/user/EditProfileController.scala:102,not-evaluated
-partial-method,ANY,/people/{nick}/favs,,,,,UserTopicListController,showUserFavs,GET /people/{nick}/favs,src/main/scala/ru/org/linux/topic/UserTopicListController.scala:37,not-evaluated
+method-declared,ANY,/people/{nick}/favs,,,,,UserTopicListController,showUserFavs,ANY /people/{nick}/favs,src/main/scala/ru/org/linux/topic/UserTopicListController.scala:37,not-evaluated
 partial-method,"GET,HEAD",/people/{nick}/profile,reset-password,,,,ResetPasswordController,showModeratorForm,GET /people/{nick}/profile; GET /people/{nick}/profile/,src/main/scala/ru/org/linux/user/ResetPasswordController.scala:33,not-evaluated
 partial-method,"GET,HEAD",/people/{nick}/profile,,,,,WhoisController,getInfoNew,GET /people/{nick}/profile; GET /people/{nick}/profile/,src/main/scala/ru/org/linux/user/WhoisController.scala:50,not-evaluated
 partial-method,"GET,HEAD",/people/{nick}/profile,year-stats,,,,WhoisController,yearStats,GET /people/{nick}/profile; GET /people/{nick}/profile/,src/main/scala/ru/org/linux/user/WhoisController.scala:215,not-evaluated
 partial-method,"GET,HEAD",/people/{nick}/profile/wipe,,,,,UserModificationController,wipe,GET /people/{nick}/profile/wipe,src/main/scala/ru/org/linux/user/UserModificationController.scala:315,not-evaluated
-partial-method,ANY,/people/{nick}/reactions,,,,,UserReactionsController,reactions,GET /people/{nick}/reactions,src/main/scala/ru/org/linux/reaction/UserReactionsController.scala:29,not-evaluated
-partial-method,ANY,/people/{nick}/reactions/{mode},,,,,UserReactionsController,reactions,GET /people/{nick}/reactions/{mode},src/main/scala/ru/org/linux/reaction/UserReactionsController.scala:29,not-evaluated
-method-declared,GET,/people/{nick}/remark,,,,,EditRemarkController,showForm,"GET,POST /people/{nick}/remark; GET,POST /people/{nick}/remark/; GET,POST /people/{nick}/remark; GET,POST /people/{nick}/remark/",src/main/scala/ru/org/linux/user/EditRemarkController.scala:29,not-evaluated
-method-declared,POST,/people/{nick}/remark,,,,,EditRemarkController,editProfile,"GET,POST /people/{nick}/remark; GET,POST /people/{nick}/remark/; GET,POST /people/{nick}/remark; GET,POST /people/{nick}/remark/",src/main/scala/ru/org/linux/user/EditRemarkController.scala:48,not-evaluated
-partial-method,ANY,/people/{nick}/remarks,,,,,ShowRemarkController,showRemarks,GET /people/{nick}/remarks,src/main/scala/ru/org/linux/user/ShowRemarkController.scala:26,not-evaluated
-method-declared,GET,/people/{nick}/settings,,,,,EditSettingsController,showForm,"GET,POST /people/{nick}/settings; GET,POST /people/{nick}/settings/; GET /people/{nick}/settings",src/main/scala/ru/org/linux/user/EditSettingsController.scala:37,not-evaluated
+method-declared,ANY,/people/{nick}/reactions,,,,,UserReactionsController,reactions,ANY /people/{nick}/reactions,src/main/scala/ru/org/linux/reaction/UserReactionsController.scala:29,not-evaluated
+method-declared,ANY,/people/{nick}/reactions/{mode},,,,,UserReactionsController,reactions,ANY /people/{nick}/reactions/{mode},src/main/scala/ru/org/linux/reaction/UserReactionsController.scala:29,not-evaluated
+method-declared,GET,/people/{nick}/remark,,,,,EditRemarkController,showForm,"GET,POST /people/{nick}/remark; GET,POST /people/{nick}/remark/",src/main/scala/ru/org/linux/user/EditRemarkController.scala:29,not-evaluated
+method-declared,POST,/people/{nick}/remark,,,,,EditRemarkController,editProfile,"GET,POST /people/{nick}/remark; GET,POST /people/{nick}/remark/",src/main/scala/ru/org/linux/user/EditRemarkController.scala:48,not-evaluated
+method-declared,ANY,/people/{nick}/remarks,,,,,ShowRemarkController,showRemarks,ANY /people/{nick}/remarks,src/main/scala/ru/org/linux/user/ShowRemarkController.scala:26,not-evaluated
+method-declared,GET,/people/{nick}/settings,,,,,EditSettingsController,showForm,"GET,POST /people/{nick}/settings; GET,POST /people/{nick}/settings/",src/main/scala/ru/org/linux/user/EditSettingsController.scala:37,not-evaluated
 method-declared,POST,/people/{nick}/settings,,,,,EditSettingsController,updateSettings,"GET,POST /people/{nick}/settings; GET,POST /people/{nick}/settings/",src/main/scala/ru/org/linux/user/EditSettingsController.scala:78,not-evaluated
-partial-method,ANY,/people/{nick}/tracked,,,,,UserTopicListController,showUserWatches,GET /people/{nick}/tracked,src/main/scala/ru/org/linux/topic/UserTopicListController.scala:161,not-evaluated
+method-declared,ANY,/people/{nick}/tracked,,,,,UserTopicListController,showUserWatches,ANY /people/{nick}/tracked,src/main/scala/ru/org/linux/topic/UserTopicListController.scala:161,not-evaluated
 method-declared,ANY,/poll.boxlet,,,,,PollBoxlet,getData,ANY /poll.boxlet,src/main/scala/ru/org/linux/poll/PollBoxlet.scala:30,not-evaluated
-partial-method,ANY,/polls/archive,,,,,ArchiveController,pollsArchive,GET /polls/archive; GET /polls/archive/,src/main/scala/ru/org/linux/topic/ArchiveController.scala:82,not-evaluated
-partial-method,ANY,/polls/{group}/{id}/history,,,,,EditHistoryController,showEditInfo,GET /polls/{group}/{id}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35,not-evaluated
-partial-method,ANY,/polls/{group}/{id}/{commentid}/history,,,,,EditHistoryController,showCommentEditInfo,GET /polls/{group}/{id}/{commentid}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60,not-evaluated
+method-declared,ANY,/polls/archive,,,,,ArchiveController,pollsArchive,ANY /polls/archive; ANY /polls/archive/,src/main/scala/ru/org/linux/topic/ArchiveController.scala:82,not-evaluated
+method-declared,ANY,/polls/{group}/{id}/history,,,,,EditHistoryController,showEditInfo,ANY /polls/{group}/{id}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:35,not-evaluated
+method-declared,ANY,/polls/{group}/{id}/{commentid}/history,,,,,EditHistoryController,showCommentEditInfo,ANY /polls/{group}/{id}/{commentid}/history,src/main/scala/ru/org/linux/edithistory/EditHistoryController.scala:60,not-evaluated
 method-declared,GET,/post-warning,,,,,WarningController,showForm,"GET,POST /post-warning",src/main/scala/ru/org/linux/warning/WarningController.scala:50,not-evaluated
 method-declared,POST,/post-warning,,,,,WarningController,post,"GET,POST /post-warning",src/main/scala/ru/org/linux/warning/WarningController.scala:98,not-evaluated
 method-declared,GET,/reactions,comment,,,,ReactionController,commentReaction,"GET,POST /reactions",src/main/scala/ru/org/linux/reaction/ReactionController.scala:44,not-evaluated
@@ -127,12 +127,12 @@ method-declared,POST,/remove-userpic.jsp,,,,,UserModificationController,removeUs
 method-declared,GET,/reset-password,,,,,ResetPasswordController,showCodeForm,"GET,POST /reset-password",src/main/scala/ru/org/linux/user/ResetPasswordController.scala:47,not-evaluated
 method-declared,POST,/reset-password,,,,,ResetPasswordController,resetPassword,"GET,POST /reset-password",src/main/scala/ru/org/linux/user/ResetPasswordController.scala:50,not-evaluated
 partial-method,ANY,/resolve.jsp,,,,,ResolveController,resolve,"GET,POST,PUT,DELETE,PATCH /resolve.jsp",src/main/scala/ru/org/linux/topic/ResolveController.scala:29,not-evaluated
-partial-method,ANY,/sameip.jsp,,,,,SameIPController,sameIP,GET /sameip.jsp,src/main/scala/ru/org/linux/admin/SameIPController.scala:59,not-evaluated
+method-declared,ANY,/sameip.jsp,,,,,SameIPController,sameIP,ANY /sameip.jsp,src/main/scala/ru/org/linux/admin/SameIPController.scala:59,not-evaluated
 partial-method,"GET,HEAD",/search.jsp,,,,,SearchController,search,GET /search.jsp,src/main/scala/ru/org/linux/search/SearchController.scala:56,not-evaluated
-partial-method,ANY,/section-rss.jsp,,,,,TopicListController,showRSS,GET /section-rss.jsp,src/main/scala/ru/org/linux/topic/TopicListController.scala:240,not-evaluated
+method-declared,ANY,/section-rss.jsp,,,,,TopicListController,showRSS,ANY /section-rss.jsp,src/main/scala/ru/org/linux/topic/TopicListController.scala:240,not-evaluated
 method-declared,GET,/setpostscore.jsp,,,,,TopicModificationController,showForm,"GET,POST /setpostscore.jsp",src/main/scala/ru/org/linux/topic/TopicModificationController.scala:41,not-evaluated
 method-declared,POST,/setpostscore.jsp,,,,,TopicModificationController,modifyTopic,"GET,POST /setpostscore.jsp",src/main/scala/ru/org/linux/topic/TopicModificationController.scala:51,not-evaluated
-partial-method,ANY,/show-comments.jsp,,,,,ShowCommentsController,showComments,GET /show-comments.jsp,src/main/scala/ru/org/linux/comment/ShowCommentsController.scala:32,not-evaluated
+method-declared,ANY,/show-comments.jsp,,,,,ShowCommentsController,showComments,ANY /show-comments.jsp,src/main/scala/ru/org/linux/comment/ShowCommentsController.scala:32,not-evaluated
 partial-method,"GET,HEAD",/show-replies.jsp,"!output,!nick",,,,UserEventController,showNotificationsOld,GET /show-replies.jsp,src/main/scala/ru/org/linux/user/UserEventController.scala:191,not-evaluated
 partial-method,"GET,HEAD",/show-replies.jsp,!output,,,,UserEventController,showNotificationsForModerator,GET /show-replies.jsp,src/main/scala/ru/org/linux/user/UserEventController.scala:197,not-evaluated
 partial-method,"GET,HEAD",/show-replies.jsp,output,,,,UserEventController,repliesFeed,GET /show-replies.jsp,src/main/scala/ru/org/linux/user/UserEventController.scala:254,not-evaluated
@@ -140,17 +140,17 @@ method-declared,GET,/show-topics.jsp,,,,,TopicListController,showUserTopics,GET 
 partial-method,"GET,HEAD",/tag/{tag},!section,,,,TagPageController,tagPage,GET /tag/{tag},src/main/scala/ru/org/linux/tag/TagPageController.scala:61,not-evaluated
 partial-method,"GET,HEAD",/tag/{tag},section,,,,TagTopicListController,tagFeed,GET /tag/{tag},src/main/scala/ru/org/linux/topic/TagTopicListController.scala:74,not-evaluated
 method-declared,ANY,/tagcloud.boxlet,,,,,TagCloudBoxlet,getData,ANY /tagcloud.boxlet,src/main/java/ru/org/linux/boxlets/TagCloudBoxlet.java:36,not-evaluated
-partial-method,ANY,/tags,,,,,TagController,showDefaultTagListHandlertags,GET /tags,src/main/scala/ru/org/linux/tag/TagController.scala:40,not-evaluated
-partial-method,ANY,/tags,term,,,,TagController,showTagListHandlerJSON,GET /tags,src/main/scala/ru/org/linux/tag/TagController.scala:93,not-evaluated
-partial-method,ANY,/tags.jsp,,,,,TagController,oldTagsRedirectHandler,GET /tags.jsp,src/main/scala/ru/org/linux/tag/TagController.scala:83,not-evaluated
+method-declared,ANY,/tags,,,,,TagController,showDefaultTagListHandlertags,ANY /tags,src/main/scala/ru/org/linux/tag/TagController.scala:40,not-evaluated
+method-declared,ANY,/tags,term,,,,TagController,showTagListHandlerJSON,ANY /tags,src/main/scala/ru/org/linux/tag/TagController.scala:93,not-evaluated
+method-declared,ANY,/tags.jsp,,,,,TagController,oldTagsRedirectHandler,ANY /tags.jsp,src/main/scala/ru/org/linux/tag/TagController.scala:83,not-evaluated
 method-declared,GET,/tags/change,,,,,TagController,changeTagShowFormHandler,"GET,POST /tags/change",src/main/scala/ru/org/linux/tag/TagController.scala:107,not-evaluated
 method-declared,POST,/tags/change,,,,,TagController,changeTagSubmitHandler,"GET,POST /tags/change",src/main/scala/ru/org/linux/tag/TagController.scala:133,not-evaluated
 method-declared,GET,/tags/delete,,,,,TagController,deleteTagShowFormHandler,"GET,POST /tags/delete",src/main/scala/ru/org/linux/tag/TagController.scala:169,not-evaluated
 method-declared,POST,/tags/delete,,,,,TagController,deleteTagSubmitHandler,"GET,POST /tags/delete",src/main/scala/ru/org/linux/tag/TagController.scala:193,not-evaluated
-partial-method,ANY,/tags/{firstLetter},,,,,TagController,showTagListHandler,GET /tags/{first_letter},src/main/scala/ru/org/linux/tag/TagController.scala:50,not-evaluated
+method-declared,ANY,/tags/{firstLetter},,,,,TagController,showTagListHandler,ANY /tags/{first_letter},src/main/scala/ru/org/linux/tag/TagController.scala:50,not-evaluated
 method-declared,ANY,/top10.boxlet,,,,,TopTenBoxlet,getData,ANY /top10.boxlet,src/main/scala/ru/org/linux/boxlets/TopTenBoxlet.scala:28,not-evaluated
-partial-method,ANY,/tracker,,,,,TrackerController,tracker,GET /tracker; GET /tracker/,src/main/scala/ru/org/linux/tracker/TrackerController.scala:68,not-evaluated
-partial-method,ANY,/tracker.jsp,,,,,TrackerController,trackerOldUrl,GET /tracker.jsp,src/main/scala/ru/org/linux/tracker/TrackerController.scala:36,not-evaluated
+method-declared,ANY,/tracker,,,,,TrackerController,tracker,ANY /tracker; ANY /tracker/,src/main/scala/ru/org/linux/tracker/TrackerController.scala:68,not-evaluated
+method-declared,ANY,/tracker.jsp,,,,,TrackerController,trackerOldUrl,ANY /tracker.jsp,src/main/scala/ru/org/linux/tracker/TrackerController.scala:36,not-evaluated
 method-declared,GET,/uncommit.jsp,,,,,TopicModificationController,uncommitForm,"GET,POST /uncommit.jsp",src/main/scala/ru/org/linux/topic/TopicModificationController.scala:155,not-evaluated
 method-declared,POST,/uncommit.jsp,,,,,TopicModificationController,uncommit,"GET,POST /uncommit.jsp",src/main/scala/ru/org/linux/topic/TopicModificationController.scala:167,not-evaluated
 method-declared,GET,/undelete,,,,,DeleteTopicController,undeleteForm,"GET,POST /undelete",src/main/scala/ru/org/linux/topic/DeleteTopicController.scala:104,not-evaluated
@@ -179,16 +179,16 @@ method-declared,POST,/usermod.jsp,action=remove_town,,,,UserModificationControll
 method-declared,POST,/usermod.jsp,action=remove_url,,,,UserModificationController,removeUrl,"GET,POST /usermod.jsp",src/main/scala/ru/org/linux/user/UserModificationController.scala:256,not-evaluated
 method-declared,POST,/usermod.jsp,action=freeze,,,,UserModificationController,freezeUser,"GET,POST /usermod.jsp",src/main/scala/ru/org/linux/user/UserModificationController.scala:291,not-evaluated
 partial-method,"GET,HEAD",/view-all.jsp,,,,,UncommitedTopicsController,viewAll,GET /view-all.jsp,src/main/scala/ru/org/linux/topic/UncommitedTopicsController.scala:37,not-evaluated
-partial-method,ANY,/view-deleted,,,,,DeletedCommentController,viewDeleted,GET /view-deleted,src/main/scala/ru/org/linux/comment/DeletedCommentController.scala:35,not-evaluated
-partial-method,ANY,/view-message.jsp,,,,,TopicController,getMessageOld,GET /view-message.jsp,src/main/scala/ru/org/linux/topic/TopicController.scala:359,not-evaluated
+method-declared,ANY,/view-deleted,,,,,DeletedCommentController,viewDeleted,ANY /view-deleted,src/main/scala/ru/org/linux/comment/DeletedCommentController.scala:35,not-evaluated
+method-declared,ANY,/view-message.jsp,,,,,TopicController,getMessageOld,ANY /view-message.jsp,src/main/scala/ru/org/linux/topic/TopicController.scala:359,not-evaluated
 partial-method,"GET,HEAD",/view-news.jsp,tag,,,,TagTopicListController,tagFeedOld,GET /view-news.jsp,src/main/scala/ru/org/linux/topic/TagTopicListController.scala:168,not-evaluated
-partial-method,ANY,/view-section.jsp,,,,,SectionController,oldLink,GET /view-section.jsp,src/main/scala/ru/org/linux/section/SectionController.scala:45,not-evaluated
+method-declared,ANY,/view-section.jsp,,,,,SectionController,oldLink,ANY /view-section.jsp,src/main/scala/ru/org/linux/section/SectionController.scala:45,not-evaluated
 method-declared,POST,/vote.jsp,,,,,VoteController,vote,POST /vote.jsp,src/main/scala/ru/org/linux/poll/VoteController.scala:30,not-evaluated
-partial-method,ANY,/whois.jsp,,,,,WhoisController,getInfo,GET /whois.jsp,src/main/scala/ru/org/linux/user/WhoisController.scala:173,not-evaluated
+method-declared,ANY,/whois.jsp,,,,,WhoisController,getInfo,ANY /whois.jsp,src/main/scala/ru/org/linux/user/WhoisController.scala:173,not-evaluated
 method-declared,GET,/yandex-tableau,,,,application/json,UserEventApiController,getYandexWidget,GET /yandex-tableau,src/main/scala/ru/org/linux/user/UserEventApiController.scala:47,not-evaluated
-partial-method,ANY,/{section}/,,,,,TopicListController,topics,GET /forum; GET /forum/; GET /news/; GET /polls/; GET /articles/; GET /gallery/,src/main/scala/ru/org/linux/topic/TopicListController.scala:167,not-evaluated
-partial-method,ANY,/{section}/archive/{year}/{month},,,,,TopicListController,sectionArchive,GET /news/archive/{year}/{month}; GET /news/archive/{year}/{month}/; GET /polls/archive/{year}/{month}; GET /polls/archive/{year}/{month}/; GET /articles/archive/{year}/{month}; GET /articles/archive/{year}/{month}/; GET /gallery/archive/{year}/{month}; GET /gallery/archive/{year}/{month}/,src/main/scala/ru/org/linux/topic/TopicListController.scala:218,not-evaluated
-partial-method,ANY,/{section}/{group},,,,,TopicListController,topicsByGroup,"GET,POST /forum/{group}; GET /news/{group}; GET /polls/{group}; GET /articles/{group}; GET /gallery/{group}",src/main/scala/ru/org/linux/topic/TopicListController.scala:203,not-evaluated
-partial-method,ANY,/{section}/{group}/{id},,,,,TopicController,getMessageMain,GET /forum/{group}/{id}; GET /news/{group}/{id}; GET /polls/{group}/{id}; GET /articles/{group}/{id}; GET /gallery/{group}/{id},src/main/scala/ru/org/linux/topic/TopicController.scala:98,not-evaluated
-method-declared,GET,/{section}/{group}/{id}/page{page},,,,,TopicController,getMessagePage,GET /forum/{group}/{id_or_year}/{page_or_month}; GET /forum/{group}/{id_or_year}/{page_or_month}/; GET /news/{group}/{id}/{page_marker}; GET /polls/{group}/{id}/{page_marker}; GET /articles/{group}/{id}/{page_marker}; GET /gallery/{group}/{id}/{page_marker},src/main/scala/ru/org/linux/topic/TopicController.scala:127,not-evaluated
+method-declared,ANY,/{section}/,,,,,TopicListController,topics,ANY /forum; ANY /forum/; ANY /news/; ANY /polls/; ANY /articles/; ANY /gallery/,src/main/scala/ru/org/linux/topic/TopicListController.scala:167,not-evaluated
+method-declared,ANY,/{section}/archive/{year}/{month},,,,,TopicListController,sectionArchive,ANY /news/archive/{year}/{month}; ANY /news/archive/{year}/{month}/; ANY /polls/archive/{year}/{month}; ANY /polls/archive/{year}/{month}/; ANY /articles/archive/{year}/{month}; ANY /articles/archive/{year}/{month}/; ANY /gallery/archive/{year}/{month}; ANY /gallery/archive/{year}/{month}/,src/main/scala/ru/org/linux/topic/TopicListController.scala:218,not-evaluated
+method-declared,ANY,/{section}/{group},,,,,TopicListController,topicsByGroup,ANY /forum/{group}; ANY /news/{group}; ANY /polls/{group}; ANY /articles/{group}; ANY /gallery/{group},src/main/scala/ru/org/linux/topic/TopicListController.scala:203,not-evaluated
+method-declared,ANY,/{section}/{group}/{id},,,,,TopicController,getMessageMain,ANY /forum/{group}/{id}; ANY /news/{group}/{id}; ANY /polls/{group}/{id}; ANY /articles/{group}/{id}; ANY /gallery/{group}/{id},src/main/scala/ru/org/linux/topic/TopicController.scala:98,not-evaluated
+method-declared,GET,/{section}/{group}/{id}/page{page},,,,,TopicController,getMessagePage,ANY /forum/{group}/{id_or_year}/{page_or_month}; ANY /forum/{group}/{id_or_year}/{page_or_month}/; GET /news/{group}/{id}/{page_marker}; GET /polls/{group}/{id}/{page_marker}; GET /articles/{group}/{id}/{page_marker}; GET /gallery/{group}/{id}/{page_marker},src/main/scala/ru/org/linux/topic/TopicController.scala:127,not-evaluated
 method-declared,GET,/{section}/{group}/{id}/thread/{threadRoot},,,,,TopicController,getMessageThread,GET /forum/{group}/{id}/thread/{thread_root}; GET /news/{group}/{id}/thread/{thread_root}; GET /polls/{group}/{id}/thread/{thread_root}; GET /articles/{group}/{id}/thread/{thread_root}; GET /gallery/{group}/{id}/thread/{thread_root},src/main/scala/ru/org/linux/topic/TopicController.scala:143,not-evaluated

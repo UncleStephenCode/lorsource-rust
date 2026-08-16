@@ -1,9 +1,10 @@
 use async_trait::async_trait;
 use sqlx::{Postgres, Transaction};
 
-use crate::domain::comment::model::StCommentItem;
+use crate::domain::comment::model::{StCommentItem, StCommentPageMeta};
 use crate::domain::topic::model::{
-    StMainTopicSummary, StRssContext, StRssTopic, StTopicDetail, StTopicSummary,
+    StLegacyTopicRedirect, StMainTopicSummary, StRssContext, StRssTopic, StTopicDetail,
+    StTopicScrollers, StTopicSummary,
 };
 use crate::error::Result;
 use chrono::{DateTime, Utc};
@@ -36,7 +37,20 @@ pub trait TrTopicRepository: Send + Sync {
         dtFrom: DateTime<Utc>,
     ) -> Result<Vec<StRssTopic>>;
     async fn stGetTopic(&self, iTopicId: i32) -> Result<StTopicDetail>;
+    async fn stLegacyTopicRedirect(&self, iTopicId: i32) -> Result<StLegacyTopicRedirect>;
+    async fn stTopicScrollers(
+        &self,
+        iTopicId: i32,
+        optViewerIdForIgnoreList: Option<i32>,
+    ) -> Result<StTopicScrollers>;
     async fn vecListComments(&self, iTopicId: i32) -> Result<Vec<StCommentItem>>;
+    async fn vecCommentPageMeta(
+        &self,
+        vecCommentIds: &[i32],
+        optViewerId: Option<i32>,
+        bModeratorSession: bool,
+        bLoadWarnings: bool,
+    ) -> Result<Vec<StCommentPageMeta>>;
     async fn iNextMessageId(&self, txPg: &mut Transaction<'_, Postgres>) -> Result<i32>;
     async fn vInsertTopicMessage(
         &self,

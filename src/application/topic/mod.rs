@@ -4,12 +4,12 @@ pub mod moderation;
 pub mod options;
 pub mod posting;
 
-use crate::domain::comment::model::StCommentItem;
+use crate::domain::comment::model::{StCommentItem, StCommentPageMeta};
 use crate::domain::markup::model::StMarkupUserDirectory;
 use crate::domain::topic::{
     model::{
-        StMainTopicSummary, StRssImage, StRssPoll, StRssTag, StRssTopic, StTopicDetail,
-        StTopicSummary,
+        StLegacyTopicRedirect, StMainTopicSummary, StRssImage, StRssPoll, StRssTag, StRssTopic,
+        StTopicDetail, StTopicScrollers, StTopicSummary,
     },
     repository::{StNewTopic, TrTopicRepository},
 };
@@ -98,6 +98,20 @@ where
         self.oRepository.stGetTopic(iTopicId).await
     }
 
+    pub async fn stLegacyTopicRedirect(&self, iTopicId: i32) -> Result<StLegacyTopicRedirect> {
+        self.oRepository.stLegacyTopicRedirect(iTopicId).await
+    }
+
+    pub async fn stTopicScrollers(
+        &self,
+        iTopicId: i32,
+        optViewerIdForIgnoreList: Option<i32>,
+    ) -> Result<StTopicScrollers> {
+        self.oRepository
+            .stTopicScrollers(iTopicId, optViewerIdForIgnoreList)
+            .await
+    }
+
     pub async fn stRssSource(
         &self,
         iSectionId: i32,
@@ -161,6 +175,18 @@ where
 
     pub async fn vecListComments(&self, iTopicId: i32) -> Result<Vec<StCommentItem>> {
         self.oRepository.vecListComments(iTopicId).await
+    }
+
+    pub async fn vecCommentPageMeta(
+        &self,
+        vecCommentIds: &[i32],
+        optViewerId: Option<i32>,
+        bModeratorSession: bool,
+        bLoadWarnings: bool,
+    ) -> Result<Vec<StCommentPageMeta>> {
+        self.oRepository
+            .vecCommentPageMeta(vecCommentIds, optViewerId, bModeratorSession, bLoadWarnings)
+            .await
     }
 
     pub async fn iNextMessageId(&self, txPg: &mut Transaction<'_, Postgres>) -> Result<i32> {

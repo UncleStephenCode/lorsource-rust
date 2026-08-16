@@ -9,7 +9,7 @@ use axum::{
     Form,
     extract::{ConnectInfo, Query, State},
     http::{StatusCode, header},
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{Html, IntoResponse, Response},
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar};
 use serde::Deserialize;
@@ -98,15 +98,6 @@ fn found(sLocation: &str) -> Response {
         .into_response()
 }
 
-/// Redirect an unauthenticated browser page to the login form while retaining
-/// the complete local request target.  Encoding the target as a single query
-/// value is important: `/login.jsp` decodes it back into `LoginQuery::from`,
-/// then carries the value in the original `redirectUrl` form field.
-pub(crate) fn login_redirect(sFrom: &str) -> Response {
-    let sFrom = safe_redirect_url(sFrom);
-    Redirect::to(&format!("/login.jsp?from={}", urlencoding::encode(&sFrom))).into_response()
-}
-
 #[derive(Template)]
 #[template(path = "register.html")]
 struct RegisterTemplate<'a> {
@@ -157,10 +148,12 @@ pub struct LoginQuery {
 
 #[derive(Deserialize)]
 pub struct LoginForm {
+    #[serde(default)]
     pub nick: String,
+    #[serde(default)]
     pub passwd: String,
-    #[serde(rename = "redirectUrl", alias = "redirect_url")]
-    pub redirect_url: Option<String>,
+    #[serde(default, rename = "redirectUrl")]
+    pub redirect_url: String,
     #[serde(rename = "h-captcha-response")]
     pub captcha_response: Option<String>,
 }
@@ -215,7 +208,7 @@ pub async fn login(
     ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
     Form(form): Form<LoginForm>,
 ) -> Result<Response> {
-    let redirect_url = safe_redirect_url(form.redirect_url.as_deref().unwrap_or(""));
+    let redirect_url = safe_redirect_url(&form.redirect_url);
     if current_user.is_some() {
         return Ok(found(&redirect_url));
     }
@@ -255,7 +248,7 @@ pub async fn login(
         // LockedException (blocked account): silently back to their own
         // profile, no error message, no failed-attempt penalty.
         auth::LoginOutcome::Blocked => {
-            let sLocation = format!("/people/{}/profile", urlencoding::encode(form.nick.trim()));
+            let sLocation = format!("/people/{}/profile", urlencoding::encode(&form.nick));
             return Ok((jar, found(&sLocation)).into_response());
         }
         auth::LoginOutcome::NotActivated => {
@@ -1017,11 +1010,7 @@ fn generate_java_like_password() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{EMAIL_IN_USE_SQL, login_redirect, optRegistrationEmailDomain, safe_redirect_url};
-    use axum::{
-        http::{StatusCode, header},
-        response::IntoResponse,
-    };
+    use super::{EMAIL_IN_USE_SQL, LoginForm, optRegistrationEmailDomain, safe_redirect_url};
 
     #[test]
     fn login_redirect_accepts_only_java_local_targets() {
@@ -1035,31 +1024,33 @@ mod tests {
     }
 
     #[test]
-    fn protected_page_login_redirect_preserves_and_encodes_request_target() {
-        let stResponse = login_redirect("/people/maxcom/settings?tab=display").into_response();
+    fn login_form_binding_uses_java_bean_empty_defaults() {
+        let stMissingNick: LoginForm =
+            serde_urlencoded::from_str("passwd=secret&redirectUrl=%2Fforum%2F").unwrap();
+        assert_eq!(stMissingNick.nick, "");
+        assert_eq!(stMissingNick.passwd, "secret");
+        assert_eq!(stMissingNick.redirect_url, "/forum/");
 
-        assert_eq!(stResponse.status(), StatusCode::SEE_OTHER);
-        assert_eq!(
-            stResponse
-                .headers()
-                .get(header::LOCATION)
-                .and_then(|stValue| stValue.to_str().ok()),
-            Some("/login.jsp?from=%2Fpeople%2Fmaxcom%2Fsettings%3Ftab%3Ddisplay")
-        );
+        let stMissingPassword: LoginForm = serde_urlencoded::from_str("nick=%20alice%20").unwrap();
+        assert_eq!(stMissingPassword.nick, " alice ");
+        assert_eq!(stMissingPassword.passwd, "");
     }
 
     #[test]
-    fn protected_page_login_redirect_rejects_non_local_target() {
-        let stResponse = login_redirect("https://evil.example/");
+    fn login_form_does_not_accept_the_rust_only_redirect_alias() {
+        let stForm: LoginForm =
+            serde_urlencoded::from_str("nick=alice&passwd=secret&redirect_url=%2Fforum%2F")
+                .unwrap();
+        assert_eq!(stForm.redirect_url, "");
+        assert_eq!(safe_redirect_url(&stForm.redirect_url), "/");
+    }
 
-        assert_eq!(stResponse.status(), StatusCode::SEE_OTHER);
-        assert_eq!(
-            stResponse
-                .headers()
-                .get(header::LOCATION)
-                .and_then(|stValue| stValue.to_str().ok()),
-            Some("/login.jsp?from=%2F")
-        );
+    #[test]
+    fn login_error_template_redisplays_only_the_raw_nickname() {
+        let sTemplate = include_str!("../../templates/login.html");
+        assert!(sTemplate.contains("name=\"nick\" value=\"{{ nick }}\""));
+        assert!(sTemplate.contains("name=\"passwd\" type=\"password\""));
+        assert!(!sTemplate.contains("name=\"passwd\" type=\"password\" value="));
     }
 
     #[test]
@@ -1069,6 +1060,22 @@ mod tests {
         assert!(EMAIL_IN_USE_SQL.contains("'block_user'::user_log_action"));
         assert!(EMAIL_IN_USE_SQL.contains("'14 days'::interval"));
         assert!(!EMAIL_IN_USE_SQL.contains("lastlogin"));
+    }
+
+    #[test]
+    fn registration_page_restores_java_client_validation_contract() {
+        let sTemplate = include_str!("../../templates/register.html");
+        let sBase = include_str!("../../templates/base.html");
+
+        assert!(sBase.contains("$script('/js/plugins.js', 'plugins')"));
+        assert!(sTemplate.contains("$script.ready(\"plugins\""));
+        assert!(sTemplate.contains("equalTo: \"#password\""));
+        assert!(sTemplate.contains("remote: \"/check-login\""));
+        let sConfirmation = sTemplate
+            .lines()
+            .find(|sLine| sLine.contains("name=\"password2\""))
+            .expect("password confirmation input");
+        assert!(!sConfirmation.contains("minlength="));
     }
 
     #[test]

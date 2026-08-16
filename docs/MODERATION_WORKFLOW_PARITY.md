@@ -12,15 +12,15 @@ Source of truth:
 
 | Path | Methods | Required parameters | Binding/auth order | OPTIONS `Allow` |
 |---|---|---|---|---|
-| `/mt.jsp` | GET, HEAD, POST, OPTIONS | GET: `msgid`; POST: `msgid`, `moveto` | binding, then moderator check | `POST,GET,HEAD,OPTIONS` |
+| `/mt.jsp` | GET, HEAD, POST, OPTIONS | GET: `msgid`; POST: `msgid`, `moveto` | binding, then moderator check | `GET,HEAD,POST,OPTIONS` |
 | `/mtn.jsp` | GET, HEAD, OPTIONS | `msgid` | binding, then moderator check | `GET,HEAD,OPTIONS` |
-| `/uncommit.jsp` | POST, GET, HEAD, OPTIONS | `msgid` | binding, then moderator check | `POST,GET,HEAD,OPTIONS` |
+| `/uncommit.jsp` | GET, HEAD, POST, OPTIONS | `msgid` | binding, then moderator check | `GET,HEAD,POST,OPTIONS` |
 | `/resolve.jsp` | GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS | `msgid`, `resolve` | binding, then authorized-user check | `GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS` |
 
 Missing, empty and non-integer required values are HTTP 400. Unsupported
-methods are HTTP 405; current production exposes the controller mapping only
-in that response (`POST, GET` for `/mt.jsp`, `GET` for `/mtn.jsp`, and
-`POST, GET` for `/uncommit.jsp`), which intentionally differs from the richer
+methods are HTTP 405; the pinned Java runtime exposes the controller mapping only
+in that response (`GET, POST` for `/mt.jsp`, `GET` for `/mtn.jsp`, and
+`GET, POST` for `/uncommit.jsp`), which intentionally differs from the richer
 automatic OPTIONS value. `TRACE /resolve.jsp` is HTTP 405. OPTIONS is HTTP 200
 with an empty body and `Content-Length: 0`.
 

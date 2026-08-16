@@ -67,7 +67,7 @@ impl TrEmailSender for CSmtpEmailSender {
         Self::vSendCommand(&mut oWriteHalf, &format!("MAIL FROM:<{}>", stMessage.sFrom)).await?;
         vExpectResponse(&mut oReader, &[250]).await?;
         Self::vSendCommand(&mut oWriteHalf, &format!("RCPT TO:<{}>", stMessage.sTo)).await?;
-        vExpectResponse(&mut oReader, &[250, 251]).await?;
+        vExpectRecipientResponse(&mut oReader).await?;
         Self::vSendCommand(&mut oWriteHalf, "DATA").await?;
         vExpectResponse(&mut oReader, &[354]).await?;
 
@@ -153,7 +153,13 @@ fn sWireMessage(stMessage: &StEmailMessage) -> Result<String> {
     Ok(sResult)
 }
 
-async fn vExpectResponse<R>(oReader: &mut R, vecExpected: &[u16]) -> Result<()>
+#[derive(Debug)]
+struct StSmtpResponse {
+    iCode: u16,
+    sLastLine: String,
+}
+
+async fn stReadResponse<R>(oReader: &mut R) -> Result<StSmtpResponse>
 where
     R: AsyncBufRead + Unpin,
 {
@@ -174,21 +180,91 @@ where
             .ok_or_else(|| AppError::Anyhow(anyhow::anyhow!("invalid SMTP response")))?;
         let bMore = sLastLine.as_bytes().get(3) == Some(&b'-');
         if !bMore {
-            if !vecExpected.contains(&iCode) {
-                return Err(AppError::Anyhow(anyhow::anyhow!(
-                    "SMTP command failed with status {iCode}: {}",
-                    sLastLine.trim_end()
-                )));
-            }
-            return Ok(());
+            return Ok(StSmtpResponse {
+                iCode,
+                sLastLine: sLastLine.trim_end().to_owned(),
+            });
         }
     }
+}
+
+async fn vExpectResponse<R>(oReader: &mut R, vecExpected: &[u16]) -> Result<()>
+where
+    R: AsyncBufRead + Unpin,
+{
+    let stResponse = stReadResponse(oReader).await?;
+    if !vecExpected.contains(&stResponse.iCode) {
+        return Err(AppError::Anyhow(anyhow::anyhow!(
+            "SMTP command failed with status {}: {}",
+            stResponse.iCode,
+            stResponse.sLastLine
+        )));
+    }
+    Ok(())
+}
+
+async fn vExpectRecipientResponse<R>(oReader: &mut R) -> Result<()>
+where
+    R: AsyncBufRead + Unpin,
+{
+    let stResponse = stReadResponse(oReader).await?;
+    if ![250, 251].contains(&stResponse.iCode) {
+        return Err(AppError::SmtpAddressRejected {
+            iStatus: stResponse.iCode,
+            sResponse: stResponse.sLastLine,
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    async fn stFailureAt(sCommand: &'static str, sFailureResponse: &'static str) -> AppError {
+        let oListener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let iPort = oListener.local_addr().unwrap().port();
+        let hServer = tokio::spawn(async move {
+            let (oStream, _) = oListener.accept().await.unwrap();
+            let (oReadHalf, mut oWriteHalf) = oStream.into_split();
+            let mut oReader = BufReader::new(oReadHalf);
+            oWriteHalf.write_all(b"220 test ESMTP\r\n").await.unwrap();
+            loop {
+                let mut sLine = String::new();
+                oReader.read_line(&mut sLine).await.unwrap();
+                let sLine = sLine.trim_end();
+                if sLine.starts_with(sCommand) {
+                    oWriteHalf
+                        .write_all(sFailureResponse.as_bytes())
+                        .await
+                        .unwrap();
+                    break;
+                }
+                let sResponse = if sLine == "DATA" {
+                    "354 continue\r\n"
+                } else {
+                    "250 ok\r\n"
+                };
+                oWriteHalf.write_all(sResponse.as_bytes()).await.unwrap();
+            }
+        });
+
+        let oSender = CSmtpEmailSender::new("127.0.0.1", iPort, "test-host");
+        let stError = oSender
+            .vSend(&StEmailMessage {
+                sFrom: "no-reply@linux.org.ru".to_owned(),
+                sTo: "user@example.org".to_owned(),
+                sSubject: "Test".to_owned(),
+                sBody: "body".to_owned(),
+            })
+            .await
+            .expect_err("fake SMTP server must reject the selected command");
+        hServer.await.unwrap();
+        stError
+    }
 
     #[test]
     fn wire_message_encodes_unicode_subject_and_dot_stuffs_body() {
@@ -298,5 +374,25 @@ mod tests {
         assert!(sData.contains("Date: "));
         assert!(sData.contains("Message-ID: <"));
         assert!(sData.contains("hello\r\n..world\r\n"));
+    }
+
+    #[tokio::test]
+    async fn only_rcpt_rejection_has_java_smtp_address_failed_classification() {
+        let stRcptError = stFailureAt("RCPT TO:", "550 mailbox unavailable\r\n").await;
+        assert!(matches!(
+            stRcptError,
+            AppError::SmtpAddressRejected { iStatus: 550, .. }
+        ));
+
+        for (sCommand, sResponse) in [
+            ("HELO ", "550 bad HELO\r\n"),
+            ("DATA", "554 transaction failed\r\n"),
+        ] {
+            let stError = stFailureAt(sCommand, sResponse).await;
+            assert!(
+                matches!(stError, AppError::Anyhow(_)),
+                "{sCommand} failure must remain an infrastructure error"
+            );
+        }
     }
 }

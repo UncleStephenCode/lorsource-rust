@@ -84,7 +84,8 @@ SELECT c.id AS i_comment_id,c.userid AS i_author_id,t.userid AS i_topic_author_i
        COALESCE(u.passwd,'')='' AS b_author_anonymous,
        COALESCE(u.frozen_until>CURRENT_TIMESTAMP,false) AS b_author_frozen,
        u.photo AS opt_photo,u.email AS opt_email,remark.remark_text AS opt_remark,
-       COALESCE(c.edit_count,0) AS i_edit_count,c.edit_date AS opt_edit_date,
+       COALESCE(c.edit_count,0) AS i_edit_count,
+       (c.edit_date AT TIME ZONE 'UTC') AS opt_edit_date,
        editor.nick AS opt_editor_nick,COALESCE(host(c.postip),'') AS s_post_ip,
        COALESCE(c.ua_id,0) AS i_user_agent_id,
        user_agent.name AS opt_user_agent,COALESCE(c.reactions,'{}'::jsonb)::text AS s_reactions_json,
@@ -130,7 +131,8 @@ SELECT c.id AS i_comment_id,c.userid AS i_author_id,t.userid AS i_topic_author_i
        COALESCE(u.passwd,'')='' AS b_author_anonymous,
        COALESCE(u.frozen_until>CURRENT_TIMESTAMP,false) AS b_author_frozen,
        u.photo AS opt_photo,u.email AS opt_email,NULL::text AS opt_remark,
-       COALESCE(c.edit_count,0) AS i_edit_count,c.edit_date AS opt_edit_date,
+       COALESCE(c.edit_count,0) AS i_edit_count,
+       (c.edit_date AT TIME ZONE 'UTC') AS opt_edit_date,
        editor.nick AS opt_editor_nick,COALESCE(host(c.postip),'') AS s_post_ip,
        COALESCE(c.ua_id,0) AS i_user_agent_id,
        user_agent.name AS opt_user_agent,COALESCE(c.reactions,'{}'::jsonb)::text AS s_reactions_json,
@@ -633,6 +635,12 @@ mod tests {
     #[test]
     fn deletion_preview_selects_warning_type_for_prepared_message_prefix() {
         assert!(S_DELETE_PREVIEW_SQL.contains("'warning_type',warning.warning_type::text"));
+    }
+
+    #[test]
+    fn java_timestamp_without_timezone_edit_date_is_decoded_as_utc() {
+        assert!(S_DELETE_PREVIEW_SQL.contains("c.edit_date AT TIME ZONE 'UTC'"));
+        assert!(S_UNDELETE_PREVIEW_SQL.contains("c.edit_date AT TIME ZONE 'UTC'"));
     }
 
     #[test]

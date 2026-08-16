@@ -77,8 +77,93 @@ canonical_functions(function_name) AS (
     ('topins'),
     ('update_monthly_stats')
 ),
+canonical_enum_names(type_name) AS (
+  VALUES
+    ('edit_event_type'),
+    ('event_type'),
+    ('markup_type'),
+    ('user_log_action'),
+    ('warning_type')
+),
+canonical_table_privileges(table_name, privileges) AS (
+  VALUES
+    ('adv_counts', ARRAY['INSERT', 'SELECT', 'UPDATE']::text[]),
+    ('b_ips', ARRAY['DELETE', 'INSERT', 'SELECT', 'UPDATE']::text[]),
+    ('ban_info', ARRAY['DELETE', 'INSERT', 'REFERENCES', 'SELECT', 'TRIGGER', 'TRUNCATE', 'UPDATE']::text[]),
+    ('comments', ARRAY['DELETE', 'INSERT', 'SELECT', 'UPDATE']::text[]),
+    ('del_info', ARRAY['DELETE', 'INSERT', 'SELECT', 'UPDATE']::text[]),
+    ('edit_info', ARRAY['INSERT', 'SELECT', 'UPDATE']::text[]),
+    ('email_domains_block', ARRAY['DELETE', 'INSERT', 'SELECT', 'UPDATE']::text[]),
+    ('groups', ARRAY['DELETE', 'INSERT', 'SELECT', 'UPDATE']::text[]),
+    ('ignore_list', ARRAY['DELETE', 'INSERT', 'REFERENCES', 'SELECT', 'TRIGGER', 'TRUNCATE', 'UPDATE']::text[]),
+    ('images', ARRAY['INSERT', 'SELECT', 'UPDATE']::text[]),
+    ('memories', ARRAY['DELETE', 'INSERT', 'REFERENCES', 'SELECT', 'TRIGGER', 'TRUNCATE', 'UPDATE']::text[]),
+    ('message_warnings', ARRAY['INSERT', 'SELECT', 'UPDATE']::text[]),
+    ('monthly_stats', ARRAY['DELETE', 'INSERT', 'REFERENCES', 'SELECT', 'TRIGGER', 'TRUNCATE', 'UPDATE']::text[]),
+    ('msgbase', ARRAY['INSERT', 'SELECT', 'UPDATE']::text[]),
+    ('polls', ARRAY['DELETE', 'INSERT', 'SELECT', 'UPDATE']::text[]),
+    ('polls_variants', ARRAY['DELETE', 'INSERT', 'SELECT', 'UPDATE']::text[]),
+    ('reactions_log', ARRAY['DELETE', 'INSERT', 'REFERENCES', 'SELECT', 'TRIGGER', 'TRUNCATE', 'UPDATE']::text[]),
+    ('sections', ARRAY['DELETE', 'SELECT', 'UPDATE']::text[]),
+    ('tags', ARRAY['DELETE', 'INSERT', 'REFERENCES', 'SELECT', 'TRIGGER', 'TRUNCATE', 'UPDATE']::text[]),
+    ('tags_synonyms', ARRAY['DELETE', 'INSERT', 'REFERENCES', 'SELECT', 'TRIGGER', 'TRUNCATE', 'UPDATE']::text[]),
+    ('tags_values', ARRAY['DELETE', 'INSERT', 'SELECT', 'UPDATE']::text[]),
+    ('telegram_posts', ARRAY['DELETE', 'INSERT', 'SELECT']::text[]),
+    ('topic_users_notified', ARRAY['DELETE', 'INSERT', 'SELECT']::text[]),
+    ('topics', ARRAY['DELETE', 'INSERT', 'SELECT', 'UPDATE']::text[]),
+    ('user_agents', ARRAY['INSERT', 'SELECT']::text[]),
+    ('user_events', ARRAY['DELETE', 'INSERT', 'SELECT', 'UPDATE']::text[]),
+    ('user_invites', ARRAY['INSERT', 'SELECT', 'UPDATE']::text[]),
+    ('user_log', ARRAY['INSERT', 'SELECT']::text[]),
+    ('user_remarks', ARRAY['DELETE', 'INSERT', 'REFERENCES', 'SELECT', 'TRIGGER', 'TRUNCATE', 'UPDATE']::text[]),
+    ('user_settings', ARRAY['DELETE', 'INSERT', 'REFERENCES', 'SELECT', 'TRIGGER', 'TRUNCATE', 'UPDATE']::text[]),
+    ('user_tags', ARRAY['DELETE', 'INSERT', 'REFERENCES', 'SELECT', 'TRIGGER', 'TRUNCATE', 'UPDATE']::text[]),
+    ('users', ARRAY['DELETE', 'INSERT', 'SELECT', 'UPDATE']::text[]),
+    ('vote_users', ARRAY['INSERT', 'SELECT']::text[])
+),
+canonical_sequence_privileges(sequence_name, privileges) AS (
+  VALUES
+    ('edit_info_id_seq', ARRAY['SELECT', 'UPDATE']::text[]),
+    ('images_id_seq', ARRAY['UPDATE']::text[]),
+    ('memories_id_seq', ARRAY['SELECT', 'UPDATE']::text[]),
+    ('s_guid', ARRAY['SELECT', 'UPDATE']::text[]),
+    ('s_msgid', ARRAY['SELECT', 'UPDATE', 'USAGE']::text[]),
+    ('s_uid', ARRAY['SELECT', 'UPDATE']::text[]),
+    ('tags_values_id_seq', ARRAY['UPDATE']::text[]),
+    ('user_agents_id_seq', ARRAY['UPDATE']::text[]),
+    ('user_events_id_seq', ARRAY['SELECT', 'UPDATE', 'USAGE']::text[]),
+    ('user_log_id_seq', ARRAY['USAGE']::text[]),
+    ('user_remarks_id_seq', ARRAY['UPDATE']::text[]),
+    ('vote_id', ARRAY['UPDATE']::text[]),
+    ('votes_id', ARRAY['UPDATE']::text[])
+),
+canonical_schema AS (
+  SELECT n.oid, n.nspname, n.nspowner
+    FROM pg_catalog.pg_namespace AS n
+   WHERE n.nspname = 'public'
+),
+canonical_enum_types AS (
+  SELECT
+    enum_type.oid,
+    enum_type.typname,
+    enum_type.typowner,
+    enum_type.typtype,
+    enum_type.typcategory
+    FROM pg_catalog.pg_type AS enum_type
+    JOIN canonical_schema AS schema ON schema.oid = enum_type.typnamespace
+    JOIN canonical_enum_names AS wanted ON wanted.type_name = enum_type.typname
+),
 canonical_table_relations AS (
-  SELECT c.oid, c.relname, c.relowner, c.relacl, c.relkind
+  SELECT
+    c.oid,
+    c.relname,
+    c.relowner,
+    c.relacl,
+    c.relkind,
+    c.relpersistence,
+    c.relrowsecurity,
+    c.relforcerowsecurity,
+    c.relam
     FROM pg_catalog.pg_class AS c
     JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
     JOIN canonical_tables AS wanted ON wanted.table_name = c.relname
@@ -86,7 +171,16 @@ canonical_table_relations AS (
      AND c.relkind IN ('r', 'p')
 ),
 canonical_sequence_relations AS (
-  SELECT c.oid, c.relname, c.relowner, c.relacl, c.relkind
+  SELECT
+    c.oid,
+    c.relname,
+    c.relowner,
+    c.relacl,
+    c.relkind,
+    c.relpersistence,
+    c.relrowsecurity,
+    c.relforcerowsecurity,
+    c.relam
     FROM pg_catalog.pg_class AS c
     JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
     JOIN canonical_sequences AS wanted ON wanted.sequence_name = c.relname
@@ -136,11 +230,9 @@ object_rows(object_kind, object_identity, object_definition) AS (
       idx.indisprimary,
       idx.indisexclusion,
       idx.indimmediate,
-      idx.indisclustered,
       idx.indisvalid,
       idx.indisready,
       idx.indislive,
-      idx.indisreplident,
       idx.indnullsnotdistinct,
       idx.indnkeyatts,
       idx.indnatts,
@@ -149,6 +241,41 @@ object_rows(object_kind, object_identity, object_definition) AS (
     FROM pg_catalog.pg_index AS idx
     JOIN canonical_table_relations AS table_rel ON table_rel.oid = idx.indrelid
     JOIN pg_catalog.pg_class AS index_rel ON index_rel.oid = idx.indexrelid
+
+  UNION ALL
+
+  SELECT
+    'relation'::text,
+    table_rel.relname,
+    jsonb_build_array(
+      table_rel.relkind::text,
+      table_rel.relpersistence::text,
+      table_rel.relrowsecurity,
+      table_rel.relforcerowsecurity,
+      access_method.amname
+    )::text
+    FROM canonical_table_relations AS table_rel
+    LEFT JOIN pg_catalog.pg_am AS access_method
+      ON access_method.oid = table_rel.relam
+
+  UNION ALL
+
+  SELECT
+    'schema'::text,
+    schema.nspname,
+    pg_catalog.jsonb_build_array()::text
+    FROM canonical_schema AS schema
+
+  UNION ALL
+
+  SELECT
+    'type'::text,
+    enum_type.typname,
+    pg_catalog.jsonb_build_array(
+      enum_type.typtype::text,
+      enum_type.typcategory::text
+    )::text
+    FROM canonical_enum_types AS enum_type
 
   UNION ALL
 
@@ -254,29 +381,104 @@ object_rows(object_kind, object_identity, object_definition) AS (
   UNION ALL
 
   SELECT
-    'grant'::text,
+    'owner'::text,
+    'schema.' || schema.nspname,
+    pg_catalog.jsonb_build_array(owner_role.rolname)::text
+    FROM canonical_schema AS schema
+    JOIN pg_catalog.pg_roles AS owner_role ON owner_role.oid = schema.nspowner
+
+  UNION ALL
+
+  SELECT
+    'owner'::text,
+    'type.' || enum_type.typname,
+    pg_catalog.jsonb_build_array(owner_role.rolname)::text
+    FROM canonical_enum_types AS enum_type
+    JOIN pg_catalog.pg_roles AS owner_role ON owner_role.oid = enum_type.typowner
+
+  UNION ALL
+
+  SELECT
+    'acl'::text,
     CASE relation.relkind
       WHEN 'S' THEN 'sequence.'
       ELSE 'table.'
-    END || relation.relname || '.' ||
-      COALESCE(grantee_role.rolname, 'PUBLIC') || '.' || acl.privilege_type,
-    jsonb_build_array(acl.is_grantable)::text
+    END || relation.relname,
+    pg_catalog.jsonb_build_array(relation.relacl::text)::text
     FROM canonical_relations AS relation
-    CROSS JOIN LATERAL pg_catalog.aclexplode(
-      COALESCE(
-        relation.relacl,
-        pg_catalog.acldefault(
-          CASE relation.relkind
-            WHEN 'S' THEN 's'::"char"
-            ELSE 'r'::"char"
-          END,
-          relation.relowner
-        )
-      )
-    ) AS acl
-    LEFT JOIN pg_catalog.pg_roles AS grantee_role ON grantee_role.oid = acl.grantee
-   WHERE acl.grantee = 0
-      OR grantee_role.rolname = 'linuxweb'
+
+  UNION ALL
+
+  SELECT
+    'acl'::text,
+    'function.' || proc.proname || '(' ||
+      pg_catalog.pg_get_function_identity_arguments(proc.oid) || ')',
+    pg_catalog.jsonb_build_array(proc.proacl::text)::text
+    FROM pg_catalog.pg_proc AS proc
+    JOIN pg_catalog.pg_namespace AS n ON n.oid = proc.pronamespace
+    JOIN canonical_functions AS wanted ON wanted.function_name = proc.proname
+   WHERE n.nspname = 'public'
+
+  UNION ALL
+
+  SELECT
+    'grant'::text,
+    'table.' || table_rel.relname || '.linuxweb.' || privilege.privilege,
+    pg_catalog.jsonb_build_array(
+      pg_catalog.has_table_privilege('linuxweb', table_rel.oid, privilege.privilege)
+    )::text
+    FROM canonical_table_relations AS table_rel
+    JOIN canonical_table_privileges AS wanted
+      ON wanted.table_name = table_rel.relname
+    CROSS JOIN LATERAL unnest(wanted.privileges) AS privilege(privilege)
+
+  UNION ALL
+
+  SELECT
+    'grant'::text,
+    'sequence.' || seq_rel.relname || '.linuxweb.' || privilege.privilege,
+    pg_catalog.jsonb_build_array(
+      pg_catalog.has_sequence_privilege('linuxweb', seq_rel.oid, privilege.privilege)
+    )::text
+    FROM canonical_sequence_relations AS seq_rel
+    JOIN canonical_sequence_privileges AS wanted
+      ON wanted.sequence_name = seq_rel.relname
+    CROSS JOIN LATERAL unnest(wanted.privileges) AS privilege(privilege)
+
+  UNION ALL
+
+  SELECT
+    'grant'::text,
+    'function.' || proc.proname || '(' ||
+      pg_catalog.pg_get_function_identity_arguments(proc.oid) ||
+      ').linuxweb.EXECUTE',
+    pg_catalog.jsonb_build_array(
+      pg_catalog.has_function_privilege('linuxweb', proc.oid, 'EXECUTE')
+    )::text
+    FROM pg_catalog.pg_proc AS proc
+    JOIN pg_catalog.pg_namespace AS n ON n.oid = proc.pronamespace
+    JOIN canonical_functions AS wanted ON wanted.function_name = proc.proname
+   WHERE n.nspname = 'public'
+
+  UNION ALL
+
+  SELECT
+    'grant'::text,
+    'schema.' || schema.nspname || '.linuxweb.USAGE',
+    pg_catalog.jsonb_build_array(
+      pg_catalog.has_schema_privilege('linuxweb', schema.oid, 'USAGE')
+    )::text
+    FROM canonical_schema AS schema
+
+  UNION ALL
+
+  SELECT
+    'grant'::text,
+    'type.' || enum_type.typname || '.linuxweb.USAGE',
+    pg_catalog.jsonb_build_array(
+      pg_catalog.has_type_privilege('linuxweb', enum_type.oid, 'USAGE')
+    )::text
+    FROM canonical_enum_types AS enum_type
 )
 SELECT object_kind, object_identity, object_definition
   FROM object_rows

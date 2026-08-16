@@ -78,6 +78,14 @@ surfaces now use this contract, including profiles/statistics, edit and user
 logs, deleted content, reactions, notifications, same-IP moderation results and
 OpenSearch results.
 
+Profile statistics also retain the original split data source instead of
+substituting live PostgreSQL aggregates for the Java search-index contract.
+Comment count and topic dates/section buckets are loaded by two concurrent
+OpenSearch requests with one five-second deadline. Either request can fail
+independently while the profile remains available with the original
+incomplete-statistics warning. Ignore count and the first/last comment dates
+remain PostgreSQL values; the latter deliberately include deleted comments.
+
 Topic and comment edit-history pages now reconstruct changes from
 `edit_info` by object type, retain the original topic/comment access-policy
 difference, render the JSP-compatible `.messages/.msg` structure, and load the

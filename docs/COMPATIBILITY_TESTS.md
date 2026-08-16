@@ -98,8 +98,8 @@ change rather than an unobserved move of the upstream default branch.
 
 The 2026-08-15 milestone run passed all 126 declared cases against pinned Java
 SHA `2ddf930005adac28077cb6ad74d1481485f44096`. Its credential-free report was
-generated at `2026-08-15T05:41:34Z`; SHA-256:
-`add67c20ebdf56d12145b13668f1adc8a55e7191d12b8707e27dfeb0589547b1`.
+generated at `2026-08-15T16:56:58.001548Z`; SHA-256:
+`60686eae55f94942c76695afac2101ceab48bf188409ea9099123bb4619fae8f`.
 
 The comparator keeps an independent cookie jar for each application and adds
 the double-submit `CSRF_TOKEN` value to POST form data by default. A case can

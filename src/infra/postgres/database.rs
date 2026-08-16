@@ -16,20 +16,24 @@ const S_SCHEMA_OBJECTS_QUERY: &str =
     include_str!("../../../compat/java-db/export-schema-objects.sql");
 
 const VEC_SCHEMA_OBJECT_KINDS: &[&str] = &[
+    "acl",
     "constraint",
     "default",
     "function",
     "grant",
     "index",
     "owner",
+    "relation",
+    "schema",
     "sequence",
     "trigger",
+    "type",
 ];
 
 /// Owner role names are deployment metadata rather than application schema
 /// semantics. A different migration-owner role is reported in the fingerprint
 /// drift, but it does not make an otherwise compatible database unusable.
-const VEC_ADVISORY_SCHEMA_OBJECT_KINDS: &[&str] = &["owner"];
+const VEC_ADVISORY_SCHEMA_OBJECT_KINDS: &[&str] = &["acl", "owner"];
 
 const I_SCHEMA_DRIFT_LOG_LIMIT: usize = 25;
 const I_SCHEMA_ERROR_LIMIT: usize = 50;
@@ -617,6 +621,10 @@ fn bSchemaObjectKindIsAdvisory(sKind: &str) -> bool {
     VEC_ADVISORY_SCHEMA_OBJECT_KINDS.contains(&sKind)
 }
 
+fn bAdditionalSchemaObjectIsBlocking(sKind: &str) -> bool {
+    matches!(sKind, "constraint" | "trigger")
+}
+
 fn stCompareSchemaObjects(
     mapExpected: &TySchemaObjectMap,
     mapActual: &TySchemaObjectMap,
@@ -642,14 +650,17 @@ fn stCompareSchemaObjects(
         }
     }
 
-    // Additional operator-created indexes, constraints, grants and other
-    // objects on canonical tables are visible in the drift fingerprint but do
-    // not prove incompatibility with the Java/Liquibase required subset.
+    // Additional constraints and enabled triggers can reject, rewrite or add
+    // effects to otherwise valid Java writes.  Other bounded operator objects
+    // remain visible in the fingerprint without preventing startup.
     for (sKind, sIdentity) in mapActual.keys() {
         if !mapExpected.contains_key(&(sKind.clone(), sIdentity.clone())) {
-            stComparison
-                .vecAdvisoryDrift
-                .push(format!("additional {sKind} {sIdentity}"));
+            let sProblem = format!("additional {sKind} {sIdentity}");
+            if bAdditionalSchemaObjectIsBlocking(sKind) {
+                stComparison.vecBlockingProblems.push(sProblem);
+            } else {
+                stComparison.vecAdvisoryDrift.push(sProblem);
+            }
         }
     }
 
@@ -797,15 +808,19 @@ mod tests {
             *mapCounts.entry(sKind.clone()).or_default() += 1;
         }
 
-        assert_eq!(mapObjects.len(), 605);
+        assert_eq!(mapObjects.len(), 728);
+        assert_eq!(mapCounts.get("acl"), Some(&60));
         assert_eq!(mapCounts.get("constraint"), Some(&82));
         assert_eq!(mapCounts.get("default"), Some(&61));
         assert_eq!(mapCounts.get("function"), Some(&12));
-        assert_eq!(mapCounts.get("grant"), Some(&168));
+        assert_eq!(mapCounts.get("grant"), Some(&186));
         assert_eq!(mapCounts.get("index"), Some(&101));
-        assert_eq!(mapCounts.get("owner"), Some(&161));
+        assert_eq!(mapCounts.get("owner"), Some(&167));
+        assert_eq!(mapCounts.get("relation"), Some(&33));
+        assert_eq!(mapCounts.get("schema"), Some(&1));
         assert_eq!(mapCounts.get("sequence"), Some(&15));
         assert_eq!(mapCounts.get("trigger"), Some(&5));
+        assert_eq!(mapCounts.get("type"), Some(&5));
         assert_eq!(
             mapObjects.get(&(
                 "constraint".to_string(),
@@ -819,6 +834,32 @@ mod tests {
         assert_eq!(
             mapObjects.get(&("sequence".to_string(), "images_id_seq".to_string())),
             Some(&"[\"integer\",1,1,2147483647,1,1,false,\"images\",\"id\",\"i\"]".to_string())
+        );
+        assert_eq!(
+            mapObjects.get(&("relation".to_string(), "topics".to_string())),
+            Some(&"[\"r\",\"p\",false,false,\"heap\"]".to_string())
+        );
+        assert_eq!(
+            mapObjects.get(&(
+                "grant".to_string(),
+                "function.topins().linuxweb.EXECUTE".to_string()
+            )),
+            Some(&"[true]".to_string())
+        );
+        assert_eq!(
+            mapObjects.get(&("schema".to_string(), "public".to_string())),
+            Some(&"[]".to_string())
+        );
+        assert_eq!(
+            mapObjects.get(&("type".to_string(), "event_type".to_string())),
+            Some(&"[\"e\",\"E\"]".to_string())
+        );
+        assert_eq!(
+            mapObjects.get(&(
+                "grant".to_string(),
+                "type.event_type.linuxweb.USAGE".to_string()
+            )),
+            Some(&"[true]".to_string())
         );
     }
 
@@ -876,6 +917,92 @@ mod tests {
     }
 
     #[test]
+    fn schemaObjectExporterUsesEffectiveRuntimeGrantsAndOmitsPhysicalFlags() {
+        assert!(S_SCHEMA_OBJECTS_QUERY.contains("has_table_privilege('linuxweb'"));
+        assert!(S_SCHEMA_OBJECTS_QUERY.contains("has_sequence_privilege('linuxweb'"));
+        assert!(S_SCHEMA_OBJECTS_QUERY.contains("has_function_privilege('linuxweb'"));
+        assert!(S_SCHEMA_OBJECTS_QUERY.contains("jsonb_build_array(relation.relacl::text)"));
+        assert!(!S_SCHEMA_OBJECTS_QUERY.contains("relreplident"));
+        assert!(!S_SCHEMA_OBJECTS_QUERY.contains("indisclustered"));
+        assert!(!S_SCHEMA_OBJECTS_QUERY.contains("indisreplident"));
+    }
+
+    #[test]
+    fn directAclDriftIsAdvisoryWhenEffectiveGrantStillMatches() {
+        let mapExpected = TySchemaObjectMap::from([
+            (
+                ("acl".to_string(), "table.topics".to_string()),
+                "[\"{linuxweb=r/maxcom}\"]".to_string(),
+            ),
+            (
+                (
+                    "grant".to_string(),
+                    "table.topics.linuxweb.SELECT".to_string(),
+                ),
+                "[true]".to_string(),
+            ),
+        ]);
+        let mapActual = TySchemaObjectMap::from([
+            (
+                ("acl".to_string(), "table.topics".to_string()),
+                "[\"{runtime_reader=r/maxcom}\"]".to_string(),
+            ),
+            (
+                (
+                    "grant".to_string(),
+                    "table.topics.linuxweb.SELECT".to_string(),
+                ),
+                "[true]".to_string(),
+            ),
+        ]);
+
+        let stComparison = stCompareSchemaObjects(&mapExpected, &mapActual);
+        assert!(stComparison.vecBlockingProblems.is_empty());
+        assert_eq!(stComparison.vecAdvisoryDrift.len(), 1);
+        assert!(stComparison.vecAdvisoryDrift[0].contains("changed acl table.topics"));
+    }
+
+    #[test]
+    fn additionalConstraintsAndTriggersAreBlockingButIndexesRemainAdvisory() {
+        let mapExpected = TySchemaObjectMap::new();
+        let mapActual = TySchemaObjectMap::from([
+            (
+                (
+                    "constraint".to_string(),
+                    "topics.operator_check".to_string(),
+                ),
+                "[\"c\"]".to_string(),
+            ),
+            (
+                ("trigger".to_string(), "topics.operator_trigger".to_string()),
+                "[\"O\"]".to_string(),
+            ),
+            (
+                (
+                    "index".to_string(),
+                    "topics.operator_observability_idx".to_string(),
+                ),
+                "[false]".to_string(),
+            ),
+        ]);
+
+        let stComparison = stCompareSchemaObjects(&mapExpected, &mapActual);
+        assert_eq!(stComparison.vecBlockingProblems.len(), 2);
+        assert!(
+            stComparison.vecBlockingProblems[0]
+                .contains("additional constraint topics.operator_check")
+        );
+        assert!(
+            stComparison.vecBlockingProblems[1]
+                .contains("additional trigger topics.operator_trigger")
+        );
+        assert_eq!(
+            stComparison.vecAdvisoryDrift,
+            ["additional index topics.operator_observability_idx"]
+        );
+    }
+
+    #[test]
     fn schemaOwnerDifferencesAreAdvisoryButRequiredRuntimeGrantsAreBlocking() {
         let mapExpected = TySchemaObjectMap::from([
             (
@@ -887,7 +1014,7 @@ mod tests {
                     "grant".to_string(),
                     "table.topics.linuxweb.SELECT".to_string(),
                 ),
-                "[false]".to_string(),
+                "[true]".to_string(),
             ),
         ]);
         let mapActual = TySchemaObjectMap::from([(
@@ -900,6 +1027,73 @@ mod tests {
         assert!(stComparison.vecBlockingProblems[0].contains("missing grant"));
         assert_eq!(stComparison.vecAdvisoryDrift.len(), 1);
         assert!(stComparison.vecAdvisoryDrift[0].contains("changed owner"));
+    }
+
+    #[test]
+    fn schemaRlsAndFunctionExecuteDifferencesAreBlocking() {
+        let mapExpected = TySchemaObjectMap::from([
+            (
+                ("relation".to_string(), "topics".to_string()),
+                "[\"r\",\"p\",false,false,\"heap\"]".to_string(),
+            ),
+            (
+                (
+                    "grant".to_string(),
+                    "function.topins().linuxweb.EXECUTE".to_string(),
+                ),
+                "[true]".to_string(),
+            ),
+        ]);
+        let mapActual = TySchemaObjectMap::from([(
+            ("relation".to_string(), "topics".to_string()),
+            "[\"r\",\"p\",true,false,\"heap\"]".to_string(),
+        )]);
+
+        let stComparison = stCompareSchemaObjects(&mapExpected, &mapActual);
+        assert_eq!(stComparison.vecBlockingProblems.len(), 2);
+        assert!(
+            stComparison.vecBlockingProblems[0]
+                .contains("missing grant function.topins().linuxweb.EXECUTE")
+        );
+        assert!(stComparison.vecBlockingProblems[1].contains("changed relation topics"));
+    }
+
+    #[test]
+    fn schemaAndEnumUsageDifferencesAreBlocking() {
+        let mapExpected = TySchemaObjectMap::from([
+            (
+                (
+                    "grant".to_string(),
+                    "schema.public.linuxweb.USAGE".to_string(),
+                ),
+                "[true]".to_string(),
+            ),
+            (
+                (
+                    "grant".to_string(),
+                    "type.event_type.linuxweb.USAGE".to_string(),
+                ),
+                "[true]".to_string(),
+            ),
+        ]);
+        let mapActual = TySchemaObjectMap::from([(
+            (
+                "grant".to_string(),
+                "schema.public.linuxweb.USAGE".to_string(),
+            ),
+            "[false]".to_string(),
+        )]);
+
+        let stComparison = stCompareSchemaObjects(&mapExpected, &mapActual);
+        assert_eq!(stComparison.vecBlockingProblems.len(), 2);
+        assert!(
+            stComparison.vecBlockingProblems[0]
+                .contains("changed grant schema.public.linuxweb.USAGE")
+        );
+        assert!(
+            stComparison.vecBlockingProblems[1]
+                .contains("missing grant type.event_type.linuxweb.USAGE")
+        );
     }
 
     #[test]

@@ -1,9 +1,25 @@
 use crate::{
-    application::boxlet::CBoxletService,
+    application::{
+        boxlet::CBoxletService,
+        tag::{
+            CTagTopicListService, bTagSectionHasNext, optTagSectionPreviousOffset, sTagSectionUrl,
+        },
+    },
     auth::CurrentUser,
-    domain::boxlet::model::StTagCloudItem,
+    domain::{
+        boxlet::model::StTagCloudItem,
+        tag::model::{EnTagSectionOutcome, EnTagSectionTopics, StTagForumTopic},
+        topic::options::TrTopicReindexQueue,
+    },
     error::{AppError, Result},
-    infra::postgres::boxlet_repository::CBoxletPgRepository,
+    infra::{
+        opensearch::tag_topic_count::CTagTopicCountOpenSearchRepository,
+        postgres::{
+            boxlet_repository::CBoxletPgRepository,
+            tag_topic_list_repository::CTagTopicListPgRepository,
+        },
+        search_queue::CSearchQueueSender,
+    },
     models::TopicSummary,
     request_timezone::stRequestTimezone,
     state::AppState,
@@ -11,15 +27,16 @@ use crate::{
 use askama::Template;
 use axum::{
     Form, Json,
-    extract::{Path, Query, State},
-    http::{StatusCode, header},
-    response::{Html, IntoResponse, Redirect},
+    extract::{ConnectInfo, Path, Query, Request, State},
+    http::{HeaderMap, StatusCode, header},
+    response::{Html, IntoResponse, Response},
 };
 use axum_extra::extract::cookie::CookieJar;
 use chrono::{Datelike, TimeZone};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::Deserialize;
+use std::net::SocketAddr;
 
 #[derive(Template)]
 #[template(path = "tags.html")]
@@ -76,6 +93,7 @@ struct TagGalleryItem {
 #[template(path = "tag_page.html")]
 struct TagPageTemplate {
     tag: String,
+    tag_query_value: String,
     title: String,
     counter: i64,
     sections: Vec<TagSectionGroup>,
@@ -85,8 +103,8 @@ struct TagPageTemplate {
     show_unfavorite_button: bool,
     show_ignore_button: bool,
     show_unignore_button: bool,
+    authorized: bool,
     show_delete: bool,
-    csrf_token: String,
     favorites_count: i64,
     ignored_count: i64,
 }
@@ -97,9 +115,79 @@ struct TagLink {
     url: String,
 }
 
-#[derive(Deserialize)]
-pub struct AllTagsQuery {
-    pub term: Option<String>,
+#[derive(Debug, Clone)]
+struct StTagSectionLinkView {
+    sName: String,
+    sUrl: String,
+    bSelected: bool,
+}
+
+#[derive(Debug)]
+struct StTagForumTopicView {
+    stTopic: StTagForumTopic,
+    sLastPageUrl: String,
+    sGroupUrl: String,
+    iVisibleCommentCount: i32,
+    bCommentsClosed: bool,
+}
+
+impl StTagForumTopicView {
+    fn sTitlePlain(&self) -> String {
+        self.stTopic.sTitlePlain()
+    }
+
+    fn vecTags(&self) -> Vec<&str> {
+        self.stTopic.vecTags()
+    }
+}
+
+#[derive(Template)]
+#[template(path = "tag_topics.html")]
+struct StTagTopicsTemplate {
+    sTitle: String,
+    sTagTitle: String,
+    sTag: String,
+    sTagQueryValue: String,
+    sTagUrl: String,
+    vecSectionLinks: Vec<StTagSectionLinkView>,
+    optAddUrl: Option<String>,
+    sAddReason: String,
+    bAuthorized: bool,
+    bShowFavorite: bool,
+    bShowUnfavorite: bool,
+    bShowIgnore: bool,
+    bShowUnignore: bool,
+    iFavoritesCount: i64,
+    iIgnoreCount: i64,
+    iCounter: i64,
+    vecTopics: Vec<crate::routes::topics::NewsTopicView>,
+    optPreviousLink: Option<String>,
+    optNextLink: Option<String>,
+    sCsrfToken: String,
+}
+
+#[derive(Template)]
+#[template(path = "tag_topics_forum.html")]
+struct StTagTopicsForumTemplate {
+    sTitle: String,
+    sTagTitle: String,
+    sTagQueryValue: String,
+    sTagUrl: String,
+    vecSectionLinks: Vec<StTagSectionLinkView>,
+    optAddUrl: Option<String>,
+    sAddReason: String,
+    bAuthorized: bool,
+    bShowFavorite: bool,
+    bShowUnfavorite: bool,
+    bShowIgnore: bool,
+    bShowUnignore: bool,
+    iFavoritesCount: i64,
+    iIgnoreCount: i64,
+    iCounter: i64,
+    vecTopics: Vec<StTagForumTopicView>,
+    bOldTracker: bool,
+    optPreviousLink: Option<String>,
+    optNextLink: Option<String>,
 }
 
 /// TagController's `/tags` path is shared with `showTagListHandlerJSON`,
@@ -108,10 +196,13 @@ pub struct AllTagsQuery {
 pub async fn all_tags(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
-    Query(q): Query<AllTagsQuery>,
+    stRequest: Request,
 ) -> Result<axum::response::Response> {
-    if let Some(term) = q.term.filter(|t| !t.is_empty()) {
-        return Ok(Json(tag_autocomplete(&state, &term).await?).into_response());
+    let vecParameters = crate::form::servlet_request_parameters(stRequest).await?;
+    // Spring's `params = "term"` condition tests parameter presence, so an
+    // explicitly empty `?term=` still selects the JSON autocomplete handler.
+    if let Some(sTerm) = crate::form::get(&vecParameters, "term") {
+        return Ok(Json(tag_autocomplete(&state, sTerm).await?).into_response());
     }
     let first_letters = vecTagsFirstLetters(&state, None).await?;
     let cService = CBoxletService::new(
@@ -368,11 +459,248 @@ fn vecTagTopicColumns(
 /// favorite/ignore-tag button state - none of which the previous flat
 /// listing did.
 pub async fn tag_page(
-    State(state): State<AppState>,
-    Path(tag): Path<String>,
+    State(stState): State<AppState>,
+    Path(sTag): Path<String>,
     stJar: CookieJar,
-    CurrentUser(user): CurrentUser,
-    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+    CurrentUser(optUser): CurrentUser,
+    crate::csrf::CsrfToken(sCsrfToken): crate::csrf::CsrfToken,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
+    stHeaders: HeaderMap,
+    stRequest: Request,
+) -> Result<axum::response::Response> {
+    let vecParameters = crate::form::servlet_request_parameters(stRequest).await?;
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &stHeaders,
+        &stState.config.trusted_proxy_cidrs,
+    )
+    .to_string();
+    let Some(sRawSection) = crate::form::get(&vecParameters, "section") else {
+        return aggregate_tag_page(stState, sTag, stJar, optUser, sRemoteIp).await;
+    };
+
+    // `defaultValue="0"` applies to an explicitly empty value too; a
+    // non-empty type mismatch is handled by the global bad-parameter view.
+    let iSectionId = iTagSectionParameter(sRawSection, "section")?;
+    let sRawOffset = crate::form::get(&vecParameters, "offset").unwrap_or("0");
+    let iRawOffset = iTagSectionParameter(sRawOffset, "offset")?;
+
+    if !is_good_tag(&sTag) {
+        return Ok(stTagNameUserErrorResponse(&sTag));
+    }
+
+    let cService = CTagTopicListService::new(
+        CTagTopicListPgRepository::new(stState.pool.clone()),
+        CTagTopicCountOpenSearchRepository::new(
+            stState.config.opensearch_url.clone(),
+            stState.http.clone(),
+        ),
+    );
+    let enOutcome = cService
+        .enSectionPage(
+            &sTag,
+            iSectionId,
+            iRawOffset,
+            optUser.as_ref().map(|stUser| stUser.id),
+        )
+        .await?;
+    let EnTagSectionOutcome::Page(stPage) = enOutcome else {
+        let EnTagSectionOutcome::Redirect {
+            sMainTag,
+            iSectionId,
+        } = enOutcome
+        else {
+            unreachable!("covered tag-section outcomes")
+        };
+        let sLocation = sTagSectionUrl(&sMainTag, iSectionId, 0);
+        return Ok((StatusCode::FOUND, [(header::LOCATION, sLocation)]).into_response());
+    };
+
+    let iItems = stPage.enTopics.iLen();
+    let optPreviousLink = optTagSectionPreviousOffset(stPage.iOffset, stPage.iPageSize)
+        .map(|iOffset| sTagSectionUrl(&sTag, stPage.stSection.iId, iOffset));
+    let optNextLink = bTagSectionHasNext(stPage.iOffset, iItems, stPage.iPageSize).then(|| {
+        sTagSectionUrl(
+            &sTag,
+            stPage.stSection.iId,
+            stPage.iOffset + stPage.iPageSize,
+        )
+    });
+    let sTagUrl = sTagSectionUrl(&sTag, 0, 0);
+    let sTagQueryValue = urlencoding::encode(&sTag).into_owned();
+    let vecSectionLinks = stPage
+        .vecSections
+        .iter()
+        .map(|stSection| StTagSectionLinkView {
+            sName: stSection.sName.clone(),
+            sUrl: sTagSectionUrl(&sTag, stSection.iId, 0),
+            bSelected: stSection.iId == stPage.stSection.iId,
+        })
+        .collect::<Vec<_>>();
+    let sTagTitle = capitalize_first(&sTag);
+    let sTitle = format!("{sTagTitle} ({})", stPage.stSection.sName);
+    let stPostingIdentity =
+        crate::application::auth::stResolvePostingIdentity(&stState, optUser.as_ref(), None, None)
+            .await?
+            .stIdentity;
+    let stPostingUser = &stPostingIdentity.stUser;
+    let stPostingActor = crate::domain::topic::posting::StAddTopicActor {
+        optUserId: Some(stPostingUser.id),
+        bAnonymous: !stPostingIdentity.bAuthorized,
+        bModerator: stPostingUser.canmod,
+        bCorrector: stPostingUser.corrector,
+        bBlocked: stPostingUser.blocked.unwrap_or(false),
+        iScore: stPostingUser.score.unwrap_or(0),
+    };
+    let stPostingPermission = crate::application::topic::posting::CAddTopicService::new(
+        crate::infra::postgres::add_topic_repository::CAddTopicPgRepository::new(
+            stState.pool.clone(),
+        ),
+    )
+    .stCheckRestriction(
+        stPage.stSection.iTopicsRestriction,
+        stPostingActor,
+        &sRemoteIp,
+    )
+    .await?;
+    let optPostingReason = stPostingPermission.optReason;
+    let optAddUrl = optPostingReason.as_ref().is_none().then(|| {
+        format!(
+            "/add-section.jsp?section={}&tag={}",
+            stPage.stSection.iId,
+            urlencoding::encode(&sTag)
+        )
+    });
+    let sAddReason = optPostingReason.unwrap_or_default();
+    let bAuthorized = optUser.is_some();
+    let bModerator = optUser.as_ref().is_some_and(|stUser| stUser.canmod);
+    let bShowFavorite = bAuthorized && !stPage.stViewerState.bFavorite;
+    let bShowUnfavorite = bAuthorized && stPage.stViewerState.bFavorite;
+    let bShowIgnore = bAuthorized && !bModerator && !stPage.stViewerState.bIgnored;
+    let bShowUnignore = bAuthorized && !bModerator && stPage.stViewerState.bIgnored;
+
+    match stPage.enTopics {
+        EnTagSectionTopics::Feed(vecTopics) => {
+            let mut vecTopics = crate::routes::topics::prepare_news_topics_for_viewer(
+                &stState,
+                vecTopics,
+                true,
+                &optUser,
+                &sCsrfToken,
+            )
+            .await?;
+            // tag-topics.jsp passes minorAsMajor=true to news.tag.
+            for stTopic in &mut vecTopics {
+                stTopic.minor = false;
+            }
+            Ok(Html(
+                StTagTopicsTemplate {
+                    sTitle,
+                    sTagTitle,
+                    sTag,
+                    sTagQueryValue,
+                    sTagUrl,
+                    vecSectionLinks,
+                    optAddUrl,
+                    sAddReason,
+                    bAuthorized,
+                    bShowFavorite,
+                    bShowUnfavorite,
+                    bShowIgnore,
+                    bShowUnignore,
+                    iFavoritesCount: stPage.stViewerState.iFavoritesCount,
+                    iIgnoreCount: stPage.stViewerState.iIgnoreCount,
+                    iCounter: stPage.iCounter,
+                    vecTopics,
+                    optPreviousLink,
+                    optNextLink,
+                    sCsrfToken,
+                }
+                .render()?,
+            )
+            .into_response())
+        }
+        EnTagSectionTopics::Forum(vecTopics) => {
+            let iMessages = stPage.stProfile.iMessages;
+            let vecTopics = vecTopics
+                .into_iter()
+                .map(|stTopic| StTagForumTopicView {
+                    sLastPageUrl: stTopic.sLastPageUrl(iMessages),
+                    sGroupUrl: stTopic.sGroupUrl(),
+                    iVisibleCommentCount: stTopic.iVisibleCommentCount(),
+                    bCommentsClosed: stTopic.bCommentsClosed(),
+                    stTopic,
+                })
+                .collect();
+            Ok(Html(
+                StTagTopicsForumTemplate {
+                    sTitle,
+                    sTagTitle,
+                    sTagQueryValue,
+                    sTagUrl,
+                    vecSectionLinks,
+                    optAddUrl,
+                    sAddReason,
+                    bAuthorized,
+                    bShowFavorite,
+                    bShowUnfavorite,
+                    bShowIgnore,
+                    bShowUnignore,
+                    iFavoritesCount: stPage.stViewerState.iFavoritesCount,
+                    iIgnoreCount: stPage.stViewerState.iIgnoreCount,
+                    iCounter: stPage.iCounter,
+                    vecTopics,
+                    bOldTracker: stPage.stProfile.bOldTracker,
+                    optPreviousLink,
+                    optNextLink,
+                }
+                .render()?,
+            )
+            .into_response())
+        }
+    }
+}
+
+/// The live pinned Spring/Jetty stack answers malformed numeric parameters
+/// on `TagTopicListController` with HTTP 400. This is distinct from an
+/// explicit `ServletParameterException`, whose themed error page is a 404.
+fn iTagSectionParameter(sRawValue: &str, sName: &str) -> Result<i32> {
+    if sRawValue.trim().is_empty() {
+        return Ok(0);
+    }
+
+    sRawValue
+        .trim()
+        .parse::<i32>()
+        .map_err(|_| AppError::BadRequest(format!("Некорректное значение параметра `{sName}`")))
+}
+
+#[derive(Template)]
+#[template(path = "topic_edit_user_error.html")]
+struct StTagNameUserErrorTemplate<'a> {
+    exception_class: &'static str,
+    message: &'a str,
+}
+
+fn stTagNameUserErrorResponse(sTag: &str) -> axum::response::Response {
+    let sMessage = format!("Некорректный тег: '{sTag}'");
+    match (StTagNameUserErrorTemplate {
+        exception_class: "ru.org.linux.user.UserErrorException",
+        message: &sMessage,
+    })
+    .render()
+    {
+        Ok(sBody) => (StatusCode::INTERNAL_SERVER_ERROR, Html(sBody)).into_response(),
+        Err(stError) => AppError::Template(stError).into_response(),
+    }
+}
+
+async fn aggregate_tag_page(
+    state: AppState,
+    tag: String,
+    stJar: CookieJar,
+    user: Option<crate::models::UserSummary>,
+    sRemoteIp: String,
 ) -> Result<axum::response::Response> {
     use axum::response::IntoResponse;
 
@@ -399,9 +727,10 @@ pub async fn tag_page(
         .fetch_optional(&state.pool)
         .await?;
         return match synonym_target {
-            Some(main_tag) => Ok(
-                Redirect::to(&format!("/tag/{}", urlencoding::encode(&main_tag))).into_response(),
-            ),
+            Some(main_tag) => Ok(crate::routes::stFoundRedirect(format!(
+                "/tag/{}",
+                urlencoding::encode(&main_tag)
+            ))),
             None => Err(AppError::NotFound),
         };
     };
@@ -476,8 +805,13 @@ pub async fn tag_page(
                 topics
             };
             let topic_columns = vecTagTopicColumns(brief_topics, stTimezone, dtNow);
-            let add_reason =
-                crate::routes::topics::posting_reason_for_port(&state, restriction, &user).await?;
+            let add_reason = crate::routes::topics::posting_reason_for_port(
+                &state,
+                restriction,
+                &user,
+                &sRemoteIp,
+            )
+            .await?;
             let add_url = add_reason.is_none().then(|| {
                 format!(
                     "/add-section.jsp?section={section_id}&tag={}",
@@ -597,6 +931,7 @@ pub async fn tag_page(
     Ok(Html(
         TagPageTemplate {
             tag: tag.clone(),
+            tag_query_value: urlencoding::encode(&tag).into_owned(),
             title: format!("Метка: {}", capitalize_first(&tag)),
             counter,
             sections,
@@ -606,8 +941,8 @@ pub async fn tag_page(
             show_unfavorite_button,
             show_ignore_button,
             show_unignore_button,
+            authorized: user.is_some(),
             show_delete: is_moderator,
-            csrf_token,
             favorites_count,
             ignored_count,
         }
@@ -631,7 +966,10 @@ static TAG_RE: Lazy<Regex> = Lazy::new(|| {
 });
 
 pub(crate) fn is_good_tag(tag: &str) -> bool {
-    let len = tag.chars().count();
+    // Scala/Java String.length counts UTF-16 code units, not Unicode scalar
+    // values. This matters for supplementary-plane letters near the 32-unit
+    // boundary.
+    let len = tag.encode_utf16().count();
     (1..=32).contains(&len) && TAG_RE.is_match(tag)
 }
 
@@ -751,6 +1089,71 @@ mod create_tag_permission_tests {
     }
 
     #[test]
+    fn tag_length_matches_java_utf16_units() {
+        let sSupplementaryLetter = "\u{10400}";
+        assert!(is_good_tag(&sSupplementaryLetter.repeat(16)));
+        assert!(!is_good_tag(&sSupplementaryLetter.repeat(17)));
+    }
+
+    #[test]
+    fn section_templates_keep_both_original_topic_modes_and_memory_hooks() {
+        let sFeed = include_str!("../../templates/tag_topics.html");
+        let sForum = include_str!("../../templates/tag_topics_forum.html");
+        let sHeader = include_str!("../../templates/tag_topics_header.html");
+
+        assert!(sFeed.contains("{% include \"news_card.html\" %}"));
+        assert!(sFeed.contains("tag_memories_form_setup"));
+        assert!(sForum.contains("{% if bOldTracker %}"));
+        assert!(sForum.contains("class=\"message-table\""));
+        assert!(sForum.contains("class=\"tracker-item\""));
+        assert!(sHeader.contains("btn-selected"));
+        assert!(sHeader.contains("id=\"favsCount\""));
+        assert!(sHeader.contains("id=\"ignoreCount\""));
+    }
+
+    fn sAggregateTagControls(bAuthorized: bool, bFavorite: bool, bIgnored: bool) -> String {
+        TagPageTemplate {
+            tag: "rust+web".to_owned(),
+            tag_query_value: "rust%2Bweb".to_owned(),
+            title: "Метка: Rust+web".to_owned(),
+            counter: 0,
+            sections: Vec::new(),
+            related_tags: Vec::new(),
+            synonyms: Vec::new(),
+            show_favorite_button: bAuthorized && !bFavorite,
+            show_unfavorite_button: bAuthorized && bFavorite,
+            show_ignore_button: bAuthorized && !bIgnored,
+            show_unignore_button: bAuthorized && bIgnored,
+            authorized: bAuthorized,
+            show_delete: false,
+            favorites_count: 0,
+            ignored_count: 0,
+        }
+        .render()
+        .unwrap()
+    }
+
+    #[test]
+    fn aggregate_tag_controls_match_java_get_link_contract() {
+        let sAdd = sAggregateTagControls(true, false, false);
+        assert!(
+            sAdd.contains("id=\"tagFavAdd\" href=\"/user-filter?newFavoriteTagName=rust%2Bweb\"")
+        );
+        assert!(
+            sAdd.contains("id=\"tagIgnore\" href=\"/user-filter?newIgnoreTagName=rust%2Bweb\"")
+        );
+        assert!(!sAdd.contains("<form"));
+
+        let sSelected = sAggregateTagControls(true, true, true);
+        assert!(sSelected.contains("id=\"tagFavAdd\" href=\"/user-filter\" class=\"selected\""));
+        assert!(sSelected.contains("id=\"tagIgnore\" href=\"/user-filter\" class=\"selected\""));
+
+        let sAnonymous = sAggregateTagControls(false, false, false);
+        assert!(sAnonymous.contains("id=\"tagFavNoth\" href=\"#\""));
+        assert!(sAnonymous.contains("id=\"tagIgnNoth\" href=\"#\""));
+    }
+
+    #[test]
     fn moderators_do_not_need_the_score_threshold() {
         assert!(can_create_tag_by_role(true, 0, false));
         assert!(!can_create_tag_by_role(false, CREATE_TAG_SCORE - 1, false));
@@ -839,6 +1242,65 @@ pub struct TagChangeQuery {
     pub tag_name: String,
 }
 
+fn sTagFormErrorsHtml(vecErrors: &[String]) -> String {
+    if vecErrors.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<div class=\"error\">{}</div>",
+            vecErrors
+                .iter()
+                .map(|sError| html_escape::encode_text(sError).into_owned())
+                .collect::<Vec<_>>()
+                .join("<br>")
+        )
+    }
+}
+
+fn stRenderChangeTagForm(
+    sOldTagName: &str,
+    sTagName: &str,
+    sFirstLetter: &str,
+    sCsrfToken: &str,
+    vecErrors: &[String],
+) -> Result<Html<String>> {
+    let sTitle = format!("Изменение тега {sOldTagName}");
+    let sAction = format!(
+        "/tags/change?firstLetter={}",
+        urlencoding::encode(sFirstLetter)
+    );
+    let sCancelUrl = format!("/tags/{}", urlencoding::encode(sFirstLetter));
+    let sContentHtml = format!(
+        r#"
+<h1>{title}</h1>
+<form method="post" action="{action}">
+<input type="hidden" name="csrf" value="{csrf_token}">
+{errors}
+<input type="hidden" name="oldTagName" value="{old_attr}">
+Старое название: {old_text}<br>
+<label for="tagName">Новое название:</label>
+<input id="tagName" name="tagName" value="{tag_attr}" required style="width: 40em" autofocus>
+<div class="form-actions">
+<button type="submit" class="btn btn-primary">Изменить</button>
+<button type="button" class="btn btn-default" onclick="window.location='{cancel_url}'">Отменить</button>
+</div>
+</form>
+"#,
+        title = html_escape::encode_text(&sTitle),
+        action = html_escape::encode_double_quoted_attribute(&sAction),
+        csrf_token = html_escape::encode_double_quoted_attribute(sCsrfToken),
+        errors = sTagFormErrorsHtml(vecErrors),
+        old_attr = html_escape::encode_double_quoted_attribute(sOldTagName),
+        old_text = html_escape::encode_text(sOldTagName),
+        tag_attr = html_escape::encode_double_quoted_attribute(sTagName),
+        cancel_url = html_escape::encode_double_quoted_attribute(&sCancelUrl),
+    );
+    Ok(Html(crate::routes::sRenderLegacyContent(
+        &sTitle,
+        sContentHtml,
+    )?))
+}
+
 pub async fn change_form(
     CurrentUser(user): CurrentUser,
     Query(q): Query<TagChangeQuery>,
@@ -847,30 +1309,19 @@ pub async fn change_form(
     if !user.as_ref().map(|u| u.canmod).unwrap_or(false) {
         return Err(AppError::Forbidden);
     }
-    let sTitle = format!("Изменение тега {}", q.tag_name);
-    let sContentHtml = format!(
-        r#"
-<h1>{title}</h1>
-<form method="post" action="/tags/change" class="form">
-<input type="hidden" name="csrf" value="{csrf_token}">
-<input type="hidden" name="firstLetter" value="{fl}">
-<label>Старая <input name="oldTagName" value="{old}" required readonly></label>
-<label>Новая <input name="tagName" value="{old}" required></label>
-<button type="submit">Переименовать</button>
-</form>
-"#,
-        title = html_escape::encode_text(&sTitle),
-        fl = html_escape::encode_double_quoted_attribute(q.first_letter.as_deref().unwrap_or("")),
-        old = html_escape::encode_double_quoted_attribute(&q.tag_name),
-    );
-    Ok(Html(crate::routes::sRenderLegacyContent(
-        &sTitle,
-        sContentHtml,
-    )?))
+    stRenderChangeTagForm(
+        &q.tag_name,
+        &q.tag_name,
+        q.first_letter.as_deref().unwrap_or(""),
+        &csrf_token,
+        &[],
+    )
 }
 
 #[derive(Deserialize)]
 pub struct TagChangeForm {
+    #[serde(rename = "firstLetter")]
+    pub first_letter: Option<String>,
     #[serde(rename = "oldTagName")]
     pub old_tag_name: String,
     #[serde(rename = "tagName")]
@@ -880,30 +1331,40 @@ pub struct TagChangeForm {
 pub async fn change_tag(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
+    Query(q): Query<TagChangePostQuery>,
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
     Form(form): Form<TagChangeForm>,
-) -> Result<Redirect> {
+) -> Result<Response> {
     let moderator = user
         .as_ref()
         .filter(|u| u.canmod)
         .ok_or(AppError::Forbidden)?;
-    let old_tag_name = form.old_tag_name.trim();
-    let tag_name = form.tag_name.trim();
-
-    let Some(old_tag_id) = get_tag_id(&state.pool, old_tag_name).await? else {
-        return Err(AppError::BadRequest(
-            "Тега с таким именем не существует!".into(),
-        ));
+    let old_tag_name = form.old_tag_name.as_str();
+    let tag_name = form.tag_name.as_str();
+    let optOldTagId = get_tag_id(&state.pool, old_tag_name).await?;
+    let bGoodTag = is_good_tag(tag_name);
+    let bNewTagExists = if bGoodTag {
+        get_tag_id(&state.pool, tag_name).await?.is_some()
+    } else {
+        false
     };
-    if !is_good_tag(tag_name) {
-        return Err(AppError::BadRequest(format!(
-            "Некорректный тег: '{tag_name}'"
-        )));
+    let vecErrors = vecChangeTagErrors(optOldTagId.is_some(), bNewTagExists, tag_name);
+    if !vecErrors.is_empty() {
+        let sFirstLetter = q
+            .first_letter
+            .as_deref()
+            .or(form.first_letter.as_deref())
+            .unwrap_or("");
+        return Ok(stRenderChangeTagForm(
+            old_tag_name,
+            tag_name,
+            sFirstLetter,
+            &csrf_token,
+            &vecErrors,
+        )?
+        .into_response());
     }
-    if get_tag_id(&state.pool, tag_name).await?.is_some() {
-        return Err(AppError::BadRequest(
-            "Тег с таким именем уже существует!".into(),
-        ));
-    }
+    let old_tag_id = optOldTagId.expect("validated existing tag");
 
     let mut tx = state.pool.begin().await?;
     sqlx::query("DELETE FROM tags_synonyms WHERE value=$1")
@@ -915,12 +1376,14 @@ pub async fn change_tag(
         .bind(tag_name)
         .execute(&mut *tx)
         .await?;
-    tx.commit().await?;
-
     // TagModificationService.change calls searchQueueSender.updateMessage
-    // for every topic carrying this tag - the indexed tag value would
-    // otherwise stay stale under the old name forever.
-    reindex_topics_with_tag(&state, old_tag_id).await;
+    // from inside localTx. A queue failure therefore rolls this rename back.
+    let vecTopicIds: Vec<i32> = sqlx::query_scalar("SELECT msgid FROM tags WHERE tagid=$1")
+        .bind(old_tag_id)
+        .fetch_all(&mut *tx)
+        .await?;
+    vReindexTopicIds(&state, &vecTopicIds).await?;
+    tx.commit().await?;
     tracing::info!(
         old_tag = %old_tag_name,
         new_tag = %tag_name,
@@ -928,21 +1391,48 @@ pub async fn change_tag(
         "tag changed"
     );
 
-    Ok(Redirect::to(&format!(
+    Ok(crate::routes::stFoundRedirect(format!(
         "/tags/{}",
         urlencoding::encode(&first_letter_of(tag_name))
     )))
 }
 
-async fn reindex_topics_with_tag(state: &AppState, tag_id: i32) {
+#[derive(Default, Deserialize)]
+pub struct TagChangePostQuery {
+    #[serde(rename = "firstLetter")]
+    pub first_letter: Option<String>,
+}
+
+fn vecChangeTagErrors(bOldTagExists: bool, bNewTagExists: bool, sTagName: &str) -> Vec<String> {
+    let mut vecErrors = Vec::new();
+    if !bOldTagExists {
+        vecErrors.push("Тега с таким именем не существует!".into());
+    }
+    if !is_good_tag(sTagName) {
+        vecErrors.push(format!("Некорректный тег: '{sTagName}'"));
+    } else if bNewTagExists {
+        vecErrors.push("Тег с таким именем уже существует!".into());
+    }
+    vecErrors
+}
+
+async fn vReindexTopicIds(state: &AppState, vecTopicIds: &[i32]) -> Result<()> {
+    let cQueue = CSearchQueueSender::new(
+        state.config.opensearch_url.as_deref(),
+        &state.config.upload_dir,
+    );
+    for iTopicId in vecTopicIds {
+        cQueue.vUpdateMessage(*iTopicId, true).await?;
+    }
+    Ok(())
+}
+
+async fn reindex_topics_with_tag(state: &AppState, tag_id: i32) -> Result<()> {
     let topic_ids: Vec<i32> = sqlx::query_scalar("SELECT msgid FROM tags WHERE tagid=$1")
         .bind(tag_id)
         .fetch_all(&state.pool)
-        .await
-        .unwrap_or_default();
-    for id in topic_ids {
-        crate::search_index::index_topic(state, id, true).await;
-    }
+        .await?;
+    vReindexTopicIds(state, &topic_ids).await
 }
 
 #[derive(Deserialize)]
@@ -951,6 +1441,63 @@ pub struct TagDeleteQuery {
     pub first_letter: Option<String>,
     #[serde(rename = "tagName")]
     pub tag_name: String,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn stRenderDeleteTagForm(
+    sOldTagName: &str,
+    optTagName: Option<&str>,
+    bCreateSynonym: bool,
+    bSynonym: bool,
+    sFirstLetter: &str,
+    sCsrfToken: &str,
+    vecErrors: &[String],
+) -> Result<Html<String>> {
+    let sReplacementControls = if bSynonym {
+        String::new()
+    } else {
+        format!(
+            r#"
+<div class="control-group">
+<label for="tagName">Метка, которой нужно заменить удаляемую (пусто - удалить без замены):</label>
+<input autofocus autocapitalize="off" data-tags-autocomplete-single="data-tags-autocomplete-single" id="tagName" name="tagName" value="{tag_attr}" style="width: 40em">
+</div>
+<div class="control-group">
+<label><input id="createSynonym" name="createSynonym" type="checkbox" value="true"{checked}> создать синоним</label>
+</div>
+"#,
+            tag_attr = html_escape::encode_double_quoted_attribute(optTagName.unwrap_or("")),
+            checked = if bCreateSynonym { " checked" } else { "" },
+        )
+    };
+    let sCancelUrl = format!("/tags/{}", urlencoding::encode(sFirstLetter));
+    let sContentHtml = format!(
+        r#"
+<script>$script.ready("plugins", function() {{ $script("/js/tagsAutocomplete.js"); }});</script>
+<h1>Удаление метки «{old_text}»</h1>
+<p><strong>Внимание!</strong> Удаление метки нельзя отменить. Изменение не отражается в истории правок топика.</p>
+<form method="post" action="/tags/delete">
+<input type="hidden" name="csrf" value="{csrf_token}">
+{errors}
+<input type="hidden" name="oldTagName" value="{old_attr}">
+{replacement_controls}
+<div class="form-actions">
+<button type="submit" class="btn btn-danger">Удалить</button>
+<button type="button" class="btn btn-default" onclick="window.location='{cancel_url}'">Отменить</button>
+</div>
+</form>
+"#,
+        old_text = html_escape::encode_text(sOldTagName),
+        csrf_token = html_escape::encode_double_quoted_attribute(sCsrfToken),
+        errors = sTagFormErrorsHtml(vecErrors),
+        old_attr = html_escape::encode_double_quoted_attribute(sOldTagName),
+        replacement_controls = sReplacementControls,
+        cancel_url = html_escape::encode_double_quoted_attribute(&sCancelUrl),
+    );
+    Ok(Html(crate::routes::sRenderLegacyContent(
+        "Удаление метки",
+        sContentHtml,
+    )?))
 }
 
 pub async fn delete_form(
@@ -964,38 +1511,18 @@ pub async fn delete_form(
     }
     let is_synonym: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM tags_synonyms WHERE value=$1)")
-            .bind(q.tag_name.trim())
+            .bind(&q.tag_name)
             .fetch_one(&state.pool)
             .await?;
-    let synonym_note = if is_synonym {
-        "<p class=\"muted\">Это синоним - будет удалена только сама ссылка-синоним.</p>"
-    } else {
-        ""
-    };
-    let sContentHtml = format!(
-        r#"
-<h1>Удаление метки «{old_text}»</h1>
-<p><strong>Внимание!</strong> Удаление метки нельзя отменить. Изменение не отражается в истории правок топика.</p>
-{synonym_note}
-<form method="post" action="/tags/delete" class="form">
-<input type="hidden" name="csrf" value="{csrf_token}">
-<input type="hidden" name="firstLetter" value="{fl}">
-<input type="hidden" name="oldTagName" value="{old_attr}">
-<p>Удаляемая метка: <b>{old_text}</b></p>
-<label>Заменить на (оставьте пустым, чтобы просто удалить) <input name="tagName"></label>
-<label><input type="checkbox" name="createSynonym" value="true"> Оставить синоним на новую метку</label>
-<button type="submit">Удалить</button>
-</form>
-"#,
-        fl = html_escape::encode_double_quoted_attribute(q.first_letter.as_deref().unwrap_or("")),
-        old_attr = html_escape::encode_double_quoted_attribute(&q.tag_name),
-        old_text = html_escape::encode_text(&q.tag_name),
-        synonym_note = synonym_note,
-    );
-    Ok(Html(crate::routes::sRenderLegacyContent(
-        "Удаление метки",
-        sContentHtml,
-    )?))
+    stRenderDeleteTagForm(
+        &q.tag_name,
+        None,
+        false,
+        is_synonym,
+        q.first_letter.as_deref().unwrap_or(""),
+        &csrf_token,
+        &[],
+    )
 }
 
 #[derive(Deserialize)]
@@ -1011,13 +1538,14 @@ pub struct TagDeleteForm {
 pub async fn delete_tag(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
+    crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
     Form(form): Form<TagDeleteForm>,
-) -> Result<Redirect> {
+) -> Result<Response> {
     let moderator = user
         .as_ref()
         .filter(|u| u.canmod)
         .ok_or(AppError::Forbidden)?;
-    let old_tag_name = form.old_tag_name.trim();
+    let old_tag_name = form.old_tag_name.as_str();
 
     // A synonym entry isn't a real tag - deleting it just drops the redirect.
     let synonym_target: Option<i32> =
@@ -1035,30 +1563,37 @@ pub async fn delete_tag(
             moderator = %moderator.nick,
             "tag synonym deleted"
         );
-        return Ok(Redirect::to(&format!(
+        return Ok(crate::routes::stFoundRedirect(format!(
             "/tags/{}",
             urlencoding::encode(&first_letter_of(old_tag_name))
         )));
     }
 
-    let Some(old_tag_id) = get_tag_id(&state.pool, old_tag_name).await? else {
-        return Err(AppError::BadRequest(
-            "Тега с таким именем не существует!".into(),
-        ));
-    };
-    let tag_name = form
-        .tag_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    let optOldTagId = get_tag_id(&state.pool, old_tag_name).await?;
+    let tag_name = form.tag_name.as_deref().filter(|s| !s.is_empty());
     let create_synonym = form.create_synonym.is_some();
+    let vecErrors = vecDeleteTagErrors(
+        optOldTagId.is_some(),
+        old_tag_name,
+        form.tag_name.as_deref(),
+        create_synonym,
+    );
+    if !vecErrors.is_empty() {
+        let sFirstLetter = old_tag_name.chars().next().into_iter().collect::<String>();
+        return Ok(stRenderDeleteTagForm(
+            old_tag_name,
+            form.tag_name.as_deref(),
+            create_synonym,
+            false,
+            &sFirstLetter,
+            &csrf_token,
+            &vecErrors,
+        )?
+        .into_response());
+    }
+    let old_tag_id = optOldTagId.expect("validated existing tag");
 
     let Some(tag_name) = tag_name else {
-        if create_synonym {
-            return Err(AppError::BadRequest(
-                "Не указан тег для создания синонима!".into(),
-            ));
-        }
         let affected_topics: Vec<i32> = sqlx::query_scalar("SELECT msgid FROM tags WHERE tagid=$1")
             .bind(old_tag_id)
             .fetch_all(&state.pool)
@@ -1082,30 +1617,17 @@ pub async fn delete_tag(
             .await?;
         tx.commit().await?;
         // TagModificationService.delete: reindex every topic that lost the tag.
-        for id in affected_topics {
-            crate::search_index::index_topic(&state, id, true).await;
-        }
+        vReindexTopicIds(&state, &affected_topics).await?;
         tracing::info!(
             tag = %old_tag_name,
             moderator = %moderator.nick,
             "tag deleted"
         );
-        return Ok(Redirect::to(&format!(
+        return Ok(crate::routes::stFoundRedirect(format!(
             "/tags/{}",
             urlencoding::encode(&first_letter_of(old_tag_name))
         )));
     };
-
-    if !is_good_tag(tag_name) {
-        return Err(AppError::BadRequest(format!(
-            "Некорректный тег: '{tag_name}'"
-        )));
-    }
-    if old_tag_name.eq_ignore_ascii_case(tag_name) {
-        return Err(AppError::BadRequest(
-            "Заменяемый тег не должен быть равен удаляемому!".into(),
-        ));
-    }
 
     let mut tx = state.pool.begin().await?;
     let new_tag_id: i32 = sqlx::query_scalar(
@@ -1153,7 +1675,7 @@ pub async fn delete_tag(
     tx.commit().await?;
 
     // TagModificationService.merge: reindex every topic now carrying the merge target's tag.
-    reindex_topics_with_tag(&state, new_tag_id).await;
+    reindex_topics_with_tag(&state, new_tag_id).await?;
     tracing::info!(
         old_tag = %old_tag_name,
         new_tag = %tag_name,
@@ -1162,8 +1684,134 @@ pub async fn delete_tag(
         "tag merged"
     );
 
-    Ok(Redirect::to(&format!(
+    Ok(crate::routes::stFoundRedirect(format!(
         "/tags/{}",
         urlencoding::encode(&first_letter_of(tag_name))
     )))
+}
+
+fn vecDeleteTagErrors(
+    bOldTagExists: bool,
+    sOldTagName: &str,
+    optTagName: Option<&str>,
+    bCreateSynonym: bool,
+) -> Vec<String> {
+    let mut vecErrors = Vec::new();
+    let bPerformDelete = optTagName.is_none_or(str::is_empty);
+    if !bOldTagExists {
+        vecErrors.push("Тега с таким именем не существует!".into());
+    }
+    if let Some(sTagName) = optTagName.filter(|sTagName| !sTagName.is_empty())
+        && !is_good_tag(sTagName)
+    {
+        vecErrors.push(format!("Некорректный тег: '{sTagName}'"));
+    }
+    if optTagName.is_some_and(|sTagName| sOldTagName == sTagName) {
+        vecErrors.push("Заменяемый тег не должен быть равен удаляемому!".into());
+    }
+    if bCreateSynonym && bPerformDelete {
+        vecErrors.push("Не указан тег для создания синонима!".into());
+    }
+    vecErrors
+}
+
+#[cfg(test)]
+mod tag_mutation_form_validation_tests {
+    use super::*;
+
+    #[test]
+    fn change_validation_accumulates_errors_in_java_order() {
+        let vecErrors = vecChangeTagErrors(false, false, " invalid");
+        assert_eq!(
+            vecErrors,
+            vec![
+                "Тега с таким именем не существует!",
+                "Некорректный тег: ' invalid'",
+            ]
+        );
+
+        assert_eq!(
+            vecChangeTagErrors(true, true, "existing"),
+            vec!["Тег с таким именем уже существует!"]
+        );
+    }
+
+    #[test]
+    fn delete_validation_accumulates_errors_without_trimming_values() {
+        let vecErrors = vecDeleteTagErrors(false, "?bad", Some("?bad"), false);
+        assert_eq!(
+            vecErrors,
+            vec![
+                "Тега с таким именем не существует!",
+                "Некорректный тег: '?bad'",
+                "Заменяемый тег не должен быть равен удаляемому!",
+            ]
+        );
+        assert_eq!(
+            vecDeleteTagErrors(true, "old", Some(""), true),
+            vec!["Не указан тег для создания синонима!"]
+        );
+    }
+
+    #[test]
+    fn invalid_forms_retain_values_errors_and_theme_shell() {
+        let Html(sChangeHtml) = stRenderChangeTagForm(
+            "old",
+            "bad<name",
+            "b",
+            "csrf-token",
+            &["Некорректный тег: 'bad<name'".into()],
+        )
+        .expect("change form");
+        assert_eq!(
+            Html(sChangeHtml.clone()).into_response().status(),
+            StatusCode::OK
+        );
+        assert!(sChangeHtml.contains("<main id=\"bd\">"));
+        assert!(sChangeHtml.contains("class=\"error\""));
+        assert!(sChangeHtml.contains("name=\"tagName\""));
+        assert!(sChangeHtml.contains("bad&lt;name"));
+        assert!(!sChangeHtml.contains("value=\"bad<name\""));
+
+        let Html(sDeleteHtml) = stRenderDeleteTagForm(
+            "old",
+            Some("replacement"),
+            true,
+            false,
+            "o",
+            "csrf-token",
+            &["Ошибка".into()],
+        )
+        .expect("delete form");
+        assert!(sDeleteHtml.contains("<main id=\"bd\">"));
+        assert!(sDeleteHtml.contains("class=\"error\">Ошибка</div>"));
+        assert!(sDeleteHtml.contains("value=\"replacement\""));
+        assert!(sDeleteHtml.contains("id=\"createSynonym\""));
+        assert!(sDeleteHtml.contains(" checked"));
+    }
+
+    #[test]
+    fn synonym_delete_form_hides_merge_controls_like_java_jsp() {
+        let Html(sHtml) = stRenderDeleteTagForm("alias", None, false, true, "a", "csrf-token", &[])
+            .expect("synonym delete form");
+        assert!(!sHtml.contains("id=\"tagName\""));
+        assert!(!sHtml.contains("id=\"createSynonym\""));
+    }
+}
+
+#[cfg(test)]
+mod tag_section_binding_tests {
+    use super::*;
+
+    #[test]
+    fn malformed_numeric_parameters_use_the_live_spring_400_contract() {
+        assert_eq!(iTagSectionParameter("", "section").unwrap(), 0);
+        assert_eq!(iTagSectionParameter("  -1  ", "offset").unwrap(), -1);
+
+        for sName in ["section", "offset"] {
+            let stError = iTagSectionParameter("invalid", sName).unwrap_err();
+            assert!(matches!(&stError, AppError::BadRequest(_)));
+            assert_eq!(stError.into_response().status(), StatusCode::BAD_REQUEST);
+        }
+    }
 }

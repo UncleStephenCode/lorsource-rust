@@ -6,7 +6,7 @@ use crate::{
     state::AppState,
 };
 use axum::{
-    extract::{Query, State},
+    extract::{Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
@@ -30,9 +30,15 @@ pub struct RssQuery {
 pub async fn section_rss(
     State(stState): State<AppState>,
     CurrentUser(optUser): CurrentUser,
-    stRequestHeaders: HeaderMap,
-    Query(stQuery): Query<RssQuery>,
+    stRequest: Request,
 ) -> Result<Response> {
+    let stRequestHeaders = stRequest.headers().clone();
+    let vecParameters = crate::form::servlet_request_parameters(stRequest).await?;
+    let stQuery = RssQuery {
+        section: iRssParameter(&vecParameters, "section", 1)?,
+        group: iRssParameter(&vecParameters, "group", 0)?,
+        filter: crate::form::get(&vecParameters, "filter").map(ToOwned::to_owned),
+    };
     let cTopicService = CTopicService::new(CTopicPgRepository::new(stState.pool.clone()));
     let stSource = cTopicService
         .stRssSource(
@@ -68,6 +74,17 @@ pub async fn section_rss(
         &stState.config.public_url,
         Utc::now(),
     ))
+}
+
+fn iRssParameter(vecParameters: &[(String, String)], sName: &str, iDefault: i32) -> Result<i32> {
+    match crate::form::get(vecParameters, sName) {
+        None | Some("") => Ok(iDefault),
+        Some(sValue) => sValue.parse().map_err(|_| {
+            crate::error::AppError::BadRequest(format!(
+                "Failed to convert request parameter '{sName}'"
+            ))
+        }),
+    }
 }
 
 fn stRssResponse(

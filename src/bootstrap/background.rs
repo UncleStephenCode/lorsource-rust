@@ -13,7 +13,7 @@ use serde_json::Value;
 use sqlx::{PgPool, Postgres, Transaction};
 use tokio::{sync::watch, task::JoinHandle};
 
-use crate::state::AppState;
+use crate::{application::exception_reporting::StExceptionReport, state::AppState};
 
 const LOCK_STATS: i64 = 0x4c4f_5201;
 const LOCK_GROUP_STATS: i64 = 0x4c4f_5202;
@@ -39,18 +39,7 @@ const S_DISPOSABLE_DOMAINS_URL: &str =
 
 pub fn vecSpawn(stState: AppState, oShutdown: watch::Receiver<bool>) -> Vec<JoinHandle<()>> {
     let mut vecJobs = vec![
-        stSpawnFixed(
-            "search queue",
-            Duration::from_secs(1),
-            Duration::from_secs(5),
-            stState.clone(),
-            oShutdown.clone(),
-            |stState| async move {
-                crate::search_index::vDrainQueue(&stState)
-                    .await
-                    .map_err(anyhow::Error::msg)
-            },
-        ),
+        stSpawnSearchQueue(stState.clone(), oShutdown.clone()),
         stSpawnAdvCounters(stState.clone(), oShutdown.clone()),
     ];
     if !stState.config.enable_background_jobs {
@@ -176,6 +165,25 @@ pub fn vecSpawn(stState: AppState, oShutdown: watch::Receiver<bool>) -> Vec<Join
     vecJobs
 }
 
+fn stSpawnSearchQueue(stState: AppState, mut oShutdown: watch::Receiver<bool>) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        if bWaitOrShutdown(Duration::from_secs(1), &mut oShutdown).await {
+            return;
+        }
+        loop {
+            if let Err(stError) = crate::search_index::vDrainQueue(&stState).await {
+                // The Java search listener is a broker consumer, not a
+                // Spring `@Scheduled` method governed by TaskScheduler's
+                // ErrorHandler. Keep its existing log-only behavior here.
+                tracing::error!(job = "search queue", error = %stError, "background job failed");
+            }
+            if bWaitOrShutdown(Duration::from_secs(5), &mut oShutdown).await {
+                return;
+            }
+        }
+    })
+}
+
 fn stSpawnAdvCounters(stState: AppState, mut oShutdown: watch::Receiver<bool>) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
@@ -240,7 +248,7 @@ where
         }
         loop {
             if let Err(stError) = fRun(stState.clone()).await {
-                tracing::error!(job = sName, error = %stError, "background job failed");
+                vReportScheduledFailure(&stState, sName, &stError);
             }
             if bWaitOrShutdown(stDelay, &mut oShutdown).await {
                 return;
@@ -267,7 +275,7 @@ where
                 return;
             }
             if let Err(stError) = fRun(stState.clone()).await {
-                tracing::error!(job = sName, error = %stError, "background job failed");
+                vReportScheduledFailure(&stState, sName, &stError);
             }
         }
     })
@@ -292,10 +300,37 @@ where
                 return;
             }
             if let Err(stError) = fRun(stState.clone()).await {
-                tracing::error!(job = sName, error = %stError, "background job failed");
+                vReportScheduledFailure(&stState, sName, &stError);
             }
         }
     })
+}
+
+fn vReportScheduledFailure(stState: &AppState, sName: &str, stError: &anyhow::Error) {
+    tracing::error!(job = sName, error = %stError, "background job failed");
+    stState.exception_reporter.vReport(stScheduledFailureReport(
+        sName,
+        stError,
+        stState.config.telegram_token.as_deref(),
+    ));
+}
+
+fn stScheduledFailureReport(
+    sName: &str,
+    stError: &anyhow::Error,
+    optTelegramToken: Option<&str>,
+) -> StExceptionReport {
+    let mut sError = format!("{stError:#}");
+    if let Some(sToken) = optTelegramToken.filter(|sToken| !sToken.is_empty()) {
+        sError = sError.replace(sToken, "[REDACTED]");
+    }
+    StExceptionReport {
+        // `anyhow` deliberately erases the concrete exception class which the
+        // Java scheduler used for rate grouping. Keep jobs distinct so one
+        // failing task cannot suppress the first report from another task.
+        sType: format!("Periodic task: {sName}"),
+        sBody: format!("Periodic task failed\n\nJob: {sName}\n{sError}"),
+    }
 }
 
 async fn bWaitOrShutdown(stDelay: Duration, oShutdown: &mut watch::Receiver<bool>) -> bool {
@@ -653,6 +688,26 @@ fn vecJavaLines(sBody: &str) -> Vec<&str> {
     sBody.lines().collect()
 }
 
+fn sTelegramPostText(sStoredTitle: &str, optTags: Option<&str>, sLink: &str) -> String {
+    // `TelegramPostsDao.hotTopic` materializes a Java `Topic`, whose
+    // `fromResultSet` applies `StringUtil.makeTitle`; TelegramPoster then calls
+    // `getTitleUnescaped` (one HTML4 entity layer). Reuse that exact title
+    // representation pipeline instead of publishing the raw database value.
+    let sTitle = crate::domain::title::sMakeTitlePlainForDisplay(sStoredTitle);
+    let sTags = optTags
+        .filter(|sTags| !sTags.is_empty())
+        .map(|sTags| {
+            sTags
+                .split(',')
+                .map(|sTag| format!("#{}", sTag.replace(' ', "")))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_default();
+
+    format!("{sTitle} {sTags}\n\n{sLink}")
+}
+
 async fn vUpdateTelegram(stState: &AppState) -> anyhow::Result<()> {
     let Some(sToken) = stState.config.telegram_token.as_deref() else {
         return Ok(());
@@ -699,17 +754,11 @@ async fn vUpdateTelegramLocked(
     .fetch_optional(&mut **oConnection)
     .await?;
     if let Some((iTopicId, sTitle, sGroup, sSection, optTags)) = optTopic {
-        let sTags = optTags
-            .unwrap_or_default()
-            .split(',')
-            .map(|sTag| format!("#{}", sTag.replace(' ', "")))
-            .collect::<Vec<_>>()
-            .join(" ");
         let sLink = format!(
             "{}/{sSection}/{sGroup}/{iTopicId}",
             stState.config.public_url.trim_end_matches('/')
         );
-        let sText = format!("{sTitle} {sTags}\n\n{sLink}");
+        let sText = sTelegramPostText(&sTitle, optTags.as_deref(), &sLink);
         let sUrl = format!("https://api.telegram.org/bot{sToken}/sendMessage");
         let stJson: Value = stTelegramGet(
             stState,
@@ -971,8 +1020,8 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::{
-        sFetchExternalList, sTelegramHttpError, stTelegramRequest, stUntilNextDay, stUntilNextHour,
-        vecJavaLines,
+        sFetchExternalList, sTelegramHttpError, sTelegramPostText, stScheduledFailureReport,
+        stTelegramRequest, stUntilNextDay, stUntilNextHour, vecJavaLines,
     };
 
     #[test]
@@ -987,6 +1036,74 @@ mod tests {
     fn scheduler_delays_are_bounded() {
         assert!(stUntilNextHour(15, 1).as_secs() <= 3600);
         assert!(stUntilNextDay(4, 30, 0).as_secs() <= 24 * 3600);
+    }
+
+    #[test]
+    fn every_spring_style_scheduler_loop_reports_and_redacts_failures() {
+        let stError =
+            anyhow::anyhow!("request https://api.telegram.org/botSUPER_SECRET/sendMessage failed")
+                .context("publisher adapter");
+        let stReport =
+            stScheduledFailureReport("Telegram publisher", &stError, Some("SUPER_SECRET"));
+        assert_eq!(stReport.sType, "Periodic task: Telegram publisher");
+        assert!(stReport.sBody.contains("publisher adapter"));
+        assert!(stReport.sBody.contains("Periodic task failed"));
+        assert!(!stReport.sBody.contains("SUPER_SECRET"));
+        assert!(stReport.sBody.contains("[REDACTED]"));
+
+        let sProduction = include_str!("background.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source");
+        assert_eq!(
+            sProduction
+                .matches("vReportScheduledFailure(&stState, sName, &stError)")
+                .count(),
+            3,
+            "fixed-delay, hourly and daily Spring-style loops must all report"
+        );
+        assert!(
+            !sProduction
+                .split("fn stSpawnSearchQueue")
+                .nth(1)
+                .and_then(|sSource| sSource.split("fn stSpawnAdvCounters").next())
+                .unwrap_or_default()
+                .contains("vReportScheduledFailure")
+        );
+        assert!(
+            !sProduction
+                .split("fn stSpawnAdvCounters")
+                .nth(1)
+                .and_then(|sSource| sSource.split("fn vFlushAdvCounters").next())
+                .unwrap_or_default()
+                .contains("vReportScheduledFailure")
+        );
+    }
+
+    #[test]
+    fn telegram_text_matches_java_topic_title_and_tag_pipeline() {
+        assert_eq!(
+            sTelegramPostText(
+                "&quot;LOR&quot; &amp; Rust &amp;lt; &amp;apos; &bogus; &amp",
+                Some("два слова,rust"),
+                "https://example.test/forum/linux/42",
+            ),
+            "«LOR» & Rust &lt; &apos; &bogus; &amp #дваслова #rust\n\nhttps://example.test/forum/linux/42"
+        );
+        assert_eq!(
+            sTelegramPostText(" \t\r\n", Some("rust"), "/forum/linux/42"),
+            "Без заглавия #rust\n\n/forum/linux/42"
+        );
+    }
+
+    #[test]
+    fn telegram_text_omits_phantom_hash_for_topic_without_tags() {
+        for optTags in [None, Some("")] {
+            assert_eq!(
+                sTelegramPostText("A &amp; B", optTags, "/news/linux/7"),
+                "A & B \n\n/news/linux/7"
+            );
+        }
     }
 
     async fn stExternalServer(

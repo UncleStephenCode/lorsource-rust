@@ -37,7 +37,7 @@ where
     ) -> Result<StEmailDomainBlockPage> {
         let iCount = self.oRepository.iManualCount().await?;
         if iOffset < 0 || (iCount > 0 && i64::from(iOffset) >= iCount) {
-            return Err(AppError::BadRequest("Wrong offset".to_string()));
+            return Err(AppError::stBadInput("Wrong offset"));
         }
 
         let optSettings = self.oRepository.optProfileSettings(iModeratorId).await?;
@@ -67,7 +67,10 @@ where
     }
 
     pub async fn vUnblock(&self, sDomain: &str) -> Result<()> {
-        let sDomain = Self::sNormalizeDomain(sDomain)?;
+        // EmailDomainsBlockController.delete calls only `normalize`; the
+        // add-only length/regex validation must not reject an existing legacy
+        // domain selected for removal.
+        let sDomain = Self::sNormalizeDomainForUnblock(sDomain)?;
         self.oRepository.vUnblock(&sDomain).await
     }
 
@@ -76,12 +79,17 @@ where
     }
 
     pub fn sNormalizeDomain(sDomain: &str) -> Result<String> {
+        let sNormalized = Self::sNormalizeDomainForUnblock(sDomain)?;
+        if sNormalized.chars().count() > 255 || !ST_DOMAIN_RE.is_match(&sNormalized) {
+            return Err(AppError::stBadInput("Invalid domain"));
+        }
+        Ok(sNormalized)
+    }
+
+    pub fn sNormalizeDomainForUnblock(sDomain: &str) -> Result<String> {
         let sNormalized = sDomain.trim().to_lowercase();
         if sNormalized.is_empty() {
-            return Err(AppError::BadRequest("Empty domain".to_string()));
-        }
-        if sNormalized.chars().count() > 255 || !ST_DOMAIN_RE.is_match(&sNormalized) {
-            return Err(AppError::BadRequest("Invalid domain".to_string()));
+            return Err(AppError::stBadInput("Empty domain"));
         }
         Ok(sNormalized)
     }
@@ -115,5 +123,18 @@ mod tests {
             assert!(TyService::sNormalizeDomain(sDomain).is_err(), "{sDomain}");
         }
         assert!(TyService::sNormalizeDomain(&"a".repeat(256)).is_err());
+    }
+
+    #[test]
+    fn delete_only_normalizes_and_accepts_legacy_nonempty_domains() {
+        assert_eq!(
+            TyService::sNormalizeDomainForUnblock("  EXAM_PLE.ORG  ").unwrap(),
+            "exam_ple.org"
+        );
+        assert_eq!(
+            TyService::sNormalizeDomainForUnblock(&"A".repeat(256)).unwrap(),
+            "a".repeat(256)
+        );
+        assert!(TyService::sNormalizeDomainForUnblock("  ").is_err());
     }
 }

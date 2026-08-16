@@ -98,11 +98,12 @@ that an ordinary user cannot inspect another user's private activity.
 ## Recorded validation
 
 - Docker release and quality targets: passed, including repository-wide
-  rustfmt, all-target/all-feature check, 457 passing tests, 2 explicitly
-  ignored tests and Clippy with warnings denied.
+  rustfmt, all-target/all-feature check, 690 passing tests, 7 explicitly
+  ignored tests, 0 failures and Clippy with warnings denied.
 - The rebuilt application passed `/healthz`; edit-topic, comment-deletion and
-  topic-deletion lifecycle scripts completed with scoped cleanup.
-- `prod_ready_test/test_port.py`: 26 groups passed, 0 failed; destructive
+  topic-deletion and userpic/profile lifecycle scripts completed with scoped
+  cleanup.
+- `prod_ready_test/test_port.py`: 30 groups passed, 0 failed; destructive
   lifecycle scenarios restored their owned state in `finally`.
 - Browser seed passed from a clean checkpoint and on immediate resume. The
   before/after database tuple stayed exactly 10 topics, 5 comments, 2
@@ -118,15 +119,24 @@ that an ordinary user cannot inspect another user's private activity.
   concurrency 8 (889.15 requests/s, p50 3.88 ms, p95 33.33 ms, max 39.62 ms).
   The report is `/tmp/prod_ready_7d_benchmark_final.json` and records
   `registration_tested=false`.
-- Java↔Rust HTTP comparison: 126/126 declared scenarios passed against pinned
-  Java SHA `2ddf930005adac28077cb6ad74d1481485f44096`, including exact legacy
-  status, `Allow`, content-length and `Location` cases. The report SHA-256 is
-  `add67c20ebdf56d12145b13668f1adc8a55e7191d12b8707e27dfeb0589547b1`.
-- Runtime database startup: all 605 required schema-object contract records
-  matched the canonical Java/Liquibase catalog.
-- Headless Chromium HTTP preflight and all 52 desktop/mobile captures passed.
+- Java↔Rust HTTP comparison passed all 211 declared scenarios against pinned
+  Java SHA `2ddf930005adac28077cb6ad74d1481485f44096`: core 126/126 (report
+  SHA-256 `60686eae55f94942c76695afac2101ceab48bf188409ea9099123bb4619fae8f`),
+  API/HTTP edge 71/71 (`9fc7842a861621a0b6770d08df40d17f6a1a419a9bbd66c8bf9d80bdad918008`)
+  and conditioned UI 14/14
+  (`557a557392e2479e2396f232ac48d9a9522584610031c5a75b59185f1f2beecd`).
+- Runtime database startup matched all 728 catalog-contract records; its
+  fingerprint SHA-256 is
+  `931930417d10d5a4d99966bfacac39a5888f088bc6d45439b796130f32d5e52e`.
+  All 187 canonical Liquibase identities and sequence headroom validated; the
+  contract file SHA-256 is
+  `eaed5aacda3724e56f4508a98ebc98e45a48fec6acba3f9e35a342d72d9e84f0`.
+- Headless Chromium HTTP preflight and all 56 desktop/mobile captures across
+  28 routes passed; output: `/tmp/lorsource-visual-final-20260815`.
   They remain useful for manual avatar/layout inspection, but are not claimed
   as a Java↔Rust perceptual diff.
+- The seven-theme browser matrix passed 42/42 page/theme checks; report:
+  `/tmp/lorsource-theme-final-20260815/report.json`.
 - Fixture result: 50 users, 1000 topics, 5000 comments, 42 images, 20 polls,
   226 reaction-log rows.
 - All 50 avatar URLs returned HTTP 200, `image/png`, and a valid PNG signature.

@@ -3,6 +3,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock* ./
 COPY src ./src
+COPY tests ./tests
 COPY templates ./templates
 COPY compat/java-db/schema-contract.tsv ./compat/java-db/schema-contract.tsv
 COPY compat/java-db/schema-objects-contract.tsv ./compat/java-db/schema-objects-contract.tsv

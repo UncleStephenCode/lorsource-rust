@@ -57,7 +57,7 @@
 
 {% match ban_info %}
 {% when Some with (b) %}
-<div class="infoblock ban-info"><b>Заблокирован</b> <time data-format="default" datetime="{{ b.bandate.to_rfc3339() }}">{{ b.bandate }}</time> модератором {{ b.moderator_nick }} · причина: {{ b.reason }}</div>
+<div class="infoblock ban-info"><b>Заблокирован</b> <time data-format="default" datetime="{{ b.bandate.to_rfc3339() }}">{{ b.bandate }}</time>{% match b.moderator_nick %}{% when Some with (sModerator) %} модератором {{ sModerator }}{% when None %}{% endmatch %} · причина: {{ b.reason }}</div>
 {% when None %}{% endmatch %}
 {% if can_view_private %}
 {% match frozen_until %}
@@ -182,6 +182,11 @@
 
 <h2>Статистика</h2>
 <div id="cal-heatmap" data-stats-url="{{ year_stats_url }}" data-search-user="{{ year_stats_user }}"></div>
+{% if stats.incomplete %}
+<div class="infoblock">
+  Внимание! Статистику пользователя не удалось полностью загрузить. Попробуйте обновить страницу позже.
+</div>
+{% endif %}
 {% match stats.first_topic %}{% when Some with (v) %}<b>Первая созданная тема:</b> <time data-format="default" datetime="{{ v.to_rfc3339() }}">{{ v }}</time><br>{% when None %}{% endmatch %}
 {% match stats.last_topic %}{% when Some with (v) %}<b>Последняя созданная тема:</b> <time data-format="default" datetime="{{ v.to_rfc3339() }}">{{ v }}</time><br>{% when None %}{% endmatch %}
 {% match stats.first_comment %}{% when Some with (v) %}<b>Первый комментарий:</b> <time data-format="default" datetime="{{ v.to_rfc3339() }}">{{ v }}</time><br>{% when None %}{% endmatch %}
@@ -196,7 +201,7 @@
 {% endif %}
 <h2>Сообщения пользователя</h2>
 <ul>
-  {% if stats.topic_count > 0 || can_view_private %}<li>{% if stats.topic_count > 0 %}<a href="/people/{{ profile.nick }}/">Темы</a>{% else %}Темы{% endif %}{% if can_view_private %} (<a href="/people/{{ profile.nick }}/deleted-topics">удаленные</a>){% endif %}</li>{% endif %}
+  {% if stats.topics_by_section.len() > 0 || can_view_private %}<li>{% if stats.topics_by_section.len() > 0 %}<a href="/people/{{ profile.nick }}/">Темы</a>{% else %}Темы{% endif %}{% if can_view_private %} (<a href="/people/{{ profile.nick }}/deleted-topics">удаленные</a>){% endif %}</li>{% endif %}
   {% if stats.comment_count > 0 || is_moderator %}<li>{% if stats.comment_count > 0 %}<a href="/search.jsp?range=COMMENTS&amp;user={{ profile.nick }}&amp;sort=DATE">Комментарии</a>{% else %}Комментарии{% endif %}{% if is_moderator %} (<a href="/people/{{ profile.nick }}/deleted-comments">удаленные</a>){% endif %}</li>{% endif %}
   {% if can_view_private %}<li><a href="/show-replies.jsp?nick={{ profile.nick }}">Уведомления</a></li>{% endif %}
   {% if can_view_private && watch_present %}<li><a href="/people/{{ profile.nick }}/tracked">Отслеживаемые темы</a></li>{% endif %}

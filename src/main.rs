@@ -9,6 +9,7 @@ mod domain;
 mod error;
 mod exception_report;
 mod form;
+mod http_method_firewall;
 mod image_upload;
 mod infra;
 mod markup;
@@ -24,7 +25,10 @@ mod state;
 mod theme_middleware;
 
 use anyhow::Context;
-use axum::{Router, routing::get};
+use axum::{
+    Router,
+    routing::{any as axum_any, get},
+};
 use config::Config;
 use state::AppState;
 use std::net::SocketAddr;
@@ -116,6 +120,18 @@ async fn main() -> anyhow::Result<()> {
             "/black",
             ServeDir::new(format!("{}/black", config.static_dir)),
         )
+        // The original demo/import DB still contains the pre-2016 group-image
+        // names.  The pinned Java tree replaced those files with `klogo.png`
+        // and `red-copyright.png` without a Liquibase data migration.  Keep
+        // the database-authored URLs working during an in-place migration.
+        .route_service(
+            "/tango/img/kde-logo-new2.png",
+            ServeFile::new(format!("{}/tango/img/klogo.png", config.static_dir)),
+        )
+        .route_service(
+            "/tango/img/money-logo.png",
+            ServeFile::new(format!("{}/tango/img/red-copyright.png", config.static_dir)),
+        )
         .nest_service(
             "/tango",
             ServeDir::new(format!("{}/tango", config.static_dir)),
@@ -137,7 +153,12 @@ async fn main() -> anyhow::Result<()> {
             "/qrerror",
             ServeDir::new(format!("{}/qrerror", config.static_dir)),
         )
-        .fallback(routes::not_found)
+        // Spring invokes CSRFHandlerInterceptor for DispatcherServlet's
+        // non-HandlerMethod not-found fallback too: an untrusted POST is 403,
+        // while a valid-token POST proceeds to the normal 404 response.
+        .fallback_service(
+            axum_any(routes::not_found).layer(axum::middleware::from_fn(csrf::validate_auto_post)),
+        )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             routes::adv::apply,
@@ -169,9 +190,13 @@ async fn main() -> anyhow::Result<()> {
             state.clone(),
             routes::canonical_host::apply,
         ))
-        // This is the outermost application middleware, matching web.xml where
-        // UrlRewriteFilter runs before Spring Security and DispatcherServlet.
+        // UrlRewriteFilter is the first web.xml filter, inside the servlet
+        // container's request boundary.
         .layer(axum::middleware::from_fn(routes::legacy_redirects::apply))
+        // Jetty rejects TRACE and ambiguous request targets before invoking
+        // filters. Keep this outermost so even a legacy rewrite such as
+        // `/rss.xml` observes that container-level contract.
+        .layer(axum::middleware::from_fn(http_method_firewall::apply))
         .with_state(state.clone());
 
     let addr: SocketAddr = format!("{}:{}", config.host, config.port)

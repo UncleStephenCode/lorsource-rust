@@ -60,6 +60,7 @@ too_many_arguments = "allow"
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
+tower = { version = "0.5.3", features = ["util"] }
 
 [profile.release]
 lto = true

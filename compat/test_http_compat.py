@@ -40,6 +40,9 @@ class Response:
     cache_control: str
     allow: str
     content_length: str
+    x_frame_options: str
+    x_xss_protection: str
+    expires: str
 
 
 class HttpClient:
@@ -106,7 +109,7 @@ class HttpClient:
         body = None
         if data is not None:
             body = data.encode("utf-8")
-            headers["Content-Type"] = "application/x-www-form-urlencoded"
+            headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
         request = urllib.request.Request(url, data=body, method=method, headers=headers)
         try:
             with self.opener.open(request, timeout=15) as response:
@@ -141,6 +144,9 @@ def response_value(status: int, headers, body: bytes) -> Response:
         cache_control=headers.get("cache-control", ""),
         allow=headers.get("allow", ""),
         content_length=headers.get("content-length", ""),
+        x_frame_options=headers.get("x-frame-options", ""),
+        x_xss_protection=headers.get("x-xss-protection", ""),
+        expires=headers.get("expires", ""),
     )
 
 
@@ -171,6 +177,9 @@ def report_response(response: Response) -> dict[str, object]:
         "cache_control": response.cache_control,
         "allow": response.allow,
         "content_length": response.content_length,
+        "x_frame_options": response.x_frame_options,
+        "x_xss_protection": response.x_xss_protection,
+        "expires": response.expires,
     }
 
 
@@ -192,6 +201,12 @@ def validate_expected(
         failures.append(
             f"{label} content type {response.content_type!r}, expected {expected_type!r}"
         )
+    expected_type_raw = expected(case, side, "expected_content_type_raw")
+    if expected_type_raw is not None and response.content_type != str(expected_type_raw):
+        failures.append(
+            f"{label} raw content type {response.content_type!r}, "
+            f"expected {expected_type_raw!r}"
+        )
 
     expected_location = expected(case, side, "expected_location")
     if expected_location is not None and response.location_target != expected_location:
@@ -200,6 +215,23 @@ def validate_expected(
         )
 
     body_text = response.body.decode("utf-8", errors="replace")
+    expected_json = expected(case, side, "expected_json")
+    if expected_json is not None:
+        try:
+            actual_json = json.loads(response.body)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            failures.append(f"{label} body is not valid JSON: {error}")
+        else:
+            if actual_json != expected_json:
+                failures.append(
+                    f"{label} JSON {actual_json!r}, expected {expected_json!r}"
+                )
+    expected_body = expected(case, side, "expected_body")
+    if expected_body is not None and response.body != str(expected_body).encode("utf-8"):
+        failures.append(
+            f"{label} body {response.body!r}, expected "
+            f"{str(expected_body).encode('utf-8')!r}"
+        )
     for fragment in expected(case, side, "body_contains") or []:
         if str(fragment) not in body_text:
             failures.append(f"{label} body is missing {fragment!r}")
@@ -237,6 +269,15 @@ def validate_expected(
         failures.append(
             f"{label} Content-Length {response.content_length!r}, expected {expected_content_length!r}"
         )
+    for sField, sLabel in (
+        ("x_frame_options", "X-Frame-Options"),
+        ("x_xss_protection", "X-XSS-Protection"),
+        ("expires", "Expires"),
+    ):
+        optExpected = expected(case, side, f"expected_{sField}")
+        sActual = getattr(response, sField)
+        if optExpected is not None and sActual != str(optExpected):
+            failures.append(f"{label} {sLabel} {sActual!r}, expected {optExpected!r}")
     return failures
 
 
@@ -280,6 +321,29 @@ def compare_responses(
             f"{case['name']}: Cache-Control old={old_response.cache_control!r} "
             f"new={new_response.cache_control!r}"
         )
+    if (
+        case.get("compare_content_type_raw")
+        and old_response.content_type != new_response.content_type
+    ):
+        failures.append(
+            f"{case['name']}: raw content type old={old_response.content_type!r} "
+            f"new={new_response.content_type!r}"
+        )
+    if case.get("compare_json"):
+        try:
+            old_json = json.loads(old_response.body)
+            new_json = json.loads(new_response.body)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            failures.append(f"{case['name']}: cannot compare JSON bodies: {error}")
+        else:
+            if old_json != new_json:
+                failures.append(
+                    f"{case['name']}: JSON old={old_json!r} new={new_json!r}"
+                )
+    if case.get("compare_body_exact") and old_response.body != new_response.body:
+        failures.append(
+            f"{case['name']}: body old={old_response.body!r} new={new_response.body!r}"
+        )
     if case.get("compare_location_raw") and old_response.location_raw != new_response.location_raw:
         failures.append(
             f"{case['name']}: raw redirect old={old_response.location_raw!r} "
@@ -289,7 +353,28 @@ def compare_responses(
         failures.append(
             f"{case['name']}: Allow old={old_response.allow!r} new={new_response.allow!r}"
         )
+    if case.get("compare_security_headers"):
+        for sField, sLabel in (
+            ("x_frame_options", "X-Frame-Options"),
+            ("x_xss_protection", "X-XSS-Protection"),
+            ("expires", "Expires"),
+        ):
+            sOld = getattr(old_response, sField)
+            sNew = getattr(new_response, sField)
+            if sOld != sNew:
+                failures.append(
+                    f"{case['name']}: {sLabel} old={sOld!r} new={sNew!r}"
+                )
     return failures
+
+
+def unexpected_new_404(case: dict[str, object], response: Response) -> bool:
+    """Fail undeclared 404s unless a differential probe explicitly permits one."""
+    return (
+        expected(case, "new", "expected_status") is None
+        and response.status == 404
+        and not case.get("allow_new_404", False)
+    )
 
 
 def main() -> int:
@@ -325,14 +410,15 @@ def main() -> int:
             "new": report_response(new_resp),
         }
         failures.extend(validate_expected(case, "new", new_resp))
-        if expected(case, "new", "expected_status") is None and new_resp.status == 404:
+        if unexpected_new_404(case, new_resp):
             failures.append(f"{case['name']}: new endpoint unexpectedly 404: {case['new']}")
         if case_old_client and case.get("compare", True):
             old_resp = case_old_client.request(case["old"], method, data, csrf_mode, case_headers)
             result["old_path"] = case["old"]
             result["old"] = report_response(old_resp)
             failures.extend(validate_expected(case, "old", old_resp))
-            failures.extend(compare_responses(case, old_resp, new_resp))
+            if not case.get("skip_response_comparison", False):
+                failures.extend(compare_responses(case, old_resp, new_resp))
         results.append(result)
         print(f"{case['name']}: {method} {case['new']} -> {new_resp.status} {new_resp.content_type}")
 

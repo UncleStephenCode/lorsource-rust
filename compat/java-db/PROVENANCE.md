@@ -34,12 +34,21 @@ demo hash. `schema-contract.tsv` is derived from a PostgreSQL 17 schema-only
 dump after applying this bootstrap; it is a Rust runtime compatibility
 contract, not a replacement migration source.
 
+`liquibase-changesets.tsv` was exported from a fresh local application of the
+same canonical bootstrap using the Java-pinned Liquibase 4.17.2. Its 187 rows
+record execution ordinal, ID, author, original logical path, version-8
+checksum and execution state. The ordinal/ID/author/path projection is also
+regenerated directly from the 116 sorted vendored XML files by
+`check-vendor.sh`; its full SHA-256 is
+`af0e920c0fe922f87d41957583ace19ff7db669a75a7f7d1f1d292c7cee1a644`.
+This is local canonical-bootstrap provenance, not a production-ledger export.
+
 `schema-objects-contract.tsv` complements the column contract with the
 catalog objects that a column-only inventory cannot prove. It was generated
 on 2026-08-15 from a fresh application of the same vendored bootstrap using
 PostgreSQL 16.14, through the read-only, bounded query in
 `export-schema-objects.sql`, then verified through the `linuxweb` runtime role.
-It contains 605 sorted records:
+It contains 728 sorted records:
 
 - 82 primary/foreign/unique constraints (and any canonical checks; currently
   none);
@@ -47,13 +56,18 @@ It contains 605 sorted records:
 - 101 index definitions;
 - 15 sequence definitions and `OWNED BY` links;
 - 12 application function definitions and five trigger definitions;
-- 168 effective `linuxweb`/`PUBLIC` relation grants;
-- 161 table/index/sequence/function owner records.
+- 168 effective `linuxweb` relation grants, 12 effective runtime function
+  `EXECUTE` grants and six effective runtime schema/enum `USAGE` checks;
+- 60 advisory direct relation/function ACL provenance records;
+- 33 relation records covering relation kind/persistence,
+  row-level-security/forced-row-level-security flags and access method;
+- one schema and five enum-type semantic records;
+- 167 table/index/sequence/function/schema/type owner records.
 
 The contract SHA-256 is
-`95c94e345eff1cd0a405b6f99bf83994efe76e95cab13692da03eb09d70152c7`;
+`eaed5aacda3724e56f4508a98ebc98e45a48fec6acba3f9e35a342d72d9e84f0`;
 the exporter SHA-256 is
-`cc87808b9476532d1d61502b0c062b1ce701e5c59d9c8087e17484571525ff97`.
+`930539ad7662d66ff8037a979f0e2a89f560bb055573b81b40065a53d85ff3d7`.
 `check-vendor.sh` pins both. To prove reproducibility against a freshly
 bootstrapped disposable database, run:
 
@@ -63,10 +77,21 @@ JAVA_DATABASE_RUNTIME_URL=postgres://linuxweb:linuxweb@localhost:5432/lor \
 ```
 
 This exact comparison is a regeneration/evidence check. Application startup
-uses the canonical records as a required subset: additional operator-created
-objects are reported as fingerprint drift rather than rejected. A production
-clone and other PostgreSQL major versions have not been validated by this
-local derivation and remain cutover evidence requirements.
+uses the canonical records as a required subset. Additional constraints and
+enabled triggers on canonical tables are rejected because they can change
+write behavior; additional operator indexes, grants, direct ACL provenance
+and owners are reported as fingerprint drift instead. A production clone and
+other PostgreSQL major versions have not been validated by this local
+derivation and remain cutover evidence requirements.
+
+The read-only sequence collision/bounds query is pinned at SHA-256
+`c156537595af3e703e975fec83ae6494fa8200bacf56e8c90628c66756967c31`.
+It covers the nine canonical sequences with `OWNED BY` dependencies and four
+unowned generators whose table/column mappings are proved by the current Java
+DAOs. It also rejects non-canonical increments/cycling and exhausted next
+values outside the configured bounds. It deliberately excludes the unowned,
+unused `s_guid` and `s_msg` generators because neither has a canonical
+application ID column to compare.
 
 The audit-time diagnostic dump (not vendored) was produced with PostgreSQL
 17.10 using `pg_dump --schema-only --no-owner --no-privileges` and had SHA-256

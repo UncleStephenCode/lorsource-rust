@@ -128,7 +128,7 @@ Status legend: `ported` means used by Rust handlers now; `ported-partial` means 
 | `linux` | `UserLogPrepareService` | not ported yet | `pending` |
 | `linux` | `UserPermissionService` | `src/security.rs`, route-level checks | `ported-partial` |
 | `linux` | `UserService` | `src/routes/auth.rs`, `src/routes/users.rs`, `src/routes/legacy.rs` | `ported-partial` |
-| `linux` | `UserStatisticsService` | not ported yet | `pending` |
+| `linux` | `UserStatisticsService` | `src/application/user/statistics.rs`, `src/domain/user/statistics.rs`, `src/infra/opensearch/mod.rs`, `src/infra/postgres/user_statistics_repository.rs`, profile route/template | `ported`; ordinary profile uses the original two concurrent OpenSearch queries under one five-second deadline, independent incomplete recovery, and the original PostgreSQL-only ignore/comment-date values; year histogram retains the timezone-aware JSON contract |
 | `linux` | `UserTagDao` | not ported yet | `pending` |
 | `linux` | `UserTagService` | not ported yet | `pending` |
 | `linux` | `UserpicPermissionInterceptor` | not ported yet | `pending` |

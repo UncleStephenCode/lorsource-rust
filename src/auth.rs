@@ -235,7 +235,9 @@ pub async fn verify_login(
     login: &str,
     password: &str,
 ) -> Result<LoginOutcome> {
-    let sLogin = login.trim();
+    // UserDetailsService passes nicknames to UserDao verbatim. Email login is
+    // instead parsed by InternetAddress, which accepts surrounding whitespace.
+    let sLogin = sLoginLookupKey(login);
     let optRow: Option<StLoginRow> = if sLogin.contains('@') {
         if sLogin.chars().filter(|c| *c == '@').count() != 1
             || sLogin.chars().any(char::is_whitespace)
@@ -316,6 +318,30 @@ pub async fn verify_login(
         password_hash: sCurrentPasswordHash,
         token_generation: stRow.token_generation,
     }))
+}
+
+fn sLoginLookupKey(sLogin: &str) -> &str {
+    if sLogin.contains('@') {
+        sLogin.trim()
+    } else {
+        sLogin
+    }
+}
+
+#[cfg(test)]
+mod login_lookup_contract_tests {
+    use super::sLoginLookupKey;
+
+    #[test]
+    fn nickname_lookup_keeps_the_bound_login_form_value_verbatim() {
+        assert_eq!(sLoginLookupKey(" alice "), " alice ");
+        assert_eq!(sLoginLookupKey("alice"), "alice");
+    }
+
+    #[test]
+    fn email_lookup_keeps_internet_address_surrounding_space_behavior() {
+        assert_eq!(sLoginLookupKey(" user@example.org "), "user@example.org");
+    }
 }
 
 #[cfg(test)]

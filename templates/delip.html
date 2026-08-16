@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}delip{% endblock %}
+{% block head_extra %}<link rel="parent" title="Linux.org.ru" href="/">{% endblock %}
+{% block content %}
+<h1>Удаление тем и сообщений</h1>
+
+Удаляем темы и сообщения после {{ sCutoff }} с IP {{ sIp }}<br>
+
+<br>
+
+Удалено тем: {{ iTopics }}; удалено комментариев: {{ iComments }}
+
+<ul>
+{% for iCommentId in vecSkipped %}
+  <li>Пропущен <a href="delete_comment.jsp?msgid={{ iCommentId }}">#{{ iCommentId }}</a></li>
+{% endfor %}
+</ul>
+{% endblock %}

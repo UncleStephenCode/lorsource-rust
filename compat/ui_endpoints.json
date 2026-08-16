@@ -1,0 +1,176 @@
+[
+  {
+    "name": "fixture tag without section selects aggregate controller",
+    "method": "GET",
+    "old": "/tag/prod-ready",
+    "new": "/tag/prod-ready",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 200,
+    "expected_content_type": "text/html",
+    "body_contains": [
+      "prod-ready",
+      "id=\"tagFavNoth\"",
+      "id=\"tagIgnNoth\"",
+      "Спор вокруг бренда открытого сетевого проекта",
+      "Проходите ли вы игры, которые покупаете?"
+    ],
+    "body_not_contains": [
+      "/user-filter/favorite-tag",
+      "/user-filter/ignore-tag"
+    ]
+  },
+  {
+    "name": "fixture aggregate tag ignores offset without section",
+    "method": "GET",
+    "old": "/tag/prod-ready?offset=-1",
+    "new": "/tag/prod-ready?offset=-1",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 200,
+    "expected_content_type": "text/html",
+    "body_contains": [
+      "Спор вокруг бренда открытого сетевого проекта"
+    ]
+  },
+  {
+    "name": "fixture tag news section uses feed controller",
+    "method": "GET",
+    "old": "/tag/prod-ready?section=1",
+    "new": "/tag/prod-ready?section=1",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 200,
+    "expected_content_type": "text/html",
+    "body_contains": [
+      "/tag/prod-ready",
+      "/news/russia/9101002",
+      "Спор вокруг бренда открытого сетевого проекта",
+      "id=\"tagFavNoth\"",
+      "id=\"tagIgnNoth\""
+    ]
+  },
+  {
+    "name": "fixture tag forum section uses tracker controller",
+    "method": "GET",
+    "old": "/tag/prod-ready?section=2",
+    "new": "/tag/prod-ready?section=2",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 200,
+    "expected_content_type": "text/html",
+    "body_contains": [
+      "/tag/prod-ready",
+      "/forum/games/9101003",
+      "Проходите ли вы игры, которые покупаете?",
+      "id=\"tagFavNoth\"",
+      "id=\"tagIgnNoth\""
+    ]
+  },
+  {
+    "name": "fixture tag empty section resolves default zero then 404",
+    "method": "GET",
+    "old": "/tag/prod-ready?section=",
+    "new": "/tag/prod-ready?section=",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 404,
+    "expected_content_type": "text/html"
+  },
+  {
+    "name": "fixture tag zero section is unknown",
+    "method": "GET",
+    "old": "/tag/prod-ready?section=0",
+    "new": "/tag/prod-ready?section=0",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 404,
+    "expected_content_type": "text/html"
+  },
+  {
+    "name": "fixture tag malformed section uses live binder 400",
+    "method": "GET",
+    "old": "/tag/prod-ready?section=invalid",
+    "new": "/tag/prod-ready?section=invalid",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 400,
+    "expected_content_type": "text/html"
+  },
+  {
+    "name": "fixture tag explicit zero offset keeps first page",
+    "method": "GET",
+    "old": "/tag/prod-ready?section=1&offset=0",
+    "new": "/tag/prod-ready?section=1&offset=0",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 200,
+    "expected_content_type": "text/html",
+    "body_contains": [
+      "/news/russia/9101002"
+    ]
+  },
+  {
+    "name": "fixture tag negative offset clamps to first page",
+    "method": "GET",
+    "old": "/tag/prod-ready?section=1&offset=-1",
+    "new": "/tag/prod-ready?section=1&offset=-1",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 200,
+    "expected_content_type": "text/html",
+    "body_contains": [
+      "/news/russia/9101002"
+    ]
+  },
+  {
+    "name": "fixture tag malformed offset uses live binder 400",
+    "method": "GET",
+    "old": "/tag/prod-ready?section=1&offset=invalid",
+    "new": "/tag/prod-ready?section=1&offset=invalid",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 400,
+    "expected_content_type": "text/html"
+  },
+  {
+    "name": "add section without section selects the all-sections mapping",
+    "method": "GET",
+    "old": "/add-section.jsp",
+    "new": "/add-section.jsp",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 200,
+    "expected_content_type": "text/html"
+  },
+  {
+    "name": "add section malformed section is a differential binder probe",
+    "method": "GET",
+    "old": "/add-section.jsp?section=invalid",
+    "new": "/add-section.jsp?section=invalid",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 400,
+    "expected_content_type": "text/html"
+  },
+  {
+    "name": "view news without parameters has no conditioned mapping",
+    "method": "GET",
+    "old": "/view-news.jsp",
+    "new": "/view-news.jsp",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 400,
+    "expected_content_type": "text/html"
+  },
+  {
+    "name": "view news malformed msgid does not satisfy the tag mapping",
+    "method": "GET",
+    "old": "/view-news.jsp?msgid=invalid",
+    "new": "/view-news.jsp?msgid=invalid",
+    "compare": true,
+    "compare_exact": true,
+    "expected_status": 400,
+    "expected_content_type": "text/html"
+  }
+]

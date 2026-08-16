@@ -35,6 +35,8 @@ PAGES = {
     "search": "/search.jsp",
     "tags": "/tags",
     "tag": "/tag/prod-ready",
+    "tag-news": "/tag/prod-ready?section=1",
+    "tag-forum": "/tag/prod-ready?section=2",
     "login": "/login.jsp?from=/forum/",
     "register": "/register.jsp",
     "add-section": "/add-section.jsp",

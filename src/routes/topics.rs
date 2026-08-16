@@ -9,7 +9,11 @@ use crate::{
         edit::{
             StTopicEditActor, StTopicEditPoll, StTopicEditPollValue, TrTopicEditRealtimeNotifier,
         },
-        posting::{StAddTopicActor, StAddTopicPermission, StTopicLimitInfo},
+        options::TrTopicReindexQueue,
+        posting::{
+            POSTSCORE_HIDE_COMMENTS, POSTSCORE_UNRESTRICTED, StAddTopicActor, StAddTopicPermission,
+            StTopicLimitInfo,
+        },
         repository::StNewTopic,
     },
     error::{AppError, Result},
@@ -25,13 +29,39 @@ use crate::{
 };
 use askama::Template;
 use axum::{
-    extract::{ConnectInfo, DefaultBodyLimit, FromRequest, Multipart, Path, Query, Request, State},
+    extract::{
+        ConnectInfo, DefaultBodyLimit, FromRequest, Multipart, Path, Query, RawQuery, Request,
+        State,
+    },
     http::{HeaderMap, StatusCode, Uri, header, header::CONTENT_TYPE},
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{Html, IntoResponse, Response},
     routing::{MethodRouter, get},
 };
 use serde::Deserialize;
 use std::net::SocketAddr;
+
+/// Spring MVC's redirects use HTTP 302. Axum's `Redirect::to` uses 303,
+/// which is observable to legacy clients and compatibility probes.
+fn stFoundRedirect(sLocation: impl Into<String>) -> Response {
+    (StatusCode::FOUND, [(header::LOCATION, sLocation.into())]).into_response()
+}
+
+#[cfg(test)]
+mod found_redirect_tests {
+    use axum::http::{StatusCode, header};
+
+    use super::stFoundRedirect;
+
+    #[test]
+    fn spring_mvc_redirect_contract_is_302_with_location() {
+        let stResponse = stFoundRedirect("/forum/test/42");
+        assert_eq!(stResponse.status(), StatusCode::FOUND);
+        assert_eq!(
+            stResponse.headers().get(header::LOCATION).unwrap(),
+            "/forum/test/42"
+        );
+    }
+}
 
 #[derive(Template)]
 #[template(path = "index.html")]
@@ -225,6 +255,13 @@ pub(crate) struct TopicListNavigation {
 struct CommentPageLink {
     page: i64,
     current: bool,
+    url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StTopicScrollerLink {
+    sUrl: String,
+    sTitle: String,
 }
 
 #[derive(Template)]
@@ -232,16 +269,29 @@ struct CommentPageLink {
 struct TopicTemplate {
     topic: TopicDetail,
     canonical_url: String,
+    og_url: String,
+    og_description: String,
     og_image_url: String,
+    published_time: chrono::DateTime<chrono::Utc>,
+    modified_time: Option<chrono::DateTime<chrono::Utc>>,
     topic_card_html: String,
     comments: Vec<CommentView>,
     /// Non-empty only outside thread/deleted mode, when there's more than
     /// one page of comments (TopicController.buildPages).
     pages: Vec<CommentPageLink>,
+    prev_page_url: Option<String>,
+    next_page_url: Option<String>,
+    prev_topic: Option<StTopicScrollerLink>,
+    next_topic: Option<StTopicScrollerLink>,
+    show_top_scroller: bool,
+    show_bottom_scroller: bool,
+    group_url: String,
+    filter_mode_show: bool,
+    hide_filter_url: String,
+    show_all_url: String,
     thread_root: Option<i32>,
-    show_deleted: bool,
-    /// Java's `showDeletedButton`: only a moderator viewing the live
-    /// (non-deleted-mode) page gets offered the toggle.
+    /// Java's `showDeletedButton`: any viewer allowed by
+    /// `allowViewAllDeletedComments` gets the POST toggle outside deleted mode.
     show_deleted_button: bool,
     /// Comments hidden by the viewer's ignore list in the current filtered
     /// view (TopicController's hideSet) - `unfiltered_count` is Java's
@@ -252,7 +302,11 @@ struct TopicTemplate {
     comment_format_mode: String,
     comment_format_title: String,
     can_comment: bool,
+    topic_expired: bool,
+    comment_disabled_html: String,
+    expire_date: Option<chrono::DateTime<chrono::Utc>>,
     anonymous_comment_form: bool,
+    postscore_info_html: String,
     require_comment_captcha: bool,
     captcha_site_key: String,
     realtime_bootstrap_html: String,
@@ -309,6 +363,10 @@ struct StTopicCardMeta {
     bResolvable: bool,
     #[sqlx(rename = "bExpired")]
     bExpired: bool,
+    #[sqlx(rename = "optExpireDate")]
+    optExpireDate: Option<chrono::DateTime<chrono::Utc>>,
+    #[sqlx(rename = "optLastEditDate")]
+    optLastEditDate: Option<chrono::DateTime<chrono::Utc>>,
     #[sqlx(rename = "iTopicPostScore")]
     iTopicPostScore: i32,
     #[sqlx(rename = "iRestrictComments")]
@@ -356,6 +414,10 @@ struct StTopicCardBuildInput {
     enable_schema: bool,
     include_canonical_extras: bool,
     remote_ip: String,
+    /// The canonical topic page also needs the effective postscore/expiry
+    /// for the comments-disabled notice. Reuse its already loaded metadata
+    /// instead of issuing the same original-compatible query twice.
+    opt_meta: Option<StTopicCardMeta>,
 }
 
 fn iSectionCommentPostScore(iSectionId: i32) -> i32 {
@@ -434,6 +496,10 @@ async fn stTopicCardMeta(
     sqlx::query_as(
         r#"SELECT s.havelink AS "bLinksAllowed", g.resolvable AS "bResolvable",
                   NOT t.sticky AND COALESCE(t.commitdate,t.postdate)<CURRENT_TIMESTAMP-s.expire AS "bExpired",
+                  COALESCE(t.commitdate,t.postdate)+s.expire AS "optExpireDate",
+                  (SELECT e.editdate FROM edit_info e
+                    WHERE e.msgid=t.id AND e.object_type='TOPIC'::edit_event_type
+                    ORDER BY e.id DESC LIMIT 1) AS "optLastEditDate",
                   COALESCE(t.postscore,-9999) AS "iTopicPostScore",
                   g.restrict_comments AS "iRestrictComments", t.stat1 AS "iCommentCount",
                   t.open_warnings AS "iOpenWarnings", t.allow_anonymous AS "bAllowAnonymous",
@@ -653,12 +719,17 @@ async fn sBuildTopicCardHtml(
     stInput: StTopicCardBuildInput,
 ) -> Result<String> {
     let stTopic = &stInput.topic;
-    let stMeta = stTopicCardMeta(
-        stState,
-        stTopic.id,
-        optUser.as_ref().map(|stUser| stUser.id),
-    )
-    .await?;
+    let stMeta = match stInput.opt_meta {
+        Some(stMeta) => stMeta,
+        None => {
+            stTopicCardMeta(
+                stState,
+                stTopic.id,
+                optUser.as_ref().map(|stUser| stUser.id),
+            )
+            .await?
+        }
+    };
     let bModerator = optUser.as_ref().is_some_and(|stUser| stUser.canmod);
     let bAuthorized = optUser.is_some();
     let sAuthorHtml = sTopicCardUserHtml(
@@ -979,6 +1050,7 @@ pub(crate) async fn sPrepareTopicCardHtml(
             enable_schema: false,
             include_canonical_extras: false,
             remote_ip: String::new(),
+            opt_meta: None,
         },
     )
     .await
@@ -1003,7 +1075,12 @@ fn sRealtimeTopicBootstrap(
 
 #[cfg(test)]
 mod realtime_browser_contract_tests {
-    use super::sRealtimeTopicBootstrap;
+    use super::{
+        CommentItem, bJavaCanonicalBasePage, bJavaTopicFilterShow, iJavaTopicModelPage,
+        sCommentAuthorHtml, sCommentJumpUrl, sRealtimeTopicBootstrap, sTopicOgDescription,
+        sTopicPageUrl, setDateJumpIds, setHiddenCommentIds, stExpiredTopicCacheHeaders,
+    };
+    use chrono::{TimeZone, Utc};
     use sha2::{Digest, Sha256};
 
     #[test]
@@ -1102,11 +1179,205 @@ mod realtime_browser_contract_tests {
             "daddf3c57a828e77fa96bdc17c01178e7aea560dd0a5a0b2d1e0121c419983b5"
         );
     }
+
+    fn stComment(iId: i32, iAuthorId: i32, optReplyTo: Option<i32>, iDay: u32) -> CommentItem {
+        CommentItem {
+            id: iId,
+            topic: 42,
+            replyto: optReplyTo,
+            title: String::new(),
+            message: String::new(),
+            markup: "MARKDOWN".to_owned(),
+            postdate: Utc.with_ymd_and_hms(2026, 1, iDay, 0, 0, 0).unwrap(),
+            author_id: iAuthorId,
+            author: format!("user-{iAuthorId}"),
+            author_score: 0,
+            author_blocked: false,
+            author_anonymous: false,
+            author_frozen: false,
+            deleted: false,
+        }
+    }
+
+    #[test]
+    fn ignored_authors_hide_their_complete_reply_subtrees() {
+        let vecComments = vec![
+            stComment(1, 10, None, 1),
+            stComment(2, 20, Some(1), 2),
+            stComment(3, 30, Some(2), 3),
+            stComment(4, 40, None, 4),
+        ];
+        let setHidden = setHiddenCommentIds(&vecComments, &[10]);
+        assert_eq!(setHidden, [1, 2, 3].into_iter().collect());
+        assert!(!setHidden.contains(&4));
+    }
+
+    #[test]
+    fn comment_sign_user_matches_user_tag_link_and_block_rules() {
+        let mut stAnonymous = stComment(1, 2, None, 1);
+        stAnonymous.author = "anonymous".to_owned();
+        stAnonymous.author_anonymous = true;
+        assert_eq!(sCommentAuthorHtml(&stAnonymous, false), "anonymous");
+        assert!(sCommentAuthorHtml(&stAnonymous, true).contains("itemprop=\"creator\""));
+
+        let mut stBlocked = stComment(2, 20, None, 2);
+        stBlocked.author_blocked = true;
+        let sBlocked = sCommentAuthorHtml(&stBlocked, false);
+        assert!(sBlocked.starts_with("<s><a itemprop=\"creator\""));
+        assert!(sBlocked.ends_with("</a></s>"));
+    }
+
+    #[test]
+    fn page_and_jump_links_preserve_the_java_parameter_order() {
+        assert!(bJavaCanonicalBasePage(-1));
+        assert!(!bJavaCanonicalBasePage(-2));
+        assert!(!bJavaCanonicalBasePage(0));
+        assert_eq!(iJavaTopicModelPage(0, true), -1);
+        assert!(!bJavaTopicFilterShow(Some("show"), true));
+        assert_eq!(
+            sTopicPageUrl("/forum/lor/42", iJavaTopicModelPage(0, true), false, false),
+            "/forum/lor/42/page-1"
+        );
+        assert_eq!(iJavaTopicModelPage(3, false), 3);
+        assert!(bJavaTopicFilterShow(Some("show"), false));
+        assert_eq!(
+            sTopicPageUrl("/forum/lor/42", 0, true, true),
+            "/forum/lor/42?filter=show#comments"
+        );
+        assert_eq!(
+            sTopicPageUrl("/forum/lor/42", 2, false, true),
+            "/forum/lor/42/page2#comments"
+        );
+        assert_eq!(
+            sCommentJumpUrl("/forum/lor/42", 3, 99, true, Some(1234), true),
+            "/forum/lor/42/page3?deleted=true&lastmod=1234&filter=show#comment-99"
+        );
+    }
+
+    #[test]
+    fn date_jump_is_strictly_greater_than_thirty_days() {
+        let dtFirst = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let mut stSecond = stComment(2, 20, None, 2);
+        stSecond.postdate = dtFirst + chrono::Duration::days(30);
+        let mut stThird = stComment(3, 30, None, 3);
+        stThird.postdate =
+            stSecond.postdate + chrono::Duration::days(30) + chrono::Duration::seconds(1);
+        let mut stFirst = stComment(1, 10, None, 1);
+        stFirst.postdate = dtFirst;
+        assert_eq!(
+            setDateJumpIds(&[stFirst, stSecond, stThird]),
+            [3].into_iter().collect()
+        );
+    }
+
+    #[test]
+    fn topic_head_description_is_plain_and_java_length_limited() {
+        let sDescription = sTopicOgDescription(&format!(
+            "<p>alpha &amp; beta</p><strong>{}</strong>",
+            "я".repeat(180)
+        ));
+        assert!(sDescription.starts_with("alpha & beta "));
+        assert!(sDescription.ends_with("..."));
+        assert!(!sDescription.contains('<'));
+    }
+
+    #[test]
+    fn anonymous_expired_cache_matches_etag_then_last_modified_order() {
+        let dtLastModified = Utc.with_ymd_and_hms(2026, 8, 15, 12, 31, 42).unwrap();
+        let stEmpty = axum::http::HeaderMap::new();
+        let (stHeaders, bNotModified) = stExpiredTopicCacheHeaders(&stEmpty, 42, dtLastModified);
+        assert!(!bNotModified);
+        assert_eq!(stHeaders[axum::http::header::ETAG], "msg-42-1786797102000");
+        assert!(!stHeaders.contains_key(axum::http::header::LAST_MODIFIED));
+
+        let mut stEtagRequest = axum::http::HeaderMap::new();
+        stEtagRequest.insert(
+            axum::http::header::IF_NONE_MATCH,
+            axum::http::HeaderValue::from_static("msg-42-1786797102000"),
+        );
+        let (stHeaders, bNotModified) =
+            stExpiredTopicCacheHeaders(&stEtagRequest, 42, dtLastModified);
+        assert!(bNotModified);
+        assert!(!stHeaders.contains_key(axum::http::header::LAST_MODIFIED));
+
+        let mut stDateRequest = axum::http::HeaderMap::new();
+        stDateRequest.insert(
+            axum::http::header::IF_NONE_MATCH,
+            axum::http::HeaderValue::from_static("msg-42-stale"),
+        );
+        stDateRequest.insert(
+            axum::http::header::IF_MODIFIED_SINCE,
+            axum::http::HeaderValue::from_static("Sat, 15 Aug 2026 12:31:42 GMT"),
+        );
+        let (stHeaders, bNotModified) =
+            stExpiredTopicCacheHeaders(&stDateRequest, 42, dtLastModified);
+        assert!(bNotModified);
+        assert_eq!(
+            stHeaders[axum::http::header::LAST_MODIFIED],
+            "Sat, 15 Aug 2026 12:31:42 GMT"
+        );
+
+        let mut stOnlyDateRequest = axum::http::HeaderMap::new();
+        stOnlyDateRequest.insert(
+            axum::http::header::IF_MODIFIED_SINCE,
+            axum::http::HeaderValue::from_static("Sat, 15 Aug 2026 12:31:42 GMT"),
+        );
+        let (stHeaders, bNotModified) =
+            stExpiredTopicCacheHeaders(&stOnlyDateRequest, 42, dtLastModified);
+        assert!(!bNotModified);
+        assert!(!stHeaders.contains_key(axum::http::header::LAST_MODIFIED));
+    }
+
+    #[test]
+    fn canonical_topic_template_keeps_the_current_jsp_browser_contract() {
+        let sTopic = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/templates/topic.html"));
+        let sRoutes = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/routes/mod.rs"));
+        let sLegacy = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/routes/legacy.rs"));
+
+        for sToken in [
+            "initNextPrevKeys()",
+            "class=\"scroller-row\"",
+            "rel=\"prev\"",
+            "rel=\"next\"",
+            "data-samepage=\"{{ reply.same_page }}\"",
+            "data-samepage=\"{{ c.answer_same_page }}\"",
+            "удаленный комментарий",
+            "data-format=\"long-date\"",
+            "id=\"interpage\"",
+            "init_interpage_adv(ads)",
+            "property=\"og:description\"",
+            "property=\"article:modified_time\"",
+            "method=\"POST\"",
+            "name=\"deleted\" value=\"1\"",
+            "name=\"csrf\"",
+            "<br class=\"visible-phone\"> <span class=\"hideon-phone\">(</span>",
+            "{{ c.remark_html|safe }}",
+            "{{ c.moderator_ip_html|safe }}",
+            "{{ c.edit_summary_html|safe }}",
+            "{{ c.moderator_user_agent_html|safe }}",
+            "{% endif %}{{ c.warnings_html|safe }}{{ c.reactions_html|safe }}",
+            "<div class=\"help-block\">{{ postscore_info_html|safe }}</div>",
+        ] {
+            assert!(sTopic.contains(sToken), "missing topic DOM token: {sToken}");
+        }
+        assert_eq!(
+            sTopic
+                .matches("{% if pages.len() > 0 %}<div class=\"nav\">")
+                .count(),
+            2
+        );
+        assert!(!sTopic.contains("href=\"?deleted=true\""));
+        assert!(!sTopic.contains("Просмотр удалённых комментариев"));
+        assert_eq!(sRoutes.matches("any(topics::topic_page_any)").count(), 5);
+        assert!(sLegacy.contains("pub struct ForumPageOrArchiveQuery"));
+        assert!(sLegacy.contains("q.filter,"));
+    }
 }
 
 #[derive(Debug, Clone)]
 struct CommentView {
     item: CommentItem,
+    author_html: String,
     author_signature: AuthorSignatureView,
     userpic_url: Option<String>,
     userpic_width: i32,
@@ -1114,6 +1385,7 @@ struct CommentView {
     reply: Option<CommentReplyView>,
     answer_count: usize,
     answer_url: String,
+    answer_same_page: bool,
     html: String,
     reactions_html: String,
     show_reactions_link: bool,
@@ -1122,8 +1394,14 @@ struct CommentView {
     can_undelete: bool,
     can_warn: bool,
     is_topic_author: bool,
+    remark_html: String,
+    moderator_ip_html: String,
+    edit_summary_html: String,
+    moderator_user_agent_html: String,
+    warnings_html: String,
     delete_info: Option<CommentDeleteInfoView>,
     author_readonly: bool,
+    show_date_jump: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1139,6 +1417,8 @@ struct CommentReplyView {
     title: Option<String>,
     author: String,
     postdate: chrono::DateTime<chrono::Utc>,
+    same_page: bool,
+    deleted: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1147,6 +1427,70 @@ struct AuthorSignatureView {
     score: i32,
     max_score: i32,
     show_score: bool,
+}
+
+fn sCommentAuthorHtml(stComment: &CommentItem, bSessionAuthorized: bool) -> String {
+    sTopicCardUserHtml(
+        &stComment.author,
+        stComment.author_blocked,
+        !stComment.author_anonymous || bSessionAuthorized,
+        " itemprop=\"creator\"",
+    )
+}
+
+fn sCommentEditSummaryHtml(
+    stMeta: &crate::domain::comment::model::StCommentPageMeta,
+    sTopicUrl: &str,
+) -> String {
+    if stMeta.iEditCount <= 0 {
+        return String::new();
+    }
+    let (Some(sEditorNick), Some(dtEditDate)) =
+        (stMeta.optEditorNick.as_deref(), stMeta.optEditDate)
+    else {
+        return String::new();
+    };
+    format!(
+        "<span class=\"sign_more\"><br>Последнее исправление: {} <time data-format=\"default\" datetime=\"{}\">{}</time> (всего <a href=\"{}/{}/history\">исправлений: {}</a>)</span>",
+        html_escape::encode_text(sEditorNick),
+        dtEditDate.to_rfc3339(),
+        dtEditDate,
+        html_escape::encode_double_quoted_attribute(sTopicUrl),
+        stMeta.iCommentId,
+        stMeta.iEditCount,
+    )
+}
+
+fn stCommentModeratorMetaHtml(
+    stMeta: &crate::domain::comment::model::StCommentPageMeta,
+    bModeratorSession: bool,
+) -> (String, String) {
+    if !bModeratorSession {
+        return (String::new(), String::new());
+    }
+    let sIp = stMeta.optPostIp.as_deref().unwrap_or_default();
+    let sIpHtml = if sIp.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " <a href=\"sameip.jsp?ip={}\">{}</a>",
+            html_escape::encode_double_quoted_attribute(sIp),
+            html_escape::encode_text(sIp),
+        )
+    };
+    let sUserAgentHtml = stMeta
+        .optUserAgent
+        .as_deref()
+        .map(|sUserAgent| {
+            format!(
+                "<br><span class=\"sign_more\">{}&nbsp;<a href=\"sameip.jsp?ua={}&amp;ip={}&amp;mask=0\">🔍</a></span>",
+                html_escape::encode_text(sUserAgent),
+                stMeta.iUserAgentId,
+                html_escape::encode_double_quoted_attribute(sIp),
+            )
+        })
+        .unwrap_or_default();
+    (sIpHtml, sUserAgentHtml)
 }
 
 type TyAuthorPresentationRow = (i32, i32, i32, bool, Option<String>, Option<String>);
@@ -1749,19 +2093,17 @@ pub(crate) async fn prepare_news_topics_for_viewer(
                 value,
             })
             .collect();
-        // The public topic/feed UI on LOR does not expose reply controls to an
-        // anonymous viewer. Keep the legacy comment endpoints capable of
-        // validating an explicitly supplied posting identity, but only offer
-        // the browser action when the current session is authenticated.
-        let can_comment = stPostingIdentity.bAuthorized
-            && crate::routes::comments::check_comment_posting_allowed(
-                state,
-                &stPostingIdentity.stUser,
-                false,
-                topic.id,
-            )
-            .await
-            .is_ok();
+        // TopicPrepareService/getTopicMenu evaluates the effective AnySession
+        // user, including the shared anonymous identity. Unrestricted topics
+        // therefore expose the same comment action in feed cards to guests.
+        let can_comment = crate::routes::comments::check_comment_posting_allowed(
+            state,
+            &stPostingIdentity.stUser,
+            !stPostingIdentity.bAuthorized,
+            topic.id,
+        )
+        .await
+        .is_ok();
         prepared.push(NewsTopicView {
             topic_html: markup::render_topic_with_minimized_cut_policy_and_users(
                 &message,
@@ -2298,7 +2640,70 @@ struct AddSectionTemplate {
     title: String,
     heading: String,
     choices: Vec<AddSectionChoice>,
+    technical_choices: Vec<AddSectionChoice>,
+    other_choices: Vec<AddSectionChoice>,
+    split_forum_groups: bool,
     choosing_groups: bool,
+}
+
+// SectionController.NonTech in the original. AddTopicController partitions
+// section 2 with the same set before rendering add-section.jsp.
+const VEC_ADD_SECTION_NON_TECH_GROUP_IDS: [i32; 4] = [8404, 4068, 9326, 19405];
+
+fn bAddSectionNonTechGroup(iGroupId: i32) -> bool {
+    VEC_ADD_SECTION_NON_TECH_GROUP_IDS.contains(&iGroupId)
+}
+
+#[cfg(test)]
+mod add_section_contract_tests {
+    use super::{
+        AddSectionChoice, AddSectionTemplate, VEC_ADD_SECTION_NON_TECH_GROUP_IDS,
+        bAddSectionNonTechGroup,
+    };
+    use askama::Template;
+
+    fn stChoice(sTitle: &str) -> AddSectionChoice {
+        AddSectionChoice {
+            title: sTitle.to_owned(),
+            url: "/add.jsp?group=1".to_owned(),
+            view_url: Some("/forum/test/".to_owned()),
+            info: None,
+            postable: true,
+            reason: String::new(),
+        }
+    }
+
+    #[test]
+    fn forum_partition_uses_section_controller_non_tech_ids() {
+        for iGroupId in VEC_ADD_SECTION_NON_TECH_GROUP_IDS {
+            assert!(bAddSectionNonTechGroup(iGroupId));
+        }
+        assert!(!bAddSectionNonTechGroup(1));
+        assert!(!bAddSectionNonTechGroup(126));
+    }
+
+    #[test]
+    fn forum_add_page_renders_the_two_java_jsp_groups_in_order() {
+        let sHtml = AddSectionTemplate {
+            title: "Forum: add".to_owned(),
+            heading: "Add".to_owned(),
+            choices: Vec::new(),
+            technical_choices: vec![stChoice("tech-group")],
+            other_choices: vec![stChoice("other-group")],
+            split_forum_groups: true,
+            choosing_groups: true,
+        }
+        .render()
+        .unwrap();
+
+        let iTechnical = sHtml.find("Технический форум:").unwrap();
+        let iTechnicalChoice = sHtml.find("tech-group").unwrap();
+        let iOther = sHtml.find("Остальное:").unwrap();
+        let iOtherChoice = sHtml.find("other-group").unwrap();
+        assert!(iTechnical < iTechnicalChoice);
+        assert!(iTechnicalChoice < iOther);
+        assert!(iOther < iOtherChoice);
+    }
 }
 
 pub struct TopicForm {
@@ -2428,6 +2833,109 @@ mod topic_form_contract_tests {
         .unwrap();
         assert_eq!(form.poll, ["Да", "Нет"]);
     }
+
+    #[test]
+    fn add_validation_accumulates_java_binding_errors() {
+        let form = parse_topic_form(&pairs(&[
+            ("group", "8"),
+            ("title", "[tag]"),
+            ("msg", "bad\u{1}xml"),
+            ("url", "not a url"),
+            ("linktext", ""),
+            ("tags", "good, bad/tag"),
+        ]))
+        .unwrap();
+
+        let stValidation = stValidateAddTopicForm(&form);
+        assert_eq!(stValidation.vecTags, ["good"]);
+        assert!(
+            stValidation
+                .vecErrors
+                .iter()
+                .any(|sError| sError.starts_with("Не добавляйте теги"))
+        );
+        assert!(
+            stValidation
+                .vecErrors
+                .iter()
+                .any(|sError| sError == "0x0001 is not a legal XML character")
+        );
+        assert!(stValidation.vecErrors.contains(&"Некорректный URL".into()));
+        assert!(
+            stValidation
+                .vecErrors
+                .contains(&"URL указан без текста ссылки".into())
+        );
+        assert!(
+            stValidation
+                .vecErrors
+                .contains(&"Некорректный тег: 'bad/tag'".into())
+        );
+        let sRenderedError = optAddTopicFormError(&stValidation.vecErrors).unwrap();
+        assert!(sRenderedError.contains("Некорректный URL"));
+        assert!(sRenderedError.contains("Некорректный тег"));
+    }
+
+    #[test]
+    fn required_tag_error_obeys_complete_binding_result() {
+        let clean_form = parse_topic_form(&pairs(&[
+            ("group", "8"),
+            ("title", "Title"),
+            ("msg", "Body"),
+            ("tags", ""),
+        ]))
+        .unwrap();
+        assert_eq!(
+            stValidateAddTopicForm(&clean_form).vecErrors,
+            ["Установите теги"]
+        );
+
+        let invalid_title_form = parse_topic_form(&pairs(&[
+            ("group", "8"),
+            ("title", ""),
+            ("msg", "Body"),
+            ("tags", ""),
+        ]))
+        .unwrap();
+        let vecErrors = stValidateAddTopicForm(&invalid_title_form).vecErrors;
+        assert_eq!(vecErrors.len(), 1);
+        assert_eq!(vecErrors[0], "заголовок сообщения не может быть пустым");
+    }
+
+    #[test]
+    fn anonymous_message_limit_uses_java_utf16_units() {
+        let mut form = parse_topic_form(&pairs(&[
+            ("group", "8"),
+            ("title", "Title"),
+            ("msg", "Body"),
+            ("tags", "lor"),
+        ]))
+        .unwrap();
+        form.msg = "😀".repeat(TOPIC_MAX_MESSAGE_LENGTH_ANONYMOUS / 2 + 1);
+        let mut vecErrors = Vec::new();
+        vValidateAddTopicMessageLength(&form, true, &mut vecErrors);
+        assert_eq!(vecErrors, ["Слишком большое сообщение"]);
+    }
+
+    #[test]
+    fn add_validation_render_gate_precedes_database_mutation() {
+        let sSource = include_str!("topics.rs");
+        let sHandlerNeedle = ["pub async fn create_", "topic("].concat();
+        let (_, sHandler) = sSource
+            .split_once(&sHandlerNeedle)
+            .expect("create_topic handler");
+        let sRenderGateNeedle = ["if form.preview.is_some() || ", "!vecErrors.is_empty()"].concat();
+        let iRenderGate = sHandler
+            .find(&sRenderGateNeedle)
+            .expect("BindingResult-compatible render gate");
+        let sTransactionNeedle = ["let mut tx = state.pool.", "begin().await?"].concat();
+        let iTransaction = sHandler
+            .find(&sTransactionNeedle)
+            .expect("topic transaction");
+
+        assert!(iRenderGate < iTransaction);
+        assert!(sHandler[iRenderGate..iTransaction].contains("renderSubmittedAddTopicForm"));
+    }
 }
 
 pub async fn index(
@@ -2435,6 +2943,8 @@ pub async fn index(
     Query(q): Query<PagerQuery>,
     CurrentUser(current_user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+    headers: HeaderMap,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
 ) -> Result<Html<String>> {
     let _ = q;
     let stProfileSettings = match &current_user {
@@ -2479,7 +2989,14 @@ pub async fn index(
             .fetch_one(&state.pool)
             .await?
     };
-    let add_reason = posting_reason_for_port(&state, add_restriction, &current_user).await?;
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
+    let add_reason =
+        posting_reason_for_port(&state, add_restriction, &current_user, &sRemoteIp).await?;
     let mut uncommitted = sqlx::query_as::<_, (i32, String, i64)>(
         "SELECT s.id,s.name,count(t.id) FROM sections s JOIN groups g ON g.section=s.id JOIN topics t ON t.groupid=g.id WHERE s.moderate AND NOT t.moderate AND NOT t.deleted AND NOT t.draft AND t.postdate > (CURRENT_TIMESTAMP-'3 month'::interval) GROUP BY s.id,s.name HAVING count(t.id)>0 ORDER BY s.id",
     ).fetch_all(&state.pool).await?;
@@ -2560,9 +3077,7 @@ impl EnForumFeedFilter {
             None => Ok(Self::All),
             Some("notalks") => Ok(Self::NoTalks),
             Some("tech") => Ok(Self::Tech),
-            Some(_) => Err(AppError::BadRequest(
-                "Некорректное значение filter".to_owned(),
-            )),
+            Some(_) => Err(AppError::stUserError("Некорректное значение filter")),
         }
     }
 
@@ -2628,6 +3143,7 @@ fn stTopicFeedLinks(
 #[cfg(test)]
 mod topic_listing_contract_tests {
     use super::{EnForumFeedFilter, stTopicFeedLinks};
+    use crate::error::AppError;
 
     #[test]
     fn forum_filter_parser_accepts_only_java_values() {
@@ -2643,9 +3159,13 @@ mod topic_listing_contract_tests {
             EnForumFeedFilter::parse(Some("tech")).unwrap(),
             EnForumFeedFilter::Tech
         );
-        assert!(EnForumFeedFilter::parse(Some("")).is_err());
-        assert!(EnForumFeedFilter::parse(Some("all")).is_err());
-        assert!(EnForumFeedFilter::parse(Some("TECH")).is_err());
+        for stError in [
+            EnForumFeedFilter::parse(Some("")).unwrap_err(),
+            EnForumFeedFilter::parse(Some("all")).unwrap_err(),
+            EnForumFeedFilter::parse(Some("TECH")).unwrap_err(),
+        ] {
+            assert!(matches!(stError, AppError::UserError { .. }));
+        }
     }
 
     #[test]
@@ -2674,6 +3194,8 @@ pub async fn lenta(
     Query(q): Query<StForumFeedQuery>,
     CurrentUser(current_user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+    headers: HeaderMap,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
 ) -> Result<Html<String>> {
     let enFilter = EnForumFeedFilter::parse(q.filter.as_deref())?;
     let pager = crate::pagination::topic_feed_pager(q.offset.unwrap_or(0));
@@ -2692,7 +3214,14 @@ pub async fn lenta(
     let news =
         prepare_news_topics_for_viewer(&state, topics.clone(), true, &current_user, &csrf_token)
             .await?;
-    let mut navigation = build_topic_list_navigation(&state, "forum", None, &current_user).await?;
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
+    let mut navigation =
+        build_topic_list_navigation(&state, "forum", None, &current_user, &sRemoteIp).await?;
     navigation.section_url = None;
     navigation.quick_groups.clear();
     navigation.rss_url = Some(match enFilter.optId() {
@@ -2741,6 +3270,8 @@ pub async fn section_topics(
     Query(q): Query<PagerQuery>,
     CurrentUser(current_user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+    headers: HeaderMap,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
 ) -> Result<Html<String>> {
     let section = section_from_uri(&uri).unwrap_or("news");
     let pager = crate::pagination::topic_feed_pager(q.offset.unwrap_or(0));
@@ -2750,7 +3281,14 @@ pub async fn section_topics(
     let news =
         prepare_news_topics_for_viewer(&state, topics.clone(), true, &current_user, &csrf_token)
             .await?;
-    let navigation = build_topic_list_navigation(&state, section, None, &current_user).await?;
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
+    let navigation =
+        build_topic_list_navigation(&state, section, None, &current_user, &sRemoteIp).await?;
     Ok(Html(
         IndexTemplate {
             title: section_title(section).to_string(),
@@ -2773,6 +3311,8 @@ pub async fn section_group_topics(
     Query(q): Query<PagerQuery>,
     CurrentUser(current_user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+    headers: HeaderMap,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
 ) -> Result<Html<String>> {
     let section = section_from_uri(&uri).unwrap_or("news");
     let pager = crate::pagination::topic_feed_pager(q.offset.unwrap_or(0));
@@ -2794,8 +3334,15 @@ pub async fn section_group_topics(
     let news =
         prepare_news_topics_for_viewer(&state, topics.clone(), false, &current_user, &csrf_token)
             .await?;
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
     let navigation =
-        build_topic_list_navigation(&state, section, Some(&selected), &current_user).await?;
+        build_topic_list_navigation(&state, section, Some(&selected), &current_user, &sRemoteIp)
+            .await?;
     Ok(Html(
         IndexTemplate {
             title: format!("{} «{}»", section_title(section), selected.title),
@@ -2963,72 +3510,24 @@ pub struct ViewAllQuery {
     pub section: Option<i32>,
 }
 
-const POSTSCORE_UNRESTRICTED: i32 = -9999;
-const POSTSCORE_REGISTERED_ONLY: i32 = -50;
-const POSTSCORE_MODERATORS_ONLY: i32 = 10000;
-const POSTSCORE_NO_COMMENTS: i32 = 10001;
-const POSTSCORE_HIDE_COMMENTS: i32 = 10002;
-
-/// Request-IP-independent AddTopicChecker hint used by topic-list navigation.
-/// The actual `/add.jsp` GET/POST enforcement goes through
-/// `CAddTopicService`, including frozen-user and canonical `b_ips` checks.
-pub(crate) fn topic_posting_reason(restriction: i32, user: &Option<UserSummary>) -> Option<String> {
-    let anonymous = user.is_none();
-    let score = user.as_ref().and_then(|u| u.score).unwrap_or(0);
-    let is_moderator = user.as_ref().map(|u| u.canmod).unwrap_or(false);
-    match restriction {
-        POSTSCORE_UNRESTRICTED => None,
-        POSTSCORE_MODERATORS_ONLY => {
-            if is_moderator {
-                None
-            } else {
-                Some("только для модераторов".to_string())
-            }
-        }
-        POSTSCORE_REGISTERED_ONLY => {
-            if anonymous {
-                Some("только для зарегистрированных".to_string())
-            } else {
-                None
-            }
-        }
-        POSTSCORE_NO_COMMENTS | POSTSCORE_HIDE_COMMENTS => Some("постинг запрещен".to_string()),
-        _ => {
-            if anonymous || score < restriction {
-                Some(format!(
-                    "только для зарегистрированных, score>={restriction}"
-                ))
-            } else {
-                None
-            }
-        }
-    }
-}
-
-/// Navigation-level posting hint. Anonymous posting is a real Java workflow:
-/// unrestricted groups must expose the add link even without a session. The
-/// request-IP checks remain in the `/add.jsp` handler where the client address
-/// is available.
+/// UI-level equivalent of Java's `AddTopicChecker`: every page that exposes
+/// an add-topic affordance uses the same frozen, postscore, and request-IP
+/// checks as `/add.jsp`. Anonymous users remain allowed in unrestricted
+/// sections when their client IP is not blocked.
 pub(crate) async fn posting_reason_for_port(
     state: &AppState,
     restriction: i32,
     user: &Option<UserSummary>,
+    sRemoteIp: &str,
 ) -> Result<Option<String>> {
-    if let Some(current) = user {
-        if current.blocked.unwrap_or(false) {
-            return Ok(Some("аккаунт заблокирован".to_string()));
-        }
-        let frozen_until: Option<chrono::DateTime<chrono::Utc>> =
-            sqlx::query_scalar("SELECT frozen_until FROM users WHERE id=$1")
-                .bind(current.id)
-                .fetch_optional(&state.pool)
-                .await?
-                .flatten();
-        if frozen_until.is_some_and(|until| until > chrono::Utc::now()) {
-            return Ok(Some("аккаунт заморожен".to_string()));
-        }
-    }
-    Ok(topic_posting_reason(restriction, user))
+    let stIdentity =
+        crate::application::auth::stResolvePostingIdentity(state, user.as_ref(), None, None)
+            .await?
+            .stIdentity;
+    Ok(add_topic_service(state)
+        .stCheckRestriction(restriction, stPostingActor(&stIdentity), sRemoteIp)
+        .await?
+        .optReason)
 }
 
 pub(crate) async fn build_topic_list_navigation(
@@ -3036,6 +3535,7 @@ pub(crate) async fn build_topic_list_navigation(
     section_prefix: &str,
     selected_group: Option<&Group>,
     user: &Option<UserSummary>,
+    sRemoteIp: &str,
 ) -> Result<TopicListNavigation> {
     let (section_id, section_restriction, section_premoderated): (i32, i32, bool) = sqlx::query_as(
         r#"SELECT id, COALESCE(restrict_topics,-9999), moderate FROM sections WHERE CASE id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(name) END=$1"#,
@@ -3055,7 +3555,7 @@ pub(crate) async fn build_topic_list_navigation(
     } else {
         section_restriction
     };
-    let add_reason = posting_reason_for_port(state, restriction, user).await?;
+    let add_reason = posting_reason_for_port(state, restriction, user, sRemoteIp).await?;
     let add_url = add_reason.is_none().then(|| match selected_group {
         Some(group) => format!("/add.jsp?group={}", group.id),
         None => format!("/add-section.jsp?section={section_id}"),
@@ -3140,6 +3640,8 @@ pub async fn view_all(
     Query(q): Query<ViewAllQuery>,
     CurrentUser(user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
+    headers: HeaderMap,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
 ) -> Result<Html<String>> {
     let section: Option<ViewAllSection> = if let Some(sid) = q.section.filter(|&id| id != 0) {
         let sql = format!(
@@ -3266,7 +3768,13 @@ pub async fn view_all(
             .await?
         }
     };
-    let posting_reason = posting_reason_for_port(&state, restriction, &user).await?;
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
+    let posting_reason = posting_reason_for_port(&state, restriction, &user, &sRemoteIp).await?;
     let (add_link, add_link_reason) = match posting_reason {
         None => (
             Some(match &section {
@@ -3304,56 +3812,6 @@ pub async fn view_all(
     ))
 }
 
-#[derive(Deserialize)]
-pub struct ViewMessageQuery {
-    msgid: i32,
-    #[serde(rename = "fromHistory")]
-    from_history: Option<i32>,
-    page: Option<i32>,
-    lastmod: Option<i64>,
-    filter: Option<String>,
-    output: Option<String>,
-}
-
-pub async fn legacy_view_message(
-    State(state): State<AppState>,
-    Query(q): Query<ViewMessageQuery>,
-) -> Result<Response> {
-    let topic = get_topic(&state, q.msgid).await?;
-    let mut target = topic.topic_url();
-    if let Some(page) = q.page {
-        target.push_str(&format!("/page{page}"));
-    }
-    let mut params = Vec::new();
-    if q.lastmod.is_some() {
-        let expired: bool = sqlx::query_scalar(
-            r#"SELECT NOT t.sticky
-                      AND COALESCE(t.commitdate,t.postdate) < CURRENT_TIMESTAMP-s.expire
-                 FROM topics t
-                 JOIN groups g ON g.id=t.groupid
-                 JOIN sections s ON s.id=g.section
-                WHERE t.id=$1"#,
-        )
-        .bind(topic.id)
-        .fetch_one(&state.pool)
-        .await?;
-        if !expired && let Some(lastmod) = topic.lastmod {
-            params.push(format!("lastmod={}", lastmod.timestamp_millis()));
-        }
-    }
-    if let Some(filter) = q.filter {
-        params.push(format!("filter={}", urlencoding::encode(&filter)));
-    }
-    if let Some(output) = q.output {
-        params.push(format!("output={}", urlencoding::encode(&output)));
-    }
-    if !params.is_empty() {
-        target.push('?');
-        target.push_str(&params.join("&"));
-    }
-    Ok((StatusCode::FOUND, [(header::LOCATION, target)]).into_response())
-}
-
 #[derive(Deserialize, Default)]
 pub struct TopicViewQuery {
     pub cid: Option<i32>,
@@ -3363,11 +3821,18 @@ pub struct TopicViewQuery {
     pub deleted: Option<String>,
     /// "show" disables ignore-list-based comment hiding for this request.
     pub filter: Option<String>,
+    pub skipdeleted: Option<bool>,
     pub results: Option<bool>,
 }
 
-pub async fn topic_page(
+#[derive(Deserialize, Default)]
+pub struct TopicFilterQuery {
+    pub filter: Option<String>,
+}
+
+pub async fn topic_page_any(
     State(state): State<AppState>,
+    method: axum::http::Method,
     headers: axum::http::HeaderMap,
     uri: Uri,
     Path((group, id)): Path<(String, i32)>,
@@ -3391,6 +3856,8 @@ pub async fn topic_page(
         0,
         None,
         q,
+        method == axum::http::Method::POST,
+        headers,
         current_user,
         csrf_token,
         sRemoteIp,
@@ -3403,6 +3870,7 @@ pub async fn topic_page_with_page(
     headers: axum::http::HeaderMap,
     uri: Uri,
     Path((group, id, page_marker)): Path<(String, i32, String)>,
+    Query(q): Query<TopicFilterQuery>,
     CurrentUser(current_user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
     ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
@@ -3418,16 +3886,16 @@ pub async fn topic_page_with_page(
         &state.config.trusted_proxy_cidrs,
     )
     .to_string();
-    // Java's getMessagePage doesn't accept `cid`/`deleted`/`filter` at all -
-    // only the base (page-less) route does.
-    render_topic_view(
+    // Java's getMessagePage accepts the ignore-list filter but not the
+    // base route's cid/deleted/skipdeleted parameters.
+    render_topic_page(
         state,
         section,
         group,
         id,
         page,
-        None,
-        TopicViewQuery::default(),
+        q.filter,
+        headers,
         current_user,
         csrf_token,
         sRemoteIp,
@@ -3440,6 +3908,7 @@ pub async fn topic_thread(
     headers: axum::http::HeaderMap,
     uri: Uri,
     Path((group, id, thread_root)): Path<(String, i32, i32)>,
+    Query(q): Query<TopicFilterQuery>,
     CurrentUser(current_user): CurrentUser,
     crate::csrf::CsrfToken(csrf_token): crate::csrf::CsrfToken,
     ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
@@ -3458,7 +3927,12 @@ pub async fn topic_thread(
         id,
         0,
         Some(thread_root),
-        TopicViewQuery::default(),
+        TopicViewQuery {
+            filter: q.filter,
+            ..TopicViewQuery::default()
+        },
+        false,
+        headers,
         current_user,
         csrf_token,
         sRemoteIp,
@@ -3474,10 +3948,15 @@ pub async fn render_topic_page(
     group: String,
     id: i32,
     page: i64,
+    filter: Option<String>,
+    headers: HeaderMap,
     current_user: Option<UserSummary>,
     csrf_token: String,
     sRemoteIp: String,
 ) -> Result<Response> {
+    if bJavaCanonicalBasePage(page) {
+        return Ok(stFoundRedirect(get_topic(&state, id).await?.topic_url()));
+    }
     render_topic_view(
         state,
         section,
@@ -3485,12 +3964,21 @@ pub async fn render_topic_page(
         id,
         page,
         None,
-        TopicViewQuery::default(),
+        TopicViewQuery {
+            filter,
+            ..TopicViewQuery::default()
+        },
+        false,
+        headers,
         current_user,
         csrf_token,
         sRemoteIp,
     )
     .await
+}
+
+fn bJavaCanonicalBasePage(iPage: i64) -> bool {
+    iPage == -1
 }
 
 pub(crate) async fn messages_per_page(state: &AppState, user: &Option<UserSummary>) -> i64 {
@@ -3509,6 +3997,217 @@ pub(crate) async fn messages_per_page(state: &AppState, user: &Option<UserSummar
     }
 }
 
+fn setHiddenCommentIds(
+    vecComments: &[CommentItem],
+    vecIgnoredAuthorIds: &[i32],
+) -> std::collections::HashSet<i32> {
+    let setIgnoredAuthors = vecIgnoredAuthorIds
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    let mut setHidden = vecComments
+        .iter()
+        .filter(|stComment| setIgnoredAuthors.contains(&stComment.author_id))
+        .map(|stComment| stComment.id)
+        .collect::<std::collections::HashSet<_>>();
+
+    // CommentNode.hideIgnored hides the complete reply subtree below an
+    // ignored author. Use a fixed point so imported/out-of-order rows retain
+    // the same semantic result without assuming parent-before-child storage.
+    loop {
+        let iBefore = setHidden.len();
+        for stComment in vecComments {
+            if stComment
+                .replyto
+                .is_some_and(|iParent| setHidden.contains(&iParent))
+            {
+                setHidden.insert(stComment.id);
+            }
+        }
+        if setHidden.len() == iBefore {
+            break;
+        }
+    }
+    setHidden
+}
+
+fn setDateJumpIds(vecComments: &[CommentItem]) -> std::collections::HashSet<i32> {
+    vecComments
+        .windows(2)
+        .filter(|arrPair| {
+            arrPair[1]
+                .postdate
+                .signed_duration_since(arrPair[0].postdate)
+                > chrono::Duration::days(30)
+        })
+        .map(|arrPair| arrPair[1].id)
+        .collect()
+}
+
+fn sTopicPageUrl(sTopicUrl: &str, iPage: i64, bFilterShow: bool, bCommentsAnchor: bool) -> String {
+    let mut sUrl = if iPage != 0 {
+        format!("{sTopicUrl}/page{iPage}")
+    } else {
+        sTopicUrl.to_owned()
+    };
+    if bFilterShow {
+        sUrl.push_str("?filter=show");
+    }
+    if bCommentsAnchor {
+        sUrl.push_str("#comments");
+    }
+    sUrl
+}
+
+fn iJavaTopicModelPage(iRequestedPage: i64, bShowDeleted: bool) -> i64 {
+    if bShowDeleted { -1 } else { iRequestedPage }
+}
+
+fn bJavaTopicFilterShow(optFilter: Option<&str>, bShowDeleted: bool) -> bool {
+    !bShowDeleted && optFilter == Some("show")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnTopicViewPreflight {
+    JumpToComment,
+    RedirectDeletedRequest,
+    RedirectCanonicalPath,
+    CheckPermissions,
+}
+
+/// Ordering in `TopicController.getMessageMain`: `cid` bypasses the shared
+/// renderer completely; a non-moderator's non-POST deleted-comments request
+/// redirects before group/section canonicalization; only then does the shared
+/// renderer canonicalize and call `TopicPermissionService.checkView`.
+fn enTopicViewPreflight(
+    bCommentJump: bool,
+    bShowDeleted: bool,
+    bModerator: bool,
+    bPostRequest: bool,
+    bCanonicalPath: bool,
+) -> EnTopicViewPreflight {
+    if bCommentJump {
+        EnTopicViewPreflight::JumpToComment
+    } else if bShowDeleted && !bModerator && !bPostRequest {
+        EnTopicViewPreflight::RedirectDeletedRequest
+    } else if !bCanonicalPath {
+        EnTopicViewPreflight::RedirectCanonicalPath
+    } else {
+        EnTopicViewPreflight::CheckPermissions
+    }
+}
+
+fn sCommentJumpUrl(
+    sTopicUrl: &str,
+    iPage: i64,
+    iCommentId: i32,
+    bDeletedView: bool,
+    optLastmod: Option<i64>,
+    bFilterShow: bool,
+) -> String {
+    let mut sUrl = if iPage > 0 {
+        format!("{sTopicUrl}/page{iPage}")
+    } else {
+        sTopicUrl.to_owned()
+    };
+    let mut vecParams = Vec::new();
+    if bDeletedView {
+        vecParams.push("deleted=true".to_owned());
+    }
+    if let Some(iLastmod) = optLastmod {
+        vecParams.push(format!("lastmod={iLastmod}"));
+    }
+    if bFilterShow {
+        vecParams.push("filter=show".to_owned());
+    }
+    if !vecParams.is_empty() {
+        sUrl.push('?');
+        sUrl.push_str(&vecParams.join("&"));
+    }
+    sUrl.push_str(&format!("#comment-{iCommentId}"));
+    sUrl
+}
+
+fn sTopicOgDescription(sRenderedHtml: &str) -> String {
+    static RE_TAG: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?s)<[^>]+>").expect("static HTML tag regex")
+    });
+    let sPlain = html_escape::decode_html_entities(&RE_TAG.replace_all(sRenderedHtml, " "))
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if sPlain.encode_utf16().count() < 160 {
+        return sPlain;
+    }
+    let mut iUtf16Length = 0;
+    let sCut = sPlain
+        .chars()
+        .take_while(|chValue| {
+            let iNextLength = iUtf16Length + chValue.len_utf16();
+            if iNextLength > 160 {
+                false
+            } else {
+                iUtf16Length = iNextLength;
+                true
+            }
+        })
+        .collect::<String>();
+    format!("{}...", sCut.trim())
+}
+
+fn stExpiredTopicCacheHeaders(
+    stRequestHeaders: &HeaderMap,
+    iTopicId: i32,
+    dtLastModified: chrono::DateTime<chrono::Utc>,
+) -> (HeaderMap, bool) {
+    let sEtag = format!("msg-{iTopicId}-{}", dtLastModified.timestamp_millis());
+    let mut stResponseHeaders = HeaderMap::new();
+    stResponseHeaders.insert(
+        header::ETAG,
+        axum::http::HeaderValue::from_str(&sEtag).expect("numeric topic ETag is valid"),
+    );
+
+    // Preserve TopicController's dangling nested `if`: without
+    // If-None-Match it emits only Etag and never calls checkLastModified.
+    // A matching If-None-Match returns 304 immediately. Only a mismatching
+    // If-None-Match falls through to Spring's Last-Modified check.
+    let Some(stIfNoneMatch) = stRequestHeaders.get(header::IF_NONE_MATCH) else {
+        return (stResponseHeaders, false);
+    };
+    if stIfNoneMatch
+        .to_str()
+        .ok()
+        .is_some_and(|sValue| sValue == sEtag)
+    {
+        return (stResponseHeaders, true);
+    }
+
+    stResponseHeaders.insert(
+        header::LAST_MODIFIED,
+        axum::http::HeaderValue::from_str(&httpdate::fmt_http_date(dtLastModified.into()))
+            .expect("HTTP date is a valid header value"),
+    );
+    let bNotModified = stRequestHeaders
+        .get(header::IF_MODIFIED_SINCE)
+        .and_then(|stValue| stValue.to_str().ok())
+        .and_then(|sValue| httpdate::parse_http_date(sValue).ok())
+        .map(chrono::DateTime::<chrono::Utc>::from)
+        .is_some_and(|dtRequested| dtLastModified.timestamp() <= dtRequested.timestamp());
+    (stResponseHeaders, bNotModified)
+}
+
+fn stTopicScrollerLink(
+    stItem: crate::domain::topic::model::StTopicScrollerItem,
+) -> StTopicScrollerLink {
+    StTopicScrollerLink {
+        sUrl: format!(
+            "/{}/{}/{}",
+            stItem.sSectionPrefix, stItem.sGroupUrlName, stItem.iId
+        ),
+        sTitle: crate::domain::title::sTopicTitlePlainForDisplay(&stItem.sStoredTitle),
+    }
+}
+
 /// TopicController.getMessageMain/getMessagePage/getMessageThread, merged
 /// into one function parameterized by page/thread_root/query - mirrors
 /// Java's shared private `getMessage` helper.
@@ -3520,50 +4219,88 @@ async fn render_topic_view(
     page: i64,
     thread_root: Option<i32>,
     query: TopicViewQuery,
+    bPostRequest: bool,
+    stRequestHeaders: HeaderMap,
     current_user: Option<UserSummary>,
     csrf_token: String,
     sRemoteIp: String,
 ) -> Result<Response> {
     let topic = get_topic(&state, id).await?;
     let is_moderator = current_user.as_ref().map(|u| u.canmod).unwrap_or(false);
-
-    // TopicPermissionService.checkView restricts drafts and deleted topics,
-    // but deliberately does not hide an uncommitted topic by itself.  The
-    // public `/view-all.jsp` queue therefore links to a publicly viewable
-    // preview, matching the Java application.
-    if topic.draft || topic.deleted {
-        let allowed = current_user
-            .as_ref()
-            .map(|u| u.canmod || u.id == topic.author_id)
-            .unwrap_or(false);
-        if !allowed {
-            return Err(AppError::NotFound);
-        }
-    }
-
-    // TopicController.getMessageMain: canonical redirect if the URL's
-    // group/section don't match the topic's real ones.
-    if topic.group_urlname != group || topic.section_prefix != section {
-        return Ok(Redirect::to(&topic.topic_url()).into_response());
-    }
-
     let want_deleted = query.deleted.is_some();
-    let can_view_deleted_comments =
-        allow_view_all_deleted_comments(&state, topic.id, &current_user).await?;
-    if want_deleted && !can_view_deleted_comments {
-        return Ok(Redirect::to(&topic.topic_url()).into_response());
+    let optJumpCommentId = query.cid.filter(|_| thread_root.is_none() && page == 0);
+    let bCanonicalPath = topic.group_urlname == group && topic.section_prefix == section;
+    match enTopicViewPreflight(
+        optJumpCommentId.is_some(),
+        want_deleted,
+        is_moderator,
+        bPostRequest,
+        bCanonicalPath,
+    ) {
+        EnTopicViewPreflight::JumpToComment => {
+            return resolve_comment_jump_with_skip(
+                &state,
+                &topic,
+                optJumpCommentId.expect("comment-jump preflight requires cid"),
+                query.skipdeleted.unwrap_or(false),
+                is_moderator,
+                &current_user,
+            )
+            .await;
+        }
+        EnTopicViewPreflight::RedirectDeletedRequest
+        | EnTopicViewPreflight::RedirectCanonicalPath => {
+            return Ok(stFoundRedirect(topic.topic_url()));
+        }
+        EnTopicViewPreflight::CheckPermissions => {}
     }
 
-    // `?cid=` jumps straight to the comment (resolving its page), bypassing
-    // the rest of rendering entirely - matches Java's inline jumpMessage
-    // short-circuit in getMessageMain. Only the base (page-less, non-thread)
-    // route wires this in.
-    if let Some(cid) = query.cid
-        && thread_root.is_none()
-        && page == 0
-    {
-        return resolve_comment_jump(&state, &topic, cid, is_moderator, &current_user).await;
-    }
+    // `checkView(showDeleted=true)` evaluates the deleted-comments gate before
+    // the topic's own deleted/draft/open-warning policy. For a normal view the
+    // same gate is evaluated later only to populate `showDeletedButton`.
+    let can_view_deleted_comments = if want_deleted {
+        let bAllowed = allow_view_all_deleted_comments(&state, topic.id, &current_user).await?;
+        if !bAllowed {
+            return Err(AppError::Forbidden);
+        }
+        check_topic_viewable(&state, topic.id, &current_user).await?;
+        true
+    } else {
+        check_topic_viewable(&state, topic.id, &current_user).await?;
+        allow_view_all_deleted_comments(&state, topic.id, &current_user).await?
+    };
+
+    // getMessageMain invokes the shared Java renderer with page=-1 and
+    // filter=null for showDeleted. That value remains observable in the JSP
+    // canonical/filter links even though /page-1 itself redirects to base.
+    let iModelPage = iJavaTopicModelPage(page, want_deleted);
+
+    let stTopicMeta = stTopicCardMeta(
+        &state,
+        topic.id,
+        current_user.as_ref().map(|stUser| stUser.id),
+    )
+    .await?;
+    let topic_expired = stTopicMeta.bExpired;
+    let topic_postscore = stTopicMeta.iTopicPostScore;
+    let comments_hidden = topic_postscore == POSTSCORE_HIDE_COMMENTS;
+    let iEffectivePostScore = iEffectiveTopicPostScore(&topic, &stTopicMeta);
+    let expire_date = stTopicMeta.optExpireDate.filter(|dtExpireDate| {
+        !topic_expired && *dtExpireDate < chrono::Utc::now() + chrono::Duration::days(14)
+    });
+    let optExpiredCacheHeaders = if current_user.is_none() && topic_expired {
+        let (stCacheHeaders, bNotModified) = stExpiredTopicCacheHeaders(
+            &stRequestHeaders,
+            topic.id,
+            topic.lastmod.unwrap_or(topic.postdate),
+        );
+        if bNotModified {
+            return Ok((StatusCode::NOT_MODIFIED, stCacheHeaders).into_response());
+        }
+        Some(stCacheHeaders)
+    } else {
+        None
+    };
 
     // TopicController starts MoreLikeThis immediately and gives the JSP only
     // the remainder of a 500 ms deadline after the main page work. Keep the
@@ -3586,6 +4323,8 @@ async fn render_topic_view(
 
     let all_comments: Vec<CommentItem> = if want_deleted {
         topic_service(&state).vecListComments(id).await?
+    } else if comments_hidden {
+        Vec::new()
     } else {
         topic_service(&state)
             .vecListComments(id)
@@ -3600,9 +4339,9 @@ async fn render_topic_view(
         .filter_map(|stComment| stComment.replyto)
         .collect();
 
-    // TopicController's hideSet: comments from ignored authors are dropped
-    // from the rendered list (not just visually) unless `?filter=show`.
-    let filter_show = query.filter.as_deref() == Some("show");
+    // TopicController's hideSet: an ignored author's complete reply subtree
+    // is dropped from the rendered list unless `?filter=show`.
+    let filter_show = bJavaTopicFilterShow(query.filter.as_deref(), want_deleted);
     let ignored_ids: Vec<i32> = match (&current_user, filter_show) {
         (Some(u), false) => sqlx::query_scalar("SELECT ignored FROM ignore_list WHERE userid=$1")
             .bind(u.id)
@@ -3611,17 +4350,8 @@ async fn render_topic_view(
             .unwrap_or_default(),
         _ => vec![],
     };
-    let unfiltered_count = all_comments.len();
-    let visible_comments: Vec<CommentItem> = if ignored_ids.is_empty() {
-        all_comments
-    } else {
-        all_comments
-            .into_iter()
-            .filter(|c| !ignored_ids.contains(&c.author_id))
-            .collect()
-    };
-    let filtered_count = visible_comments.len();
-    let mapCommentReplies: std::collections::HashMap<i32, CommentReplyView> = visible_comments
+    let setHiddenCommentIds = setHiddenCommentIds(&all_comments, &ignored_ids);
+    let mapCommentReplies: std::collections::HashMap<i32, CommentReplyView> = all_comments
         .iter()
         .map(|stComment| {
             (
@@ -3631,14 +4361,21 @@ async fn render_topic_view(
                     title: stComment.optTitlePlain(),
                     author: stComment.author.clone(),
                     postdate: stComment.postdate,
+                    same_page: false,
+                    // CommentPrepareService marks only a missing reply node
+                    // as deleted. In showDeleted mode the node exists and is
+                    // therefore linked even when that comment itself is deleted.
+                    deleted: false,
                 },
             )
         })
         .collect();
     let mut mapCommentAnswers: std::collections::HashMap<i32, Vec<i32>> =
         std::collections::HashMap::new();
-    for stComment in &visible_comments {
-        if let Some(iReplyTo) = stComment.replyto {
+    for stComment in &all_comments {
+        if let Some(iReplyTo) = stComment.replyto
+            && !setHiddenCommentIds.contains(&stComment.id)
+        {
             mapCommentAnswers
                 .entry(iReplyTo)
                 .or_default()
@@ -3646,21 +4383,36 @@ async fn render_topic_view(
         }
     }
 
-    let (page_comments, pages, _thread_mode, bHasNextPage): (
+    let (page_comments, pages, prev_page_url, next_page_url, bHasNextPage, unfiltered_count): (
         Vec<CommentItem>,
         Vec<CommentPageLink>,
+        Option<String>,
+        Option<String>,
         bool,
-        bool,
+        usize,
     ) = if let Some(root) = thread_root {
-        let subtree = comment_subtree(&visible_comments, root);
-        (subtree, vec![], true, false)
+        let vecUnfiltered = comment_subtree(&all_comments, root);
+        let iUnfilteredCount = vecUnfiltered.len();
+        let vecFiltered = vecUnfiltered
+            .into_iter()
+            .filter(|stComment| !setHiddenCommentIds.contains(&stComment.id))
+            .collect();
+        (vecFiltered, vec![], None, None, false, iUnfilteredCount)
     } else if want_deleted {
         // Java's showDeleted path uses page=-1: render every comment on one
         // page, no pagination controls.
-        (visible_comments, vec![], false, false)
+        let iUnfilteredCount = all_comments.len();
+        let vecFiltered = all_comments
+            .iter()
+            .filter(|stComment| !setHiddenCommentIds.contains(&stComment.id))
+            .cloned()
+            .collect();
+        (vecFiltered, vec![], None, None, false, iUnfilteredCount)
     } else {
         let per_page = messages_per_page(&state, &current_user).await.max(1);
-        let total_pages = (unfiltered_count as i64 + per_page - 1) / per_page.max(1);
+        // Topic.getPageCount uses the persisted live-comment counter. The
+        // actual slice still comes from CommentList, as in the source.
+        let total_pages = ((topic.comments.max(0) as i64) + per_page - 1) / per_page;
         if page > 0 && page >= total_pages {
             let target_page = (total_pages - 1).max(0);
             let url = if target_page > 0 {
@@ -3668,27 +4420,58 @@ async fn render_topic_view(
             } else {
                 topic.topic_url()
             };
-            return Ok(Redirect::to(&url).into_response());
+            return Ok(stFoundRedirect(url));
         }
         let start = (page * per_page) as usize;
-        let end = (start + per_page as usize).min(visible_comments.len());
-        let slice = if start < visible_comments.len() {
-            visible_comments[start..end].to_vec()
+        let end = (start + per_page as usize).min(all_comments.len());
+        let vecUnfiltered = if start < all_comments.len() {
+            all_comments[start..end].to_vec()
         } else {
             vec![]
         };
-        let pages = if total_pages > 1 {
+        let iUnfilteredCount = vecUnfiltered.len();
+        // Java slices first and applies hideSet only to that page; filtering
+        // must never pull later comments forward onto an earlier page.
+        let vecFiltered = vecUnfiltered
+            .into_iter()
+            .filter(|stComment| !setHiddenCommentIds.contains(&stComment.id))
+            .collect();
+        let pages = if total_pages > 1 && !all_comments.is_empty() {
             (0..total_pages)
                 .map(|p| CommentPageLink {
                     page: p,
                     current: p == page,
+                    url: sTopicPageUrl(&topic.topic_url(), p, filter_show, true),
                 })
                 .collect()
         } else {
             vec![]
         };
-        (slice, pages, false, page + 1 < total_pages)
+        let optPrevious =
+            (page > 0).then(|| sTopicPageUrl(&topic.topic_url(), page - 1, filter_show, true));
+        let optNext = (page + 1 < total_pages)
+            .then(|| sTopicPageUrl(&topic.topic_url(), page + 1, filter_show, true));
+        (
+            vecFiltered,
+            pages,
+            optPrevious,
+            optNext,
+            page + 1 < total_pages,
+            iUnfilteredCount,
+        )
     };
+    let filtered_count = page_comments.len();
+    let setDateJumpIds = setDateJumpIds(&page_comments);
+    let optScrollerViewerId = (!ignored_ids.is_empty())
+        .then(|| current_user.as_ref().map(|stUser| stUser.id))
+        .flatten();
+    let stScrollers = topic_service(&state)
+        .stTopicScrollers(topic.id, optScrollerViewerId)
+        .await?;
+    let prev_topic = stScrollers.optPrevious.map(stTopicScrollerLink);
+    let next_topic = stScrollers.optNext.map(stTopicScrollerLink);
+    let show_top_scroller = stScrollers.bEnabled && (prev_topic.is_some() || next_topic.is_some());
+    let show_bottom_scroller = stScrollers.bEnabled;
     let stMarkupUsers = state
         .markup
         .stResolveBatch(
@@ -3706,27 +4489,24 @@ async fn render_topic_view(
         Some(&state.config.public_url),
         Some(&stMarkupUsers),
     );
+    let og_description = sTopicOgDescription(&topic_html);
 
-    // ReactionService.allowInteract's expired/comments-hidden/frozen inputs,
-    // fetched once up front so per-comment widgets don't each hit the DB.
-    let (topic_expired, topic_postscore): (bool, i32) = sqlx::query_as(
-        "SELECT NOT t.sticky AND COALESCE(t.commitdate,t.postdate) < now() - s.expire, COALESCE(t.postscore, -9999) FROM topics t JOIN groups g ON g.id=t.groupid JOIN sections s ON s.id=g.section WHERE t.id=$1",
-    )
-    .bind(topic.id)
-    .fetch_one(&state.pool)
-    .await?;
-    let comments_hidden = topic_postscore == POSTSCORE_HIDE_COMMENTS;
-    let reactor_frozen = match &current_user {
-        Some(u) => sqlx::query_scalar::<_, Option<chrono::DateTime<chrono::Utc>>>(
-            "SELECT frozen_until FROM users WHERE id=$1",
-        )
-        .bind(u.id)
-        .fetch_one(&state.pool)
-        .await?
-        .map(|t| t > chrono::Utc::now())
-        .unwrap_or(false),
-        None => false,
+    // ReactionService.allowInteract's frozen input is fetched once so the
+    // per-comment widgets don't each hit the database.
+    let actor_frozen_until = match &current_user {
+        Some(u) => {
+            sqlx::query_scalar::<_, Option<chrono::DateTime<chrono::Utc>>>(
+                "SELECT frozen_until FROM users WHERE id=$1",
+            )
+            .bind(u.id)
+            .fetch_one(&state.pool)
+            .await?
+        }
+        None => None,
     };
+    let reactor_frozen = actor_frozen_until
+        .as_ref()
+        .is_some_and(|dtUntil| *dtUntil > chrono::Utc::now());
     let all_reactions = load_all_reactions(
         &state,
         topic.id,
@@ -3739,6 +4519,22 @@ async fn render_topic_view(
         .iter()
         .map(|stComment| stComment.id)
         .collect::<Vec<_>>();
+    let setPageCommentIds = vecPageCommentIds
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    let bModeratorSession = current_user.as_ref().is_some_and(|stUser| stUser.canmod);
+    let mapCommentPageMeta = topic_service(&state)
+        .vecCommentPageMeta(
+            &vecPageCommentIds,
+            current_user.as_ref().map(|stUser| stUser.id),
+            bModeratorSession,
+            bModeratorSession && !topic_expired,
+        )
+        .await?
+        .into_iter()
+        .map(|stMeta| (stMeta.iCommentId, stMeta))
+        .collect::<std::collections::HashMap<_, _>>();
     let vecDeleteInfoRows: Vec<(i32, i32, String, String)> = if vecPageCommentIds.is_empty() {
         Vec::new()
     } else {
@@ -3765,7 +4561,6 @@ async fn render_topic_view(
         })
         .collect::<std::collections::HashMap<_, _>>();
 
-    let bModeratorSession = current_user.as_ref().is_some_and(|stUser| stUser.canmod);
     let mut vecAuthorIds = Vec::with_capacity(page_comments.len() + 1);
     vecAuthorIds.push(topic.author_id);
     vecAuthorIds.extend(page_comments.iter().map(|stComment| stComment.author_id));
@@ -3862,15 +4657,81 @@ async fn render_topic_view(
     let comments: Vec<CommentView> = page_comments
         .into_iter()
         .map(|item| {
-            let optReply = item
-                .replyto
-                .and_then(|iReplyTo| mapCommentReplies.get(&iReplyTo).cloned());
+            let bShowDateJump = setDateJumpIds.contains(&item.id);
+            let sAuthorHtml = sCommentAuthorHtml(&item, current_user.is_some());
+            let (
+                sRemarkHtml,
+                sModeratorIpHtml,
+                sEditSummaryHtml,
+                sModeratorUserAgentHtml,
+                sWarningsHtml,
+            ) = mapCommentPageMeta.get(&item.id).map_or_else(
+                || {
+                    (
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                    )
+                },
+                |stMeta| {
+                    let sRemarkHtml = stMeta
+                        .optRemark
+                        .as_deref()
+                        .map(|sRemark| {
+                            format!(" <span>{}</span>", html_escape::encode_text(sRemark))
+                        })
+                        .unwrap_or_default();
+                    let (sModeratorIpHtml, sModeratorUserAgentHtml) =
+                        stCommentModeratorMetaHtml(stMeta, bModeratorSession);
+                    (
+                        sRemarkHtml,
+                        sModeratorIpHtml,
+                        sCommentEditSummaryHtml(stMeta, &topic.topic_url()),
+                        sModeratorUserAgentHtml,
+                        crate::routes::comments::sCommentPreviewWarnings(
+                            &stMeta.sWarningsJson,
+                            &csrf_token,
+                        ),
+                    )
+                },
+            );
+            let optReply = item.replyto.map(|iReplyTo| {
+                mapCommentReplies
+                    .get(&iReplyTo)
+                    .cloned()
+                    .map(|mut stReply| {
+                        stReply.same_page = setPageCommentIds.contains(&iReplyTo);
+                        stReply
+                    })
+                    .unwrap_or_else(|| CommentReplyView {
+                        id: iReplyTo,
+                        title: None,
+                        author: String::new(),
+                        // Not rendered for a missing/deleted parent; retain a
+                        // valid value so the view model stays non-optional.
+                        postdate: item.postdate,
+                        same_page: false,
+                        deleted: true,
+                    })
+            });
             let vecAnswers = mapCommentAnswers.get(&item.id).cloned().unwrap_or_default();
             let iAnswerCount = vecAnswers.len();
+            let bAnswerSamePage = iAnswerCount == 1 && setPageCommentIds.contains(&vecAnswers[0]);
             let sAnswerUrl = if iAnswerCount == 1 {
-                format!("{}?cid={}", topic.topic_url(), vecAnswers[0])
+                if filter_show {
+                    format!("{}?filter=show&cid={}", topic.topic_url(), vecAnswers[0])
+                } else {
+                    format!("{}?cid={}", topic.topic_url(), vecAnswers[0])
+                }
             } else {
-                format!("{}/thread/{}#comments", topic.topic_url(), item.id)
+                format!(
+                    "{}/thread/{}{}#comments",
+                    topic.topic_url(),
+                    item.id,
+                    if filter_show { "?filter=show" } else { "" }
+                )
             };
             let (optUserpicUrl, iUserpicWidth, iUserpicHeight) = mapAuthorUserpics
                 .get(&item.author_id)
@@ -3954,6 +4815,7 @@ async fn render_topic_view(
                 .copied()
                 .unwrap_or(true);
             CommentView {
+                author_html: sAuthorHtml,
                 author_signature: mapAuthorSignatures
                     .get(&item.author_id)
                     .cloned()
@@ -3964,6 +4826,7 @@ async fn render_topic_view(
                 reply: optReply,
                 answer_count: iAnswerCount,
                 answer_url: sAnswerUrl,
+                answer_same_page: bAnswerSamePage,
                 item,
                 html,
                 reactions_html: reactions.html,
@@ -3973,8 +4836,14 @@ async fn render_topic_view(
                 can_undelete,
                 can_warn,
                 is_topic_author,
+                remark_html: sRemarkHtml,
+                moderator_ip_html: sModeratorIpHtml,
+                edit_summary_html: sEditSummaryHtml,
+                moderator_user_agent_html: sModeratorUserAgentHtml,
+                warnings_html: sWarningsHtml,
                 delete_info,
                 author_readonly,
+                show_date_jump: bShowDateJump,
             }
         })
         .collect();
@@ -4015,7 +4884,11 @@ async fn render_topic_view(
     .await?;
     let images = load_topic_images(&state, topic.id).await?;
     let sPublicUrl = state.config.public_url.trim_end_matches('/');
-    let canonical_url = format!("{sPublicUrl}{}", topic.topic_url());
+    let canonical_url = format!(
+        "{sPublicUrl}{}",
+        sTopicPageUrl(&topic.topic_url(), iModelPage, false, false)
+    );
+    let og_url = format!("{sPublicUrl}{}", topic.topic_url());
     let og_image_url = images.first().map_or_else(
         || format!("{sPublicUrl}/img/good-penguin.png"),
         |stImage| format!("{sPublicUrl}{}", stImage.medium_url),
@@ -4041,24 +4914,56 @@ async fn render_topic_view(
         None,
     )
     .await?;
-    let can_comment = stPostingResolution.stIdentity.bAuthorized
-        && !comments_hidden
-        && crate::routes::comments::optCommentActorError(
-            &state,
-            &stPostingResolution.stIdentity.stUser,
-            false,
-            &sRemoteIp,
-        )
-        .await?
-        .is_none()
+    // Java's topic menu checks the AnySession identity and topic/user policy,
+    // not IpBlockChecker or flood limits. Those submission-time checks must
+    // report their own errors without hiding a valid anonymous inline form.
+    let can_comment = !comments_hidden
         && crate::routes::comments::check_comment_posting_allowed(
             &state,
             &stPostingResolution.stIdentity.stUser,
-            false,
+            !stPostingResolution.stIdentity.bAuthorized,
             topic.id,
         )
         .await
         .is_ok();
+    let posting_actor_frozen_until = if current_user.is_some() {
+        actor_frozen_until
+    } else {
+        sqlx::query_scalar::<_, Option<chrono::DateTime<chrono::Utc>>>(
+            "SELECT frozen_until FROM users WHERE id=$1",
+        )
+        .bind(stPostingResolution.stIdentity.stUser.id)
+        .fetch_one(&state.pool)
+        .await?
+    };
+    let bPostingActorFrozen = posting_actor_frozen_until
+        .as_ref()
+        .is_some_and(|dtUntil| *dtUntil > chrono::Utc::now());
+    let bShowRegisterInvite = current_user.is_none()
+        && (bPostingActorFrozen
+            || (iEffectivePostScore <= 45 && iEffectivePostScore != POSTSCORE_UNRESTRICTED));
+    let comment_disabled_html = if can_comment {
+        String::new()
+    } else if topic.deleted {
+        "Вы не можете добавлять комментарии в эту тему. Тема удалена.".to_owned()
+    } else if topic_expired {
+        "Вы не можете добавлять комментарии в эту тему. Тема перемещена в архив.".to_owned()
+    } else if bShowRegisterInvite {
+        format!(
+            "Для того чтобы оставить комментарий <a href=\"/login.jsp?from={}\">войдите</a> или <a href=\"register.jsp\">зарегистрируйтесь</a>.",
+            urlencoding::encode(&topic.topic_url())
+        )
+    } else if current_user.is_some() && bPostingActorFrozen {
+        format!(
+            "⚠️ Для вашей учетной записи установлен режим только для чтения до {}.",
+            crate::request_timezone::sTimeTag(
+                "default",
+                posting_actor_frozen_until.expect("frozen actor has an expiry"),
+            )
+        )
+    } else {
+        crate::domain::topic::options::sPostScoreInfo(iEffectivePostScore)
+    };
     let anonymous_comment_form = current_user.is_none();
     let require_comment_captcha = anonymous_comment_form
         || crate::routes::auth::bIpCaptchaRequired(&state, &sRemoteIp).await?;
@@ -4118,6 +5023,15 @@ async fn render_topic_view(
             stUserpic.iHeight,
         )
     });
+    let group_url = format!("/{}/{}", topic.section_prefix, topic.group_urlname);
+    let hide_filter_url = sTopicPageUrl(&topic.topic_url(), iModelPage, false, false);
+    let show_all_url = sTopicPageUrl(&topic.topic_url(), iModelPage, true, false);
+    let published_time = if topic.moderate {
+        stTopicMeta.optCommitDate.unwrap_or(topic.postdate)
+    } else {
+        topic.postdate
+    };
+    let modified_time = stTopicMeta.optLastEditDate;
     let topic_card_html = sBuildTopicCardHtml(
         &state,
         &current_user,
@@ -4137,20 +5051,34 @@ async fn render_topic_view(
             enable_schema: true,
             include_canonical_extras: true,
             remote_ip: sRemoteIp,
+            opt_meta: Some(stTopicMeta),
         },
     )
     .await?;
 
-    Ok(Html(
+    let mut stResponse = Html(
         TopicTemplate {
             topic,
             canonical_url,
+            og_url,
+            og_description,
             og_image_url,
+            published_time,
+            modified_time,
             topic_card_html,
             comments,
             pages,
+            prev_page_url,
+            next_page_url,
+            prev_topic,
+            next_topic,
+            show_top_scroller,
+            show_bottom_scroller,
+            group_url,
+            filter_mode_show: filter_show,
+            hide_filter_url,
+            show_all_url,
             thread_root,
-            show_deleted: want_deleted,
             show_deleted_button: can_view_deleted_comments && !want_deleted,
             filtered_count,
             unfiltered_count,
@@ -4158,7 +5086,11 @@ async fn render_topic_view(
             comment_format_mode,
             comment_format_title,
             can_comment,
+            topic_expired,
+            comment_disabled_html,
+            expire_date,
             anonymous_comment_form,
+            postscore_info_html: crate::domain::topic::options::sPostScoreInfo(iEffectivePostScore),
             require_comment_captcha,
             captcha_site_key: state.config.captcha_public_key.clone().unwrap_or_default(),
             realtime_bootstrap_html,
@@ -4166,7 +5098,11 @@ async fn render_topic_view(
         }
         .render()?,
     )
-    .into_response())
+    .into_response();
+    if let Some(stCacheHeaders) = optExpiredCacheHeaders {
+        stResponse.headers_mut().extend(stCacheHeaders);
+    }
+    Ok(stResponse)
 }
 
 /// Filters `comments` down to the subtree rooted at `root` (root itself
@@ -4175,9 +5111,8 @@ async fn render_topic_view(
 fn comment_subtree(comments: &[CommentItem], root: i32) -> Vec<CommentItem> {
     let mut ids = std::collections::HashSet::new();
     ids.insert(root);
-    // `comments` is ordered by postdate ASC, so a parent always appears
-    // before its replies; a couple of passes is enough to reach a fixed
-    // point without needing a real graph structure.
+    // The repository keeps Java's msgid order. Imported rows can still be
+    // unusual, so iterate to a fixed point instead of relying on parent order.
     loop {
         let before = ids.len();
         for c in comments {
@@ -4211,42 +5146,97 @@ pub(crate) async fn resolve_comment_jump(
     is_moderator: bool,
     current_user: &Option<UserSummary>,
 ) -> Result<Response> {
-    let live_comments: Vec<CommentItem> = topic_service(state)
-        .vecListComments(topic.id)
-        .await?
-        .into_iter()
-        .filter(|c| !c.deleted)
-        .collect();
-    if let Some(pos) = live_comments.iter().position(|c| c.id == cid) {
-        let per_page = messages_per_page(state, current_user).await.max(1);
-        let page = pos as i64 / per_page;
-        let url = if page > 0 {
-            format!("{}/page{page}#comment-{cid}", topic.topic_url())
-        } else {
-            format!("{}#comment-{cid}", topic.topic_url())
-        };
-        return Ok((StatusCode::FOUND, [(header::LOCATION, url)]).into_response());
-    }
-    if is_moderator {
-        let exists_deleted: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM comments WHERE id=$1 AND topic=$2 AND deleted)",
-        )
-        .bind(cid)
-        .bind(topic.id)
-        .fetch_one(&state.pool)
-        .await?;
-        if exists_deleted {
-            return Ok((
-                StatusCode::FOUND,
-                [(
-                    header::LOCATION,
-                    format!("{}?deleted=true#comment-{cid}", topic.topic_url()),
-                )],
-            )
-                .into_response());
+    resolve_comment_jump_with_skip(state, topic, cid, false, is_moderator, current_user).await
+}
+
+async fn resolve_comment_jump_with_skip(
+    state: &AppState,
+    topic: &TopicDetail,
+    cid: i32,
+    skip_deleted: bool,
+    is_moderator: bool,
+    current_user: &Option<UserSummary>,
+) -> Result<Response> {
+    let (bExpired, iTopicPostScore): (bool, i32) = sqlx::query_as(
+        r#"SELECT NOT t.sticky AND COALESCE(t.commitdate,t.postdate)<CURRENT_TIMESTAMP-s.expire,
+                  COALESCE(t.postscore,-9999)
+             FROM topics t JOIN groups g ON g.id=t.groupid
+             JOIN sections s ON s.id=g.section WHERE t.id=$1"#,
+    )
+    .bind(topic.id)
+    .fetch_one(&state.pool)
+    .await?;
+    let vecAllComments = topic_service(state).vecListComments(topic.id).await?;
+    let vecLiveComments = if iTopicPostScore == POSTSCORE_HIDE_COMMENTS {
+        Vec::new()
+    } else {
+        vecAllComments
+            .iter()
+            .filter(|stComment| !stComment.deleted)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+
+    let mut optTarget = vecLiveComments
+        .iter()
+        .find(|stComment| stComment.id == cid)
+        .cloned();
+    if optTarget.is_none() && skip_deleted {
+        if vecLiveComments.is_empty() {
+            return Ok(stFoundRedirect(topic.topic_url()));
         }
+        optTarget = vecLiveComments
+            .iter()
+            .find(|stComment| stComment.id > cid)
+            .or_else(|| vecLiveComments.last())
+            .cloned();
     }
-    Err(AppError::NotFound)
+
+    let mut bDeletedView = false;
+    if optTarget.is_none() && is_moderator {
+        optTarget = vecAllComments
+            .iter()
+            .find(|stComment| stComment.id == cid)
+            .cloned();
+        bDeletedView = optTarget.is_some();
+    }
+    let Some(stTarget) = optTarget else {
+        return Err(AppError::NotFound);
+    };
+
+    let iMessagesPerPage = messages_per_page(state, current_user).await.max(1);
+    let iPage = if bDeletedView {
+        0
+    } else {
+        vecLiveComments
+            .iter()
+            .position(|stComment| stComment.id == stTarget.id)
+            .ok_or(AppError::NotFound)? as i64
+            / iMessagesPerPage
+    };
+    let bLastPage = !bDeletedView
+        && !bExpired
+        && ((topic.comments.max(0) as i64 + iMessagesPerPage - 1) / iMessagesPerPage) - 1 == iPage;
+    let bFilterShow = if current_user.is_some() && !bDeletedView {
+        let vecIgnoredIds: Vec<i32> =
+            sqlx::query_scalar("SELECT ignored FROM ignore_list WHERE userid=$1")
+                .bind(current_user.as_ref().map(|stUser| stUser.id))
+                .fetch_all(&state.pool)
+                .await
+                .unwrap_or_default();
+        setHiddenCommentIds(&vecLiveComments, &vecIgnoredIds).contains(&stTarget.id)
+    } else {
+        false
+    };
+    let sUrl = sCommentJumpUrl(
+        &topic.topic_url(),
+        iPage,
+        stTarget.id,
+        bDeletedView,
+        bLastPage.then(|| topic.lastmod.unwrap_or(topic.postdate).timestamp_millis()),
+        bFilterShow,
+    );
+    Ok((StatusCode::FOUND, [(header::LOCATION, sUrl)]).into_response())
 }
 
 /// Poll.MaxPollSize
@@ -4257,7 +5247,6 @@ const POLL_NEW_VARIANT_SLOTS: usize = 3;
 #[derive(Default, Deserialize)]
 pub struct NewTopicQuery {
     pub group: Option<i32>,
-    pub section: Option<i32>,
     pub tags: Option<String>,
     pub tag: Option<String>,
     pub noinfo: Option<String>,
@@ -4265,11 +5254,35 @@ pub struct NewTopicQuery {
 
 pub async fn choose_topic_section(
     State(state): State<AppState>,
-    Query(q): Query<NewTopicQuery>,
+    RawQuery(optRawQuery): RawQuery,
     CurrentUser(user): CurrentUser,
+    headers: HeaderMap,
+    ConnectInfo(stPeerAddress): ConnectInfo<SocketAddr>,
 ) -> Result<Response> {
-    let tag = q.tags.or(q.tag).unwrap_or_default();
-    if let Some(section_id) = q.section {
+    let vecParameters = match optRawQuery.as_deref() {
+        Some(sQuery) => crate::form::parse_pairs(sQuery.as_bytes())?,
+        None => Vec::new(),
+    };
+    // Spring's two mappings are exhaustive `section`/`!section` predicates.
+    // Presence selects the first mapping even for an empty value, after which
+    // its primitive Int argument binding fails with 400.
+    let optSectionId = crate::form::get(&vecParameters, "section")
+        .map(|sValue| {
+            sValue.parse::<i32>().map_err(|_| {
+                AppError::BadRequest("Failed to convert request parameter 'section'".to_owned())
+            })
+        })
+        .transpose()?;
+    let tag = crate::form::get(&vecParameters, "tag")
+        .unwrap_or_default()
+        .to_owned();
+    let sRemoteIp = crate::security::stClientIp(
+        stPeerAddress.ip(),
+        &headers,
+        &state.config.trusted_proxy_cidrs,
+    )
+    .to_string();
+    if let Some(section_id) = optSectionId {
         let section_title: String = sqlx::query_scalar("SELECT name FROM sections WHERE id=$1")
             .bind(section_id)
             .fetch_optional(&state.pool)
@@ -4279,37 +5292,78 @@ pub async fn choose_topic_section(
         let rows: Vec<TyAddSectionRow> = sqlx::query_as(
             r#"SELECT g.id,g.title,g.urlname,g.info,COALESCE(g.restrict_topics,-9999),COALESCE(s.restrict_topics,-9999),
                       CASE s.id WHEN 1 THEN 'news' WHEN 2 THEN 'forum' WHEN 3 THEN 'gallery' WHEN 5 THEN 'polls' WHEN 6 THEN 'articles' ELSE lower(s.name) END
-               FROM groups g JOIN sections s ON s.id=g.section WHERE s.id=$1 ORDER BY g.title"#,
+               FROM groups g JOIN sections s ON s.id=g.section WHERE s.id=$1 ORDER BY g.id"#,
         ).bind(section_id).fetch_all(&state.pool).await?;
         let mut choices = Vec::with_capacity(rows.len());
+        let mut technical_choices = Vec::new();
+        let mut other_choices = Vec::new();
         for (id, title, urlname, info, group_restriction, section_restriction, section_prefix) in
             rows
         {
-            let reason =
-                posting_reason_for_port(&state, group_restriction.max(section_restriction), &user)
-                    .await?;
+            let reason = posting_reason_for_port(
+                &state,
+                group_restriction.max(section_restriction),
+                &user,
+                &sRemoteIp,
+            )
+            .await?;
             let suffix = if tag.is_empty() {
                 String::new()
             } else {
                 format!("&tags={}", urlencoding::encode(&tag))
             };
-            choices.push(AddSectionChoice {
+            let stChoice = AddSectionChoice {
                 title,
-                url: format!("/add.jsp?group={id}{suffix}"),
+                // Every rendered GroupChoice uses noinfo=true. The only
+                // postable group shortcut below removes it, matching the
+                // controller's distinct getAddUrl(group, tag) call.
+                url: format!("/add.jsp?group={id}{suffix}&noinfo=1"),
                 view_url: Some(format!("/{section_prefix}/{urlname}/")),
                 info,
                 postable: reason.is_none(),
                 reason: reason.unwrap_or_default(),
-            });
+            };
+            if section_id == 2 {
+                if bAddSectionNonTechGroup(id) {
+                    other_choices.push(stChoice);
+                } else {
+                    technical_choices.push(stChoice);
+                }
+            } else {
+                choices.push(stChoice);
+            }
         }
-        if choices.len() == 1 && choices[0].postable {
-            return Ok(Redirect::to(&choices[0].url).into_response());
+        let iChoiceCount = choices.len() + technical_choices.len() + other_choices.len();
+        if iChoiceCount == 1 {
+            // The Java controller handles a one-group section before its
+            // forum partition. A forbidden sole group is therefore rendered
+            // under the ordinary "available groups" branch.
+            if section_id == 2 {
+                choices.push(
+                    technical_choices
+                        .pop()
+                        .or_else(|| other_choices.pop())
+                        .expect("one forum choice was counted"),
+                );
+            }
+            if choices[0].postable {
+                let sRedirectUrl = choices[0]
+                    .url
+                    .strip_suffix("&noinfo=1")
+                    .expect("rendered group choice always has noinfo")
+                    .to_owned();
+                return Ok(stFoundRedirect(sRedirectUrl));
+            }
         }
+        let bSplitForumGroups = section_id == 2 && !technical_choices.is_empty();
         return Ok(Html(
             AddSectionTemplate {
                 title: format!("{section_title}: добавление"),
                 heading: format!("Добавить в «{section_title}»"),
                 choices,
+                technical_choices,
+                other_choices,
+                split_forum_groups: bSplitForumGroups,
                 choosing_groups: true,
             }
             .render()?,
@@ -4323,7 +5377,7 @@ pub async fn choose_topic_section(
             .await?;
     let mut choices = Vec::with_capacity(rows.len());
     for (id, title, restriction) in rows {
-        let reason = posting_reason_for_port(&state, restriction, &user).await?;
+        let reason = posting_reason_for_port(&state, restriction, &user, &sRemoteIp).await?;
         let suffix = if tag.is_empty() {
             String::new()
         } else {
@@ -4343,6 +5397,9 @@ pub async fn choose_topic_section(
             title: "Добавить топик".into(),
             heading: "Выберите раздел".into(),
             choices,
+            technical_choices: Vec::new(),
+            other_choices: Vec::new(),
+            split_forum_groups: false,
             choosing_groups: false,
         }
         .render()?,
@@ -4462,7 +5519,7 @@ pub async fn new_topic_form(
     .to_string();
     let selected_group = match q.group {
         Some(id) => id,
-        None => return Ok(Redirect::to("/add-section.jsp").into_response()),
+        None => return Ok(stFoundRedirect("/add-section.jsp")),
     };
     let stResolution =
         crate::application::auth::stResolvePostingIdentity(&state, user.as_ref(), None, None)
@@ -4564,6 +5621,7 @@ pub async fn new_topic_form(
 /// AddTopicController.MaxMessageLength / MaxMessageLengthAnonymous.
 const TOPIC_MAX_MESSAGE_LENGTH: usize = 65536;
 const TOPIC_MAX_MESSAGE_LENGTH_ANONYMOUS: usize = 8196;
+const TOPIC_IMAGE_LIMIT: usize = 4;
 
 struct TopicUpload {
     bytes: bytes::Bytes,
@@ -4598,6 +5656,9 @@ async fn parse_topic_request(
         let Some(name) = field.name().map(str::to_string) else {
             continue;
         };
+        if !crate::form::bAllowedServletParameterName(&name) {
+            return Err(AppError::RequestRejected);
+        }
         if name == "image" || name == "additionalImage" || name == "images" {
             let bytes = field.bytes().await.map_err(|error| {
                 AppError::BadRequest(format!("ошибка чтения изображения: {error}"))
@@ -4615,43 +5676,119 @@ async fn parse_topic_request(
     Ok((pairs, uploads))
 }
 
-fn validate_topic_form(form: &TopicForm, links_allowed: bool, bAnonymous: bool) -> Result<()> {
-    let title = form.title.trim();
-    if title.is_empty() {
-        return Err(AppError::BadRequest(
-            "заголовок сообщения не может быть пустым".into(),
-        ));
+struct StAddTopicValidation {
+    vecErrors: Vec<String>,
+    vecTags: Vec<String>,
+}
+
+fn optAddTopicInvalidXmlError(sValue: &str) -> Option<String> {
+    sValue
+        .chars()
+        .find(|cValue| {
+            !matches!(
+                *cValue,
+                '\u{9}' | '\u{A}' | '\u{D}' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..='\u{10FFFF}'
+            )
+        })
+        // org.jdom2.Verifier.checkCharacterData uses this exact text and
+        // lower-case, at-least-four-digit hexadecimal formatting.
+        .map(|cValue| {
+            format!(
+                "0x{:04x} is not a legal XML character",
+                u32::from(cValue)
+            )
+        })
+}
+
+/// `AddTopicRequestValidator` writes every ordinary validation failure into
+/// Spring's `BindingResult`.  The POST handler must therefore keep all of the
+/// messages and render `add.jsp` with HTTP 200 instead of turning the first
+/// one into an HTTP 400 response.
+fn stValidateAddTopicForm(stForm: &TopicForm) -> StAddTopicValidation {
+    let mut vecErrors = Vec::new();
+    let sTitle = stForm.title.trim();
+    if sTitle.is_empty() {
+        vecErrors.push("заголовок сообщения не может быть пустым".into());
     }
-    if crate::domain::title::iJavaStringLength(&form.title) > 140 {
-        return Err(AppError::BadRequest("Слишком большой заголовок".into()));
+    if crate::domain::title::iJavaStringLength(&stForm.title) > 140 {
+        vecErrors.push("Слишком большой заголовок".into());
     }
-    if title.starts_with('[') {
-        return Err(AppError::BadRequest(
+    if sTitle.starts_with('[') {
+        vecErrors.push(
             "Не добавляйте теги в заголовки, используйте предназначенное для тегов поле ввода"
                 .into(),
-        ));
+        );
     }
+    if let Some(sError) = optAddTopicInvalidXmlError(&stForm.msg) {
+        vecErrors.push(sError);
+    }
+    if let Some(sUrl) = stForm.url.as_deref().filter(|sValue| !sValue.is_empty()) {
+        if crate::domain::title::iJavaStringLength(sUrl) > 255 {
+            vecErrors.push("Слишком длинный URL".into());
+        }
+        if !bJavaTopicUrl(sUrl) {
+            vecErrors.push("Некорректный URL".into());
+        }
+        if stForm.linktext.as_deref().is_none_or(str::is_empty) {
+            vecErrors.push("URL указан без текста ссылки".into());
+        }
+    }
+
+    let mut vecTags = Vec::new();
+    if let Some(sTags) = stForm.tags.as_deref() {
+        for sTag in crate::routes::tags::parse_tags(sTags) {
+            if crate::routes::tags::is_good_tag(&sTag) {
+                vecTags.push(sTag);
+            } else if crate::domain::title::iJavaStringLength(&sTag) > 32 {
+                vecErrors.push(format!(
+                    "Слишком длинный тег: '{sTag}' (максимум 32 символов)"
+                ));
+            } else {
+                vecErrors.push(format!("Некорректный тег: '{sTag}'"));
+            }
+        }
+        if vecTags.len() > crate::routes::tags::MAX_TAGS_PER_TOPIC {
+            vecErrors.push(format!(
+                "Слишком много тегов (максимум {})",
+                crate::routes::tags::MAX_TAGS_PER_TOPIC
+            ));
+        }
+        // TagName.parseAndValidateTags only adds the required-tags error when
+        // the complete BindingResult is otherwise clean.
+        if vecErrors.is_empty() && vecTags.is_empty() {
+            vecErrors.push("Установите теги".into());
+        }
+    }
+
+    StAddTopicValidation { vecErrors, vecTags }
+}
+
+fn vValidateAddTopicMessageLength(
+    stForm: &TopicForm,
+    bAnonymous: bool,
+    vecErrors: &mut Vec<String>,
+) {
     let iMaxMessageLength = if bAnonymous {
         TOPIC_MAX_MESSAGE_LENGTH_ANONYMOUS
     } else {
         TOPIC_MAX_MESSAGE_LENGTH
     };
-    if form.msg.chars().count() > iMaxMessageLength {
-        return Err(AppError::BadRequest("Слишком большое сообщение".into()));
+    if crate::domain::title::iJavaStringLength(&stForm.msg) > iMaxMessageLength {
+        vecErrors.push("Слишком большое сообщение".into());
     }
-    if links_allowed && let Some(url) = form.url.as_deref().filter(|value| !value.trim().is_empty())
-    {
-        if url.chars().count() > 255 {
-            return Err(AppError::BadRequest("Слишком длинный URL".into()));
-        }
-        if reqwest::Url::parse(url).is_err() {
-            return Err(AppError::BadRequest("Некорректный URL".into()));
-        }
-        if form.linktext.as_deref().unwrap_or("").is_empty() {
-            return Err(AppError::BadRequest("URL указан без текста ссылки".into()));
-        }
-    }
-    Ok(())
+}
+
+fn optAddTopicFormError(vecErrors: &[String]) -> Option<String> {
+    (!vecErrors.is_empty()).then(|| vecErrors.join(" "))
+}
+
+fn vTruncateAddTopicImages(
+    vecExisting: &mut Vec<String>,
+    vecUploads: &mut Vec<TopicUpload>,
+    iLimit: usize,
+) {
+    vecExisting.truncate(iLimit);
+    vecUploads.truncate(iLimit.saturating_sub(vecExisting.len()));
 }
 
 fn validate_topic_image(data: &[u8]) -> Result<(image::DynamicImage, &'static str)> {
@@ -4985,6 +6122,21 @@ mod topic_image_processing_tests {
         }
         assert!(!pathDirectory.exists());
     }
+
+    #[test]
+    fn add_topic_image_candidates_are_truncated_to_java_limit() {
+        let mut vecExisting = vec!["one".into(), "two".into()];
+        let mut vecUploads = (0..4)
+            .map(|iValue| TopicUpload {
+                bytes: bytes::Bytes::from(vec![iValue]),
+            })
+            .collect();
+
+        vTruncateAddTopicImages(&mut vecExisting, &mut vecUploads, TOPIC_IMAGE_LIMIT);
+
+        assert_eq!(vecExisting, ["one", "two"]);
+        assert_eq!(vecUploads.len(), 2);
+    }
 }
 
 async fn renderSubmittedAddTopicForm(
@@ -5102,17 +6254,21 @@ pub async fn create_topic(
         .get(axum::http::header::USER_AGENT)
         .and_then(|stValue| stValue.to_str().ok())
         .map(str::to_owned);
-    let (pairs, uploads) = parse_topic_request(&state, request).await?;
+    let (pairs, mut uploads) = parse_topic_request(&state, request).await?;
     let mut form = parse_topic_form(&pairs)?;
     let group = load_topic_form_group(&state, form.group).await?;
+    let StAddTopicValidation {
+        mut vecErrors,
+        vecTags,
+    } = stValidateAddTopicForm(&form);
     let bSessionAuthorized = user.is_some();
     let bShowAllowAnonymous =
         bSessionAuthorized && !group.premoderated && group.comments_restriction < -50;
     let bAllowAnonymous = !bShowAllowAnonymous || form.allow_anonymous.is_some();
     let bRequireCaptcha =
         !bSessionAuthorized || crate::routes::auth::bIpCaptchaRequired(&state, &sRemoteIp).await?;
-    let mut optFormError = None;
     if form.preview.is_none()
+        && vecErrors.is_empty()
         && bRequireCaptcha
         && let Err(sError) = crate::application::auth::sValidateCaptcha(
             &state.config,
@@ -5122,7 +6278,7 @@ pub async fn create_topic(
         )
         .await
     {
-        optFormError = Some(sError);
+        vecErrors.push(sError);
     }
     let stResolution = crate::application::auth::stResolvePostingIdentity(
         &state,
@@ -5131,8 +6287,8 @@ pub async fn create_topic(
         form.password.as_deref(),
     )
     .await?;
-    if optFormError.is_none() {
-        optFormError = stResolution.optError.clone();
+    if let Some(sError) = stResolution.optError.clone() {
+        vecErrors.push(sError);
     }
     let stPostingIdentity = stResolution.stIdentity;
     let bPostingAuthorFrozen: bool = sqlx::query_scalar(
@@ -5175,58 +6331,15 @@ pub async fn create_topic(
         .bAuthorized
         .then(|| stPostingIdentity.stUser.clone());
     let upload_allowed = image_upload_allowed(&group, &optUploadUser);
-    if optFormError.is_some() {
-        return renderSubmittedAddTopicForm(
-            &state,
-            &group,
-            &form,
-            &csrf_token,
-            &format_mode,
-            &format_mode_title,
-            &markup_id,
-            upload_allowed,
-            optFormError,
-            stTopicLimitInfo,
-            &stPublishPermission,
-            bPreviewNofollow,
-            form.preview.is_some(),
-            bSessionAuthorized,
-            bRequireCaptcha,
-        )
-        .await;
-    }
     if !stPostingPermission.bPermitted() {
         // AddTopicController.checkOrError puts the restriction into the
-        // BindingResult and returns the populated form (HTTP 200), including
-        // in preview mode.  It does not attempt the mutation.
-        return renderSubmittedAddTopicForm(
-            &state,
-            &group,
-            &form,
-            &csrf_token,
-            &format_mode,
-            &format_mode_title,
-            &markup_id,
-            upload_allowed,
-            Some(format!(
-                "Недостаточно прав для создания топика: {}",
-                stPostingPermission.sReason()
-            )),
-            stTopicLimitInfo,
-            &stPublishPermission,
-            bPreviewNofollow,
-            form.preview.is_some(),
-            bSessionAuthorized,
-            bRequireCaptcha,
-        )
-        .await;
+        // BindingResult and continues preparing the submitted form.
+        vecErrors.push(format!(
+            "Недостаточно прав для создания топика: {}",
+            stPostingPermission.sReason()
+        ));
     }
-    if form.preview.is_none()
-        && crate::form::get(&pairs, "csrf").map(str::trim) != Some(csrf_token.trim())
-    {
-        return Err(AppError::Forbidden);
-    }
-    validate_topic_form(&form, group.links_allowed, !stPostingIdentity.bAuthorized)?;
+    vValidateAddTopicMessageLength(&form, !stPostingIdentity.bAuthorized, &mut vecErrors);
     let is_draft = form.draft.is_some();
     let premoderated: bool = sqlx::query_scalar(
         "SELECT s.moderate FROM groups g JOIN sections s ON s.id=g.section WHERE g.id=$1",
@@ -5234,21 +6347,75 @@ pub async fn create_topic(
     .bind(form.group)
     .fetch_one(&state.pool)
     .await?;
-    if (!uploads.is_empty() || !form.uploaded_images.is_empty()) && !upload_allowed {
-        return Err(AppError::Forbidden);
-    }
-    form.uploaded_images =
-        vecReusableTopicPreviews(&state, stPostingIdentity.stUser.id, &form.uploaded_images);
-    if form.uploaded_images.len() + uploads.len() > 4 {
-        return Err(AppError::BadRequest("Слишком много изображений".into()));
-    }
-    if group.image_required && form.uploaded_images.is_empty() && uploads.is_empty() {
-        return Err(AppError::BadRequest("Изображение отсутствует".into()));
+
+    // TopicService.processUploads zips the existing/uploaded image lists and
+    // takes only `imageLimit` entries.  Extra browser fields are ignored; they
+    // are not a validation failure.  The Java limit is four whenever posting
+    // images is permitted.
+    if stPostingIdentity.bAuthorized {
+        if upload_allowed && stPostingPermission.bPermitted() {
+            form.uploaded_images = vecReusableTopicPreviews(
+                &state,
+                stPostingIdentity.stUser.id,
+                &form.uploaded_images,
+            );
+            vTruncateAddTopicImages(&mut form.uploaded_images, &mut uploads, TOPIC_IMAGE_LIMIT);
+
+            let mut vecValidUploads = Vec::with_capacity(uploads.len());
+            for stUpload in std::mem::take(&mut uploads) {
+                match validate_topic_image(&stUpload.bytes) {
+                    Ok(_) => vecValidUploads.push(stUpload),
+                    Err(AppError::BadRequest(sError)) => vecErrors.push(sError),
+                    Err(stError) => return Err(stError),
+                }
+            }
+            if !vecValidUploads.is_empty() {
+                let vecStaged =
+                    vecStageTopicPreviews(&state, stPostingIdentity.stUser.id, &vecValidUploads)
+                        .await?;
+                form.uploaded_images.extend(vecStaged);
+            }
+        } else {
+            // processUploads returns an empty list when image posting or topic
+            // posting is forbidden; submitted file fields are not HTTP 403.
+            form.uploaded_images.clear();
+            uploads.clear();
+        }
+        if group.image_required && form.uploaded_images.is_empty() {
+            vecErrors.push("Для этого раздела требуется как минимум одно изображение".into());
+        }
+    } else {
+        form.uploaded_images.clear();
+        uploads.clear();
     }
 
-    if form.preview.is_some() {
-        form.uploaded_images
-            .extend(vecStageTopicPreviews(&state, stPostingIdentity.stUser.id, &uploads).await?);
+    // AddTopicController also records the new-tag permission failure in the
+    // BindingResult.  Preserve infrastructure failures, but catch its user
+    // validation result so the submitted form remains an HTTP 200 response.
+    if let Err(stError) = crate::routes::tags::check_can_create_new_tags(
+        &state,
+        &vecTags,
+        &stPostingIdentity.stUser,
+        premoderated,
+    )
+    .await
+    {
+        match stError {
+            AppError::BadRequest(sError) => vecErrors.push(sError),
+            stError => return Err(stError),
+        }
+    }
+
+    if form.preview.is_none()
+        && vecErrors.is_empty()
+        && crate::form::get(&pairs, "csrf").map(str::trim) != Some(csrf_token.trim())
+    {
+        // CSRFProtectionService.checkCSRF(request, errors) uses the same
+        // BindingResult path as the other caught add-form validation.
+        vecErrors.push("сбой добавления, попробуйте еще раз".into());
+    }
+
+    if form.preview.is_some() || !vecErrors.is_empty() {
         return renderSubmittedAddTopicForm(
             &state,
             &group,
@@ -5258,30 +6425,16 @@ pub async fn create_topic(
             &format_mode_title,
             &markup_id,
             upload_allowed,
-            None,
+            optAddTopicFormError(&vecErrors),
             stTopicLimitInfo,
             &stPublishPermission,
             bPreviewNofollow,
-            true,
+            form.preview.is_some(),
             bSessionAuthorized,
             bRequireCaptcha,
         )
         .await;
     }
-
-    // AddTopicRequestValidator.validateTags/AddTopicController: every
-    // topic needs 1-5 valid tags, and creating a brand-new tag (one that
-    // doesn't already exist as a value or synonym) needs either a
-    // premoderated section or score>=200 (GroupPermissionService.canCreateTag).
-    let tags = crate::routes::tags::parse_and_validate_tags(form.tags.as_deref().unwrap_or(""))
-        .map_err(AppError::BadRequest)?;
-    crate::routes::tags::check_can_create_new_tags(
-        &state,
-        &tags,
-        &stPostingIdentity.stUser,
-        premoderated,
-    )
-    .await?;
 
     // AddTopicController performs FloodProtector.AddTopic after all ordinary
     // validation and CSRF checks.  A draft is rate-limited too; only preview
@@ -5411,9 +6564,17 @@ pub async fn create_topic(
         vDeleteTopicPreview(&state, sPreview).await;
     }
     if !is_draft {
+        // AddTopicController queues the committed topic before publishing
+        // realtime notifications. Queue failure is visible to the client,
+        // but cannot roll back the already committed topic.
+        CSearchQueueSender::new(
+            state.config.opensearch_url.as_deref(),
+            &state.config.upload_dir,
+        )
+        .vUpdateMessage(id, false)
+        .await?;
         state.realtime.vNotifyEvents(vecNotified.iter().copied());
     }
-    crate::search_index::index_topic(&state, id, false).await;
     // Java shows a dedicated confirmation for protected sections because
     // the new topic is intentionally absent from the public section until
     // a moderator commits it.
@@ -5427,7 +6588,7 @@ pub async fn create_topic(
         )
         .into_response());
     }
-    Ok(Redirect::to(&topic.topic_url()).into_response())
+    Ok(stFoundRedirect(topic.topic_url()))
 }
 
 #[derive(Template)]
@@ -5979,6 +7140,7 @@ async fn sPrepareEditTopicCardHtml(
             enable_schema: false,
             include_canonical_extras: false,
             remote_ip: String::new(),
+            opt_meta: None,
         },
     )
     .await
@@ -6259,6 +7421,13 @@ async fn stRenderEditTopic(
         .render()?,
     )
     .into_response())
+}
+
+#[derive(Deserialize)]
+pub struct ViewMessageQuery {
+    msgid: i32,
+    #[serde(rename = "fromHistory")]
+    from_history: Option<i32>,
 }
 
 pub async fn edit_topic_form(
@@ -7532,6 +8701,66 @@ const VIEW_DELETED_SCORE: i32 = 200;
 const VIEW_AFTER_DELETE_DAYS: i64 = 14;
 const TOPIC_MAX_WARNINGS: i32 = 2;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnTopicViewPolicyDecision {
+    Allow,
+    NotFound,
+    Forbidden,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StTopicViewPolicyInput {
+    bModerator: bool,
+    bAuthorized: bool,
+    bViewByAuthor: bool,
+    bDeleted: bool,
+    bDraft: bool,
+    bExpired: bool,
+    iOpenWarnings: i32,
+    bDeleteExpired: bool,
+    bViewerFrozen: bool,
+    iViewerScore: i32,
+    bViewerSlowModeRestricted: bool,
+    bAuthorModerator: bool,
+}
+
+fn enTopicViewPolicy(stInput: StTopicViewPolicyInput) -> EnTopicViewPolicyDecision {
+    if stInput.bModerator {
+        return EnTopicViewPolicyDecision::Allow;
+    }
+
+    if stInput.bDeleted {
+        if stInput.bExpired || !stInput.bAuthorized {
+            return EnTopicViewPolicyDecision::NotFound;
+        }
+
+        if !stInput.bViewByAuthor {
+            if stInput.bDeleteExpired {
+                return EnTopicViewPolicyDecision::NotFound;
+            }
+            if stInput.bViewerFrozen {
+                return EnTopicViewPolicyDecision::Forbidden;
+            }
+            if stInput.iViewerScore < VIEW_DELETED_SCORE
+                || stInput.bViewerSlowModeRestricted
+                || stInput.bAuthorModerator
+            {
+                return EnTopicViewPolicyDecision::NotFound;
+            }
+        }
+    }
+
+    if stInput.bDraft && (stInput.bExpired || !stInput.bViewByAuthor) {
+        return EnTopicViewPolicyDecision::NotFound;
+    }
+
+    if !stInput.bAuthorized && stInput.iOpenWarnings > TOPIC_MAX_WARNINGS {
+        return EnTopicViewPolicyDecision::NotFound;
+    }
+
+    EnTopicViewPolicyDecision::Allow
+}
+
 /// TopicPermissionService.checkView: whether `user` may view this specific
 /// topic given its deleted/draft/expired/open-warnings state. Moderators
 /// always pass (mirrors `!session.moderator` guarding the whole body in
@@ -7562,63 +8791,225 @@ pub(crate) async fn check_topic_viewable(
     };
 
     let view_by_author = user.as_ref().map(|u| u.id == author_id).unwrap_or(false);
+    let bNeedsDeletedViewerChecks = deleted && !expired && user.is_some() && !view_by_author;
+    let mut bDeleteExpired = true;
+    let mut bViewerFrozen = false;
+    let iViewerScore = user.as_ref().and_then(|stUser| stUser.score).unwrap_or(0);
+    let mut bViewerSlowModeRestricted = false;
 
-    if deleted {
-        if expired {
-            return Err(AppError::NotFound);
-        }
-        if user.is_none() {
-            return Err(AppError::NotFound);
-        }
-        if !view_by_author {
-            let current = user.as_ref().unwrap();
-            let deldate: Option<chrono::DateTime<chrono::Utc>> =
-                sqlx::query_scalar("SELECT deldate FROM del_info WHERE msgid=$1")
-                    .bind(topic_id)
-                    .fetch_optional(&state.pool)
-                    .await?
-                    .flatten();
-            let delete_expired = deldate
-                .map(|d| d < chrono::Utc::now() - chrono::Duration::days(VIEW_AFTER_DELETE_DAYS))
-                .unwrap_or(true);
-            if delete_expired {
-                return Err(AppError::NotFound);
-            }
-            let frozen_until: Option<chrono::DateTime<chrono::Utc>> =
+    if bNeedsDeletedViewerChecks {
+        let stCurrentUser = user
+            .as_ref()
+            .expect("deleted-viewer checks require an authorized user");
+        let optDeleteDate: Option<chrono::DateTime<chrono::Utc>> =
+            sqlx::query_scalar("SELECT deldate FROM del_info WHERE msgid=$1")
+                .bind(topic_id)
+                .fetch_optional(&state.pool)
+                .await?
+                .flatten();
+        bDeleteExpired = optDeleteDate
+            .map(|dtDelete| {
+                dtDelete < chrono::Utc::now() - chrono::Duration::days(VIEW_AFTER_DELETE_DAYS)
+            })
+            .unwrap_or(true);
+
+        if !bDeleteExpired {
+            let optFrozenUntil: Option<chrono::DateTime<chrono::Utc>> =
                 sqlx::query_scalar("SELECT frozen_until FROM users WHERE id=$1")
-                    .bind(current.id)
+                    .bind(stCurrentUser.id)
                     .fetch_optional(&state.pool)
                     .await?
                     .flatten();
-            if frozen_until
-                .map(|u| u > chrono::Utc::now())
-                .unwrap_or(false)
-            {
-                return Err(AppError::Forbidden);
-            }
-            if current.score.unwrap_or(0) < VIEW_DELETED_SCORE {
-                return Err(AppError::NotFound);
-            }
-            if author_is_moderator {
-                return Err(AppError::NotFound);
+            bViewerFrozen = optFrozenUntil
+                .map(|dtUntil| dtUntil > chrono::Utc::now())
+                .unwrap_or(false);
+            if !bViewerFrozen && iViewerScore >= VIEW_DELETED_SCORE {
+                bViewerSlowModeRestricted =
+                    b_user_slow_mode_restricted(state, stCurrentUser).await?;
             }
         }
     }
 
-    if draft {
-        if expired {
-            return Err(AppError::NotFound);
-        }
-        if !view_by_author {
-            return Err(AppError::NotFound);
+    match enTopicViewPolicy(StTopicViewPolicyInput {
+        bModerator: false,
+        bAuthorized: user.is_some(),
+        bViewByAuthor: view_by_author,
+        bDeleted: deleted,
+        bDraft: draft,
+        bExpired: expired,
+        iOpenWarnings: open_warnings,
+        bDeleteExpired,
+        bViewerFrozen,
+        iViewerScore,
+        bViewerSlowModeRestricted,
+        bAuthorModerator: author_is_moderator,
+    }) {
+        EnTopicViewPolicyDecision::Allow => Ok(()),
+        EnTopicViewPolicyDecision::NotFound => Err(AppError::NotFound),
+        EnTopicViewPolicyDecision::Forbidden => Err(AppError::Forbidden),
+    }
+}
+
+#[cfg(test)]
+mod topic_view_policy_tests {
+    use super::{
+        EnTopicViewPolicyDecision, EnTopicViewPreflight, StTopicViewPolicyInput, enTopicViewPolicy,
+        enTopicViewPreflight,
+    };
+
+    fn stAllowedInput() -> StTopicViewPolicyInput {
+        StTopicViewPolicyInput {
+            bModerator: false,
+            bAuthorized: true,
+            bViewByAuthor: false,
+            bDeleted: false,
+            bDraft: false,
+            bExpired: false,
+            iOpenWarnings: 0,
+            bDeleteExpired: false,
+            bViewerFrozen: false,
+            iViewerScore: 200,
+            bViewerSlowModeRestricted: false,
+            bAuthorModerator: false,
         }
     }
 
-    if user.is_none() && open_warnings > TOPIC_MAX_WARNINGS {
-        return Err(AppError::NotFound);
+    #[test]
+    fn topic_main_preflight_preserves_java_short_circuit_order() {
+        assert_eq!(
+            enTopicViewPreflight(true, true, false, false, false),
+            EnTopicViewPreflight::JumpToComment
+        );
+        assert_eq!(
+            enTopicViewPreflight(false, true, false, false, false),
+            EnTopicViewPreflight::RedirectDeletedRequest
+        );
+        assert_eq!(
+            enTopicViewPreflight(false, true, true, false, false),
+            EnTopicViewPreflight::RedirectCanonicalPath
+        );
+        assert_eq!(
+            enTopicViewPreflight(false, true, false, true, false),
+            EnTopicViewPreflight::RedirectCanonicalPath
+        );
+        assert_eq!(
+            enTopicViewPreflight(false, false, false, false, true),
+            EnTopicViewPreflight::CheckPermissions
+        );
     }
 
-    Ok(())
+    #[test]
+    fn anonymous_open_warning_threshold_matches_java() {
+        let mut stInput = stAllowedInput();
+        stInput.bAuthorized = false;
+        stInput.iOpenWarnings = 2;
+        assert_eq!(enTopicViewPolicy(stInput), EnTopicViewPolicyDecision::Allow);
+        stInput.iOpenWarnings = 3;
+        assert_eq!(
+            enTopicViewPolicy(stInput),
+            EnTopicViewPolicyDecision::NotFound
+        );
+
+        stInput.bAuthorized = true;
+        assert_eq!(enTopicViewPolicy(stInput), EnTopicViewPolicyDecision::Allow);
+    }
+
+    #[test]
+    fn deleted_and_draft_authors_cannot_view_expired_topics() {
+        let mut stDeleted = stAllowedInput();
+        stDeleted.bViewByAuthor = true;
+        stDeleted.bDeleted = true;
+        stDeleted.bExpired = true;
+        assert_eq!(
+            enTopicViewPolicy(stDeleted),
+            EnTopicViewPolicyDecision::NotFound
+        );
+
+        let mut stDraft = stAllowedInput();
+        stDraft.bViewByAuthor = true;
+        stDraft.bDraft = true;
+        stDraft.bExpired = true;
+        assert_eq!(
+            enTopicViewPolicy(stDraft),
+            EnTopicViewPolicyDecision::NotFound
+        );
+        stDraft.bExpired = false;
+        stDraft.bViewByAuthor = false;
+        assert_eq!(
+            enTopicViewPolicy(stDraft),
+            EnTopicViewPolicyDecision::NotFound
+        );
+    }
+
+    #[test]
+    fn deleted_topic_non_author_gate_matches_java_matrix() {
+        let mut stInput = stAllowedInput();
+        stInput.bDeleted = true;
+        assert_eq!(enTopicViewPolicy(stInput), EnTopicViewPolicyDecision::Allow);
+
+        stInput.bDeleteExpired = true;
+        assert_eq!(
+            enTopicViewPolicy(stInput),
+            EnTopicViewPolicyDecision::NotFound
+        );
+        stInput.bDeleteExpired = false;
+        stInput.bViewerFrozen = true;
+        assert_eq!(
+            enTopicViewPolicy(stInput),
+            EnTopicViewPolicyDecision::Forbidden
+        );
+        stInput.bViewerFrozen = false;
+        stInput.iViewerScore = 199;
+        assert_eq!(
+            enTopicViewPolicy(stInput),
+            EnTopicViewPolicyDecision::NotFound
+        );
+        stInput.iViewerScore = 200;
+        stInput.bViewerSlowModeRestricted = true;
+        assert_eq!(
+            enTopicViewPolicy(stInput),
+            EnTopicViewPolicyDecision::NotFound
+        );
+        stInput.bViewerSlowModeRestricted = false;
+        stInput.bAuthorModerator = true;
+        assert_eq!(
+            enTopicViewPolicy(stInput),
+            EnTopicViewPolicyDecision::NotFound
+        );
+        stInput.bAuthorModerator = false;
+        stInput.bAuthorized = false;
+        assert_eq!(
+            enTopicViewPolicy(stInput),
+            EnTopicViewPolicyDecision::NotFound
+        );
+    }
+
+    #[test]
+    fn topic_author_and_moderator_bypasses_match_java() {
+        let mut stAuthor = stAllowedInput();
+        stAuthor.bDeleted = true;
+        stAuthor.bViewByAuthor = true;
+        stAuthor.bDeleteExpired = true;
+        stAuthor.bViewerFrozen = true;
+        stAuthor.iViewerScore = 0;
+        stAuthor.bViewerSlowModeRestricted = true;
+        stAuthor.bAuthorModerator = true;
+        assert_eq!(
+            enTopicViewPolicy(stAuthor),
+            EnTopicViewPolicyDecision::Allow
+        );
+
+        stAuthor.bModerator = true;
+        stAuthor.bExpired = true;
+        stAuthor.bDraft = true;
+        stAuthor.bAuthorized = false;
+        stAuthor.bViewByAuthor = false;
+        stAuthor.iOpenWarnings = 100;
+        assert_eq!(
+            enTopicViewPolicy(stAuthor),
+            EnTopicViewPolicyDecision::Allow
+        );
+    }
 }
 
 async fn load_topic_delete_meta(state: &AppState, msgid: i32) -> Result<TopicDeleteMeta> {

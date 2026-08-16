@@ -2,14 +2,37 @@
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
 <h1>{{ heading }}</h1>
-{% if choosing_groups %}<p>Доступные группы:</p>{% endif %}
+{% if split_forum_groups %}
+Технический форум:
 <ul>
-{% for choice in choices %}
+{% for choice in technical_choices %}
   <li>
-    {% if choice.postable %}<a class="navLink" href="{{ choice.url }}">{{ choice.title }}</a>{% match choice.info %}{% when Some with (info) %} — <em>{{ info }}</em>{% when None %}{% endmatch %}
+    {% if choice.postable %}<a class="navLink" href="{{ choice.url }}">{{ choice.title }}</a>{% match choice.info %}{% when Some with (info) %} - <em>{{ info }}</em>{% when None %}{% endmatch %}
     {% else %}{{ choice.title }} ({{ choice.reason }}){% endif %}
     {% match choice.view_url %}{% when Some with (url) %} (<a href="{{ url }}" target="_blank">просмотр...</a>){% when None %}{% endmatch %}
   </li>
 {% endfor %}
 </ul>
+Остальное:
+<ul>
+{% for choice in other_choices %}
+  <li>
+    {% if choice.postable %}<a class="navLink" href="{{ choice.url }}">{{ choice.title }}</a>{% match choice.info %}{% when Some with (info) %} - <em>{{ info }}</em>{% when None %}{% endmatch %}
+    {% else %}{{ choice.title }} ({{ choice.reason }}){% endif %}
+    {% match choice.view_url %}{% when Some with (url) %} (<a href="{{ url }}" target="_blank">просмотр...</a>){% when None %}{% endmatch %}
+  </li>
+{% endfor %}
+</ul>
+{% else %}
+{% if choosing_groups %}Доступные группы:{% endif %}
+<ul>
+{% for choice in choices %}
+  <li>
+    {% if choice.postable %}<a class="navLink" href="{{ choice.url }}">{{ choice.title }}</a>{% match choice.info %}{% when Some with (info) %} - <em>{{ info }}</em>{% when None %}{% endmatch %}
+    {% else %}{{ choice.title }} ({{ choice.reason }}){% endif %}
+    {% match choice.view_url %}{% when Some with (url) %} (<a href="{{ url }}" target="_blank">просмотр...</a>){% when None %}{% endmatch %}
+  </li>
+{% endfor %}
+</ul>
+{% endif %}
 {% endblock %}

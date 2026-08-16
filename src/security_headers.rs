@@ -1,8 +1,10 @@
 //! Global response security headers, matching Java's `HstsInterceptor`
 //! (applied to every response via a Spring `HandlerInterceptor`).
 //!
-//! - `X-Content-Type-Options: nosniff` and `X-Frame-Options: SAMEORIGIN` are
-//!   unconditional.
+//! - `X-Content-Type-Options: nosniff` is unconditional. Dynamic requests use
+//!   Spring Security's committed `X-Frame-Options: DENY` and
+//!   `X-XSS-Protection: 0`; security-excluded static resources only see the
+//!   MVC interceptor and retain `X-Frame-Options: SAMEORIGIN`.
 //! - `Content-Security-Policy` is always set; the directive set mirrors
 //!   Java's shape (default-src/base-uri/object-src/frame-ancestors/
 //!   form-action/manifest-src/script-src/style-src/img-src/font-src/
@@ -23,6 +25,10 @@ use axum::{
     response::Response,
 };
 use std::net::SocketAddr;
+
+const S_X_FRAME_OPTIONS_DYNAMIC: &str = "DENY";
+const S_X_FRAME_OPTIONS_SECURITY_IGNORED: &str = "SAMEORIGIN";
+const S_JAVA_EXPIRES: &str = "Thu, 01 Jan 1970 00:00:00 GMT";
 
 fn optOrigin(sUrl: &str) -> Option<String> {
     let stUri = sUrl.parse::<Uri>().ok()?;
@@ -72,8 +78,24 @@ pub async fn apply(State(state): State<AppState>, req: Request, next: Next) -> R
     );
     headers.insert(
         HeaderName::from_static("x-frame-options"),
-        HeaderValue::from_static("SAMEORIGIN"),
+        HeaderValue::from_static(if bSecurityIgnored {
+            S_X_FRAME_OPTIONS_SECURITY_IGNORED
+        } else {
+            S_X_FRAME_OPTIONS_DYNAMIC
+        }),
     );
+    if !bSecurityIgnored {
+        headers.insert(
+            HeaderName::from_static("x-xss-protection"),
+            HeaderValue::from_static("0"),
+        );
+        if !headers.contains_key(axum::http::header::EXPIRES) {
+            headers.insert(
+                axum::http::header::EXPIRES,
+                HeaderValue::from_static(S_JAVA_EXPIRES),
+            );
+        }
+    }
     // CommonContextFilter marks every response private. Preserve an explicit
     // handler policy (for example no-store), otherwise add the Java default.
     if !headers.contains_key(axum::http::header::CACHE_CONTROL)
@@ -125,5 +147,12 @@ mod tests {
     fn invalid_websocket_url_does_not_weaken_connect_src() {
         let sCsp = sContentSecurityPolicy("not a URL", "not a URL");
         assert!(sCsp.contains("connect-src 'self' https://hcaptcha.com"));
+    }
+
+    #[test]
+    fn frame_options_matches_the_committed_pinned_spring_response() {
+        assert_eq!(S_X_FRAME_OPTIONS_DYNAMIC, "DENY");
+        assert_eq!(S_X_FRAME_OPTIONS_SECURITY_IGNORED, "SAMEORIGIN");
+        assert_eq!(S_JAVA_EXPIRES, "Thu, 01 Jan 1970 00:00:00 GMT");
     }
 }

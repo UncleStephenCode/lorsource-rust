@@ -5,43 +5,74 @@
 <meta property="og:type" content="article">
 <meta property="og:locale" content="ru_RU">
 <meta property="og:title" content="{{ topic.sTitlePlain() }}">
-<meta property="og:url" content="{{ canonical_url }}">
+<meta property="og:url" content="{{ og_url }}">
 <meta property="og:image" content="{{ og_image_url }}">
-<meta property="article:section" content="{{ topic.group_title }}">
-<meta property="article:published_time" content="{{ topic.postdate.to_rfc3339() }}">
-{% for tag in topic.tags_vec() %}<meta property="article:tag" content="{{ tag }}">{% endfor %}
-{% if can_comment %}<script>$script('/js/add-form.js');</script>{% endif %}
+{% if og_description.len() > 0 %}<meta property="og:description" content="{{ og_description }}">{% endif %}
+<meta property="article:section" content="{{ topic.section_name }}: {{ topic.group_title }}">
+<meta property="article:published_time" content="{{ published_time.to_rfc3339() }}">
+{% match modified_time %}{% when Some with (date) %}<meta property="article:modified_time" content="{{ date.to_rfc3339() }}">{% when None %}{% endmatch %}
+{% for tag in topic.tags_vec() %}<meta property="og:tag" content="{{ tag }}">{% endfor %}
+<script>$script.ready('lorjs', function() { initNextPrevKeys(); });</script>
+{% if can_comment && !topic_expired %}<script>$script('/js/add-form.js');</script>{% endif %}
 {{ realtime_bootstrap_html|safe }}
 {% endblock %}
 {% block content %}
 <div class="messages" itemscope itemtype="http://schema.org/Article">
 {{ topic_card_html|safe }}
 
-{% match thread_root %}{% when Some with (root) %}<p><a href="{{ topic.topic_url() }}">← вернуться ко всем комментариям</a> (режим ветки, корень #{{ root }})</p>{% when None %}{% endmatch %}
-{% if show_deleted %}<p>Просмотр удалённых комментариев. <a href="{{ topic.topic_url() }}">Скрыть удалённые</a></p>{% endif %}
+{% if show_top_scroller %}<div class="nav"><div class="scroller-row">
+  <div class="scroller-prev">{% match prev_topic %}{% when Some with (prev) %}<a class="scroller-arrow" href="{{ prev.sUrl }}">←</a> <a class="scroller-title hideon-phone" href="{{ prev.sUrl }}">{{ prev.sTitle }}</a>{% when None %}{% endmatch %}</div>
+  <div class="scroller-group"></div>
+  <div class="scroller-next">{% match next_topic %}{% when Some with (next) %}<a class="scroller-title hideon-phone" href="{{ next.sUrl }}">{{ next.sTitle }}</a> <a class="scroller-arrow" href="{{ next.sUrl }}">→</a>{% when None %}{% endmatch %}</div>
+</div></div>{% endif %}
 
-<div id="comments" class="comment">
-  {% if unfiltered_count > filtered_count %}<p>Скрыто {{ unfiltered_count - filtered_count }}. <a href="?filter=show">Показать все</a></p>{% endif %}
+<div id="comments" class="comment" style="padding-top: 0.5em">
+  <div style="text-align: center; margin-top: 0.5em; height: 125px; margin-bottom: 0.5em" id="interpage"></div>
+  <script>$script.ready('lorjs', function () { const ads = [{ type: 'rimg', img320: '/adv/bare-metal-new-h2-320x100.png', img728: '/adv/bare-metal-new-h2-728x90.png', img1000: '/adv/bare-metal-new-h2-1000x120.png', href: 'https://selectel.ru/services/dedicated/auction/?utm_source=linuxorg&utm_medium=banner&utm_campaign=auction' }]; init_interpage_adv(ads); });</script>
+  {% match thread_root %}{% when Some with (root) %}<div class="nav">Показаны ответы на комментарий. <a href="{{ topic.topic_url() }}?cid={{ root }}">Показать</a> все комментарии.</div>{% when None %}{% endmatch %}
+  {% if filter_mode_show %}<div class="nav">Показаны все комментарии. <a href="{{ hide_filter_url }}">Скрыть</a> игнорируемые.</div>{% endif %}
+  {% if pages.len() > 0 %}<div class="nav">
+    {% match prev_page_url %}{% when Some with (url) %}&emsp;<a class="page-number" href="{{ url }}" rel="prev">←</a>{% when None %}&emsp;<span class="page-number">←</span>{% endmatch %}
+    {% for p in pages %}{% if p.current %}<strong class="page-number">{{ p.page + 1 }}</strong>{% else %}<a class="page-number" href="{{ p.url }}">{{ p.page + 1 }}</a>{% endif %}{% endfor %}
+    {% match next_page_url %}{% when Some with (url) %}<a class="page-number" href="{{ url }}" rel="next">→</a>{% when None %}<span class="page-number">→</span>{% endmatch %}
+  </div>{% endif %}
   {% for c in comments %}
-  <article id="comment-{{ c.item.id }}" class="msg{% if c.item.deleted %} deleted{% endif %}">
-    {% if c.item.deleted || c.reply.is_some() %}<div class="title">{% if c.item.deleted %}<strong>Сообщение удалено{% match c.delete_info %}{% when Some with (info) %} {{ info.nick }} по причине: {{ info.reason }}{% when None %}{% endmatch %}</strong>{% if c.can_undelete %}&emsp;[<a href="/undelete_comment?msgid={{ c.item.id }}">Восстановить</a>]{% endif %}<br>{% endif %}{% match c.reply %}{% when Some with (reply) %}Ответ на: <a href="{{ topic.topic_url() }}?cid={{ reply.id }}">{% match reply.title %}{% when Some with (title) %}{{ title }}{% when None %}комментарий{% endmatch %}</a> от {{ reply.author }} <time data-format="default" datetime="{{ reply.postdate.to_rfc3339() }}">{{ reply.postdate }}</time>{% when None %}{% endmatch %}</div>{% endif %}
+  {% if c.show_date_jump %}<div class="datejump"><time data-format="long-date" datetime="{{ c.item.postdate.to_rfc3339() }}">{{ c.item.postdate }}</time></div>{% endif %}
+  <article id="comment-{{ c.item.id }}" class="msg">
+    {% if c.item.deleted || c.reply.is_some() %}<div class="title">{% if c.item.deleted %}<strong>Сообщение удалено{% match c.delete_info %}{% when Some with (info) %} {{ info.nick }} по причине: {{ info.reason }}{% when None %}{% endmatch %}</strong>{% if c.can_undelete %}&emsp;[<a href="/undelete_comment?msgid={{ c.item.id }}">Восстановить</a>]{% endif %}<br>{% endif %}{% match c.reply %}{% when Some with (reply) %}Ответ на: {% if reply.deleted %}удаленный комментарий{% else %}<a href="{{ topic.topic_url() }}?cid={{ reply.id }}" data-samepage="{{ reply.same_page }}">{% match reply.title %}{% when Some with (title) %}{{ title }}{% when None %}комментарий{% endmatch %}</a> от {{ reply.author }} <time data-format="default" datetime="{{ reply.postdate.to_rfc3339() }}">{{ reply.postdate }}</time>{% endif %}{% when None %}{% endmatch %}</div>{% endif %}
     <div class="msg-container">
       {% match c.userpic_url %}{% when Some with (url) %}<div class="userpic"><img class="photo" src="{{ url }}" alt="" width={{ c.userpic_width }} height={{ c.userpic_height }} ></div>{% when None %}{% endmatch %}
       <div class="msg_body{% if c.userpic_url.is_some() %} message-w-userpic{% endif %}">
       <div class="msg-text">{% match c.item.optTitlePlain() %}{% when Some with (title) %}<h1>{{ title }}</h1>{% when None %}{% endmatch %}{{ c.html|safe }}</div>
-      <div class="sign"><a href="/people/{{ c.item.author }}/profile">{{ c.item.author }}</a> {{ c.author_signature.stars_html|safe }}{% if c.author_signature.show_score %} (Score:&nbsp;{{ c.author_signature.score }} MaxScore:&nbsp;{{ c.author_signature.max_score }}){% endif %}{% if c.is_topic_author %} <span class="user-tag">автор топика</span>{% endif %}<br><time data-format="default" datetime="{{ c.item.postdate.to_rfc3339() }}">{{ c.item.postdate }}</time></div>
-      {% if !c.item.deleted %}<div class="reply"><ul>{% if can_comment %}<li><a href="add_comment.jsp?topic={{ topic.id }}&replyto={{ c.item.id }}" data-author-readonly="{{ c.author_readonly }}">Ответить</a></li>{% endif %}{% if c.show_reactions_link %}<li><a class="reaction-show" href="/reactions?topic={{ topic.id }}&comment={{ c.item.id }}">Реакции</a></li>{% endif %}{% if c.can_edit %}<li><a href="/edit_comment?original={{ c.item.id }}&amp;topic={{ topic.id }}">Править</a></li>{% endif %}{% if c.can_delete %}<li><a href="/delete_comment.jsp?msgid={{ c.item.id }}">Удалить</a></li>{% endif %}{% if c.answer_count > 1 %}<li><a href="{{ c.answer_url }}">Показать ответы</a></li>{% endif %}{% if c.answer_count == 1 %}<li><a href="{{ c.answer_url }}">Показать ответ</a></li>{% endif %}{% if c.can_warn %}<li><a href="/post-warning?topic={{ topic.id }}&amp;comment={{ c.item.id }}">Уведомить модераторов</a></li>{% endif %}<li><a href="{{ topic.topic_url() }}?cid={{ c.item.id }}">Ссылка</a></li></ul></div>{{ c.reactions_html|safe }}{% endif %}
+      <div class="sign">{{ c.author_html|safe }}{% if !c.item.author_anonymous %} {{ c.author_signature.stars_html|safe }}{% endif %}{% if c.author_signature.show_score && !c.item.author_anonymous %} (Score:&nbsp;{{ c.author_signature.score }} MaxScore:&nbsp;{{ c.author_signature.max_score }}){% endif %}<br class="visible-phone"> <span class="hideon-phone">(</span><time data-format="default" datetime="{{ c.item.postdate.to_rfc3339() }}">{{ c.item.postdate }}</time><span class="hideon-phone">)</span>{% if c.is_topic_author %} <span class="user-tag">автор топика</span>{% endif %}{{ c.remark_html|safe }}{{ c.moderator_ip_html|safe }}{{ c.edit_summary_html|safe }}{{ c.moderator_user_agent_html|safe }}</div>
+      {% if !c.item.deleted %}<div class="reply"><ul>{% if can_comment %}<li><a href="add_comment.jsp?topic={{ topic.id }}&replyto={{ c.item.id }}" data-author-readonly="{{ c.author_readonly }}">Ответить</a></li>{% endif %}{% if c.show_reactions_link %}<li><a class="reaction-show" href="/reactions?topic={{ topic.id }}&comment={{ c.item.id }}">Реакции</a></li>{% endif %}{% if c.can_edit %}<li><a href="/edit_comment?original={{ c.item.id }}&amp;topic={{ topic.id }}">Править</a></li>{% endif %}{% if c.can_delete %}<li><a href="/delete_comment.jsp?msgid={{ c.item.id }}">Удалить</a></li>{% endif %}{% if c.answer_count > 1 %}<li><a href="{{ c.answer_url }}">Показать ответы</a></li>{% endif %}{% if c.answer_count == 1 %}<li><a href="{{ c.answer_url }}" data-samepage="{{ c.answer_same_page }}">Показать ответ</a></li>{% endif %}{% if c.can_warn %}<li><a href="/post-warning?topic={{ topic.id }}&amp;comment={{ c.item.id }}">Уведомить модераторов</a></li>{% endif %}<li><a href="{{ topic.topic_url() }}?cid={{ c.item.id }}">Ссылка</a></li></ul></div>{% endif %}{{ c.warnings_html|safe }}{{ c.reactions_html|safe }}
     </div></div>
   </article>
   {% endfor %}
-  {% if comments.len() == 0 %}<p>Комментариев нет.</p>{% endif %}
 </div>
 
 <div id="realtime" style="display: none"></div>
 
-{% if pages.len() > 1 %}<div class="nav">{% for p in pages %}{% if p.current %}<b class="page-number">{{ p.page + 1 }}</b>{% else %}<a class="page-number" href="{% if p.page == 0 %}{{ topic.topic_url() }}{% else %}{{ topic.topic_url() }}/page{{ p.page }}{% endif %}">{{ p.page + 1 }}</a>{% endif %}{% endfor %}</div>{% endif %}
-{% if show_deleted_button %}<p><a href="?deleted=true">Показать удалённые комментарии</a></p>{% endif %}
+{% if !can_comment && comment_disabled_html.len() > 0 %}<div class="infoblock">{{ comment_disabled_html|safe }}</div>{% endif %}
+{% match expire_date %}{% when Some with (date) %}<div class="infoblock">Тема будет перемещена в архив <time data-format="default" datetime="{{ date.to_rfc3339() }}">{{ date }}</time>.</div>{% when None %}{% endmatch %}
+
+{% if comments.len() > 0 %}
+  {% if pages.len() > 0 %}<div class="nav">
+    {% match prev_page_url %}{% when Some with (url) %}&emsp;<a class="page-number" href="{{ url }}" rel="prev">←</a>{% when None %}&emsp;<span class="page-number">←</span>{% endmatch %}
+    {% for p in pages %}{% if p.current %}<strong class="page-number">{{ p.page + 1 }}</strong>{% else %}<a class="page-number" href="{{ p.url }}">{{ p.page + 1 }}</a>{% endif %}{% endfor %}
+    {% match next_page_url %}{% when Some with (url) %}<a class="page-number" href="{{ url }}" rel="next">→</a>{% when None %}<span class="page-number">→</span>{% endmatch %}
+  </div>{% endif %}
+  {% if show_bottom_scroller %}<div class="nav"><div class="scroller-row">
+    <div class="scroller-prev">{% match prev_topic %}{% when Some with (prev) %}<a class="scroller-arrow" href="{{ prev.sUrl }}">←</a> <a class="scroller-title hideon-phone" href="{{ prev.sUrl }}">{{ prev.sTitle }}</a>{% when None %}{% endmatch %}</div>
+    <div class="scroller-group"><a title="{{ topic.section_name }} - {{ topic.group_title }}" href="{{ group_url }}">{{ topic.group_title }}</a></div>
+    <div class="scroller-next">{% match next_topic %}{% when Some with (next) %}<a class="scroller-title hideon-phone" href="{{ next.sUrl }}">{{ next.sTitle }}</a> <a class="scroller-arrow" href="{{ next.sUrl }}">→</a>{% when None %}{% endmatch %}</div>
+  </div></div>{% endif %}
+{% endif %}
 </div>
+
+{% if filtered_count != unfiltered_count %}<div class="nav">Показано {{ filtered_count }} сообщений из {{ unfiltered_count }}. Показать <a href="{{ show_all_url }}">все</a>.</div>{% endif %}
+
+{% if show_deleted_button %}<hr><form action="{{ topic.topic_url() }}" method="POST"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="deleted" value="1"><input type="submit" class="btn btn-default" value="Показать удаленные комментарии"></form><hr>{% endif %}
 
 {% if related_topics.len() > 0 %}<section id="related-topics">
   <h2>Похожие темы</h2>
@@ -53,7 +84,7 @@
 {% if can_comment %}<div id="comment-form-container" style="display:none">
 <form id="commentForm" method="post" action="/add_comment.jsp">
   <input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="topic" value="{{ topic.id }}"><input type="hidden" name="replyto" value="0">
-  {% if anonymous_comment_form %}<div class="control-group"><label for="nick">Имя</label><input id="nick" name="nick" type="text" value="anonymous"></div><div class="control-group"><label for="password">Пароль:</label><input id="password" name="password" type="password"></div>{% endif %}
+  {% if anonymous_comment_form %}<div class="control-group"><label for="nick">Имя</label><input id="nick" name="nick" type="text" value="anonymous"></div><div class="control-group"><label for="password">Пароль:</label><input id="password" name="password" type="password"></div><div class="help-block">{{ postscore_info_html|safe }}</div>{% endif %}
   <div class="warning-block" id="author-readonly-note"></div>
   <div class="control-group" data-format-mode="{{ comment_format_mode }}"><div class="markup-tabs"><ul class="markup-tabs__nav"><li class="markup-tabs__tab active" data-tab="editor">{{ comment_format_title }}</li></ul><div class="markup-tabs__content"><div class="markup-tabs__panel active" data-panel="editor"><textarea id="msg" name="msg" required></textarea></div></div></div><div class="help-block">Пустая строка (два раза Enter) начинает новый абзац. Знак '&gt;' в начале абзаца выделяет абзац курсивом цитирования.<br>{% if comment_format_mode == "lorcode" %}<b>Внимание:</b> прочитайте описание разметки <a href="/help/lorcode.md" target="_blank">LORCODE</a>.{% endif %}{% if comment_format_mode == "markdown" %}<b>Внимание:</b> прочитайте описание разметки <a target="_blank" href="/help/markdown.md">Markdown</a>.{% endif %}</div></div>
   {% if require_comment_captcha %}<div class="help-block"><div class="h-captcha" data-sitekey="{{ captcha_site_key }}" data-lazy-captcha></div></div>{% endif %}

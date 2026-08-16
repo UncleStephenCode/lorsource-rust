@@ -124,6 +124,10 @@ def db(sql: str) -> str:
     return result.stdout.strip()
 
 
+def sql_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
 def verify_database_target() -> None:
     _, _, expected_database = psql_target()
     if expected_database is not None:
@@ -165,6 +169,47 @@ def main() -> int:
 
     author = login(base, author_nick, author_password)
     reactor = login(base, reactor_nick, reactor_password)
+
+    # ServletRequest.getParameter does not expose a POST body unless its media
+    # type is application/x-www-form-urlencoded (or multipart). A matching
+    # csrf byte sequence in text/JSON/unknown content must therefore fail
+    # before logout_all_sessions increments token_generation.
+    author_generation_before = db(
+        "SELECT COALESCE(token_generation,0) FROM users WHERE nick="
+        + sql_literal(author_nick)
+    )
+    author_csrf = author.ensure_csrf()
+    for label, content_type in (
+        ("text/plain", "text/plain"),
+        ("JSON", "application/json"),
+        ("empty content type", ""),
+    ):
+        rejected_logout = author.request(
+            "/logout_all_sessions",
+            "POST",
+            "csrf=" + urllib.parse.quote(author_csrf, safe=""),
+            csrf_mode="omit",
+            extra_headers={"Content-Type": content_type},
+        )
+        require(
+            rejected_logout.status == 403,
+            f"{label} body was incorrectly exposed as a csrf request parameter",
+        )
+    require(
+        db(
+            "SELECT COALESCE(token_generation,0) FROM users WHERE nick="
+            + sql_literal(author_nick)
+        )
+        == author_generation_before,
+        "rejected non-form csrf bodies mutated token_generation",
+    )
+    require(
+        author.request(
+            f"/people/{urllib.parse.quote(author_nick)}/profile", "GET"
+        ).status
+        == 200,
+        "rejected non-form csrf body invalidated the authenticated session",
+    )
 
     # Exercise every server-side theme against an authenticated session.  The
     # original themes depend on different header DOMs, not just different CSS
@@ -397,6 +442,108 @@ def main() -> int:
     require('href="/tag/compatibility"' in topic_html, "second comma-separated tag is missing")
     require("rust-port-ci%2C" not in topic_html, "comma-separated tags were stored as one tag")
 
+    # Binding/CSRF failures on the AJAX comment endpoint are validation-only.
+    # Check both session states and prove none of the error paths inserts a
+    # comment. ServletRequest gives a conflicting query csrf value precedence
+    # over the URL-encoded form value.
+    comments_before_invalid_ajax = int(db("SELECT count(*) FROM comments"))
+    anonymous_ajax = HttpClient(base)
+    for label, client in (("anonymous", anonymous_ajax), ("authenticated", author)):
+        missing_topic = post(
+            client,
+            "/add_comment_ajax",
+            [("msg", f"{label} missing topic {suffix}")],
+        )
+        require(
+            missing_topic.status == 200
+            and missing_topic.content_type == "application/json;charset=utf-8"
+            and json.loads(text(missing_topic))
+            == {"errors": ["тема не задана"], "preview": None},
+            f"{label} missing AJAX topic does not return exact Java validation JSON",
+        )
+        malformed_topic = post(
+            client,
+            "/add_comment_ajax",
+            [("topic", "not-an-integer"), ("msg", f"{label} malformed topic {suffix}")],
+        )
+        malformed_payload = json.loads(text(malformed_topic))
+        require(
+            malformed_topic.status == 200
+            and malformed_topic.content_type == "application/json;charset=utf-8"
+            and malformed_payload.get("preview") is None
+            and "тема не задана" in malformed_payload.get("errors", []),
+            f"{label} malformed AJAX topic escaped the handler JSON contract",
+        )
+
+    ajax_csrf_token = author.ensure_csrf()
+    bad_query_csrf = author.request(
+        "/add_comment_ajax?csrf=wrong",
+        "POST",
+        urllib.parse.urlencode(
+            [
+                ("csrf", ajax_csrf_token),
+                ("topic", str(topic_id)),
+                ("msg", f"bad query csrf {suffix}"),
+            ]
+        ),
+        csrf_mode="omit",
+    )
+    require(bad_query_csrf.status == 403, "valid form csrf overrode a bad query csrf")
+    good_query_csrf = author.request(
+        "/add_comment_ajax?csrf=" + urllib.parse.quote(ajax_csrf_token, safe=""),
+        "POST",
+        urllib.parse.urlencode(
+            [("csrf", "wrong"), ("msg", f"good query csrf {suffix}")]
+        ),
+        csrf_mode="omit",
+    )
+    require(
+        good_query_csrf.status == 200
+        and json.loads(text(good_query_csrf))
+        == {"errors": ["тема не задана"], "preview": None},
+        "valid query csrf did not reach normal AJAX validation",
+    )
+    require(
+        int(db("SELECT count(*) FROM comments")) == comments_before_invalid_ajax,
+        "invalid AJAX comment binding/CSRF mutated comments",
+    )
+
+    # Both Spring memories mappings match when `add` and `remove` are present;
+    # the ambiguous request must fail before it can delete the selected row.
+    memory_added = post(
+        author,
+        "/memories.jsp",
+        [("add", "add"), ("msgid", str(topic_id)), ("watch", "false")],
+    )
+    require(
+        memory_added.status == 200,
+        f"memories regression setup returned {memory_added.status}: {text(memory_added)}",
+    )
+    memory_payload = json.loads(text(memory_added))
+    memory_id = int(memory_payload["id"])
+    ambiguous_memory = post(
+        author,
+        "/memories.jsp",
+        [
+            ("add", "add"),
+            ("remove", "remove"),
+            ("msgid", str(topic_id)),
+            ("watch", "false"),
+            ("id", str(memory_id)),
+        ],
+    )
+    require(ambiguous_memory.status == 500, "ambiguous memories request did not fail closed")
+    require(
+        db(f"SELECT count(*) FROM memories WHERE id={memory_id}") == "1",
+        "ambiguous memories request deleted a row",
+    )
+    memory_removed = post(
+        author,
+        "/memories.jsp",
+        [("remove", "remove"), ("id", str(memory_id))],
+    )
+    require(memory_removed.status == 200, "memories regression cleanup failed")
+
     favorite_tags = post(
         author,
         "/user-filter/favorite-tag",
@@ -440,6 +587,61 @@ def main() -> int:
     reactor_html = text(reactor_view)
     require('class="reaction-show"' in reactor_html, "empty reaction picker has no reveal control")
     require('value="🎉-true"' in reactor_html, "reaction choices are not rendered")
+
+    reactions_before_edge_cases = db(
+        f"SELECT reactions::text FROM topics WHERE id={topic_id}"
+    )
+    reaction_log_before_edge_cases = int(
+        db(f"SELECT count(*) FROM reactions_log WHERE topic_id={topic_id}")
+    )
+    missing_reaction = post(
+        reactor,
+        "/reactions/ajax",
+        [("topic", str(topic_id))],
+    )
+    require(missing_reaction.status == 400, "missing reaction did not fail binding before auth")
+    malformed_reaction_target = post(
+        reactor,
+        "/reactions/ajax",
+        [("topic", "not-an-integer"), ("reaction", "🎉-true")],
+    )
+    require(malformed_reaction_target.status == 400, "malformed reaction topic is not a binding 400")
+    anonymous_bad_shape = post(
+        HttpClient(base),
+        "/reactions/ajax",
+        [("topic", str(topic_id)), ("reaction", "🎉")],
+    )
+    require(anonymous_bad_shape.status == 403, "guest reaction shape was parsed before authorization")
+    authorized_bad_shape = post(
+        reactor,
+        "/reactions/ajax",
+        [("topic", str(topic_id)), ("reaction", "🎉")],
+    )
+    require(authorized_bad_shape.status == 500, "authorized reaction without '-' did not reproduce MatchError")
+    unsupported_empty_reaction = post(
+        reactor,
+        "/reactions/ajax",
+        [("topic", str(topic_id)), ("reaction", "-true")],
+    )
+    require(unsupported_empty_reaction.status == 403, "empty reaction bypassed the allow-list")
+    for reaction_action in ("🎉-", "🎉-true-extra"):
+        removal_shape = post(
+            reactor,
+            "/reactions/ajax",
+            [("topic", str(topic_id)), ("reaction", reaction_action)],
+        )
+        require(
+            removal_shape.status == 200
+            and json.loads(text(removal_shape)) == {"count": 0},
+            f"reaction action {reaction_action!r} was not treated as removal",
+        )
+    require(
+        db(f"SELECT reactions::text FROM topics WHERE id={topic_id}")
+        == reactions_before_edge_cases
+        and int(db(f"SELECT count(*) FROM reactions_log WHERE topic_id={topic_id}"))
+        == reaction_log_before_edge_cases,
+        "invalid/removal reaction edge cases changed reaction state",
+    )
 
     reacted = post(
         reactor,
