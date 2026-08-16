@@ -667,7 +667,7 @@
     "compare": true,
     "compare_exact": true,
     "expected_status": 405,
-    "expected_allow": "GET, POST",
+    "expected_allow": "POST, GET",
     "compare_allow": true
   },
   {
@@ -678,7 +678,7 @@
     "compare": true,
     "compare_exact": true,
     "expected_status": 200,
-    "expected_allow": "GET,HEAD,POST,OPTIONS",
+    "expected_allow": "POST,GET,HEAD,OPTIONS",
     "expected_content_length": "0",
     "compare_allow": true
   },
@@ -914,7 +914,7 @@
     "compare": true,
     "compare_exact": true,
     "expected_status": 405,
-    "expected_allow": "GET, POST",
+    "expected_allow": "POST, GET",
     "compare_allow": true
   },
   {
@@ -925,7 +925,7 @@
     "compare": true,
     "compare_exact": true,
     "expected_status": 200,
-    "expected_allow": "GET,HEAD,POST,OPTIONS",
+    "expected_allow": "POST,GET,HEAD,OPTIONS",
     "expected_content_length": "0",
     "compare_allow": true
   },

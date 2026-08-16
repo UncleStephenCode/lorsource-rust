@@ -27,15 +27,15 @@ use axum::{
     extract::{ConnectInfo, Path, Query, Request, State},
     http::{HeaderMap, Method, StatusCode, Uri, header},
     response::{Html, IntoResponse, Response},
-    routing::{MethodRouter, get},
+    routing::{MethodRouter, get, post},
 };
 use serde::Deserialize;
 use std::net::SocketAddr;
 
 const I_COMMENT_MESSAGE_PARAMETER_LIMIT: usize = 1024 * 1024;
 const S_ALLOW_COMMENT_MESSAGE: &str = "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS";
-const S_ALLOW_COMMENT_ACTION_OPTIONS: &str = "GET,HEAD,POST,OPTIONS";
-const S_ALLOW_COMMENT_ACTION_405: &str = "GET, POST";
+const S_ALLOW_COMMENT_ACTION_OPTIONS: &str = "POST,GET,HEAD,OPTIONS";
+const S_ALLOW_COMMENT_ACTION_405: &str = "POST, GET";
 const S_ALLOW_COMMENT_UNDELETE_OPTIONS: &str = "GET,HEAD,POST,OPTIONS";
 const S_ALLOW_COMMENT_UNDELETE_405: &str = "GET, POST";
 
@@ -1225,8 +1225,8 @@ pub fn stCommentMessageRoute() -> MethodRouter<AppState> {
 }
 
 pub fn stDeleteCommentRoute() -> MethodRouter<AppState> {
-    get(delete_comment_form)
-        .post(delete_comment)
+    post(delete_comment)
+        .get(delete_comment_form)
         .options(options_comment_action)
         .fallback(method_not_allowed_comment_action)
 }
@@ -3992,6 +3992,8 @@ mod comment_message_method_tests {
         assert_eq!(stCommentOptions.headers()[header::CONTENT_LENGTH], "0");
 
         let stActionOptions = options_comment_action().await;
+        assert_eq!(S_ALLOW_COMMENT_ACTION_OPTIONS, "POST,GET,HEAD,OPTIONS");
+        assert_eq!(S_ALLOW_COMMENT_ACTION_405, "POST, GET");
         assert_eq!(stActionOptions.status(), StatusCode::OK);
         assert_eq!(
             stActionOptions.headers()[header::ALLOW],
@@ -4077,7 +4079,20 @@ mod comment_message_method_tests {
             assert!(sRouter.contains(sMethod), "missing method {sMethod}");
         }
         assert!(!sRouter.contains(".trace"));
-        assert!(sSource.contains(
+        let iUndeleteStart = sSource[iEnd..]
+            .find("pub fn stUndeleteCommentRoute()")
+            .map(|iOffset| iEnd + iOffset)
+            .unwrap();
+        let iResponseStart = sSource[iUndeleteStart..]
+            .find("fn stEmptyMethodResponse(")
+            .map(|iOffset| iUndeleteStart + iOffset)
+            .unwrap();
+        let sDeleteRouter = &sSource[iEnd..iUndeleteStart];
+        let sUndeleteRouter = &sSource[iUndeleteStart..iResponseStart];
+        assert!(sDeleteRouter.contains(
+            "post(delete_comment)\n        .get(delete_comment_form)\n        .options(options_comment_action)"
+        ));
+        assert!(sUndeleteRouter.contains(
             "get(undelete_comment_form)\n        .post(undelete_comment)\n        .options(options_comment_undelete)"
         ));
     }

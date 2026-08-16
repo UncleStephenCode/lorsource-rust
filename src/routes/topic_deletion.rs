@@ -4,7 +4,7 @@ use axum::{
     extract::{Request, State},
     http::{StatusCode, Uri, header},
     response::{Html, IntoResponse, Response},
-    routing::{MethodRouter, get, post},
+    routing::{MethodRouter, post},
 };
 
 use crate::{
@@ -26,8 +26,8 @@ use crate::{
 };
 
 const I_PARAMETER_BODY_LIMIT: usize = 1024 * 1024;
-const S_ALLOW_DELETE_OPTIONS: &str = "GET,HEAD,POST,OPTIONS";
-const S_ALLOW_DELETE_405: &str = "GET, POST";
+const S_ALLOW_DELETE_OPTIONS: &str = "POST,GET,HEAD,OPTIONS";
+const S_ALLOW_DELETE_405: &str = "POST, GET";
 const S_ALLOW_UNDELETE_OPTIONS: &str = "POST,GET,HEAD,OPTIONS";
 const S_ALLOW_UNDELETE_405: &str = "POST, GET";
 
@@ -134,8 +134,8 @@ impl IntoResponse for EnTopicDeletionRouteError {
 }
 
 pub fn stDeleteRoute() -> MethodRouter<AppState> {
-    get(delete_form)
-        .post(delete_submit)
+    post(delete_submit)
+        .get(delete_form)
         .options(options_delete)
         .fallback(method_not_allowed_delete)
 }
@@ -376,12 +376,12 @@ mod tests {
             (
                 options_delete().await,
                 StatusCode::OK,
-                "GET,HEAD,POST,OPTIONS",
+                "POST,GET,HEAD,OPTIONS",
             ),
             (
                 method_not_allowed_delete().await,
                 StatusCode::METHOD_NOT_ALLOWED,
-                "GET, POST",
+                "POST, GET",
             ),
             (
                 options_undelete().await,
@@ -412,10 +412,15 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/src/routes/topic_deletion.rs"
         ));
-        assert!(sSource.contains(
-            "get(delete_form)\n        .post(delete_submit)\n        .options(options_delete)"
+        let iDeleteStart = sSource.find("pub fn stDeleteRoute()").unwrap();
+        let iUndeleteStart = sSource.find("pub fn stUndeleteRoute()").unwrap();
+        let iResponseStart = sSource.find("fn stMethodResponse(").unwrap();
+        let sDeleteRouter = &sSource[iDeleteStart..iUndeleteStart];
+        let sUndeleteRouter = &sSource[iUndeleteStart..iResponseStart];
+        assert!(sDeleteRouter.contains(
+            "post(delete_submit)\n        .get(delete_form)\n        .options(options_delete)"
         ));
-        assert!(sSource.contains(
+        assert!(sUndeleteRouter.contains(
             "post(undelete_submit)\n        .get(undelete_form)\n        .options(options_undelete)"
         ));
     }
