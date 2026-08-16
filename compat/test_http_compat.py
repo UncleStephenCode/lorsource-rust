@@ -420,7 +420,11 @@ def main() -> int:
             if not case.get("skip_response_comparison", False):
                 failures.extend(compare_responses(case, old_resp, new_resp))
         results.append(result)
-        print(f"{case['name']}: {method} {case['new']} -> {new_resp.status} {new_resp.content_type}")
+        print(
+            f"{case['name']}: {method} {case['new']} -> "
+            f"{new_resp.status} {new_resp.content_type}",
+            flush=True,
+        )
 
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)

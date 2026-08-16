@@ -62,11 +62,10 @@
     "compare": true,
     "requires_seed": true,
     "new_body_contains": [
-      "class=\"group-item\"",
-      "class=\"tracker-count\"",
-      "class=\"tracker-title\"",
-      "class=\"tracker-last\"",
-      "lastmod="
+      "class=\"tracker\"",
+      "href=\"/forum/general?lastmod=true\"",
+      "href=\"/forum/general/archive\"",
+      "name=\"showignored\""
     ],
     "new_body_not_contains": [
       "class=\"tracker-item\"",
