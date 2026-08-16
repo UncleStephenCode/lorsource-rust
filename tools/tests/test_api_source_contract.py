@@ -40,6 +40,9 @@ class JavaApiSourceContractTest(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn('-u "$(id -u):$(id -g)"', runtime)
+        self.assertIn('mkdir -p "$sMavenCache/repository" "$sMavenCache/home"', runtime)
+        self.assertIn("-e HOME=/tmp/m2/home", runtime)
+        self.assertIn("-e MAVEN_OPTS=-Duser.home=/tmp/m2/home", runtime)
         self.assertIn('-v "$sMavenCache:/tmp/m2:Z"', runtime)
         self.assertIn("-Dmaven.repo.local=/tmp/m2/repository", runtime)
 

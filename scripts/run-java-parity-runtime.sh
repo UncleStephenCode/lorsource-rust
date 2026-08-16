@@ -158,16 +158,18 @@ vStart() {
     docker rm "$sJavaContainer" >/dev/null
   fi
 
-  mkdir -p "$sMavenCache"
+  mkdir -p "$sMavenCache/repository" "$sMavenCache/home"
   # The official Maven entrypoint unsets MAVEN_CONFIG before Maven starts.
   # GitHub's runner UID is absent from the image passwd file, so Java otherwise
-  # resolves user.home to `/` and tries to create `/.m2/repository`.
+  # resolves user.home to `/`; Maven and build plugins then try to write there.
   docker run -d \
     --name "$sJavaContainer" \
     --network "$sNetwork" \
     -p 127.0.0.1:8081:8080 \
     -u "$(id -u):$(id -g)" \
+    -e HOME=/tmp/m2/home \
     -e MAVEN_CONFIG=/tmp/m2 \
+    -e MAVEN_OPTS=-Duser.home=/tmp/m2/home \
     -v "$ORIGINAL_ROOT:/workspace:Z" \
     -v "$sMavenCache:/tmp/m2:Z" \
     -v "$sRepoRoot/compat/java-runtime/config.properties:/workspace/src/main/webapp/WEB-INF/config.properties:ro,Z" \
