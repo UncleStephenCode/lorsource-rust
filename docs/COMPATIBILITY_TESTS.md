@@ -31,7 +31,7 @@ unambiguous `INSERT`/`UPDATE` column and enum-literal references against
 Java dump/Liquibase updates. Dynamic composition and bind values still require
 runtime tests; a zero-finding static report is not database-behavior parity.
 
-The frozen-snapshot rerun on 2026-08-16 passed all 113 compatibility tests.
+The frozen-snapshot rerun on 2026-08-16 passed all 114 compatibility tests.
 The route inventory contains 172 Rust declarations and 193 expanded Java
 mappings: 174 are method-declared, 19 are structural partials and none are
 missing or mismatched. The SQL audit examined 941 literals: 793 clean, 148

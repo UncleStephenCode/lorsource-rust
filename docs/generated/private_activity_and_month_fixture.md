@@ -149,7 +149,7 @@ that an ordinary user cannot inspect another user's private activity.
   and conditioned UI 14/14, generated `2026-08-16T09:14:12.706334+00:00`,
   report `/tmp/java-rust-ui-final-20260816.json`, SHA-256
   `5626a978c544139165f319501a8acfb10dae32453f180e6bf8a292e40d6ec9d8`.
-- The static compatibility suite passed 113/113 tests. Its route inventory
+- The static compatibility suite passed 114/114 tests. Its route inventory
   contains 172 Rust declarations and 193 expanded Java mappings: 174
   method-declared, 19 structural partials and 0 missing/mismatched paths. The
   SQL audit classified 941 literals as 793 clean and 148 review-required, with
