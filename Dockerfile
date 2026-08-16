@@ -28,7 +28,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 FROM debian:bookworm-slim AS runtime
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gosu && \
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl gosu tzdata && \
     rm -rf /var/lib/apt/lists/* && \
     groupadd --system --gid 8181 lorsource && \
     useradd --system --uid 8181 --gid lorsource --home-dir /app --shell /usr/sbin/nologin lorsource && \

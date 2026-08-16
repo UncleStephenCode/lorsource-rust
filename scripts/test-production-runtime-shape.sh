@@ -26,6 +26,36 @@ printf '%s\n' 'fixture-captcha-private-key' \
   > "$sFixtureRoot/secrets/captcha_private_key"
 chmod 0600 "$sFixtureRoot"/secrets/*
 
+if sInvalidTimezoneOutput="$(
+  LORSOURCE_IMAGE="registry.example.invalid/lorsource@sha256:$(printf '0%.0s' {1..64})" \
+  UPLOAD_HOST_PATH="$sFixtureRoot/uploads" \
+  SCHEDULER_TIMEZONE=../UTC \
+  ENABLE_BACKGROUND_JOBS=false \
+  "$sRoot/scripts/check-production-runtime.sh" 2>&1
+)"; then
+  echo "production preflight accepted an unsafe scheduler timezone" >&2
+  exit 1
+fi
+
+if sInvalidSchedulerFlagOutput="$(
+  LORSOURCE_IMAGE="registry.example.invalid/lorsource@sha256:$(printf '0%.0s' {1..64})" \
+  UPLOAD_HOST_PATH="$sFixtureRoot/uploads" \
+  SCHEDULER_TIMEZONE=UTC \
+  ENABLE_BACKGROUND_JOBS=treu \
+  "$sRoot/scripts/check-production-runtime.sh" 2>&1
+)"; then
+  echo "production preflight accepted an ambiguous background-jobs flag" >&2
+  exit 1
+fi
+if [[ "$sInvalidSchedulerFlagOutput" != *"literal true or false"* ]]; then
+  echo "production preflight failed before validating ENABLE_BACKGROUND_JOBS" >&2
+  exit 1
+fi
+if [[ "$sInvalidTimezoneOutput" != *"safe relative IANA timezone name"* ]]; then
+  echo "production preflight failed before validating the scheduler timezone" >&2
+  exit 1
+fi
+
 LORSOURCE_IMAGE="${LORSOURCE_RUNTIME_TEST_IMAGE:-lorsource-rust-app:latest}" \
 UPLOAD_HOST_PATH="$sFixtureRoot/uploads" \
 DATABASE_URL_SECRET_FILE="$sFixtureRoot/secrets/database_url" \
@@ -39,10 +69,14 @@ CAPTCHA_PUBLIC_KEY=fixture-public-key \
 SMTP_HOST=smtp.example.invalid \
 SMTP_HELO_NAME=www.linux.org.ru \
 ADMIN_EMAIL=operations@example.invalid \
+SCHEDULER_TIMEZONE=Europe/Moscow \
 ENABLE_BACKGROUND_JOBS=false \
 docker compose --project-name "$sProject" -f "$sCompose" run --rm --no-deps app \
   /bin/sh -c '
     set -eu
+    test "${TZ:-}" = Europe/Moscow
+    test -e /usr/share/zoneinfo/Europe/Moscow
+    test "$(date +%z)" = +0300
     test "$(id -u)" = 8181
     test "$(id -g)" = 8181
     for sPath in /tmp/lorsource-secrets/*; do

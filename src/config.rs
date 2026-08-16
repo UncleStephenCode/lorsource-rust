@@ -91,9 +91,7 @@ impl StConfig {
                     .ok()
                     .filter(|sValue| !sValue.trim().is_empty()),
             )?,
-            enable_background_jobs: std::env::var("ENABLE_BACKGROUND_JOBS")
-                .map(|sValue| sValue == "true" || sValue == "1")
-                .unwrap_or(false),
+            enable_background_jobs: bStrictEnvBoolean("ENABLE_BACKGROUND_JOBS", false)?,
             clean_old_userpics: std::env::var("CLEAN_OLD_USERPICS")
                 .map(|sValue| sValue == "true" || sValue == "1")
                 .unwrap_or(false),
@@ -343,6 +341,24 @@ fn optEnvOrFile(sName: &str) -> anyhow::Result<Option<String>> {
     sReadSingleLineValue(sName, &sPath).map(Some)
 }
 
+fn bStrictEnvBoolean(sName: &str, bDefault: bool) -> anyhow::Result<bool> {
+    match std::env::var(sName) {
+        Ok(sValue) => bStrictBooleanValue(sName, &sValue),
+        Err(std::env::VarError::NotPresent) => Ok(bDefault),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            anyhow::bail!("{sName} is not valid UTF-8")
+        }
+    }
+}
+
+fn bStrictBooleanValue(sName: &str, sValue: &str) -> anyhow::Result<bool> {
+    match sValue {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => anyhow::bail!("{sName} must be the literal true or false; got {sValue:?}"),
+    }
+}
+
 fn vecTrustedProxyCidrs(sValue: &str) -> anyhow::Result<Vec<ipnetwork::IpNetwork>> {
     sValue
         .split(',')
@@ -415,7 +431,8 @@ fn bValidSmtpHelo(sValue: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        StConfig, optHttpProxyUrl, sReadSingleLineValue, sWsUrlFromPublic, vecTrustedProxyCidrs,
+        StConfig, bStrictBooleanValue, optHttpProxyUrl, sReadSingleLineValue, sWsUrlFromPublic,
+        vecTrustedProxyCidrs,
     };
 
     fn stConfig() -> StConfig {
@@ -470,6 +487,19 @@ mod tests {
             .to_string();
         assert!(sError.contains("TRUSTED_PROXY_CIDRS"));
         assert!(sError.contains("10.0.0.0/99"));
+    }
+
+    #[test]
+    fn background_job_activation_boolean_fails_closed_on_a_typo() {
+        assert!(bStrictBooleanValue("ENABLE_BACKGROUND_JOBS", "true").unwrap());
+        assert!(!bStrictBooleanValue("ENABLE_BACKGROUND_JOBS", "false").unwrap());
+        for sInvalid in ["1", "0", "TRUE", "yes", "treu", " true"] {
+            let sError = bStrictBooleanValue("ENABLE_BACKGROUND_JOBS", sInvalid)
+                .expect_err("ambiguous scheduler activation must be rejected")
+                .to_string();
+            assert!(sError.contains("ENABLE_BACKGROUND_JOBS"));
+            assert!(sError.contains("literal true or false"));
+        }
     }
 
     #[test]

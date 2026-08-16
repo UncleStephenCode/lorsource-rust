@@ -106,9 +106,11 @@ evidence rather than another placeholder implementation.
 
 The persistent ActiveMQ search queue is represented by an atomic filesystem
 spool under `UPLOAD_DIR/search-queue`; failed jobs survive a process restart
-and are retried by the background worker. Java scheduled maintenance jobs are
-implemented in `src/bootstrap/background.rs` with PostgreSQL advisory locks so
-multiple Rust replicas retain single-scheduler side-effect semantics.
+and are retried by the background worker. Java scheduled maintenance jobs use
+a single FIFO execution gate inside `src/bootstrap/background.rs` plus per-job
+PostgreSQL advisory locks. Exactly one replica must have scheduled jobs
+enabled: the locks prevent overlapping executions, but cannot suppress a later
+sequential execution by another replica.
 
 ## v5 additions
 

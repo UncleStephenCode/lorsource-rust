@@ -1,17 +1,19 @@
 //! Java-compatible scheduled maintenance and external publishing jobs.
 //!
-//! Every job takes a PostgreSQL advisory lock. This preserves the original
-//! single-scheduler semantics when the Rust application runs with more than
-//! one replica during or after migration.
+//! Spring-style jobs share one FIFO in-process execution gate and retain their
+//! per-job PostgreSQL advisory locks. Exactly one scheduler replica is still
+//! required: advisory locks prevent overlap, not a later second execution.
 
-use std::{future::Future, path::PathBuf, time::Duration};
+use std::{future::Future, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Context;
-use chrono::{Datelike, Timelike, Utc};
-use chrono_tz::Europe::Moscow;
+use chrono::{DateTime, Datelike, Local, Timelike};
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Transaction};
-use tokio::{sync::watch, task::JoinHandle};
+use tokio::{
+    sync::{Mutex, watch},
+    task::JoinHandle,
+};
 
 use crate::{application::exception_reporting::StExceptionReport, state::AppState};
 
@@ -29,6 +31,24 @@ const LOCK_TELEGRAM: i64 = 0x4c4f_520b;
 const LOCK_USERPICS: i64 = 0x4c4f_520c;
 const LOCK_GALLERY_PREVIEWS: i64 = 0x4c4f_520d;
 
+type TySpringSchedulerGate = Arc<Mutex<()>>;
+
+const SCORE_CRON_HOUR: u32 = 1;
+const SCORE_CRON_MINUTE: u32 = 0;
+const SCORE_CRON_SECOND: u32 = 1;
+const MAX_SCORE_CRON_MINUTE: u32 = 15;
+const MAX_SCORE_CRON_SECOND: u32 = 1;
+const LOW_SCORE_CRON_MINUTE: u32 = 1;
+const LOW_SCORE_CRON_SECOND: u32 = 0;
+
+const S_UPDATE_SCORE_SQL: &str = r#"UPDATE users SET score=score+1 WHERE id IN (
+     SELECT DISTINCT comments.userid FROM comments,topics
+     WHERE comments.postdate>CURRENT_TIMESTAMP-'2 days'::interval
+       AND topics.id=comments.topic AND topics.groupid NOT IN (8404,4068,9326,19405)
+       AND NOT comments.deleted AND NOT topics.deleted AND NOT topics.notop)"#;
+const S_UPDATE_MAX_SCORE_SQL: &str = "UPDATE users SET max_score=score WHERE score>max_score";
+const S_BLOCK_LOW_SCORE_SQL: &str = "UPDATE users SET blocked=true WHERE score < -50 AND nick!='anonymous' AND max_score<150 AND NOT blocked";
+
 const HOUR: Duration = Duration::from_secs(60 * 60);
 const FOUR_HOURS: Duration = Duration::from_secs(4 * 60 * 60);
 const FIVE_MINUTES: Duration = Duration::from_secs(5 * 60);
@@ -38,20 +58,40 @@ const S_DISPOSABLE_DOMAINS_URL: &str =
     "https://disposable.github.io/disposable-email-domains/domains_mx.txt";
 
 pub fn vecSpawn(stState: AppState, oShutdown: watch::Receiver<bool>) -> Vec<JoinHandle<()>> {
+    let sSchedulerTimezone = std::env::var("TZ").unwrap_or_else(|_| "system-local".to_owned());
     let mut vecJobs = vec![
         stSpawnSearchQueue(stState.clone(), oShutdown.clone()),
         stSpawnAdvCounters(stState.clone(), oShutdown.clone()),
     ];
     if !stState.config.enable_background_jobs {
-        tracing::info!("maintenance and external background jobs disabled by configuration");
+        tracing::info!(
+            automatic_score = false,
+            maximum_score = false,
+            low_score_blocking = false,
+            scheduler_timezone = %sSchedulerTimezone,
+            "maintenance and external background jobs disabled by configuration"
+        );
         return vecJobs;
     }
 
+    tracing::info!(
+        automatic_score = true,
+        maximum_score = true,
+        low_score_blocking = true,
+        scheduler_timezone = %sSchedulerTimezone,
+        "maintenance and external background jobs enabled"
+    );
+
+    // Spring's default TaskScheduler is a single-thread scheduled executor.
+    // Tokio tasks retain independent clocks, but every Spring-style callback
+    // waits on this one FIFO mutex and therefore never overlaps or skips.
+    let oSchedulerGate = Arc::new(Mutex::new(()));
     vecJobs.extend([
         stSpawnFixed(
             "statistics",
             FIVE_MINUTES,
             TEN_MINUTES,
+            oSchedulerGate.clone(),
             stState.clone(),
             oShutdown.clone(),
             |stState| async move { vUpdateStatistics(&stState.pool).await },
@@ -60,6 +100,7 @@ pub fn vecSpawn(stState: AppState, oShutdown: watch::Receiver<bool>) -> Vec<Join
             "group statistics",
             FIVE_MINUTES,
             HOUR,
+            oSchedulerGate.clone(),
             stState.clone(),
             oShutdown.clone(),
             |stState| async move { vUpdateGroupStatistics(&stState.pool).await },
@@ -68,6 +109,7 @@ pub fn vecSpawn(stState: AppState, oShutdown: watch::Receiver<bool>) -> Vec<Join
             "tag counters",
             FIVE_MINUTES,
             HOUR,
+            oSchedulerGate.clone(),
             stState.clone(),
             oShutdown.clone(),
             |stState| async move { vUpdateTagCounters(&stState.pool).await },
@@ -76,6 +118,7 @@ pub fn vecSpawn(stState: AppState, oShutdown: watch::Receiver<bool>) -> Vec<Join
             "old events",
             FIVE_MINUTES,
             HOUR,
+            oSchedulerGate.clone(),
             stState.clone(),
             oShutdown.clone(),
             |stState| async move { vCleanupOldEvents(&stState.pool).await },
@@ -84,6 +127,7 @@ pub fn vecSpawn(stState: AppState, oShutdown: watch::Receiver<bool>) -> Vec<Join
             "old gallery previews",
             FIVE_MINUTES,
             HOUR,
+            oSchedulerGate.clone(),
             stState.clone(),
             oShutdown.clone(),
             |stState| async move { vCleanupGalleryPreviews(&stState).await },
@@ -92,6 +136,7 @@ pub fn vecSpawn(stState: AppState, oShutdown: watch::Receiver<bool>) -> Vec<Join
             "disposable email domains",
             Duration::from_secs(60),
             FOUR_HOURS,
+            oSchedulerGate.clone(),
             stState.clone(),
             oShutdown.clone(),
             |stState| async move { vUpdateDisposableDomains(&stState).await },
@@ -100,6 +145,7 @@ pub fn vecSpawn(stState: AppState, oShutdown: watch::Receiver<bool>) -> Vec<Join
             "TOR exit nodes",
             Duration::from_secs(30 * 60),
             HOUR,
+            oSchedulerGate.clone(),
             stState.clone(),
             oShutdown.clone(),
             |stState| async move { vUpdateTorExitNodes(&stState).await },
@@ -108,22 +154,25 @@ pub fn vecSpawn(stState: AppState, oShutdown: watch::Receiver<bool>) -> Vec<Join
             "Telegram publisher",
             Duration::from_secs(60),
             FIVE_MINUTES,
+            oSchedulerGate.clone(),
             stState.clone(),
             oShutdown.clone(),
             |stState| async move { vUpdateTelegram(&stState).await },
         ),
         stSpawnHourly(
             "maximum score",
-            15,
-            1,
+            MAX_SCORE_CRON_MINUTE,
+            MAX_SCORE_CRON_SECOND,
+            oSchedulerGate.clone(),
             stState.clone(),
             oShutdown.clone(),
             |stState| async move { vUpdateMaxScore(&stState.pool).await },
         ),
         stSpawnHourly(
             "low-score blocking",
-            1,
-            0,
+            LOW_SCORE_CRON_MINUTE,
+            LOW_SCORE_CRON_SECOND,
+            oSchedulerGate.clone(),
             stState.clone(),
             oShutdown.clone(),
             |stState| async move { vBlockLowScoreUsers(&stState.pool).await },
@@ -132,34 +181,32 @@ pub fn vecSpawn(stState: AppState, oShutdown: watch::Receiver<bool>) -> Vec<Join
             "inactive accounts",
             30,
             0,
+            oSchedulerGate.clone(),
             stState.clone(),
             oShutdown.clone(),
             |stState| async move { vDeleteInactiveAccounts(&stState.pool).await },
         ),
         stSpawnDaily(
             "score",
-            1,
-            0,
-            1,
+            SCORE_CRON_HOUR,
+            SCORE_CRON_MINUTE,
+            SCORE_CRON_SECOND,
+            |dtCandidate| bScoreCronDay(dtCandidate.day()),
+            oSchedulerGate.clone(),
             stState.clone(),
             oShutdown.clone(),
-            |stState| async move {
-                // Spring's `*/2` in the day-of-month field fires on 1,3,5,...
-                if Utc::now().with_timezone(&Moscow).day() % 2 == 1 {
-                    vUpdateScore(&stState.pool).await
-                } else {
-                    Ok(())
-                }
-            },
+            |stState, _dtTriggeredAt| async move { vUpdateScore(&stState.pool).await },
         ),
         stSpawnDaily(
             "old userpics",
             4,
             30,
             0,
+            |_dtCandidate| true,
+            oSchedulerGate,
             stState.clone(),
             oShutdown,
-            |stState| async move { vCleanupOldUserpics(&stState).await },
+            |stState, _dtTriggeredAt| async move { vCleanupOldUserpics(&stState).await },
         ),
     ]);
     vecJobs
@@ -234,6 +281,7 @@ fn stSpawnFixed<F, Fut>(
     sName: &'static str,
     stInitialDelay: Duration,
     stDelay: Duration,
+    oSchedulerGate: TySpringSchedulerGate,
     stState: AppState,
     mut oShutdown: watch::Receiver<bool>,
     fRun: F,
@@ -247,9 +295,12 @@ where
             return;
         }
         loop {
-            if let Err(stError) = fRun(stState.clone()).await {
-                vReportScheduledFailure(&stState, sName, &stError);
-            }
+            vRunSpringScheduled(&oSchedulerGate, async {
+                if let Err(stError) = fRun(stState.clone()).await {
+                    vReportScheduledFailure(&stState, sName, &stError);
+                }
+            })
+            .await;
             if bWaitOrShutdown(stDelay, &mut oShutdown).await {
                 return;
             }
@@ -261,6 +312,7 @@ fn stSpawnHourly<F, Fut>(
     sName: &'static str,
     iMinute: u32,
     iSecond: u32,
+    oSchedulerGate: TySpringSchedulerGate,
     stState: AppState,
     mut oShutdown: watch::Receiver<bool>,
     fRun: F,
@@ -274,36 +326,65 @@ where
             if bWaitOrShutdown(stUntilNextHour(iMinute, iSecond), &mut oShutdown).await {
                 return;
             }
-            if let Err(stError) = fRun(stState.clone()).await {
-                vReportScheduledFailure(&stState, sName, &stError);
-            }
+            vRunSpringScheduled(&oSchedulerGate, async {
+                if let Err(stError) = fRun(stState.clone()).await {
+                    vReportScheduledFailure(&stState, sName, &stError);
+                }
+            })
+            .await;
         }
     })
 }
 
-fn stSpawnDaily<F, Fut>(
+fn stSpawnDaily<P, F, Fut>(
     sName: &'static str,
     iHour: u32,
     iMinute: u32,
     iSecond: u32,
+    fMatchesTrigger: P,
+    oSchedulerGate: TySpringSchedulerGate,
     stState: AppState,
     mut oShutdown: watch::Receiver<bool>,
     fRun: F,
 ) -> JoinHandle<()>
 where
-    F: Fn(AppState) -> Fut + Send + Sync + 'static,
+    P: Fn(&DateTime<Local>) -> bool + Send + Sync + 'static,
+    F: Fn(AppState, DateTime<Local>) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
 {
     tokio::spawn(async move {
         loop {
-            if bWaitOrShutdown(stUntilNextDay(iHour, iMinute, iSecond), &mut oShutdown).await {
+            // Resolve the precise cron instant before sleeping. Scheduled
+            // executor wake-up may be delayed by VM suspension, and callback
+            // execution may then wait behind an earlier Spring-style job.
+            // Neither delay may change the trigger's local calendar fields.
+            let dtNow = dtSchedulerNow();
+            let dtTriggeredAt =
+                dtNextDayMatchingAt(dtNow, iHour, iMinute, iSecond, |dtCandidate| {
+                    fMatchesTrigger(dtCandidate)
+                });
+            let stDelay = stDurationUntil(&dtNow, &dtTriggeredAt);
+            if bWaitOrShutdown(stDelay, &mut oShutdown).await {
                 return;
             }
-            if let Err(stError) = fRun(stState.clone()).await {
-                vReportScheduledFailure(&stState, sName, &stError);
-            }
+            vRunSpringScheduled(&oSchedulerGate, async {
+                if let Err(stError) = fRun(stState.clone(), dtTriggeredAt).await {
+                    vReportScheduledFailure(&stState, sName, &stError);
+                }
+            })
+            .await;
         }
     })
+}
+
+async fn vRunSpringScheduled<Fut>(oSchedulerGate: &Mutex<()>, stCallback: Fut)
+where
+    Fut: Future<Output = ()>,
+{
+    // Tokio's mutex is FIFO: a callback that becomes due while another one is
+    // running waits and executes afterwards, matching Spring's single thread.
+    let _stSchedulerGuard = oSchedulerGate.lock().await;
+    stCallback.await;
 }
 
 fn vReportScheduledFailure(stState: &AppState, sName: &str, stError: &anyhow::Error) {
@@ -344,30 +425,102 @@ async fn bWaitOrShutdown(stDelay: Duration, oShutdown: &mut watch::Receiver<bool
 }
 
 fn stUntilNextHour(iMinute: u32, iSecond: u32) -> Duration {
-    let dtNow = Utc::now().with_timezone(&Moscow);
-    let mut dtNext = dtNow
-        .with_minute(iMinute)
-        .and_then(|dt| dt.with_second(iSecond))
-        .and_then(|dt| dt.with_nanosecond(0))
-        .expect("valid scheduler minute and second");
-    if dtNext <= dtNow {
-        dtNext += chrono::Duration::hours(1);
-    }
-    (dtNext - dtNow).to_std().unwrap_or(Duration::from_secs(1))
+    stUntilNextHourAt(dtSchedulerNow(), iMinute, iSecond)
 }
 
+#[cfg(test)]
 fn stUntilNextDay(iHour: u32, iMinute: u32, iSecond: u32) -> Duration {
-    let dtNow = Utc::now().with_timezone(&Moscow);
-    let mut dtNext = dtNow
-        .with_hour(iHour)
-        .and_then(|dt| dt.with_minute(iMinute))
-        .and_then(|dt| dt.with_second(iSecond))
-        .and_then(|dt| dt.with_nanosecond(0))
-        .expect("valid scheduler time");
-    if dtNext <= dtNow {
-        dtNext += chrono::Duration::days(1);
+    stUntilNextDayAt(dtSchedulerNow(), iHour, iMinute, iSecond)
+}
+
+fn stUntilNextHourAt<Tz>(dtNow: DateTime<Tz>, iMinute: u32, iSecond: u32) -> Duration
+where
+    Tz: chrono::TimeZone,
+{
+    assert!(iMinute < 60 && iSecond < 60, "valid scheduler time");
+    let dtNext = dtNextLocalMatch(dtNow.clone(), 3 * 24 * 60 * 60, |dtCandidate| {
+        dtCandidate.minute() == iMinute && dtCandidate.second() == iSecond
+    });
+    stDurationUntil(&dtNow, &dtNext)
+}
+
+#[cfg(test)]
+fn stUntilNextDayAt<Tz>(dtNow: DateTime<Tz>, iHour: u32, iMinute: u32, iSecond: u32) -> Duration
+where
+    Tz: chrono::TimeZone,
+{
+    let dtNext = dtNextDayMatchingAt(dtNow.clone(), iHour, iMinute, iSecond, |_dtCandidate| true);
+    stDurationUntil(&dtNow, &dtNext)
+}
+
+fn dtNextDayMatchingAt<Tz, F>(
+    dtNow: DateTime<Tz>,
+    iHour: u32,
+    iMinute: u32,
+    iSecond: u32,
+    fMatchesDate: F,
+) -> DateTime<Tz>
+where
+    Tz: chrono::TimeZone,
+    F: Fn(&DateTime<Tz>) -> bool,
+{
+    assert!(
+        iHour < 24 && iMinute < 60 && iSecond < 60,
+        "valid scheduler time"
+    );
+    // Seven days also covers an odd-day trigger whose local wall time is
+    // nonexistent during a timezone transition: the next odd date still
+    // remains inside this search window.
+    dtNextLocalMatch(dtNow, 7 * 24 * 60 * 60, |dtCandidate| {
+        dtCandidate.hour() == iHour
+            && dtCandidate.minute() == iMinute
+            && dtCandidate.second() == iSecond
+            && fMatchesDate(dtCandidate)
+    })
+}
+
+fn stDurationUntil<Tz>(dtNow: &DateTime<Tz>, dtNext: &DateTime<Tz>) -> Duration
+where
+    Tz: chrono::TimeZone,
+{
+    dtNext
+        .clone()
+        .signed_duration_since(dtNow)
+        .to_std()
+        .expect("next cron instant is later than now")
+}
+
+fn dtNextLocalMatch<Tz, F>(dtNow: DateTime<Tz>, iSearchSeconds: usize, fMatches: F) -> DateTime<Tz>
+where
+    Tz: chrono::TimeZone,
+    F: Fn(&DateTime<Tz>) -> bool,
+{
+    // Search real instants but compare local calendar fields. This preserves
+    // wall-clock cron semantics through DST: nonexistent times are skipped,
+    // and both occurrences of an ambiguous time remain eligible.
+    // Subtract on the instant timeline instead of calling `with_nanosecond`:
+    // rebuilding an ambiguous local time would discard which overlap offset
+    // the previous Spring execution used.
+    let mut dtCandidate = dtNow.clone()
+        - chrono::Duration::nanoseconds(i64::from(dtNow.nanosecond()))
+        + chrono::Duration::seconds(1);
+    for _ in 0..iSearchSeconds {
+        if fMatches(&dtCandidate) {
+            return dtCandidate;
+        }
+        dtCandidate += chrono::Duration::seconds(1);
     }
-    (dtNext - dtNow).to_std().unwrap_or(Duration::from_secs(1))
+    panic!("no matching local cron instant within search window")
+}
+
+fn dtSchedulerNow() -> DateTime<Local> {
+    // Spring @Scheduled without an explicit zone uses the JVM/system default.
+    // Compose maps the operator-facing SCHEDULER_TIMEZONE to container TZ.
+    Local::now()
+}
+
+const fn bScoreCronDay(iDayOfMonth: u32) -> bool {
+    iDayOfMonth % 2 == 1
 }
 
 async fn bLock(stTransaction: &mut Transaction<'_, Postgres>, iLock: i64) -> anyhow::Result<bool> {
@@ -490,16 +643,10 @@ async fn vUpdateScore(oPool: &PgPool) -> anyhow::Result<()> {
     if !bLock(&mut stTransaction, LOCK_SCORE).await? {
         return Ok(());
     }
-    sqlx::query(
-        r#"UPDATE users SET score=score+1 WHERE id IN (
-             SELECT DISTINCT comments.userid FROM comments,topics
-             WHERE comments.postdate>CURRENT_TIMESTAMP-'2 days'::interval
-               AND topics.id=comments.topic AND topics.groupid NOT IN (8404,4068,9326,19405)
-               AND NOT comments.deleted AND NOT topics.deleted AND NOT topics.notop)"#,
-    )
-    .execute(&mut *stTransaction)
-    .await?;
-    sqlx::query("UPDATE users SET max_score=score WHERE score>max_score")
+    sqlx::query(S_UPDATE_SCORE_SQL)
+        .execute(&mut *stTransaction)
+        .await?;
+    sqlx::query(S_UPDATE_MAX_SCORE_SQL)
         .execute(&mut *stTransaction)
         .await?;
     stTransaction.commit().await?;
@@ -507,21 +654,11 @@ async fn vUpdateScore(oPool: &PgPool) -> anyhow::Result<()> {
 }
 
 async fn vUpdateMaxScore(oPool: &PgPool) -> anyhow::Result<()> {
-    vExecuteLocked(
-        oPool,
-        LOCK_MAX_SCORE,
-        "UPDATE users SET max_score=score WHERE score>max_score",
-    )
-    .await
+    vExecuteLocked(oPool, LOCK_MAX_SCORE, S_UPDATE_MAX_SCORE_SQL).await
 }
 
 async fn vBlockLowScoreUsers(oPool: &PgPool) -> anyhow::Result<()> {
-    vExecuteLocked(
-        oPool,
-        LOCK_LOW_SCORE,
-        "UPDATE users SET blocked=true WHERE score < -50 AND nick!='anonymous' AND max_score<150 AND NOT blocked",
-    )
-    .await
+    vExecuteLocked(oPool, LOCK_LOW_SCORE, S_BLOCK_LOW_SCORE_SQL).await
 }
 
 async fn vDeleteInactiveAccounts(oPool: &PgPool) -> anyhow::Result<()> {
@@ -1017,12 +1154,509 @@ async fn vCleanupGalleryPreviews(stState: &AppState) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use std::{
+        sync::{Arc, Mutex as StdMutex},
+        time::Duration,
+    };
+
+    use chrono::{Datelike, TimeZone, Timelike};
+    use sqlx::{PgPool, postgres::PgPoolOptions};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        sync::{Notify, oneshot},
+    };
 
     use super::{
+        LOW_SCORE_CRON_MINUTE, LOW_SCORE_CRON_SECOND, MAX_SCORE_CRON_MINUTE, MAX_SCORE_CRON_SECOND,
+        S_BLOCK_LOW_SCORE_SQL, S_UPDATE_MAX_SCORE_SQL, S_UPDATE_SCORE_SQL, SCORE_CRON_HOUR,
+        SCORE_CRON_MINUTE, SCORE_CRON_SECOND, bScoreCronDay, dtNextDayMatchingAt, dtSchedulerNow,
         sFetchExternalList, sTelegramHttpError, sTelegramPostText, stScheduledFailureReport,
-        stTelegramRequest, stUntilNextDay, stUntilNextHour, vecJavaLines,
+        stTelegramRequest, stUntilNextDay, stUntilNextDayAt, stUntilNextHour, vBlockLowScoreUsers,
+        vRunSpringScheduled, vUpdateMaxScore, vUpdateScore, vecJavaLines,
     };
+
+    #[test]
+    fn score_schedules_match_spring_cron_contract() {
+        assert_eq!(
+            (SCORE_CRON_HOUR, SCORE_CRON_MINUTE, SCORE_CRON_SECOND),
+            (1, 0, 1),
+            "ScoreUpdater.updateScore: 1 0 1 */2 * *"
+        );
+        assert_eq!(
+            (MAX_SCORE_CRON_MINUTE, MAX_SCORE_CRON_SECOND),
+            (15, 1),
+            "ScoreUpdater.updateMaxScore: 1 15 * * * *"
+        );
+        assert_eq!(
+            (LOW_SCORE_CRON_MINUTE, LOW_SCORE_CRON_SECOND),
+            (1, 0),
+            "ScoreUpdater.blockUsers: 0 1 * * * *"
+        );
+        assert_eq!(
+            (1..=31)
+                .filter(|iDayOfMonth| bScoreCronDay(*iDayOfMonth))
+                .collect::<Vec<_>>(),
+            vec![1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31]
+        );
+    }
+
+    #[test]
+    fn score_sql_matches_java_user_dao_contract() {
+        assert_eq!(
+            S_UPDATE_SCORE_SQL,
+            r#"UPDATE users SET score=score+1 WHERE id IN (
+     SELECT DISTINCT comments.userid FROM comments,topics
+     WHERE comments.postdate>CURRENT_TIMESTAMP-'2 days'::interval
+       AND topics.id=comments.topic AND topics.groupid NOT IN (8404,4068,9326,19405)
+       AND NOT comments.deleted AND NOT topics.deleted AND NOT topics.notop)"#
+        );
+        assert_eq!(
+            S_UPDATE_MAX_SCORE_SQL,
+            "UPDATE users SET max_score=score WHERE score>max_score"
+        );
+        assert_eq!(
+            S_BLOCK_LOW_SCORE_SQL,
+            "UPDATE users SET blocked=true WHERE score < -50 AND nick!='anonymous' AND max_score<150 AND NOT blocked"
+        );
+        for sNonJavaFilter in ["activated", "passwd", "lastlogin"] {
+            assert!(
+                !S_UPDATE_SCORE_SQL.contains(sNonJavaFilter),
+                "automatic score must not acquire a Rust-only {sNonJavaFilter} filter"
+            );
+        }
+    }
+
+    #[test]
+    fn startup_logs_make_score_job_activation_explicit() {
+        let sProduction = include_str!("background.rs")
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .expect("production source");
+        for sField in [
+            "automatic_score = false",
+            "maximum_score = false",
+            "low_score_blocking = false",
+            "automatic_score = true",
+            "maximum_score = true",
+            "low_score_blocking = true",
+        ] {
+            assert!(
+                sProduction.contains(sField),
+                "missing startup log: {sField}"
+            );
+        }
+    }
+
+    #[test]
+    fn spring_scheduler_uses_system_timezone_and_fixes_the_trigger_before_sleeping() {
+        let _dtSystemLocal: chrono::DateTime<chrono::Local> = dtSchedulerNow();
+        let sProduction = include_str!("background.rs")
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .expect("production source");
+        assert!(sProduction.contains("Local::now()"));
+        assert!(!sProduction.contains("use chrono_tz::Europe::Moscow"));
+        assert!(!sProduction.contains("with_timezone(&Moscow)"));
+
+        let sDaily = sProduction
+            .split("fn stSpawnDaily")
+            .nth(1)
+            .and_then(|sSource| sSource.split("async fn vRunSpringScheduled").next())
+            .expect("daily scheduler source");
+        let iTriggerCapture = sDaily
+            .find("dtNextDayMatchingAt(")
+            .expect("exact local cron trigger calculation");
+        let iSchedulerSleep = sDaily
+            .find("if bWaitOrShutdown(stDelay, &mut oShutdown).await")
+            .expect("scheduler sleep");
+        let iExecutionGate = sDaily
+            .find("vRunSpringScheduled(&oSchedulerGate")
+            .expect("shared execution gate");
+        assert!(
+            iTriggerCapture < iSchedulerSleep && iSchedulerSleep < iExecutionGate,
+            "exact trigger must be fixed before scheduler sleep and FIFO queueing"
+        );
+        assert!(sProduction.contains("|dtCandidate| bScoreCronDay(dtCandidate.day())"));
+        assert!(
+            !sProduction.contains("if bScoreCronDay"),
+            "odd-day selection belongs in the cron matcher, not a delayed callback"
+        );
+    }
+
+    #[test]
+    fn score_scheduler_preserves_an_exact_odd_trigger_across_long_delays() {
+        let stTimezone = chrono_tz::UTC;
+        let dtBeforeTrigger = stTimezone
+            .with_ymd_and_hms(2026, 8, 16, 23, 0, 0)
+            .single()
+            .expect("UTC time");
+        let dtTriggeredAt = dtNextDayMatchingAt(
+            dtBeforeTrigger,
+            SCORE_CRON_HOUR,
+            SCORE_CRON_MINUTE,
+            SCORE_CRON_SECOND,
+            |dtCandidate| bScoreCronDay(dtCandidate.day()),
+        );
+        assert_eq!(dtTriggeredAt.to_rfc3339(), "2026-08-17T01:00:01+00:00");
+
+        // Model both an overdue timer after VM suspension and a subsequent
+        // wait behind a long-running callback. The callback must still carry
+        // the precomputed August 17 trigger, even though wall time is now an
+        // even day on which a wake-time predicate would wrongly skip it.
+        let dtWakeAfterSuspension = dtTriggeredAt + chrono::Duration::hours(26);
+        let dtGateReleased = dtTriggeredAt + chrono::Duration::hours(30);
+        assert_eq!(dtWakeAfterSuspension.day(), 18);
+        assert_eq!(dtGateReleased.day(), 18);
+        assert!(bScoreCronDay(dtTriggeredAt.day()));
+
+        // Once that delayed callback completes, lenient Spring cron semantics
+        // select the next genuine odd trigger and do not queue an even day.
+        let dtNextTriggeredAt = dtNextDayMatchingAt(
+            dtGateReleased,
+            SCORE_CRON_HOUR,
+            SCORE_CRON_MINUTE,
+            SCORE_CRON_SECOND,
+            |dtCandidate| bScoreCronDay(dtCandidate.day()),
+        );
+        assert_eq!(dtNextTriggeredAt.to_rfc3339(), "2026-08-19T01:00:01+00:00");
+    }
+
+    #[tokio::test]
+    async fn spring_scheduler_gate_queues_low_score_until_score_callback_finishes() {
+        let oSchedulerGate = Arc::new(tokio::sync::Mutex::new(()));
+        let vecEvents = Arc::new(StdMutex::new(Vec::<&'static str>::new()));
+        let oReleaseScore = Arc::new(Notify::new());
+        let (txScoreStarted, rxScoreStarted) = oneshot::channel();
+
+        let hScore = tokio::spawn({
+            let oSchedulerGate = oSchedulerGate.clone();
+            let vecEvents = vecEvents.clone();
+            let oReleaseScore = oReleaseScore.clone();
+            async move {
+                vRunSpringScheduled(&oSchedulerGate, async move {
+                    vecEvents.lock().unwrap().push("score-start");
+                    txScoreStarted.send(()).unwrap();
+                    oReleaseScore.notified().await;
+                    // Failure reporting is part of this serialized callback in
+                    // production; model its tail before releasing the gate.
+                    vecEvents.lock().unwrap().push("score-report-finished");
+                })
+                .await;
+            }
+        });
+        rxScoreStarted.await.expect("score callback started");
+
+        let (txLowScoreAttempted, rxLowScoreAttempted) = oneshot::channel();
+        let (txLowScoreStarted, mut rxLowScoreStarted) = oneshot::channel();
+        let hLowScore = tokio::spawn({
+            let oSchedulerGate = oSchedulerGate.clone();
+            let vecEvents = vecEvents.clone();
+            async move {
+                txLowScoreAttempted.send(()).unwrap();
+                vRunSpringScheduled(&oSchedulerGate, async move {
+                    vecEvents.lock().unwrap().push("low-score-start");
+                    txLowScoreStarted.send(()).unwrap();
+                    vecEvents.lock().unwrap().push("low-score-finished");
+                })
+                .await;
+            }
+        });
+        rxLowScoreAttempted
+            .await
+            .expect("low-score callback attempted the shared gate");
+        tokio::task::yield_now().await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut rxLowScoreStarted)
+                .await
+                .is_err(),
+            "low-score callback overlapped the still-running score callback"
+        );
+
+        oReleaseScore.notify_one();
+        tokio::time::timeout(Duration::from_secs(1), hScore)
+            .await
+            .expect("score callback completion timeout")
+            .expect("score callback task");
+        tokio::time::timeout(Duration::from_secs(1), &mut rxLowScoreStarted)
+            .await
+            .expect("queued low-score callback timeout")
+            .expect("queued low-score callback start");
+        tokio::time::timeout(Duration::from_secs(1), hLowScore)
+            .await
+            .expect("low-score callback completion timeout")
+            .expect("low-score callback task");
+        assert_eq!(
+            *vecEvents.lock().unwrap(),
+            vec![
+                "score-start",
+                "score-report-finished",
+                "low-score-start",
+                "low-score-finished",
+            ]
+        );
+    }
+
+    async fn vTestExecute(oPool: &PgPool, sSql: &str) -> anyhow::Result<()> {
+        sqlx::query(sqlx::AssertSqlSafe(sSql.to_owned()))
+            .execute(oPool)
+            .await?;
+        Ok(())
+    }
+
+    fn vValidateDisposableScoreDatabase(
+        sCurrentDatabase: &str,
+        sExpectedDatabase: &str,
+    ) -> anyhow::Result<()> {
+        let sLower = sCurrentDatabase.to_ascii_lowercase();
+        anyhow::ensure!(
+            sCurrentDatabase == sExpectedDatabase,
+            "connected database {sCurrentDatabase:?} does not match LOR_SCORE_DB_INTEGRATION_EXPECT_DATABASE {sExpectedDatabase:?}"
+        );
+        anyhow::ensure!(
+            !matches!(sLower.as_str(), "lor" | "postgres") && !sLower.starts_with("template"),
+            "refusing to run the score contract against protected database {sCurrentDatabase:?}"
+        );
+        anyhow::ensure!(
+            sLower.starts_with("lorsource_score_test_"),
+            "disposable score database name must start with lorsource_score_test_; got {sCurrentDatabase:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn score_database_guard_rejects_live_and_mismatched_names() {
+        vValidateDisposableScoreDatabase(
+            "lorsource_score_test_20260816",
+            "lorsource_score_test_20260816",
+        )
+        .expect("matching disposable database");
+        for (sCurrent, sExpected) in [
+            ("lor", "lor"),
+            ("postgres", "postgres"),
+            ("template1", "template1"),
+            ("production_clone", "production_clone"),
+            ("lorsource_score_test_one", "lorsource_score_test_two"),
+        ] {
+            assert!(
+                vValidateDisposableScoreDatabase(sCurrent, sExpected).is_err(),
+                "unsafe database pair was accepted: {sCurrent:?}/{sExpected:?}"
+            );
+        }
+    }
+
+    async fn vCreateScoreFixture(oPool: &PgPool) -> anyhow::Result<()> {
+        for sSql in [
+            r#"CREATE TABLE users(
+                   id integer PRIMARY KEY,
+                   nick text NOT NULL,
+                   score integer NOT NULL,
+                   max_score integer NOT NULL,
+                   blocked boolean NOT NULL,
+                   block_updates integer NOT NULL DEFAULT 0
+               )"#,
+            r#"CREATE FUNCTION count_block_update() RETURNS trigger
+               LANGUAGE plpgsql AS $$
+               BEGIN
+                   NEW.block_updates=OLD.block_updates+1;
+                   RETURN NEW;
+               END
+               $$"#,
+            r#"CREATE TRIGGER count_block_update
+               BEFORE UPDATE OF blocked ON users
+               FOR EACH ROW EXECUTE FUNCTION count_block_update()"#,
+            r#"CREATE TABLE topics(
+                   id integer PRIMARY KEY,
+                   groupid integer NOT NULL,
+                   deleted boolean NOT NULL,
+                   notop boolean NOT NULL
+               )"#,
+            r#"CREATE TABLE comments(
+                   id integer PRIMARY KEY,
+                   userid integer NOT NULL,
+                   topic integer NOT NULL,
+                   postdate timestamptz NOT NULL,
+                   deleted boolean NOT NULL
+               )"#,
+            r#"INSERT INTO users(id,nick,score,max_score,blocked) VALUES
+                   (2,'anonymous',0,0,false),
+                   (10,'two-comments',10,5,false),
+                   (11,'old-comment',5,5,false),
+                   (12,'deleted-comment',5,5,false),
+                   (13,'nontech-8404',5,5,false),
+                   (14,'nontech-4068',5,5,false),
+                   (15,'nontech-9326',5,5,false),
+                   (16,'nontech-19405',5,5,false),
+                   (17,'deleted-topic',5,5,false),
+                   (18,'notop-topic',5,5,false),
+                   (19,'already-blocked-but-active',6,6,true),
+                   (30,'max-only',40,10,false),
+                   (40,'below-threshold',-51,149,false),
+                   (41,'at-threshold',-50,149,false),
+                   (42,'anonymous',-999,0,false),
+                   (43,'max-guard',-51,150,false),
+                   (44,'already-blocked',-51,149,true),
+                   (45,'Anonymous',-51,149,false)"#,
+            r#"INSERT INTO topics(id,groupid,deleted,notop) VALUES
+                   (100,1,false,false),
+                   (101,1,false,false),
+                   (102,1,false,false),
+                   (103,8404,false,false),
+                   (104,4068,false,false),
+                   (105,9326,false,false),
+                   (106,19405,false,false),
+                   (107,1,true,false),
+                   (108,1,false,true),
+                   (109,1,false,false),
+                   (110,1,false,false)"#,
+            r#"INSERT INTO comments(id,userid,topic,postdate,deleted) VALUES
+                   (1000,2,100,CURRENT_TIMESTAMP-'1 hour'::interval,false),
+                   (1001,10,100,CURRENT_TIMESTAMP-'1 hour'::interval,false),
+                   (1002,10,101,CURRENT_TIMESTAMP-'2 hour'::interval,false),
+                   (1003,11,102,CURRENT_TIMESTAMP-'3 days'::interval,false),
+                   (1004,12,102,CURRENT_TIMESTAMP-'1 hour'::interval,true),
+                   (1005,13,103,CURRENT_TIMESTAMP-'1 hour'::interval,false),
+                   (1006,14,104,CURRENT_TIMESTAMP-'1 hour'::interval,false),
+                   (1007,15,105,CURRENT_TIMESTAMP-'1 hour'::interval,false),
+                   (1008,16,106,CURRENT_TIMESTAMP-'1 hour'::interval,false),
+                   (1009,17,107,CURRENT_TIMESTAMP-'1 hour'::interval,false),
+                   (1010,18,108,CURRENT_TIMESTAMP-'1 hour'::interval,false),
+                   (1011,19,109,CURRENT_TIMESTAMP-'1 hour'::interval,false)"#,
+        ] {
+            vTestExecute(oPool, sSql).await?;
+        }
+        Ok(())
+    }
+
+    async fn stUserScore(oPool: &PgPool, iUserId: i32) -> anyhow::Result<(i32, i32)> {
+        Ok(
+            sqlx::query_as("SELECT score,max_score FROM users WHERE id=$1")
+                .bind(iUserId)
+                .fetch_one(oPool)
+                .await?,
+        )
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a separately created lorsource_score_test_* throwaway database"]
+    async fn automatic_score_jobs_match_java_in_an_isolated_schema() {
+        assert_eq!(
+            std::env::var("LOR_SCORE_DB_INTEGRATION_CONFIRM").as_deref(),
+            Ok("isolated-schema"),
+            "set LOR_SCORE_DB_INTEGRATION_CONFIRM=isolated-schema"
+        );
+        let sDatabaseUrl = std::env::var("LOR_SCORE_DB_INTEGRATION_DATABASE_URL").expect(
+            "set LOR_SCORE_DB_INTEGRATION_DATABASE_URL to the selected PostgreSQL database",
+        );
+        let sExpectedDatabase = std::env::var("LOR_SCORE_DB_INTEGRATION_EXPECT_DATABASE")
+            .expect("set LOR_SCORE_DB_INTEGRATION_EXPECT_DATABASE to the disposable database name");
+        let oAdminPool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&sDatabaseUrl)
+            .await
+            .expect("disposable PostgreSQL database must be reachable");
+        let sCurrentDatabase: String = sqlx::query_scalar("SELECT current_database()::text")
+            .fetch_one(&oAdminPool)
+            .await
+            .expect("read current disposable database name");
+        vValidateDisposableScoreDatabase(&sCurrentDatabase, &sExpectedDatabase)
+            .expect("score test requires a named throwaway database, never the live/main database");
+
+        let sSchema = format!("score_contract_{}", uuid::Uuid::new_v4().simple());
+        vTestExecute(&oAdminPool, &format!("CREATE SCHEMA {sSchema}"))
+            .await
+            .expect("temporary UUID schema must be creatable");
+
+        let stResult = async {
+            let sConnectionSchema = sSchema.clone();
+            let oPool = PgPoolOptions::new()
+                .max_connections(2)
+                .after_connect(move |oConnection, _stMetadata| {
+                    let sConnectionSchema = sConnectionSchema.clone();
+                    Box::pin(async move {
+                        sqlx::query("SELECT set_config('search_path',$1,false)")
+                            .bind(sConnectionSchema)
+                            .execute(&mut *oConnection)
+                            .await?;
+                        Ok(())
+                    })
+                })
+                .connect(&sDatabaseUrl)
+                .await?;
+            let stTestResult = async {
+                let sCurrentSchema: String = sqlx::query_scalar("SELECT current_schema()::text")
+                    .fetch_one(&oPool)
+                    .await?;
+                anyhow::ensure!(
+                    sCurrentSchema == sSchema,
+                    "fixture pool escaped UUID schema: {sCurrentSchema:?}"
+                );
+                vCreateScoreFixture(&oPool).await?;
+
+                vUpdateScore(&oPool).await?;
+                anyhow::ensure!(stUserScore(&oPool, 2).await? == (1, 1));
+                anyhow::ensure!(
+                    stUserScore(&oPool, 10).await? == (11, 11),
+                    "two qualifying comments must still yield one point per run"
+                );
+                for iExcludedUser in 11..=18 {
+                    anyhow::ensure!(
+                        stUserScore(&oPool, iExcludedUser).await? == (5, 5),
+                        "excluded user {iExcludedUser} acquired automatic score"
+                    );
+                }
+                anyhow::ensure!(
+                    stUserScore(&oPool, 19).await? == (7, 7),
+                    "Java does not exclude already-blocked authors from automatic score"
+                );
+                anyhow::ensure!(
+                    stUserScore(&oPool, 30).await? == (40, 40),
+                    "the score run must synchronize max_score in the same operation"
+                );
+
+                vTestExecute(&oPool, "UPDATE users SET score=50,max_score=40 WHERE id=30").await?;
+                vUpdateMaxScore(&oPool).await?;
+                anyhow::ensure!(stUserScore(&oPool, 30).await? == (50, 50));
+                vTestExecute(&oPool, "UPDATE users SET score=20 WHERE id=30").await?;
+                vUpdateMaxScore(&oPool).await?;
+                anyhow::ensure!(
+                    stUserScore(&oPool, 30).await? == (20, 50),
+                    "max_score must be monotonic when score falls"
+                );
+
+                vBlockLowScoreUsers(&oPool).await?;
+                let vecBlockStates = sqlx::query_as::<_, (i32, bool, i32)>(
+                    "SELECT id,blocked,block_updates FROM users WHERE id BETWEEN 40 AND 45 ORDER BY id",
+                )
+                .fetch_all(&oPool)
+                .await?;
+                anyhow::ensure!(
+                    vecBlockStates
+                        == vec![
+                            (40, true, 1),
+                            (41, false, 0),
+                            (42, false, 0),
+                            (43, false, 0),
+                            (44, true, 0),
+                            (45, true, 1),
+                        ],
+                    "low-score threshold/nick/max/already-blocked guards differ: {vecBlockStates:?}"
+                );
+                Ok::<_, anyhow::Error>(())
+            }
+            .await;
+            oPool.close().await;
+            stTestResult
+        }
+        .await;
+
+        // Cleanup is deliberately performed through the separate admin pool,
+        // even when setup/assertions inside stResult fail.
+        let stDropResult =
+            vTestExecute(&oAdminPool, &format!("DROP SCHEMA {sSchema} CASCADE")).await;
+        oAdminPool.close().await;
+        stDropResult.expect("temporary UUID schema cleanup must succeed");
+        stResult.expect("automatic score database contract");
+    }
 
     #[test]
     fn external_lists_preserve_java_lines_iterator_values() {
@@ -1033,9 +1667,79 @@ mod tests {
     }
 
     #[test]
-    fn scheduler_delays_are_bounded() {
-        assert!(stUntilNextHour(15, 1).as_secs() <= 3600);
-        assert!(stUntilNextDay(4, 30, 0).as_secs() <= 24 * 3600);
+    fn scheduler_delays_find_a_future_local_match() {
+        let stHourly = stUntilNextHour(15, 1);
+        let stDaily = stUntilNextDay(4, 30, 0);
+        assert!(stHourly > Duration::ZERO && stHourly <= Duration::from_secs(3 * 24 * 3600));
+        assert!(stDaily > Duration::ZERO && stDaily <= Duration::from_secs(3 * 24 * 3600));
+    }
+
+    #[test]
+    fn daily_scheduler_preserves_wall_time_across_dst_transitions() {
+        let stTimezone = chrono_tz::Europe::Berlin;
+
+        // 2026-03-29 02:30 does not exist. A local-calendar cron skips that
+        // occurrence and next fires at 02:30 on March 30, not at 03:30 on
+        // March 29 after adding a fixed 24-hour duration.
+        let dtBeforeSpringForward = stTimezone
+            .with_ymd_and_hms(2026, 3, 28, 3, 0, 0)
+            .single()
+            .expect("unambiguous Berlin time");
+        let stSpringDelay = stUntilNextDayAt(dtBeforeSpringForward, 2, 30, 0);
+        assert_eq!(stSpringDelay, Duration::from_secs(46 * 3600 + 30 * 60));
+        let dtAfterSpringForward = dtBeforeSpringForward
+            + chrono::Duration::from_std(stSpringDelay).expect("chrono duration");
+        assert_eq!(
+            (
+                dtAfterSpringForward.year(),
+                dtAfterSpringForward.month(),
+                dtAfterSpringForward.day(),
+                dtAfterSpringForward.hour(),
+                dtAfterSpringForward.minute(),
+            ),
+            (2026, 3, 30, 2, 30)
+        );
+
+        // The autumn day is 25 hours long. Reconstructing the local match
+        // preserves 04:30 instead of drifting to 03:30 or 05:30.
+        let dtBeforeFallBack = stTimezone
+            .with_ymd_and_hms(2026, 10, 24, 5, 0, 0)
+            .single()
+            .expect("unambiguous Berlin time");
+        let stFallDelay = stUntilNextDayAt(dtBeforeFallBack, 4, 30, 0);
+        assert_eq!(stFallDelay, Duration::from_secs(24 * 3600 + 30 * 60));
+        let dtAfterFallBack =
+            dtBeforeFallBack + chrono::Duration::from_std(stFallDelay).expect("chrono duration");
+        assert_eq!(
+            (
+                dtAfterFallBack.year(),
+                dtAfterFallBack.month(),
+                dtAfterFallBack.day(),
+                dtAfterFallBack.hour(),
+                dtAfterFallBack.minute(),
+            ),
+            (2026, 10, 25, 4, 30)
+        );
+
+        // Spring 6.2.19 CronExpression emits both real instants in an
+        // overlap. These seeds reproduce `0 30 2 * * *` in Europe/Berlin:
+        // first 02:30 CEST, then (after that callback) 02:30 CET.
+        let dtBeforeFirstOverlap = stTimezone
+            .with_ymd_and_hms(2026, 10, 25, 1, 59, 59)
+            .single()
+            .expect("unambiguous Berlin time");
+        let stFirstOverlapDelay = stUntilNextDayAt(dtBeforeFirstOverlap, 2, 30, 0);
+        assert_eq!(stFirstOverlapDelay, Duration::from_secs(30 * 60 + 1));
+        let dtFirstOverlap = dtBeforeFirstOverlap
+            + chrono::Duration::from_std(stFirstOverlapDelay).expect("chrono duration");
+        assert_eq!(dtFirstOverlap.to_rfc3339(), "2026-10-25T02:30:00+02:00");
+
+        let dtAfterFirstOverlap = dtFirstOverlap + chrono::Duration::seconds(1);
+        let stSecondOverlapDelay = stUntilNextDayAt(dtAfterFirstOverlap, 2, 30, 0);
+        assert_eq!(stSecondOverlapDelay, Duration::from_secs(60 * 60 - 1));
+        let dtSecondOverlap = dtAfterFirstOverlap
+            + chrono::Duration::from_std(stSecondOverlapDelay).expect("chrono duration");
+        assert_eq!(dtSecondOverlap.to_rfc3339(), "2026-10-25T02:30:00+01:00");
     }
 
     #[test]
@@ -1052,7 +1756,7 @@ mod tests {
         assert!(stReport.sBody.contains("[REDACTED]"));
 
         let sProduction = include_str!("background.rs")
-            .split("#[cfg(test)]")
+            .split("#[cfg(test)]\nmod tests")
             .next()
             .expect("production source");
         assert_eq!(
@@ -1061,6 +1765,20 @@ mod tests {
                 .count(),
             3,
             "fixed-delay, hourly and daily Spring-style loops must all report"
+        );
+        assert_eq!(
+            sProduction
+                .matches("vRunSpringScheduled(&oSchedulerGate")
+                .count(),
+            3,
+            "fixed-delay, hourly and daily loops must use the shared FIFO gate"
+        );
+        assert_eq!(
+            sProduction
+                .matches("oSchedulerGate: TySpringSchedulerGate")
+                .count(),
+            3,
+            "every Spring-style spawner must receive the one shared gate"
         );
         assert!(
             !sProduction

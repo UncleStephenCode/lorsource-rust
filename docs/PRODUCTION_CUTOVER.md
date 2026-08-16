@@ -18,6 +18,8 @@ schema at startup.
 - the existing Java `Secret` mounted as `SITE_SECRET` (and at least 32 bytes);
 - `PUBLIC_URL=https://...`, matching `WS_URL=wss://.../`;
 - the exact reverse-proxy CIDRs in `TRUSTED_PROXY_CIDRS`;
+- the original Java scheduler/JVM system timezone, supplied as an explicit
+  IANA `SCHEDULER_TIMEZONE` value and retained as cutover evidence;
 - `LOR_ENV=production` and `ENABLE_DEV_BYPASSES=false`;
 - dashboards/alerts for HTTP 5xx, latency, PostgreSQL errors, OpenSearch
   failures, SMTP failures and container restarts.
@@ -69,6 +71,7 @@ CAPTCHA_PUBLIC_KEY=<site-key> \
 SMTP_HOST=<mta-host> \
 SMTP_HELO_NAME=www.linux.org.ru \
 ADMIN_EMAIL=<operations-mailbox> \
+SCHEDULER_TIMEZONE=<original-Java-IANA-zone> \
 ENABLE_BACKGROUND_JOBS=false \
 scripts/check-production-runtime.sh
 ```
@@ -169,6 +172,15 @@ comparison set `ENABLE_BACKGROUND_JOBS=false` on the passive Rust replica so
 Java and Rust do not both run ratings, cleanup or external-publishing jobs.
 At cutover, set it to `true` on exactly the active Rust scheduler deployment;
 PostgreSQL advisory locks protect accidental overlap between Rust replicas.
+Use only the exact lowercase literals `true` or `false`; configuration loading
+and the production preflight reject ambiguous values instead of silently
+disabling scheduled score maintenance.
+All Spring-style maintenance callbacks inside one Rust process share a FIFO
+single-execution gate, matching Java's single-thread scheduler. The locks do
+not suppress a later sequential run in another replica, so exactly one active
+scheduler remains mandatory. The production manifest maps the required
+`SCHEDULER_TIMEZONE` value to container `TZ`; verify the startup log against
+the recorded Java JVM timezone before enabling jobs.
 
 ## Cutover
 

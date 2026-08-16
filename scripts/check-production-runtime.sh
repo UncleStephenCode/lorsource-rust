@@ -6,6 +6,19 @@ sCompose="$sRoot/deploy/compose.production.yml"
 
 : "${LORSOURCE_IMAGE:?Set the immutable release image reference}"
 : "${UPLOAD_HOST_PATH:?Set the restored media root}"
+: "${SCHEDULER_TIMEZONE:?Set the IANA timezone used by the original Java scheduler}"
+: "${ENABLE_BACKGROUND_JOBS:?Explicitly select true on one scheduler replica or false on passive replicas}"
+
+if [[ "$SCHEDULER_TIMEZONE" == /* || "$SCHEDULER_TIMEZONE" == *..* || \
+      ! "$SCHEDULER_TIMEZONE" =~ ^[A-Za-z0-9._+-]+(/[A-Za-z0-9._+-]+)*$ ]]; then
+  echo "SCHEDULER_TIMEZONE must be a safe relative IANA timezone name" >&2
+  exit 1
+fi
+
+if [[ "$ENABLE_BACKGROUND_JOBS" != "true" && "$ENABLE_BACKGROUND_JOBS" != "false" ]]; then
+  echo "ENABLE_BACKGROUND_JOBS must be the literal true or false" >&2
+  exit 1
+fi
 
 if [[ ! "$LORSOURCE_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]; then
   echo "LORSOURCE_IMAGE must be pinned as registry/repository@sha256:<64 lowercase hex>" >&2
@@ -74,10 +87,12 @@ docker run --rm \
   --read-only \
   --cap-drop ALL \
   --security-opt no-new-privileges:true \
+  --env "TZ=$SCHEDULER_TIMEZONE" \
   --volume "$UPLOAD_HOST_PATH:/app/uploads:rw,Z" \
   --entrypoint /bin/sh \
   "$sProbeImage" \
   -c 'set -eu
+      test -f "/usr/share/zoneinfo/$TZ"
       sProbe=/app/uploads/.lorsource-preflight-$$
       trap '\''rm -f "$sProbe" "$sProbe.renamed"'\'' EXIT
       printf probe > "$sProbe"

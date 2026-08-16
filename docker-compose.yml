@@ -47,6 +47,7 @@ services:
       # is deliberately confined to this disposable local Compose setup.
       CAPTCHA_PUBLIC_KEY: "10000000-ffff-ffff-ffff-000000000001"
       CAPTCHA_PRIVATE_KEY: "0x0000000000000000000000000000000000000000"
+      TZ: ${SCHEDULER_TIMEZONE:-UTC}
       RUST_LOG: lorsource_rust=debug,tower_http=info,sqlx=warn
       OPENSEARCH_URL: http://opensearch:9200
       SMTP_HOST: ${SMTP_HOST:-localhost}

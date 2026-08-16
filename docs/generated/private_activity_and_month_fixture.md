@@ -98,8 +98,18 @@ that an ordinary user cannot inspect another user's private activity.
 ## Recorded validation
 
 - Docker release and quality targets: passed, including repository-wide
-  rustfmt, all-target/all-feature check, 690 passing tests, 7 explicitly
-  ignored tests, 0 failures and Clippy with warnings denied.
+  rustfmt, all-target/all-feature check, 699 passing tests, 8 explicitly
+  ignored tests, 0 failures and Clippy with warnings denied (main 657/5;
+  integration targets 12/1, 4/0, 18/1, 6/0 and 2/1). The quality image
+  manifest-list digest is
+  `sha256:6c5249d30a591610e154ed367d93b905c93ce8b934a6787af92f6189766fdeba`.
+- The guarded automatic-score database integration test passed 1/1 against
+  disposable database `lorsource_score_test_20260816_root_final`, reported
+  `residue=0` and `public_tables=0`, and the database was dropped afterward
+  with only `lor` remaining. `src/bootstrap/background.rs` SHA-256 is
+  `9fcccb8e62b54a372c4d5f2559ef94cd33e43bf7b19aebb5ed4e2250ec984f9c`.
+  The schedule, SQL and one-active-scheduler contract are recorded in
+  [`SCORE_COMPATIBILITY.md`](../SCORE_COMPATIBILITY.md).
 - The rebuilt application passed `/healthz`; edit-topic, comment-deletion and
   topic-deletion and userpic/profile lifecycle scripts completed with scoped
   cleanup.
