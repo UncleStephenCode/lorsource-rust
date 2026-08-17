@@ -19,6 +19,7 @@ import datetime
 import http.cookiejar
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -167,6 +168,27 @@ def media_type(content_type: str) -> str:
     return content_type.split(";", 1)[0].strip().lower()
 
 
+HTTP_METHOD_TOKEN = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+
+
+def allow_methods(value: str) -> frozenset[str]:
+    """Parse Allow as a strict method set; wire order is not significant."""
+    if not value:
+        return frozenset()
+
+    methods: set[str] = set()
+    for raw_method in value.split(","):
+        method = raw_method.strip()
+        if not method:
+            raise ValueError("empty method")
+        if not HTTP_METHOD_TOKEN.fullmatch(method):
+            raise ValueError(f"invalid method token {method!r}")
+        if method in methods:
+            raise ValueError(f"duplicate method {method!r}")
+        methods.add(method)
+    return frozenset(methods)
+
+
 def report_response(response: Response) -> dict[str, object]:
     return {
         "status": response.status,
@@ -262,8 +284,18 @@ def validate_expected(
             f"{label} raw redirect {response.location_raw!r}, expected {expected_location_raw!r}"
         )
     expected_allow = expected(case, side, "expected_allow")
-    if expected_allow is not None and response.allow != str(expected_allow):
-        failures.append(f"{label} Allow {response.allow!r}, expected {expected_allow!r}")
+    if expected_allow is not None:
+        try:
+            actual_methods = allow_methods(response.allow)
+            expected_methods = allow_methods(str(expected_allow))
+        except ValueError as error:
+            failures.append(f"{label} invalid Allow contract: {error}")
+        else:
+            if actual_methods != expected_methods:
+                failures.append(
+                    f"{label} Allow methods {sorted(actual_methods)!r} from "
+                    f"{response.allow!r}, expected {sorted(expected_methods)!r}"
+                )
     expected_content_length = expected(case, side, "expected_content_length")
     if expected_content_length is not None and response.content_length != str(expected_content_length):
         failures.append(
@@ -349,10 +381,19 @@ def compare_responses(
             f"{case['name']}: raw redirect old={old_response.location_raw!r} "
             f"new={new_response.location_raw!r}"
         )
-    if case.get("compare_allow") and old_response.allow != new_response.allow:
-        failures.append(
-            f"{case['name']}: Allow old={old_response.allow!r} new={new_response.allow!r}"
-        )
+    if case.get("compare_allow"):
+        try:
+            old_methods = allow_methods(old_response.allow)
+            new_methods = allow_methods(new_response.allow)
+        except ValueError as error:
+            failures.append(f"{case['name']}: invalid Allow header: {error}")
+        else:
+            if old_methods != new_methods:
+                failures.append(
+                    f"{case['name']}: Allow methods old={sorted(old_methods)!r} "
+                    f"new={sorted(new_methods)!r} "
+                    f"(raw old={old_response.allow!r} new={new_response.allow!r})"
+                )
     if case.get("compare_security_headers"):
         for sField, sLabel in (
             ("x_frame_options", "X-Frame-Options"),

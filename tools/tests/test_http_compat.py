@@ -260,7 +260,7 @@ class HttpCompatibilityClientTest(unittest.TestCase):
             )
         )
 
-    def test_machine_report_omits_response_body_and_keeps_protocol_fields(self) -> None:
+    def test_machine_report_and_allow_set_protocol_semantics(self) -> None:
         headers = email.message.Message()
         headers["Content-Type"] = "text/html; charset=utf-8"
         headers["Location"] = "/target?from=compat"
@@ -282,6 +282,39 @@ class HttpCompatibilityClientTest(unittest.TestCase):
                 "expires": "",
             },
             compat.report_response(response),
+        )
+
+        old_headers = email.message.Message()
+        old_headers["Allow"] = "GET, POST"
+        new_headers = email.message.Message()
+        new_headers["Allow"] = "POST,GET"
+        old_response = compat.response_value(405, old_headers, b"")
+        new_response = compat.response_value(405, new_headers, b"")
+        case = {
+            "name": "allow methods",
+            "new_expected_allow": "GET,POST",
+            "compare_allow": True,
+        }
+        self.assertEqual([], compat.validate_expected(case, "new", new_response))
+        self.assertEqual(
+            [], compat.compare_responses(case, old_response, new_response)
+        )
+
+        for invalid_allow, error_fragment in (
+            ("POST, POST", "duplicate method"),
+            ("POST,,GET", "empty method"),
+            ("POST, G ET", "invalid method token"),
+        ):
+            with self.subTest(invalid_allow=invalid_allow):
+                new_response.allow = invalid_allow
+                self.assertIn(
+                    error_fragment,
+                    compat.validate_expected(case, "new", new_response)[0],
+                )
+        new_response.allow = "POST, PUT"
+        self.assertEqual(1, len(compat.validate_expected(case, "new", new_response)))
+        self.assertEqual(
+            1, len(compat.compare_responses(case, old_response, new_response))
         )
 
 
