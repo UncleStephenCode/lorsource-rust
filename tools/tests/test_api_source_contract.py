@@ -317,6 +317,22 @@ class JavaApiSourceContractTest(unittest.TestCase):
         self.assertIn("stSeeOtherRedirect(sLocation)", tag_page)
         self.assertIn("stSeeOtherRedirect", aggregate_tag_page)
 
+    def test_notification_author_keeps_the_unlinked_java_user_tag_contract(self) -> None:
+        java_page = (
+            JAVA_ROOT / "src/main/webapp/WEB-INF/jsp/show-replies-new.jsp"
+        ).read_text(encoding="utf-8")
+        java_user_tag = (
+            JAVA_ROOT / "src/main/webapp/WEB-INF/tags/user.tag"
+        ).read_text(encoding="utf-8")
+        rust = (ROOT / "src/routes/api.rs").read_text(encoding="utf-8")
+        flow = (ROOT / "compat/test_moderation_flows.py").read_text(encoding="utf-8")
+
+        self.assertIn('<lor:user user="${topic.author}"/>', java_page)
+        self.assertIn("link!=null and link", java_user_tag)
+        self.assertIn("notification_users_match_the_unlinked_lor_user_tag_contract", rust)
+        self.assertIn("expected_warning_author", flow)
+        self.assertNotIn('f">{low_nick}</a>"', flow)
+
     def test_firewall_and_servlet_parameter_defaults_are_kept_together(self) -> None:
         firewall = (ROOT / "src/http_method_firewall.rs").read_text(encoding="utf-8")
         form = (ROOT / "src/form.rs").read_text(encoding="utf-8")

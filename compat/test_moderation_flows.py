@@ -432,11 +432,25 @@ def main() -> int:
         f"[Нарушение правил] [4.1 Офтопик] compat topic warning {suffix}"
     )
     require(
-        moderator_warning_page.status == 200
-        and expected_topic_warning_event in moderator_warning_html
-        and "(Форум)" in moderator_warning_html
-        and f">{low_nick}</a>" in moderator_warning_html,
-        "warning notification presentation omits Java message/section/author data",
+        moderator_warning_page.status == 200,
+        f"warning notification page returned {moderator_warning_page.status}",
+    )
+    require(
+        expected_topic_warning_event in moderator_warning_html,
+        "warning notification presentation omits the Java event message",
+    )
+    require(
+        "(Форум)" in moderator_warning_html,
+        "warning notification presentation omits the Java section name",
+    )
+    # Both show-replies JSPs call <lor:user> without link=true. user.tag
+    # therefore renders a plain (escaped) nick here, not a profile anchor.
+    expected_warning_author = (
+        f'<div class="notifications-who-when"><p>{low_nick}, <time '
+    )
+    require(
+        expected_warning_author in moderator_warning_html,
+        "warning notification presentation omits the Java plain author data",
     )
     cleared_topic_warning = post(
         corrector, "/clear-warning", [("id", str(topic_warning_id))]
