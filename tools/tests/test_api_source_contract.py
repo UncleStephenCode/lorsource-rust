@@ -260,6 +260,10 @@ class JavaApiSourceContractTest(unittest.TestCase):
 
     def test_topic_create_queue_is_fallible_and_precedes_realtime_for_non_drafts(self) -> None:
         rust = (ROOT / "src/routes/topics.rs").read_text(encoding="utf-8")
+        java_topic = (
+            JAVA_ROOT
+            / "src/main/scala/ru/org/linux/topic/AddTopicController.scala"
+        ).read_text(encoding="utf-8")
         create = rust.split("pub async fn create_topic(", 1)[1].split(
             "struct ModeratedTopicTemplate", 1
         )[0]
@@ -271,6 +275,47 @@ class JavaApiSourceContractTest(unittest.TestCase):
         self.assertLess(non_draft, queued)
         self.assertLess(queued, realtime)
         self.assertNotIn("search_index::index_topic", create)
+        self.assertIn("new RedirectView(topicUrl, false, false)", java_topic)
+        self.assertIn("stSeeOtherRedirect(topic.topic_url())", create)
+
+        java_add_comment = (
+            JAVA_ROOT
+            / "src/main/scala/ru/org/linux/comment/AddCommentController.scala"
+        ).read_text(encoding="utf-8")
+        java_edit_comment = (
+            JAVA_ROOT
+            / "src/main/scala/ru/org/linux/comment/EditCommentController.scala"
+        ).read_text(encoding="utf-8")
+        java_tag_list = (
+            JAVA_ROOT
+            / "src/main/scala/ru/org/linux/topic/TagTopicListController.scala"
+        ).read_text(encoding="utf-8")
+        java_tag_page = (
+            JAVA_ROOT / "src/main/scala/ru/org/linux/tag/TagPageController.scala"
+        ).read_text(encoding="utf-8")
+        comments = (ROOT / "src/routes/comments.rs").read_text(encoding="utf-8")
+        tags = (ROOT / "src/routes/tags.rs").read_text(encoding="utf-8")
+        add_comment = comments.split("pub async fn add_comment(", 1)[1].split(
+            "pub async fn add_comment_ajax", 1
+        )[0]
+        edit_comment = comments.split("pub async fn edit_comment(", 1)[1].split(
+            "pub async fn delete_comment_form", 1
+        )[0]
+        tag_page = tags.split("pub async fn tag_page(", 1)[1].split(
+            "async fn aggregate_tag_page", 1
+        )[0]
+        aggregate_tag_page = tags.split("async fn aggregate_tag_page(", 1)[1].split(
+            "#[derive(Template)]", 1
+        )[0]
+
+        self.assertIn("false, false", java_add_comment)
+        self.assertIn("false, false", java_edit_comment)
+        self.assertIn("false, false", java_tag_list)
+        self.assertIn("false, false", java_tag_page)
+        self.assertIn("stSeeOtherRedirect(sLocation)", add_comment)
+        self.assertIn("stSeeOtherRedirect", edit_comment)
+        self.assertIn("stSeeOtherRedirect(sLocation)", tag_page)
+        self.assertIn("stSeeOtherRedirect", aggregate_tag_page)
 
     def test_firewall_and_servlet_parameter_defaults_are_kept_together(self) -> None:
         firewall = (ROOT / "src/http_method_firewall.rs").read_text(encoding="utf-8")

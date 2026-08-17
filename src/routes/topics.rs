@@ -6845,7 +6845,9 @@ pub async fn create_topic(
         )
         .into_response());
     }
-    Ok(stFoundRedirect(topic.topic_url()))
+    // AddTopicController uses RedirectView(topicUrl, false, false): disabling
+    // HTTP/1.0 compatibility makes Spring return 303 rather than 302.
+    Ok(crate::routes::stSeeOtherRedirect(topic.topic_url()))
 }
 
 #[derive(Template)]

@@ -419,7 +419,11 @@ def main() -> int:
             ("allowAnonymous", "true"),
         ],
     )
-    require(created.status == 303, f"topic creation returned {created.status}: {text(created)[:500]}")
+    require(
+        created.status == 303,
+        "topic creation returned "
+        f"{created.status}, redirect={created.location_target!r}: {text(created)[:500]}",
+    )
     require(created.location_target is not None, "topic creation has no canonical redirect")
     match = re.fullmatch(r"/forum/[^/]+/(\d+)", created.location_target)
     require(match is not None, f"unexpected topic redirect {created.location_target!r}")

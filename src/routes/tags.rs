@@ -525,7 +525,7 @@ pub async fn tag_page(
             unreachable!("covered tag-section outcomes")
         };
         let sLocation = sTagSectionUrl(&sMainTag, iSectionId, 0);
-        return Ok((StatusCode::FOUND, [(header::LOCATION, sLocation)]).into_response());
+        return Ok(crate::routes::stSeeOtherRedirect(sLocation));
     };
 
     let iItems = stPage.enTopics.iLen();
@@ -776,7 +776,7 @@ async fn aggregate_tag_page(
         .fetch_optional(&state.pool)
         .await?;
         return match synonym_target {
-            Some(main_tag) => Ok(crate::routes::stFoundRedirect(format!(
+            Some(main_tag) => Ok(crate::routes::stSeeOtherRedirect(format!(
                 "/tag/{}",
                 urlencoding::encode(&main_tag)
             ))),

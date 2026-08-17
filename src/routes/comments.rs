@@ -517,7 +517,7 @@ pub async fn add_comment(
     )
     .await?;
     let sLocation = comment_link(&state, id).await?;
-    Ok((StatusCode::FOUND, [(header::LOCATION, sLocation)]).into_response())
+    Ok(crate::routes::stSeeOtherRedirect(sLocation))
 }
 
 pub async fn add_comment_ajax(
@@ -2025,11 +2025,9 @@ pub async fn edit_comment(
     )
     .vUpdateComments(&[form.original])
     .await?;
-    Ok((
-        StatusCode::FOUND,
-        [(header::LOCATION, comment_link(&state, form.original).await?)],
-    )
-        .into_response())
+    Ok(crate::routes::stSeeOtherRedirect(
+        comment_link(&state, form.original).await?,
+    ))
 }
 
 pub async fn delete_comment_form(

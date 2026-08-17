@@ -244,6 +244,16 @@ pub(crate) fn stFoundRedirect(sLocation: impl Into<String>) -> Response {
     (StatusCode::FOUND, [(header::LOCATION, sLocation.into())]).into_response()
 }
 
+/// Spring `RedirectView` sends 303 when constructed with
+/// `http10Compatible=false`, as the original create/edit controllers do.
+pub(crate) fn stSeeOtherRedirect(sLocation: impl Into<String>) -> Response {
+    (
+        StatusCode::SEE_OTHER,
+        [(header::LOCATION, sLocation.into())],
+    )
+        .into_response()
+}
+
 /// Wraps legacy controller content in the same base document used by normal
 /// Askama pages. The theme middleware intentionally only replaces hooks in
 /// that document, so returning a bare fragment here would bypass all themes.
@@ -705,8 +715,8 @@ mod theme_shell_tests {
     use super::{
         EnSpringServletBoundary, S_SPRING_JSP_ALLOW, S_SPRING_UNRESTRICTED_ALLOW,
         bSpringExplicitNotFoundViewGate, enSpringServletBoundary, not_found, router,
-        sRenderLegacyContent, stFoundRedirect, stSpringJspMethodNotAllowedResponse,
-        stSpringUnrestrictedOptionsResponse,
+        sRenderLegacyContent, stFoundRedirect, stSeeOtherRedirect,
+        stSpringJspMethodNotAllowedResponse, stSpringUnrestrictedOptionsResponse,
     };
 
     fn stCsrfRoutingApp() -> Router {
@@ -839,6 +849,16 @@ mod theme_shell_tests {
         assert_eq!(
             stResponse.headers().get(header::LOCATION).unwrap(),
             "/forum/general?offset=30"
+        );
+    }
+
+    #[test]
+    fn non_http10_spring_redirect_view_uses_303_and_preserves_location() {
+        let stResponse = stSeeOtherRedirect("/forum/general/42");
+        assert_eq!(stResponse.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            stResponse.headers().get(header::LOCATION).unwrap(),
+            "/forum/general/42"
         );
     }
 

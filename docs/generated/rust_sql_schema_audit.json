@@ -20196,9 +20196,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "9479e87c0bb9",
+      "id": "48f95c59b943",
       "source": "src/routes/comments.rs",
-      "line": 2586,
+      "line": 2584,
       "symbol": "sCommentDeletionPreviewHtml",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -20224,9 +20224,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "7bf7d463e6e5",
+      "id": "eee347da9d54",
       "source": "src/routes/comments.rs",
-      "line": 2600,
+      "line": 2598,
       "symbol": "sCommentDeletionPreviewHtml",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -20252,9 +20252,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "172876d6deed",
+      "id": "89ed05469f99",
       "source": "src/routes/comments.rs",
-      "line": 2606,
+      "line": 2604,
       "symbol": "sCommentDeletionPreviewHtml",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -20280,9 +20280,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "3a50308ecbe5",
+      "id": "16f49efb0886",
       "source": "src/routes/comments.rs",
-      "line": 2631,
+      "line": 2629,
       "symbol": "sCommentDeletionPreviewHtml",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -20308,9 +20308,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "0c42c4f83a08",
+      "id": "af5bd6dc506f",
       "source": "src/routes/comments.rs",
-      "line": 3103,
+      "line": 3101,
       "symbol": "insert_comment",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -20336,9 +20336,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "a14a90f4f45c",
+      "id": "3db1450118dd",
       "source": "src/routes/comments.rs",
-      "line": 3119,
+      "line": 3117,
       "symbol": "insert_comment",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -20355,9 +20355,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "eea34343a36f",
+      "id": "fc03246e2def",
       "source": "src/routes/comments.rs",
-      "line": 3122,
+      "line": 3120,
       "symbol": "insert_comment",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -20383,9 +20383,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "d53224a900dc",
+      "id": "4db6d94f18ec",
       "source": "src/routes/comments.rs",
-      "line": 3136,
+      "line": 3134,
       "symbol": "insert_comment",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -20411,9 +20411,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "eb2ee2ddbd1c",
+      "id": "bcb646c91cfa",
       "source": "src/routes/comments.rs",
-      "line": 3162,
+      "line": 3160,
       "symbol": "insert_comment",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -20439,9 +20439,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "c7fb395328e3",
+      "id": "a1e3d58d703d",
       "source": "src/routes/comments.rs",
-      "line": 3170,
+      "line": 3168,
       "symbol": "insert_comment",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -20467,9 +20467,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "098804424a6d",
+      "id": "e85a98590552",
       "source": "src/routes/comments.rs",
-      "line": 3177,
+      "line": 3175,
       "symbol": "insert_comment",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -20495,9 +20495,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "a2db3c7bf097",
+      "id": "0203d5cb7865",
       "source": "src/routes/comments.rs",
-      "line": 3192,
+      "line": 3190,
       "symbol": "insert_comment",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -20531,9 +20531,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "d95b14c0c152",
+      "id": "98f26cfb7351",
       "source": "src/routes/comments.rs",
-      "line": 3208,
+      "line": 3206,
       "symbol": "insert_comment",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -20567,9 +20567,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "e28083110bdf",
+      "id": "fff8a6253805",
       "source": "src/routes/comments.rs",
-      "line": 3221,
+      "line": 3219,
       "symbol": "insert_comment",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -20595,9 +20595,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "7e1626c432b9",
+      "id": "9e86899e8a69",
       "source": "src/routes/comments.rs",
-      "line": 3236,
+      "line": 3234,
       "symbol": "insert_comment",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -20631,9 +20631,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "030766febe51",
+      "id": "fc59a76487fd",
       "source": "src/routes/comments.rs",
-      "line": 3247,
+      "line": 3245,
       "symbol": "insert_comment",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -20659,9 +20659,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "a29fa41be695",
+      "id": "ba95e15de4d5",
       "source": "src/routes/comments.rs",
-      "line": 3260,
+      "line": 3258,
       "symbol": "insert_comment",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -20695,9 +20695,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "2f8f6567eca3",
+      "id": "690d896838fb",
       "source": "src/routes/comments.rs",
-      "line": 3288,
+      "line": 3286,
       "symbol": "locate_topic_or_comment",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -20771,9 +20771,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "8ce25c0bb876",
+      "id": "840cf9228e97",
       "source": "src/routes/comments.rs",
-      "line": 3387,
+      "line": 3385,
       "symbol": "MAX_OFFSET",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -20790,9 +20790,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "75570203bb52",
+      "id": "6e5c7bcb971f",
       "source": "src/routes/comments.rs",
-      "line": 3388,
+      "line": 3386,
       "symbol": "MAX_OFFSET",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -20809,9 +20809,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "bc23bcf5a050",
+      "id": "a4b9d2aafa2b",
       "source": "src/routes/comments.rs",
-      "line": 3389,
+      "line": 3387,
       "symbol": "MAX_OFFSET",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -20828,9 +20828,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "9d95d337386d",
+      "id": "00e876341f3f",
       "source": "src/routes/comments.rs",
-      "line": 3393,
+      "line": 3391,
       "symbol": "MAX_OFFSET",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -20888,9 +20888,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "4f283c5c09e2",
+      "id": "329dde654890",
       "source": "src/routes/comments.rs",
-      "line": 3620,
+      "line": 3618,
       "symbol": "reply_form_context_uses_the_full_prepared_comment_pipeline",
       "test_scope": true,
       "fixture_schema_relations": [],
@@ -20909,9 +20909,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "71a94fec5f37",
+      "id": "4a332e5f9e72",
       "source": "src/routes/comments.rs",
-      "line": 3637,
+      "line": 3635,
       "symbol": "edit_get_and_post_preview_use_their_distinct_java_projections",
       "test_scope": true,
       "fixture_schema_relations": [],
@@ -20930,9 +20930,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "5d2e5e9ca6e0",
+      "id": "3e01c1dde04f",
       "source": "src/routes/comments.rs",
-      "line": 3670,
+      "line": 3668,
       "symbol": "deletion_preview_preserves_uploaded_userpic_aspect_ratio",
       "test_scope": true,
       "fixture_schema_relations": [],
@@ -20949,9 +20949,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "0ead2c679495",
+      "id": "d22a8c221e54",
       "source": "src/routes/comments.rs",
-      "line": 3805,
+      "line": 3803,
       "symbol": "deleted_comment_pagination_preserves_java_query_contract",
       "test_scope": true,
       "fixture_schema_relations": [],
@@ -23083,9 +23083,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "cdd59bf976c1",
+      "id": "33568439860e",
       "source": "src/routes/mod.rs",
-      "line": 606,
+      "line": 616,
       "symbol": "about",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -23111,9 +23111,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "d735f9e51f83",
+      "id": "fffeab195f25",
       "source": "src/routes/mod.rs",
-      "line": 611,
+      "line": 621,
       "symbol": "about",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -23139,9 +23139,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "6aeea39c47c3",
+      "id": "03818690ef4a",
       "source": "src/routes/mod.rs",
-      "line": 632,
+      "line": 642,
       "symbol": "readyz",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -26581,9 +26581,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "3b0df96d7d48",
+      "id": "03fab7aae30d",
       "source": "src/routes/topics.rs",
-      "line": 7094,
+      "line": 7096,
       "symbol": "optEditPreviewPollView",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -26609,9 +26609,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "7477cf4346fb",
+      "id": "11b7d071312f",
       "source": "src/routes/topics.rs",
-      "line": 7237,
+      "line": 7239,
       "symbol": "sEditPreviewUserpicHtml",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -26637,9 +26637,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "22c1bdfdca2a",
+      "id": "7def3f38aed3",
       "source": "src/routes/topics.rs",
-      "line": 7246,
+      "line": 7248,
       "symbol": "sEditPreviewUserpicHtml",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -26665,9 +26665,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "1c164902aa62",
+      "id": "0fbd96945df9",
       "source": "src/routes/topics.rs",
-      "line": 7347,
+      "line": 7349,
       "symbol": "sPrepareEditTopicCardHtml",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -26693,9 +26693,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "456b9fac5e6c",
+      "id": "71c45ca9de25",
       "source": "src/routes/topics.rs",
-      "line": 7752,
+      "line": 7754,
       "symbol": "load_topic_edit_rules",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -26737,9 +26737,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "babb7ab05962",
+      "id": "72d127af5682",
       "source": "src/routes/topics.rs",
-      "line": 8879,
+      "line": 8881,
       "symbol": "CAN_VIEW_ALL_DELETED_SCORE",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -26765,9 +26765,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "b0e0d417f55f",
+      "id": "fcbc63a2d765",
       "source": "src/routes/topics.rs",
-      "line": 8910,
+      "line": 8912,
       "symbol": "POSTSCORE_HIDE_COMMENTS",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -26809,9 +26809,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "fbff8e2c8c61",
+      "id": "18d841343899",
       "source": "src/routes/topics.rs",
-      "line": 8935,
+      "line": 8937,
       "symbol": "POSTSCORE_HIDE_COMMENTS",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -26837,9 +26837,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "ab5ac2871d3e",
+      "id": "d2fa2765d5cf",
       "source": "src/routes/topics.rs",
-      "line": 8947,
+      "line": 8949,
       "symbol": "POSTSCORE_HIDE_COMMENTS",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -26873,9 +26873,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "0b7ccd700598",
+      "id": "10fa19cc7db8",
       "source": "src/routes/topics.rs",
-      "line": 9036,
+      "line": 9038,
       "symbol": "check_topic_viewable",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -26925,9 +26925,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "3185d01bc9fd",
+      "id": "f110deb20e25",
       "source": "src/routes/topics.rs",
-      "line": 9062,
+      "line": 9064,
       "symbol": "check_topic_viewable",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -26953,9 +26953,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "94c2fd4ddc7d",
+      "id": "9a8cecd6d733",
       "source": "src/routes/topics.rs",
-      "line": 9075,
+      "line": 9077,
       "symbol": "check_topic_viewable",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -26981,9 +26981,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "fc88d7072296",
+      "id": "460a51a2ac60",
       "source": "src/routes/topics.rs",
-      "line": 9274,
+      "line": 9276,
       "symbol": "load_topic_delete_meta",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -27025,9 +27025,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "580ed004b06c",
+      "id": "387687328a34",
       "source": "src/routes/topics.rs",
-      "line": 9361,
+      "line": 9363,
       "symbol": "save_poll",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -27053,9 +27053,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "8085adca7a9f",
+      "id": "0f405022c6ab",
       "source": "src/routes/topics.rs",
-      "line": 9367,
+      "line": 9369,
       "symbol": "save_poll",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -27081,9 +27081,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "9303d19e376a",
+      "id": "71477a9395e9",
       "source": "src/routes/topics.rs",
-      "line": 9375,
+      "line": 9377,
       "symbol": "save_poll",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -27100,9 +27100,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "c5013e3a5b60",
+      "id": "3bce3cc7fa5c",
       "source": "src/routes/topics.rs",
-      "line": 9378,
+      "line": 9380,
       "symbol": "save_poll",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -27128,9 +27128,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "a8dd8754d222",
+      "id": "2c25fc4821e0",
       "source": "src/routes/topics.rs",
-      "line": 9391,
+      "line": 9393,
       "symbol": "save_poll",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -27156,9 +27156,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "7af12af4d0d0",
+      "id": "1079821d0174",
       "source": "src/routes/topics.rs",
-      "line": 9394,
+      "line": 9396,
       "symbol": "save_poll",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -27184,9 +27184,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "cfe141e9d0c6",
+      "id": "8eb620f778d9",
       "source": "src/routes/topics.rs",
-      "line": 9400,
+      "line": 9402,
       "symbol": "save_poll",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -27212,9 +27212,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "699d03762295",
+      "id": "ec1915829004",
       "source": "src/routes/topics.rs",
-      "line": 9427,
+      "line": 9429,
       "symbol": "notify_topic_users_tx",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -27256,9 +27256,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "f8c3665d5b02",
+      "id": "a3a7d7ebf580",
       "source": "src/routes/topics.rs",
-      "line": 9445,
+      "line": 9447,
       "symbol": "notify_topic_users_tx",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -27284,9 +27284,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "8a9cb1b90639",
+      "id": "3a36ee1fc88e",
       "source": "src/routes/topics.rs",
-      "line": 9452,
+      "line": 9454,
       "symbol": "notify_topic_users_tx",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -27312,9 +27312,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "9108ce0c5811",
+      "id": "af21dd71a409",
       "source": "src/routes/topics.rs",
-      "line": 9462,
+      "line": 9464,
       "symbol": "notify_topic_users_tx",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -27380,9 +27380,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "9f96b8ca00e9",
+      "id": "75ec688c1a7a",
       "source": "src/routes/topics.rs",
-      "line": 9492,
+      "line": 9494,
       "symbol": "notify_topic_users_tx",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -27408,9 +27408,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "a8c726cdfa8c",
+      "id": "59e2f2b78691",
       "source": "src/routes/topics.rs",
-      "line": 9499,
+      "line": 9501,
       "symbol": "notify_topic_users_tx",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -27436,9 +27436,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "cdf1e2eb69ce",
+      "id": "fdc6211bc869",
       "source": "src/routes/topics.rs",
-      "line": 9511,
+      "line": 9513,
       "symbol": "notify_topic_users_tx",
       "test_scope": false,
       "fixture_schema_relations": [],
@@ -27472,9 +27472,9 @@
       "intentional_absence_probes": []
     },
     {
-      "id": "408198641fd8",
+      "id": "d71a918fb09f",
       "source": "src/routes/topics.rs",
-      "line": 9557,
+      "line": 9559,
       "symbol": "bTopicUndeletable",
       "test_scope": false,
       "fixture_schema_relations": [],
